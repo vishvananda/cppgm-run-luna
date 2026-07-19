@@ -121,8 +121,10 @@ struct Binding
 	string injected_object_name;
 	TypePtr injected_owner;
 	// ClassMemberInfo is the canonical owner of layout and member-kind facts.
-	// Bindings retain lookup identity and point into the owning Type metadata.
-	ClassMemberInfo* member;
+	// Bindings retain lookup identity and refer to that record through a stable
+	// owner/index pair rather than a pointer into a relocatable member vector.
+	TypePtr member_owner;
+	size_t member_index;
 	string access;
 	CPPGMAstNodePtr declaration;
 

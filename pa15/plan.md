@@ -212,6 +212,14 @@ No test or reference fixture was changed.  The required through-PA14 report
 is clean at **819 / 819**.  The PA15 source audit passes with only the
 repository's existing header-division warnings.
 
+The Ralph loop 31 checkpoint audit found two blockers and fixed both before
+handoff: PA3's per-line `std::endl` flushes could time out the required
+`300-triple.t` workload, and class bindings used raw pointers into the
+relocatable member vector.  Output now uses buffered newlines, and bindings
+refer to the canonical member facts through a stable owner/index pair.  The
+post-fix PA15 report remains **26 / 200**, above its **16 / 200** turn-start
+baseline, and the next substantial checkpoint is unchanged.
+
 ## Post-checkpoint Remaining Work
 
 The current report has **174 failures**: 154 exit-status mismatches and 20

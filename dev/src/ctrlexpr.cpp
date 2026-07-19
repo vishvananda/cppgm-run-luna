@@ -982,9 +982,9 @@ Value Evaluate(size_t index, const vector<Node>& nodes)
 void PrintValue(Value value)
 {
 	if (value.is_unsigned)
-		cout << static_cast<uintmax_t>(value.bits) << 'u' << endl;
+		cout << static_cast<uintmax_t>(value.bits) << 'u' << '\n';
 	else
-		cout << static_cast<intmax_t>(SignedFromBits(value.bits)) << endl;
+		cout << static_cast<intmax_t>(SignedFromBits(value.bits)) << '\n';
 }
 
 void EvaluateLine(const vector<PostPPToken>& tokens, vector<Node>* nodes)
@@ -1000,7 +1000,7 @@ void EvaluateLine(const vector<PostPPToken>& tokens, vector<Node>* nodes)
 	}
 	catch (const LineError&)
 	{
-		cout << "error" << endl;
+		cout << "error\n";
 	}
 }
 
@@ -1032,5 +1032,5 @@ void RunCtrlExpr(const string& input)
 	vector<Node> nodes;
 	while (lexer.NextLine(&line))
 		EvaluateLine(line, &nodes);
-	cout << "eof" << endl;
+	cout << "eof\n";
 }

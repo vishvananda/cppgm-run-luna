@@ -308,7 +308,11 @@ void Analyzer::RecordClassMembers(const CPPGMAstNodePtr& node, const TypePtr& ty
 		ClassMemberInfo& member = type->class_members[i];
 		if (member.name.empty()) continue;
 		Binding* binding = class_scope->local(member.name);
-		if (binding) binding->member = &member;
+		if (binding)
+		{
+			binding->member_owner = type;
+			binding->member_index = i;
+		}
 	}
 	(void)scope;
 }
