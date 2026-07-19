@@ -3,41 +3,17 @@
 #include <vector>
 #include <string>
 #include <stdexcept>
-#include <iostream>
 #include <fstream>
+#include <iostream>
 
 using namespace std;
 
-#include "exceptions.h"
-
-bool HasBatchStdinArg(int argc, char** argv)
-{
-	for (int i = 1; i < argc; i++)
-	{
-		if (string(argv[i]) == "--batch-stdin")
-			return true;
-	}
-	return false;
-}
-
-int RunNotImplementedBatchMode()
-{
-	string line;
-	while (getline(cin, line))
-	{
-		(void)line;
-		cout << "EXIT_NOT_IMPLEMENTED" << endl;
-	}
-	return EXIT_SUCCESS;
-}
+#include "nsdecl_parser.h"
 
 int main(int argc, char** argv)
 {
 	try
 	{
-		if (HasBatchStdinArg(argc, argv))
-			return RunNotImplementedBatchMode();
-
 		vector<string> args;
 
 		for (int i = 1; i < argc; i++)
@@ -49,30 +25,22 @@ int main(int argc, char** argv)
 		string outfile = args[1];
 		size_t nsrcfiles = args.size() - 2;
 
-		throw NotImplementedException();
-
 		ofstream out(outfile);
+		if (!out) throw logic_error("unable to open output file");
 
 		out << nsrcfiles << " translation units" << endl;
 
 		for (size_t i = 0; i < nsrcfiles; i++)
 		{
 			string srcfile = args[i+2];
-
-			ifstream in(srcfile);
-
 			out << "start translation unit " << srcfile << endl;
-
-			out << "TODO" << endl;
-
+			// EmitNSDeclTranslationUnit writes the global namespace and all of
+			// its declarations.  Keep the per-file header here so the output
+			// preserves the exact command-line path spelling.
+			EmitNSDeclTranslationUnit(srcfile, out);
 			out << "end translation unit" << endl;
-
 		}
-	}
-	catch (const NotImplementedException& e)
-	{
-		cerr << "ERROR: " << e.what() << endl;
-		return CPPGM_EXIT_NOT_IMPLEMENTED;
+		return EXIT_SUCCESS;
 	}
 	catch (exception& e)
 	{
