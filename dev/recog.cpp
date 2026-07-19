@@ -3,10 +3,13 @@
 #include <vector>
 #include <string>
 #include <stdexcept>
+#include <sstream>
 #include <fstream>
 #include <iostream>
 
 #include "exceptions.h"
+#include "recog_parser.h"
+#include "posttoken_lexer.h"
 
 using namespace std;
 
@@ -35,42 +38,21 @@ bool PA6_IsNamespaceName(const string& identifier)
 	return identifier.find('N') != string::npos;
 }
 
-bool HasBatchStdinArg(int argc, char** argv)
-{
-	for (int i = 1; i < argc; i++)
-	{
-		if (string(argv[i]) == "--batch-stdin")
-			return true;
-	}
-	return false;
-}
-
-int RunNotImplementedBatchMode()
-{
-	string line;
-	while (getline(cin, line))
-	{
-		(void)line;
-		cout << "EXIT_NOT_IMPLEMENTED" << endl;
-	}
-	return EXIT_SUCCESS;
-}
-
 void DoRecog(istream& in)
 {
-	if (/* TODO: implement PA6 */ false)
-		return;
-	else
-		throw NotImplementedException();
+	if (!in)
+		throw logic_error("unable to open source file");
+	ostringstream contents;
+	contents << in.rdbuf();
+	const vector<PostPPToken> tokens = LexPostPPSource(contents.str());
+	if (!RecognizePA6(tokens))
+		throw logic_error("token sequence is not a translation-unit");
 };
 
 int main(int argc, char** argv)
 {
 	try
 	{
-		if (HasBatchStdinArg(argc, argv))
-			return RunNotImplementedBatchMode();
-
 		vector<string> args;
 
 		for (int i = 1; i < argc; i++)
@@ -96,10 +78,6 @@ int main(int argc, char** argv)
 				DoRecog(in);
 				out << srcfile << " OK" << endl;
 			}
-			catch (const NotImplementedException& e)
-			{
-				throw;
-			}
 			catch (const exception& e)
 			{
 				cerr << e.what() << endl;
@@ -107,14 +85,10 @@ int main(int argc, char** argv)
 			}
 		}
 	}
-	catch (const NotImplementedException& e)
-	{
-		cerr << "ERROR: " << e.what() << endl;
-		return CPPGM_EXIT_NOT_IMPLEMENTED;
-	}
 	catch (exception& e)
 	{
 		cerr << "ERROR: " << e.what() << endl;
 		return EXIT_FAILURE;
 	}
+	return EXIT_SUCCESS;
 }
