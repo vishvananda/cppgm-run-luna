@@ -66,3 +66,91 @@ passes.
 
 No PA4 groups remain. The next checkpoint group is PA5: read its contract and
 tests, establish the PA5 baseline, and group its failures before editing.
+
+## Architecture Review
+
+The integrated PA4 flow has an explicit application boundary and preserves the
+earlier stage interfaces:
+
+    dev/macro.cpp
+        UTF-8 stdin -> RunMacro -> process exit/error boundary
+
+    dev/src/macro_engine.cpp
+        shared phase 1--3 SourceUnit stream
+        -> whitespace/new-line-preserving preprocessing-token lexer
+        -> logical-line directive/text splitter
+        -> macro table and definition validation
+        -> argument-aware replacement and rescan
+        -> typed PA2 post-token stream
+
+    dev/src/pptoken_translation.cpp/.h
+        phase 1--3 decoding, raw-span protection, trigraphs, line splices,
+        universal-character names, and source encoding
+
+    dev/src/posttoken_lexer.h and dev/src/posttoken_semantics.cpp
+        PA2 token records and final typed-token conversion/output
+
+`dev/frontend_source_sets.mk` links the shared translation and PA2 modules
+into `macro`. The macro lexer intentionally retains whitespace and new-line
+tokens because PA4 needs directive boundaries, stringizing spelling, and raw
+argument collection; it uses the shared translation predicates and longest
+token rules, including the PA2 `p/P` pp-number and `<::` cases. The line
+processor recognizes only source-level `#define` and `#undef` directives, so
+tokens produced by expansion are text and cannot become directives.
+
+Macro definitions own their parameter lists and replacement tokens in the
+processor's `std::map`. Function-like invocation parsing collects nested
+parenthesized arguments before substitution. Raw arguments feed stringizing
+and token pasting, ordinary arguments are expanded first, and pasted spellings
+are retokenized before rescanning. Empty pasted arguments use placemarkers,
+including the course-supported variadic comma form.
+
+Rescanning is a work deque rather than repeated insertion into the middle of a
+vector. Replacement tokens are pushed in reverse order, so the replacement is
+rescanned before the untouched source tail and a replacement can form an
+invocation with that tail. Each token carries its unavailable macro set,
+argument provenance, replacement provenance, and a non-owning replacement
+owner pointer. This lets direct self-recursion remain painted while a nested
+replacement token can still participate in the course-defined tail-helper
+rescan. Macro objects are not mutated during a text-sequence expansion, so
+the provenance pointer cannot outlive the table entry it identifies.
+
+The final conversion collects `PostPPToken` records and delegates literal,
+keyword, operator, string-concatenation, and invalid-token behavior to the
+existing PA2 semantics. No test names, fixtures, reference binaries,
+subprocesses, host compiler, or generated answer are consulted by the normal
+compiler path.
+
+## Final Architecture Review
+
+The final stage boundary is:
+
+    UTF-8 bytes
+      -> shared translated SourceUnit stream with raw/origin metadata
+      -> PA4 token stream retaining whitespace and logical new-lines
+      -> source-line directive/state machine
+      -> macro expansion work deque with blue-paint metadata
+      -> stringized/pasted/placemarker preprocessing tokens
+      -> PA2 post-token semantics and eof output
+
+The checkpoint implementation's vector rescan and per-token line-end search
+were replaced with linear streaming structures. `ProcessLines` advances one
+logical line at a time, and `ExpandTokens` emits ordinary tokens once while
+using deque-end operations for replacement work. Local paste processing still
+uses vectors because its operands are limited to one replacement invocation;
+it does not reintroduce whole-text shifting. A 50,000-token object-like macro
+probe completed in about 0.25 seconds after the cleanup, compared with the
+pre-cleanup rescan probe exceeding 23 seconds before interruption.
+
+Ownership is RAII-only across the stage: source, token, macro, argument, and
+post-token collections are value-owned STL containers; the replacement-owner
+pointer is provenance metadata, not an owning allocation. `macro_engine.cpp`
+remains within the repository's per-file ownership limit, and the shared
+translation change is linked through its existing PA1--PA4 source-set
+boundary. The through-stage report confirms that this cleanup preserves PA1,
+PA2, and PA3 behavior while the PA4 local/course report confirms the complete
+macro feature set.
+
+The final audit record is in `pa4/audit.md`. No PA4 implementation group
+remains; subsequent work must preserve this translation, posttoken, and macro
+rescan boundary.

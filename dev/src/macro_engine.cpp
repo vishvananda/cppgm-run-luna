@@ -1,6 +1,7 @@
 #include "macro_engine.h"
 
 #include <algorithm>
+#include <deque>
 #include <map>
 #include <set>
 #include <stdexcept>
@@ -32,6 +33,8 @@ enum TokenKind
 	TOKEN_PLACEMARKER
 };
 
+struct Macro;
+
 struct Token
 {
 	TokenKind kind;
@@ -39,10 +42,14 @@ struct Token
 	set<string> blocked;
 	bool from_argument;
 	bool from_replacement;
+	// Non-owning provenance for the current text-sequence expansion. Macro
+	// objects stay in the table until that expansion has finished.
+	const Macro* replacement_owner;
 
 	Token(TokenKind kind = TOKEN_NON_WHITESPACE,
 		const string& text = string())
-		: kind(kind), text(text), from_argument(false), from_replacement(false)
+		: kind(kind), text(text), from_argument(false), from_replacement(false),
+		  replacement_owner(NULL)
 	{}
 };
 
@@ -389,7 +396,8 @@ struct PhaseTokenizer
 			const int c = source[position].code_point;
 			if (IsAsciiDigit(c) || IsIdentifierNondigit(c))
 			{
-				if ((c == 'e' || c == 'E') && position + 1 < source.size() &&
+				if ((c == 'e' || c == 'E' || c == 'p' || c == 'P') &&
+					position + 1 < source.size() &&
 					(source[position + 1].code_point == '+' ||
 					 source[position + 1].code_point == '-'))
 					position += 2;
@@ -409,6 +417,17 @@ struct PhaseTokenizer
 
 	Token ParsePunctuator()
 	{
+		if (source[position].code_point == '<' &&
+			position + 2 < source.size() &&
+			source[position + 1].code_point == ':' &&
+			source[position + 2].code_point == ':' &&
+			(position + 3 >= source.size() ||
+				(source[position + 3].code_point != ':' &&
+					source[position + 3].code_point != '>')))
+		{
+			++position;
+			return Token(TOKEN_PUNCTUATOR, "<");
+		}
 		static const char* const punctuators[] = {
 			"%:%:", "->*", "<<=", ">>=", "...", "##", "<:", ":>",
 			"<%", "%>", "%:", ".*", "::", "+=", "-=", "*=", "/=", "%=",
@@ -781,8 +800,6 @@ Macro ParseDefine(const vector<Token>& tokens, size_t hash, size_t end)
 		position = name_position + 1;
 	vector<Token> replacement(tokens.begin() + position, tokens.begin() + end);
 	macro.replacement = TrimAndCollapseSpaces(replacement);
-	for (size_t i = 0; i < macro.replacement.size(); ++i)
-		macro.replacement[i].from_replacement = true;
 	ValidateReplacement(macro);
 	return macro;
 }
@@ -856,15 +873,14 @@ vector<Token> NonSpaceTokens(const vector<Token>& input)
 	return result;
 }
 
-vector<Token> PasteTokens(const Token& left, const Token& right)
+vector<Token> PasteTokens(const Token& left, const Token& right,
+	const Macro* replacement_owner)
 {
 	if (left.kind == TOKEN_PLACEMARKER && right.kind == TOKEN_PLACEMARKER)
 		return vector<Token>(1, Token(TOKEN_PLACEMARKER));
 	if (left.kind == TOKEN_PLACEMARKER)
 	{
 		Token result = CopyToken(right);
-		result.from_argument = false;
-		result.from_replacement = true;
 		return vector<Token>(1, result);
 	}
 	if (right.kind == TOKEN_PLACEMARKER && left.text == ",")
@@ -872,8 +888,6 @@ vector<Token> PasteTokens(const Token& left, const Token& right)
 	if (right.kind == TOKEN_PLACEMARKER)
 	{
 		Token result = CopyToken(left);
-		result.from_argument = false;
-		result.from_replacement = true;
 		return vector<Token>(1, result);
 	}
 	vector<Token> pasted = NonSpaceTokens(Tokenize(left.text + right.text));
@@ -885,11 +899,12 @@ vector<Token> PasteTokens(const Token& left, const Token& right)
 		pasted[i].blocked.insert(blocked.begin(), blocked.end());
 		pasted[i].from_argument = from_argument;
 		pasted[i].from_replacement = true;
+		pasted[i].replacement_owner = replacement_owner;
 	}
 	return pasted;
 }
 
-vector<Token> ProcessPastes(vector<Token> input)
+vector<Token> ProcessPastes(vector<Token> input, const Macro* replacement_owner)
 {
 	for (size_t position = 0; position < input.size(); ++position)
 	{
@@ -899,7 +914,8 @@ vector<Token> ProcessPastes(vector<Token> input)
 		size_t right = NextNonSpace(input, position + 1, input.size());
 		Require(left < input.size() && right < input.size(),
 			"invalid token paste");
-		vector<Token> pasted = PasteTokens(input[left], input[right]);
+		vector<Token> pasted = PasteTokens(input[left], input[right],
+			replacement_owner);
 		input.erase(input.begin() + left, input.begin() + right + 1);
 		input.insert(input.begin() + left, pasted.begin(), pasted.end());
 		position = left == 0 ? 0 : left - 1;
@@ -936,13 +952,12 @@ private:
 	{
 		size_t text_begin = 0;
 		size_t position = 0;
-		bool line_start = true;
 		while (position < tokens.size())
 		{
 			const size_t line_end = FindLineEnd(tokens, position);
 			string directive;
 			size_t hash = tokens.size();
-			if (line_start && FindDirective(tokens, position, line_end,
+			if (FindDirective(tokens, position, line_end,
 				&directive, &hash))
 			{
 				ExpandText(vector<Token>(tokens.begin() + text_begin,
@@ -958,14 +973,11 @@ private:
 				if (position < tokens.size())
 					++position;
 				text_begin = position;
-				line_start = true;
 				continue;
 			}
-			if (tokens[position].kind == TOKEN_NEWLINE)
-				line_start = true;
-			else if (!IsSpace(tokens[position]))
-				line_start = false;
-			++position;
+			position = line_end;
+			if (position < tokens.size())
+				++position;
 		}
 		ExpandText(vector<Token>(tokens.begin() + text_begin, tokens.end()), output);
 	}
@@ -987,99 +999,114 @@ private:
 		output->insert(output->end(), expanded.begin(), expanded.end());
 	}
 
-	bool TryInvocation(const vector<Token>& tokens, size_t name_position,
-		const Macro& macro, Invocation* invocation, size_t* end)
+	bool TryInvocation(deque<Token>* work, Invocation* invocation)
 	{
-		size_t open = NextNonSpace(tokens, name_position + 1, tokens.size());
-		if (open >= tokens.size() || !IsPunct(tokens[open], "("))
+		size_t offset = 0;
+		while (offset < work->size() &&
+			IsSpace((*work)[work->size() - 1 - offset]))
+			++offset;
+		if (offset >= work->size() ||
+			!IsPunct((*work)[work->size() - 1 - offset], "("))
 			return false;
+		++offset;
 		vector<Token> current;
 		int depth = 0;
 		bool saw_comma = false;
 		bool saw_content = false;
-		for (size_t i = open + 1; i < tokens.size(); ++i)
+		for (; offset < work->size(); ++offset)
 		{
-			if (IsPunct(tokens[i], "(") )
+			const Token& token = (*work)[work->size() - 1 - offset];
+			if (IsPunct(token, "("))
 			{
 				++depth;
-				current.push_back(tokens[i]);
+				current.push_back(token);
 				continue;
 			}
-			if (IsPunct(tokens[i], ")"))
+			if (IsPunct(token, ")"))
 			{
 				if (depth > 0)
 				{
 					--depth;
-					current.push_back(tokens[i]);
+					current.push_back(token);
 					continue;
 				}
 				if (saw_comma || saw_content)
 					invocation->arguments.push_back(current);
 				else
 					invocation->empty_call = true;
-				*end = i + 1;
+				const size_t consumed = offset + 1;
+				for (size_t i = 0; i < consumed; ++i)
+					work->pop_back();
 				return true;
 			}
-			if (depth == 0 && IsPunct(tokens[i], ","))
+			if (depth == 0 && IsPunct(token, ","))
 			{
 				saw_comma = true;
 				invocation->arguments.push_back(current);
 				current.clear();
 				continue;
 			}
-			if (!IsSpace(tokens[i]))
+			if (!IsSpace(token))
 				saw_content = true;
-			current.push_back(tokens[i]);
+			current.push_back(token);
 		}
 		throw logic_error("unterminated macro invocation");
 	}
 
-	vector<Token> ExpandTokens(vector<Token> result)
+	vector<Token> ExpandTokens(const vector<Token>& input)
 	{
-		size_t position = 0;
-		while (position < result.size())
+		deque<Token> work;
+		for (size_t i = input.size(); i > 0; --i)
+			work.push_back(input[i - 1]);
+		vector<Token> output;
+		output.reserve(input.size());
+		while (!work.empty())
 		{
-			if (!IsIdentifier(result[position]))
+			Token head = work.back();
+			work.pop_back();
+			if (!IsIdentifier(head))
 			{
-				++position;
+				output.push_back(head);
 				continue;
 			}
-			if (result[position].text == "__VA_ARGS__")
+			if (head.text == "__VA_ARGS__")
 				throw logic_error("__VA_ARGS__ outside variadic macro");
 			map<string, Macro>::const_iterator found =
-				macros.find(result[position].text);
+				macros.find(head.text);
 			bool blocked = found != macros.end() &&
-				result[position].blocked.find(found->first) !=
-				result[position].blocked.end();
+				head.blocked.find(found->first) != head.blocked.end();
 			if (blocked && found->second.function_like &&
-				!result[position].from_argument)
+				!head.from_argument &&
+				head.replacement_owner != &found->second)
 			{
-				const size_t open = NextNonSpace(result, position + 1,
-					result.size());
-				if (open < result.size() && IsPunct(result[open], "(") &&
-					!result[open].from_replacement)
+				size_t open = 0;
+				while (open < work.size() &&
+					IsSpace(work[work.size() - 1 - open]))
+					++open;
+				if (open < work.size() &&
+					IsPunct(work[work.size() - 1 - open], "(") &&
+					!work[work.size() - 1 - open].from_replacement)
 					blocked = false;
 			}
 			if (found == macros.end() || blocked)
 			{
-				++position;
+				output.push_back(head);
 				continue;
 			}
 			Invocation invocation;
-			size_t end = position + 1;
-			if (found->second.function_like && !TryInvocation(
-				result, position, found->second, &invocation, &end))
+			if (found->second.function_like &&
+				!TryInvocation(&work, &invocation))
 			{
-				++position;
+				output.push_back(head);
 				continue;
 			}
-			vector<Token> replacement = ExpandInvocation(
-				found->second, result[position], invocation);
-			result.erase(result.begin() + position, result.begin() + end);
-			result.insert(result.begin() + position,
-				replacement.begin(), replacement.end());
+			vector<Token> replacement = ExpandInvocation(found->second, head,
+				invocation);
+			for (vector<Token>::const_reverse_iterator it = replacement.rbegin();
+				it != replacement.rend(); ++it)
+				work.push_back(*it);
 		}
-		return result;
+		return output;
 	}
 
 	vector<Token> JoinVariadic(const vector<vector<Token> >& arguments,
@@ -1204,7 +1231,10 @@ private:
 				size_t parameter = NextNonSpace(macro.replacement, i + 1,
 					macro.replacement.size());
 				const string name = macro.replacement[parameter].text;
-				result.push_back(Stringize(raw.find(name)->second, blocked));
+				Token stringized = Stringize(raw.find(name)->second, blocked);
+				stringized.from_replacement = true;
+				stringized.replacement_owner = &macro;
+				result.push_back(stringized);
 				i = parameter;
 				continue;
 			}
@@ -1212,6 +1242,8 @@ private:
 			{
 				Token paste(TOKEN_PASTE, token.text);
 				paste.blocked = blocked;
+				paste.from_replacement = true;
+				paste.replacement_owner = &macro;
 				result.push_back(paste);
 				continue;
 			}
@@ -1238,7 +1270,6 @@ private:
 					{
 						Token copy = argument->second[j];
 						copy.from_argument = true;
-						copy.from_replacement = false;
 						result.push_back(copy);
 					}
 				}
@@ -1246,9 +1277,11 @@ private:
 			}
 			Token copy = token;
 			copy.blocked = blocked;
+			copy.from_replacement = true;
+			copy.replacement_owner = &macro;
 			result.push_back(copy);
 		}
-		return ProcessPastes(result);
+		return ProcessPastes(result, &macro);
 	}
 
 	void AppendPostToken(const Token& token, vector<PostPPToken>* output)

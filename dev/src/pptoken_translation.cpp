@@ -463,7 +463,8 @@ size_t ConsumeScannerPPNumber(const vector<int>& source, size_t position)
 		const int code_point = source[i];
 		if (IsAsciiDigit(code_point) || IsIdentifierNondigit(code_point))
 		{
-			if ((code_point == 'e' || code_point == 'E') &&
+			if ((code_point == 'e' || code_point == 'E' ||
+				code_point == 'p' || code_point == 'P') &&
 				i + 1 < source.size() &&
 				(source[i + 1] == '+' || source[i + 1] == '-'))
 				i += 2;
