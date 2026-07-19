@@ -8,36 +8,12 @@
 
 using namespace std;
 
-#include "exceptions.h"
-
-bool HasBatchStdinArg(int argc, char** argv)
-{
-	for (int i = 1; i < argc; i++)
-	{
-		if (string(argv[i]) == "--batch-stdin")
-			return true;
-	}
-	return false;
-}
-
-int RunNotImplementedBatchMode()
-{
-	string line;
-	while (getline(cin, line))
-	{
-		(void)line;
-		cout << "EXIT_NOT_IMPLEMENTED" << endl;
-	}
-	return EXIT_SUCCESS;
-}
+#include "nsinit_parser.h"
 
 int main(int argc, char** argv)
 {
 	try
 	{
-		if (HasBatchStdinArg(argc, argv))
-			return RunNotImplementedBatchMode();
-
 		vector<string> args;
 
 		for (int i = 1; i < argc; i++)
@@ -48,34 +24,22 @@ int main(int argc, char** argv)
 
 		string outfile = args[1];
 		size_t nsrcfiles = args.size() - 2;
-
-		throw NotImplementedException();
-
-		vector<char> program_image;
-
-		for (size_t i = 0; i < nsrcfiles; i++)
-		{
-			string srcfile = args[i+2];
-
-			ifstream in(srcfile);
-
-			// ...
-
-			program_image.push_back('?');
-		}
-
-		ofstream out(outfile);
-
-		out.write(program_image.data(), program_image.size());
-	}
-	catch (const NotImplementedException& e)
-	{
-		cerr << "ERROR: " << e.what() << endl;
-		return CPPGM_EXIT_NOT_IMPLEMENTED;
+		vector<string> source_paths;
+		for (size_t i = 0; i < nsrcfiles; ++i)
+			source_paths.push_back(args[i + 2]);
+		vector<unsigned char> program_image;
+		BuildNSInitImage(source_paths, &program_image);
+		ofstream out(outfile.c_str(), ios::binary);
+		if (!out) throw logic_error("unable to open output file");
+		if (!program_image.empty())
+			out.write(reinterpret_cast<const char*>(program_image.data()),
+				static_cast<streamsize>(program_image.size()));
+		if (!out) throw logic_error("unable to write output file");
 	}
 	catch (exception& e)
 	{
 		cerr << "ERROR: " << e.what() << endl;
 		return EXIT_FAILURE;
 	}
+	return EXIT_SUCCESS;
 }
