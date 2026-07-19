@@ -373,20 +373,14 @@ string PA14Lowerer::low_type(const TypePtr& raw) const
 
 size_t PA14Lowerer::type_size(const TypePtr& type) const
 {
-    if(!type) return 0;
-    try { return analyzer_.TypeSize(type_value(type)); }
-    catch(const exception&) {
-      TypePtr value = type_value(type);
-      if(value->kind == TYPE_ARRAY) return static_cast<size_t>(max(0LL, value->bound)) * type_size(value->child);
-      return low_type(value) == "ptr" ? 8 : 1;
-    }
+    if(!type) throw logic_error("missing type during size computation");
+    return analyzer_.TypeSize(type_value(type));
   }
 
 size_t PA14Lowerer::type_alignment(const TypePtr& type) const
 {
-    if(!type) return 1;
-    try { return max<size_t>(1, analyzer_.TypeAlignment(type_value(type))); }
-    catch(const exception&) { return min<size_t>(8, max<size_t>(1, type_size(type))); }
+    if(!type) throw logic_error("missing type during alignment computation");
+    return max<size_t>(1, analyzer_.TypeAlignment(type_value(type)));
   }
 
 string PA14Lowerer::storage_type(const TypePtr& type) const

@@ -26,8 +26,7 @@ namespace cppgm_pa10 {
 
 Parser::Parser(const vector<Token>& tokens)
 	: tokens_(tokens), position_(0), angle_depth_(0), ordinary_depth_(0),
-	  angle_floors_(), types_(), templates_(), namespaces_(), value_names_(),
-	  pending_attributes_()
+	  angle_floors_(), types_(), templates_(), namespaces_(), value_names_()
 {
 	const char* const fundamentals[] = {
 		"bool", "char", "char16_t", "char32_t", "double", "float", "int",
@@ -39,8 +38,7 @@ Parser::Parser(const vector<Token>& tokens)
 
 Parser::Mark Parser::Save() const
 {
-	Mark result = {position_, angle_depth_, ordinary_depth_, angle_floors_,
-		pending_attributes_};
+	Mark result = {position_, angle_depth_, ordinary_depth_, angle_floors_};
 	return result;
 }
 
@@ -50,7 +48,6 @@ void Parser::Restore(const Mark& mark)
 	angle_depth_ = mark.angle_depth;
 	ordinary_depth_ = mark.ordinary_depth;
 	angle_floors_ = mark.angle_floors;
-	pending_attributes_ = mark.pending_attributes;
 }
 
 const Token& Parser::Peek(size_t offset) const
@@ -248,7 +245,7 @@ bool Parser::IsTypeStart() const
 	return IsNamedTypeStart() || Peek().text == "::";
 }
 
-void Parser::SkipAttributes()
+void Parser::SkipAttributes(vector<CPPGMAstNodePtr>* captured)
 {
 	while (true)
 	{
@@ -282,36 +279,51 @@ void Parser::SkipAttributes()
 		Restore(mark);
 		if (Take("alignas") && Take("("))
 		{
-			const size_t attribute_begin = mark.position;
-			int depth = 1;
-			while (depth != 0 && !AtEnd())
+			++ordinary_depth_;
+			CPPGMAstNodePtr argument;
+			Mark type_mark = Save();
+			CPPGMAstNodePtr type = ParseTypeId();
+			if (type && Is(")")) argument = type;
+			else
 			{
-				if (Take("(")) ++depth;
-				else if (Take(")")) --depth;
-				else ++position_;
+				// ParseTypeId may accept a prefix of an expression in an
+				// ambiguous named-type position.  The closing parenthesis is
+				// the disambiguating boundary for an alignment argument.
+				Restore(type_mark);
+				argument = ParseAssignmentExpression();
 			}
-			if (depth == 0)
+			if (argument && Take(")"))
 			{
-				string spelling;
-				for (size_t i = attribute_begin; i < position_; ++i)
+				--ordinary_depth_;
+				// The PA10 grammar accepts vendor-dependent __alignof syntax,
+				// but the PA11/PA15 type model deliberately has no dependent
+				// alignment entity to attach to it.  Keep that unsupported
+				// extension syntactic-only while retaining standard alignas
+				// as a typed AST fact.
+				bool vendor_dependent = false;
+				vector<CPPGMAstNodePtr> work;
+				work.push_back(argument);
+				while (!work.empty())
 				{
-					const string& token = tokens_[i].text;
-					if (!spelling.empty() &&
-						((tokens_[i - 1].kind == AST_IDENTIFIER &&
-						  tokens_[i].kind == AST_IDENTIFIER) ||
-						 (tokens_[i - 1].kind == AST_LITERAL &&
-						  tokens_[i].kind == AST_IDENTIFIER)))
-						spelling += " ";
-					spelling += token;
+					CPPGMAstNodePtr current = work.back();
+					work.pop_back();
+					if (current && current->value.find("__alignof") != string::npos)
+						vendor_dependent = true;
+					if (!current) continue;
+					for (size_t i = 0; i < current->children.size(); ++i)
+						work.push_back(current->children[i]);
 				}
-				// A dependent alignas expression cannot contribute a concrete
-				// layout fact yet.  Keep the pre-PA15 AST contract for those
-				// attributes; concrete alignas values and type names are retained
-				// for the semantic layout pass.
-				if (spelling.find("__alignof") == string::npos)
-					pending_attributes_.push_back(spelling);
+				if (!vendor_dependent && captured)
+				{
+					CPPGMAstNodePtr attribute = Node("attribute");
+					Add(attribute, argument);
+					captured->push_back(attribute);
+				}
 				continue;
 			}
+			--ordinary_depth_;
+			Restore(mark);
+			return;
 		}
 		Restore(mark);
 		return;

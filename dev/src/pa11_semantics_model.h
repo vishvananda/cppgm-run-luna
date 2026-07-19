@@ -18,6 +18,7 @@ using namespace std;
 
 struct Scope;
 struct Type;
+struct ClassMemberInfo;
 typedef shared_ptr<Type> TypePtr;
 
 // The PA15 object model keeps layout facts in the semantic type rather than
@@ -33,11 +34,12 @@ struct ClassMemberInfo
 	long long bit_width;
 	bool bit_field;
 	bool is_static;
+	bool is_mutable;
 	CPPGMAstNodePtr initializer;
 
 	ClassMemberInfo()
 		: name(), type(), offset(0), bit_offset(0), bit_width(0),
-		  bit_field(false), is_static(false), initializer() {}
+		  bit_field(false), is_static(false), is_mutable(false), initializer() {}
 };
 
 enum TypeKind
@@ -118,12 +120,9 @@ struct Binding
 	bool injected_member;
 	string injected_object_name;
 	TypePtr injected_owner;
-	bool is_static_member;
-	bool is_mutable_member;
-	bool is_bit_field;
-	long long bit_width;
-	long long member_offset;
-	long long member_bit_offset;
+	// ClassMemberInfo is the canonical owner of layout and member-kind facts.
+	// Bindings retain lookup identity and point into the owning Type metadata.
+	ClassMemberInfo* member;
 	string access;
 	CPPGMAstNodePtr declaration;
 

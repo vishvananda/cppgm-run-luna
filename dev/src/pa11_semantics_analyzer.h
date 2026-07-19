@@ -284,11 +284,14 @@ public:
 		bool is_constexpr;
 		bool is_const;
 		bool is_volatile;
+		bool is_static;
+		bool is_mutable;
 		vector<string> fundamental_words;
 		TypePtr named_type;
 		SpecFacts()
 			: is_typedef(false), is_constexpr(false), is_const(false),
-			  is_volatile(false), fundamental_words(), named_type() {}
+			  is_volatile(false), is_static(false), is_mutable(false),
+			  fundamental_words(), named_type() {}
 	};
 
 	TypePtr TypeFromDecltype(const CPPGMAstNodePtr& node, Scope* scope)
@@ -380,6 +383,8 @@ public:
 			const string value = child->value;
 			if (value == "KW_TYPEDEF:typedef") info.is_typedef = true;
 			else if (value == "KW_CONSTEXPR:constexpr") info.is_constexpr = true;
+			else if (value == "KW_STATIC:static") info.is_static = true;
+			else if (value == "KW_MUTABLE:mutable") info.is_mutable = true;
 			else if (value == "KW_CONST:const") info.is_const = true;
 			else if (value == "KW_VOLATILE:volatile") info.is_volatile = true;
 			else
@@ -532,8 +537,9 @@ public:
 			if (!type->complete) throw logic_error("sizeof incomplete enum");
 			return type->underlying ? TypeSize(type->underlying) : 4;
 		case TYPE_CLASS:
-			if (!type->complete) throw logic_error("sizeof incomplete class");
-			return type->layout_complete ? type->object_size : 1;
+			if (!type->complete || !type->layout_complete)
+				throw logic_error("sizeof incomplete class");
+			return type->object_size;
 		case TYPE_TEMPLATE_PARAMETER:
 		case TYPE_TEMPLATE_TEMPLATE_PARAMETER: return 0;
 		}
@@ -753,7 +759,7 @@ public:
 	static size_t AlignUp(size_t value, size_t alignment)
 	;
 
-	size_t AttributeAlignment(const string& spelling, Scope* scope) const
+	size_t AttributeAlignment(const CPPGMAstNodePtr& attribute, Scope* scope)
 	;
 
 	void ApplyClassAttributes(const CPPGMAstNodePtr& node, const TypePtr& type,

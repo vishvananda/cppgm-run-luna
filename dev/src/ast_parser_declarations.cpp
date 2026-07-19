@@ -30,7 +30,8 @@ namespace cppgm_pa10 {
 
 CPPGMAstNodePtr Parser::ParseDeclaration(bool member_context)
 {
-	SkipAttributes();
+	vector<CPPGMAstNodePtr> leading_attributes;
+	SkipAttributes(&leading_attributes);
 	if (Take(";")) return Node("empty-declaration");
 	if (Is("namespace") || (Is("inline") && Peek(1).text == "namespace"))
 	{
@@ -57,10 +58,13 @@ CPPGMAstNodePtr Parser::ParseDeclaration(bool member_context)
 	if (Is("class") || Is("struct") || Is("union"))
 	{
 		Mark mark = Save();
-		CPPGMAstNodePtr result = ParseClassSpecifier(true);
+		CPPGMAstNodePtr result = ParseClassSpecifier(true, leading_attributes);
 		if (result && Take(";")) return result;
 		Restore(mark);
 	}
+	// Attributes before a non-class declaration belong to that declaration,
+	// not to a later class parsed after a speculative branch.  The PA15 layout
+	// service currently consumes only class alignment attributes.
 	if (Is("enum"))
 	{
 		Mark mark = Save();

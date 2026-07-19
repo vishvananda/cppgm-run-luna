@@ -75,7 +75,6 @@ private:
 		int angle_depth;
 		int ordinary_depth;
 		std::vector<int> angle_floors;
-		std::vector<std::string> pending_attributes;
 	};
 
 	const std::vector<Token>& tokens_;
@@ -87,7 +86,6 @@ private:
 	std::set<std::string> templates_;
 	std::set<std::string> namespaces_;
 	std::set<std::string> value_names_;
-	std::vector<std::string> pending_attributes_;
 	std::string current_class_;
 
 	Mark Save() const;
@@ -123,7 +121,9 @@ private:
 	CPPGMAstNodePtr ParseLinkageSpecification();
 	CPPGMAstNodePtr ParseTemplateDeclaration(bool member_context = false);
 	CPPGMAstNodePtr ParseExplicitInstantiation();
-	CPPGMAstNodePtr ParseClassSpecifier(bool declaration_context = true);
+	CPPGMAstNodePtr ParseClassSpecifier(bool declaration_context = true,
+		const std::vector<CPPGMAstNodePtr>& leading_attributes =
+			std::vector<CPPGMAstNodePtr>());
 	CPPGMAstNodePtr ParseClassMember();
 	CPPGMAstNodePtr ParseBitFieldDeclaration();
 	CPPGMAstNodePtr ParseEnumSpecifier(bool declaration_context = true);
@@ -192,7 +192,7 @@ private:
 	CPPGMAstNodePtr ParseDecltypeSpecifier();
 	CPPGMAstNodePtr ParseNamedType(bool type_node);
 	bool LooksLikeTypeName(const Token& token) const;
-	void SkipAttributes();
+	void SkipAttributes(std::vector<CPPGMAstNodePtr>* captured = 0);
 	bool ParseFunctionSuffixes(const CPPGMAstNodePtr& declarator);
 
 };

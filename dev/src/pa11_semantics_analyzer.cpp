@@ -1,5 +1,62 @@
 #include "pa11_semantics_analyzer.h"
 
+namespace {
+
+bool SameLayoutType(const TypePtr& left, const TypePtr& right)
+{
+	if (left == right) return true;
+	if (!left || !right || left->kind != right->kind ||
+		left->is_const != right->is_const || left->is_volatile != right->is_volatile)
+		return false;
+	switch (left->kind)
+	{
+	case TYPE_FUNDAMENTAL:
+	case TYPE_TEMPLATE_PARAMETER:
+	case TYPE_TEMPLATE_TEMPLATE_PARAMETER:
+		return left->name == right->name;
+	case TYPE_CLASS:
+		return left->name == right->name && left->tag == right->tag;
+	case TYPE_ENUM:
+		return left->name == right->name && left->scoped_enum == right->scoped_enum;
+	case TYPE_POINTER:
+	case TYPE_LVALUE_REFERENCE:
+	case TYPE_RVALUE_REFERENCE:
+		return SameLayoutType(left->child, right->child);
+	case TYPE_ARRAY:
+		return left->bound == right->bound &&
+			SameLayoutType(left->child, right->child);
+	case TYPE_FUNCTION:
+		if (left->variadic != right->variadic ||
+			left->function_const != right->function_const ||
+			!SameLayoutType(left->child, right->child) ||
+			left->parameters.size() != right->parameters.size()) return false;
+		for (size_t i = 0; i < left->parameters.size(); ++i)
+			if (!SameLayoutType(left->parameters[i], right->parameters[i])) return false;
+		return true;
+	case TYPE_MEMBER_POINTER:
+		return SameLayoutType(left->member_owner, right->member_owner) &&
+			SameLayoutType(left->child, right->child);
+	}
+	return false;
+}
+
+bool IsBitFieldType(const TypePtr& type)
+{
+	if (!type) return false;
+	if (type->kind == TYPE_ENUM) return true;
+	if (type->kind != TYPE_FUNDAMENTAL) return false;
+	return type->name != "float" && type->name != "double" &&
+		type->name != "long double" && type->name != "void" &&
+		type->name != "nullptr_t";
+}
+
+bool IsValidAlignment(size_t alignment)
+{
+	return alignment == 0 || (alignment & (alignment - 1)) == 0;
+}
+
+} // namespace
+
 size_t Analyzer::AlignUp(size_t value, size_t alignment)
 {
 	if (alignment == 0) alignment = 1;
@@ -7,44 +64,27 @@ size_t Analyzer::AlignUp(size_t value, size_t alignment)
 	return remainder == 0 ? value : value + alignment - remainder;
 }
 
-size_t Analyzer::AttributeAlignment(const string& spelling, Scope* scope) const
+size_t Analyzer::AttributeAlignment(const CPPGMAstNodePtr& attribute, Scope* scope)
 {
-	const size_t open = spelling.find('(');
-	const size_t close = spelling.rfind(')');
-	if (open == string::npos || close == string::npos || close <= open)
-		return 0;
-	string value = spelling.substr(open + 1, close - open - 1);
-	while (!value.empty() && isspace(static_cast<unsigned char>(value[0]))) value.erase(value.begin());
-	while (!value.empty() && isspace(static_cast<unsigned char>(value[value.size() - 1]))) value.erase(value.size() - 1);
-	if (value.empty()) return 0;
-	char* end = 0;
-	errno = 0;
-	const long long numeric = strtoll(value.c_str(), &end, 0);
-	if (end != value.c_str() && *end == '\0' && errno != ERANGE && numeric > 0)
-		return static_cast<size_t>(numeric);
-	string compact;
-	for (size_t i = 0; i < value.size(); ++i)
-		if (!isspace(static_cast<unsigned char>(value[i]))) compact += value[i];
-	if (compact == "bool" || compact == "char" || compact == "signedchar" ||
-		compact == "unsignedchar") return 1;
-	if (compact == "short" || compact == "shortint" || compact == "unsignedshort" ||
-		compact == "unsignedshortint" || compact == "char16_t") return 2;
-	if (compact == "int" || compact == "unsigned" || compact == "unsignedint" ||
-		compact == "float" || compact == "char32_t" || compact == "wchar_t") return 4;
-	if (compact == "long" || compact == "longint" || compact == "unsignedlong" ||
-		compact == "unsignedlongint" || compact == "double" || compact == "longlong" ||
-		compact == "longlongint" || compact == "unsignedlonglong" ||
-		compact == "unsignedlonglongint") return 8;
-	if (compact == "longdouble") return 16;
-	try
+	if (!attribute || attribute->kind != "attribute" || attribute->children.size() != 1)
+		throw logic_error("invalid alignment attribute");
+	const CPPGMAstNodePtr argument = attribute->children[0];
+	size_t alignment = 0;
+	if (argument && argument->kind == "type-id")
 	{
-		TypePtr type = ResolveType(scope, value);
-		return TypeAlignment(type);
+		TypePtr type = TypeFromTypeId(argument, scope);
+		alignment = TypeAlignment(type);
+		if (alignment == 0) throw logic_error("alignment type has no alignment");
 	}
-	catch (const exception&)
+	else
 	{
-		return 0;
+		ConstantValue value = Evaluate(argument, scope);
+		if (!value.known || value.value < 0)
+			throw logic_error("alignment is not a non-negative constant");
+		alignment = static_cast<size_t>(value.value);
 	}
+	if (!IsValidAlignment(alignment)) throw logic_error("invalid alignment");
+	return alignment;
 }
 
 void Analyzer::ApplyClassAttributes(const CPPGMAstNodePtr& node, const TypePtr& type,
@@ -55,7 +95,7 @@ void Analyzer::ApplyClassAttributes(const CPPGMAstNodePtr& node, const TypePtr& 
 	{
 		const CPPGMAstNodePtr child = node->children[i];
 		if (!child || child->kind != "attribute") continue;
-		const size_t alignment = AttributeAlignment(child->value, scope);
+		const size_t alignment = AttributeAlignment(child, scope);
 		if (alignment > type->explicit_alignment) type->explicit_alignment = alignment;
 	}
 }
@@ -63,7 +103,9 @@ void Analyzer::ApplyClassAttributes(const CPPGMAstNodePtr& node, const TypePtr& 
 void Analyzer::ComputeClassLayout(const CPPGMAstNodePtr& node, const TypePtr& type,
 	Scope* class_scope)
 {
-	if (!type || type->layout_in_progress) return;
+	if (!type) return;
+	if (type->layout_in_progress)
+		throw logic_error("recursive class layout");
 	type->layout_in_progress = true;
 	type->is_union = type->tag == "union";
 	ApplyClassAttributes(node, type, class_scope ? class_scope->parent : 0);
@@ -79,7 +121,7 @@ void Analyzer::ComputeClassLayout(const CPPGMAstNodePtr& node, const TypePtr& ty
 	size_t bit_unit_size = 0;
 	size_t bit_unit_alignment = 1;
 	long long bits_used = 0;
-	string bit_unit_type;
+	TypePtr bit_unit_type;
 	const bool union_type = type->is_union;
 	for (size_t i = 0; i < type->class_members.size(); ++i)
 	{
@@ -88,6 +130,18 @@ void Analyzer::ComputeClassLayout(const CPPGMAstNodePtr& node, const TypePtr& ty
 		const size_t member_size = TypeSize(member.type);
 		const size_t member_alignment = max<size_t>(1, TypeAlignment(member.type));
 		maximum_alignment = max(maximum_alignment, member_alignment);
+		if (member.bit_field)
+		{
+			if (!IsBitFieldType(member.type))
+				throw logic_error("bit-field type is not integral or enum");
+			if (member_size > static_cast<size_t>(numeric_limits<long long>::max() / 8))
+				throw logic_error("bit-field storage unit is too large");
+			const long long capacity = static_cast<long long>(member_size * 8);
+			if (member.bit_width < 0 || member.bit_width > capacity)
+				throw logic_error("invalid bit-field width");
+			if (member.bit_width == 0 && !member.name.empty())
+				throw logic_error("named zero-width bit-field");
+		}
 		if (union_type)
 		{
 			member.offset = 0;
@@ -99,22 +153,19 @@ void Analyzer::ComputeClassLayout(const CPPGMAstNodePtr& node, const TypePtr& ty
 		{
 			const long long width = member.bit_width;
 			const long long capacity = static_cast<long long>(member_size * 8);
-			if (width < 0 || width > capacity)
-				throw logic_error("invalid bit-field width");
 			if (width == 0)
 			{
 				if (bits_used != 0) offset = bit_unit_offset + bit_unit_size;
 				bits_used = 0;
 				bit_unit_size = 0;
-				bit_unit_type.clear();
+				bit_unit_type.reset();
 				offset = AlignUp(offset, member_alignment);
 				member.offset = static_cast<long long>(offset);
 				member.bit_offset = 0;
 				continue;
 			}
-			const string current_type = TypeText(member.type, true);
 			if (bits_used == 0 || bit_unit_size != member_size ||
-				bit_unit_alignment != member_alignment || bit_unit_type != current_type ||
+				bit_unit_alignment != member_alignment || !SameLayoutType(bit_unit_type, member.type) ||
 				bits_used + width > capacity)
 			{
 				if (bits_used != 0) offset = bit_unit_offset + bit_unit_size;
@@ -122,7 +173,7 @@ void Analyzer::ComputeClassLayout(const CPPGMAstNodePtr& node, const TypePtr& ty
 				bit_unit_offset = offset;
 				bit_unit_size = member_size;
 				bit_unit_alignment = member_alignment;
-				bit_unit_type = current_type;
+				bit_unit_type = member.type;
 				bits_used = 0;
 			}
 			member.offset = static_cast<long long>(bit_unit_offset);
@@ -133,7 +184,7 @@ void Analyzer::ComputeClassLayout(const CPPGMAstNodePtr& node, const TypePtr& ty
 				offset = bit_unit_offset + bit_unit_size;
 				bits_used = 0;
 				bit_unit_size = 0;
-				bit_unit_type.clear();
+				bit_unit_type.reset();
 			}
 			continue;
 		}
@@ -142,7 +193,7 @@ void Analyzer::ComputeClassLayout(const CPPGMAstNodePtr& node, const TypePtr& ty
 			offset = bit_unit_offset + bit_unit_size;
 			bits_used = 0;
 			bit_unit_size = 0;
-			bit_unit_type.clear();
+			bit_unit_type.reset();
 		}
 		offset = AlignUp(offset, member_alignment);
 		member.offset = static_cast<long long>(offset);
@@ -197,8 +248,6 @@ void Analyzer::RecordClassMembers(const CPPGMAstNodePtr& node, const TypePtr& ty
 				Binding* binding = class_scope->local(name);
 				if (!binding) binding = class_scope->add(Binding(BIND_VARIABLE, name, field_type));
 				binding->type = field_type;
-				binding->is_bit_field = true;
-				binding->bit_width = width;
 				binding->access = access;
 				binding->declaration = child;
 			}
@@ -241,24 +290,25 @@ void Analyzer::RecordClassMembers(const CPPGMAstNodePtr& node, const TypePtr& ty
 			if (binding)
 			{
 				binding->type = field_type;
-				binding->is_mutable_member = false;
 				binding->access = access;
 				binding->declaration = child;
-				for (size_t k = 0; k < child->children[0]->children.size(); ++k)
-				{
-					const string& value = child->children[0]->children[k]->value;
-					if (value.find(":static") != string::npos) binding->is_static_member = true;
-					if (value.find(":mutable") != string::npos) binding->is_mutable_member = true;
-				}
 			}
 			if (facts.is_typedef || field_type->kind == TYPE_FUNCTION || name.empty()) continue;
 			ClassMemberInfo member;
 			member.name = name;
 			member.type = field_type;
-			member.is_static = binding && binding->is_static_member;
+			member.is_static = facts.is_static;
+			member.is_mutable = facts.is_mutable;
 			member.initializer = item->children.size() > 1 ? item->children[1] : CPPGMAstNodePtr();
 			type->class_members.push_back(member);
 		}
+	}
+	for (size_t i = 0; i < type->class_members.size(); ++i)
+	{
+		ClassMemberInfo& member = type->class_members[i];
+		if (member.name.empty()) continue;
+		Binding* binding = class_scope->local(member.name);
+		if (binding) binding->member = &member;
 	}
 	(void)scope;
 }
@@ -340,10 +390,19 @@ TypePtr Analyzer::ProcessForwardClass(const CPPGMAstNodePtr& node, Scope* scope)
 	const string name = LastComponent(node->value);
 	if (name.empty()) throw logic_error("anonymous class forward declaration");
 	Binding* existing = scope->local(name);
-	if (existing && existing->kind == BIND_TYPE) return existing->type;
+	if (existing && existing->kind == BIND_TYPE)
+	{
+		if (existing->type && existing->type->kind == TYPE_CLASS)
+			ApplyClassAttributes(node, existing->type, scope);
+		return existing->type;
+	}
 	existing = ResolveBinding(scope, name);
 	if (existing && (existing->kind == BIND_TYPE || existing->kind == BIND_TYPE_ALIAS) &&
-		existing->type && existing->type->kind == TYPE_CLASS) return existing->type;
+		existing->type && existing->type->kind == TYPE_CLASS)
+	{
+		ApplyClassAttributes(node, existing->type, scope);
+		return existing->type;
+	}
 	TypePtr type(new Type(TYPE_CLASS, name));
 	type->tag = ClassKey(node);
 	type->complete = false;

@@ -2,31 +2,25 @@
 
 ## Baseline
 
-The turn-start PA15 report is **16 / 200** tests.  Earlier assignments pass,
-the source file audit passes, and the PA15 failures are real compiler gaps
-rather than driver stubs.  The current `--emit-lowir` implementation is the
-PA14 procedural lowerer: it already handles scalar procedural inputs, but it
-still treats every class as a one-byte opaque object and does not collect
-class members or object lifetime actions.
+The turn-start PA15 report was **16 / 200** tests.  The landed class-layout
+checkpoint raised it to **26 / 200** while earlier assignments and the source
+file audit remained clean.  The remaining PA15 failures are real object-model
+gaps rather than driver stubs.
 
 ## Remaining Work Map
 
 The complete current-PA failure set is grouped below by shared compiler
-behavior.  The 30 LowIR mismatches are listed separately from the exit-status
-failures so every one of the 184 failures is accounted for.
+behavior.  The 20 LowIR mismatches are listed separately from the 154
+exit-status failures so every one of the 174 failures is accounted for.
 
 1. **Class layout, object storage, and aggregate LowIR shape** — output
-   mismatches `100-class-local-sizeof`, `100-global-class-zero`,
-   `100-global-reference-incomplete-referent`, `100-large-class-local`,
-   `100-large-global-class-zero`, `100-self-pointer-layout`,
+   mismatches `100-global-reference-incomplete-referent`,
    `200-comma-class-lvalue-reference-init`, `200-derived-pointer-member-init`,
-   `200-extern-class-object-declaration`, `200-external-ctor-overload-nonfirst-argument`,
-   `200-global-constructor`, `200-global-scalar-dynamic-init`,
-   `200-local-default-class-array-lifecycle`, `200-member-object-lifetime`,
-   `200-return-preserves-value`, and `200-static-thread-local-member`; and
-   `300-alignas-class-layout`, `300-bit-field-layout-sizeof`,
-   `300-zero-width-bit-field-layout`, `400-bit-field-constructor-member-init`,
-   and `400-bit-field-sparse-member-init`.  The same family has status
+   `200-external-ctor-overload-nonfirst-argument`, `200-global-constructor`,
+   `200-global-scalar-dynamic-init`, `200-local-default-class-array-lifecycle`,
+   `200-return-preserves-value`, `200-static-thread-local-member`,
+   `400-bit-field-constructor-member-init`, and
+   `400-bit-field-sparse-member-init`.  The same family has status
    failures `100-default-member-initializer-aggregate-member`,
    `100-default-member-initializer-class-member`,
    `100-default-member-initializer-scalar-brace`,
@@ -43,7 +37,8 @@ failures so every one of the 184 failures is accounted for.
    `200-pointer-member-zero-brace-init`, `200-pointer-member-zero-paren-init`,
    `200-reference-member-class-init`, `300-array-member-empty-paren-value-init`,
    `300-value-init-aggregate-with-nontrivial-member`,
-   `400-bit-field-member-access-bad`, and `400-bitfield-aggregate-init`.
+   `400-bit-field-member-access-bad`, `400-bitfield-aggregate-init`, and
+   spec `200-aggregate-brace-elision`.
 
 2. **Member collection, `this`, member lookup, and non-static/static method
    lowering** — output mismatches `100-qualified-typedef-cstyle-cast-same-name-operand`,
@@ -69,8 +64,10 @@ failures so every one of the 184 failures is accounted for.
    `200-parenthesized-member-call`, `200-pointer-subscript-class-reference-return`,
    `200-protected-base-method`, `200-simple-class-member-object-access`,
    `200-static-nonstatic-same-pointer-signature`,
-   `200-static-thread-local-member-object-call`, and
-   `300-member-callable-field-call`, `300-member-function-pointer-field-call`.
+   `200-static-thread-local-member-object-call`,
+   `300-const-method-array-member-binds-const-reference`,
+   `300-member-callable-field-call`, `300-member-function-pointer-field-call`,
+   and `300-static-const-member-address`.
 
 3. **Constructors, destructors, recursive lifetime, and initialization
    actions** — output mismatches `200-friend-noexcept-redeclaration` and
@@ -92,12 +89,12 @@ failures so every one of the 184 failures is accounted for.
    `300-explicit-destructor-call-enclosing-namespace-type`,
    `300-header-static-class-init`, `300-scalar-pseudo-destructor-call`,
    `300-static-class-member-object-definition`,
-   `300-synthesized-array-member-lifecycle`, `500-inheriting-constructors`, and
-   `500-inheriting-external-transitive-constructor`.
+   `300-synthesized-array-member-lifecycle`, `500-inheriting-constructors`,
+   `500-inheriting-external-transitive-constructor`, and spec
+   `200-direct-list-init-explicit-ctor`.
 
 4. **Inheritance, access control, nested-name lookup, references, and
-   conversions** — output mismatches `200-derived-pointer-member-init` and
-   `300-top-level-alias-anonymous-struct`; status failures
+   conversions** — status failures
    `200-base-field-access`, `200-const-cast-pointer-reference-alias`,
    `200-derived-pointer-overload-prefers-base-over-void`,
    `200-elaborated-member-forward-type`,
@@ -116,7 +113,6 @@ failures so every one of the 184 failures is accounted for.
    `300-class-using-declaration-reexposes-protected-field`,
    `300-lazy-nested-class-enclosing-alias-lookup`,
    `300-private-base-using-method-call`,
-   `300-private-base-using-method-call`,
    `300-prvalue-derived-base-friend-operator`,
    `300-qualified-friend-function-access`,
    `300-reference-member-same-name-as-class`,
@@ -125,8 +121,7 @@ failures so every one of the 184 failures is accounted for.
    `200-conditional-derived-base-lvalue-reference`,
    `200-const-reference-binds-derived-pointer-prvalue`,
    `200-derived-base-reference-overload-rank`,
-   `200-nested-class-enclosing-access`, and
-   `300-inherited-const-method-base-pointer-cv-bad`.
+   `200-nested-class-enclosing-access`.
 
 5. **Operator overload resolution, ADL, and callable/member expression
    forms** — output mismatches `300-enum-class-nonmember-operator-bitand`,
@@ -153,12 +148,12 @@ failures so every one of the 184 failures is accounted for.
    and spec failures `300-logical-operator-overload` and
    `300-overloaded-comma-nonviable-falls-back-builtin`.
 
-6. **Remaining parser/diagnostic and LowIR metadata gaps** — output mismatch
-   `300-alignas-out-of-class-nested-type` is represented by the corresponding
-   status failure; status failures `100-function-pointer-nested-param-name-shadow`,
+6. **Remaining parser/diagnostic and LowIR metadata gaps** — status failures
+   `100-function-pointer-nested-param-name-shadow`,
    `200-function-boundary-metadata-emission`, `200-parameter-access-metadata-emission`,
    `200-parameter-alias-metadata-emission`, and
-   `300-member-function-trailing-return`; plus the rejection/acceptance cases
+   `300-alignas-out-of-class-nested-type`, `300-member-function-trailing-return`;
+   plus the rejection/acceptance cases
    `200-copy-init-explicit-ctor-bad`, `200-copy-init-explicit-ctor-overload-refinement`,
    `200-copy-list-init-explicit-ctor-bad`, `200-list-init-narrowing-bad`,
    `300-compound-assignment-adl-nonmember-after-member-reject`, and
@@ -172,12 +167,16 @@ pointer/reference/array and previously completed class-member sizes, empty
 classes, self-referential pointer members, the direct single base at offset
 zero, integral bit-field allocation units including unnamed zero-width
 separators, explicit class alignment, and the resulting `sizeof`/`alignof`
-constant evaluation.  It also changes zero-initialized class globals to the
-structured `global { zero <size> }` form and prevents PA14's scalar zero store
-from pretending to initialize a trivial class object.  The implementation
-preserves all earlier procedural behavior and keeps member/lifetime lowering
-as the next checkpoint rather than baking source-test answers into the
-emitter.
+constant evaluation.  Alignment arguments are retained as typed AST
+expressions, so constant-expression and type-id forms reach semantic
+evaluation without reparsing source spelling.  Class-member bindings link to
+their canonical typed member records, and the lowerer rejects incomplete or
+in-progress class layouts instead of manufacturing fallback sizes.  It also
+changes zero-initialized class globals to the structured `global { zero <size> }`
+form and prevents PA14's scalar zero store from pretending to initialize a
+trivial class object.  The implementation preserves all earlier procedural
+behavior and keeps member/lifetime lowering as the next checkpoint rather than
+baking source-test answers into the emitter.
 
 Validation for this checkpoint is the focused layout/global subset, the full
 PA15 report, the through-PA14 report, and the PA15 source-file audit.  The
@@ -191,8 +190,10 @@ Completed.  The semantic model now retains typed class-member and layout facts;
 the analyzer computes declaration-order offsets, base and bit-field storage,
 alignment, and final object size; and the PA14 lowerer consumes those facts for
 object slots, `sizeof`/`alignof`, structured zero-initialized class globals, and
-trivial local class declarations.  The parser also preserves `alignas` on class
-definitions long enough for semantic layout.
+trivial local class declarations.  The parser preserves standard `alignas`
+arguments as typed AST facts while leaving the earlier vendor-dependent
+`__alignof` syntax syntactic-only, and invalid incomplete/recursive layouts
+now fail at the semantic boundary.
 
 The focused checkpoint set passed **9 / 9**:
 
