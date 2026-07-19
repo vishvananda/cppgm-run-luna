@@ -1,9 +1,13 @@
 // Student-facing scaffold for the PA10+ `cppgm++` binary.
 
 #include "exceptions.h"
+#include "ast_parser.h"
+#include "posttoken_semantics.h"
+#include "preprocessor_engine.h"
 #include "tool_help_text.h"
 
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -38,6 +42,12 @@ struct DriverInvocation
       : mode(DriverMode::Link)
   {
   }
+};
+
+struct SourceOutputInvocation
+{
+  string output;
+  vector<string> inputs;
 };
 
 vector<string> collect_args(int argc, char ** argv)
@@ -185,15 +195,17 @@ EmitMode parse_emit_mode(vector<string> & args)
   return mode;
 }
 
-void parse_source_output_invocation(const vector<string> & args,
-                                    bool allow_lowir_options)
+SourceOutputInvocation parse_source_output_invocation(const vector<string> & args,
+                                                      bool allow_lowir_options)
 {
   bool explicit_outfile = false;
+  string output;
   vector<string> inputs;
 
   for(size_t i = 0; i < args.size(); ++i) {
     if(args[i] == "-o") {
       consume_required_option_argument(args, i, "-o", "output file");
+      output = args[i];
       explicit_outfile = true;
       continue;
     }
@@ -218,6 +230,10 @@ void parse_source_output_invocation(const vector<string> & args,
   if(!explicit_outfile || inputs.empty()) {
     throw logic_error("invalid usage");
   }
+  SourceOutputInvocation result;
+  result.output = output;
+  result.inputs = inputs;
+  return result;
 }
 
 bool consume_preprocess_option(const vector<string> & args, size_t & i)
@@ -381,8 +397,22 @@ int run_unimplemented_mode(const char * feature,
 
 int run_emit_ast_mode(const vector<string> & args)
 {
-  parse_source_output_invocation(args, false);
-  return run_unimplemented_mode("--emit-ast", "PA10");
+  const SourceOutputInvocation invocation = parse_source_output_invocation(args, false);
+  ofstream output(invocation.output.c_str());
+  if(!output) throw logic_error("unable to open output file");
+  output << invocation.inputs.size() << " translation units\n";
+  for(size_t i = 0; i < invocation.inputs.size(); ++i) {
+    const vector<PostPPToken> tokens = PreprocessSourceFile(invocation.inputs[i]);
+    if(!ValidatePostTokens(tokens)) {
+      throw logic_error("invalid token in preprocessed sequence");
+    }
+    const CPPGMAstNodePtr tree = ParsePA10TranslationUnit(tokens);
+    if(!tree) throw logic_error("token sequence is not a translation-unit");
+    output << "start translation unit " << (i + 1) << "\n";
+    PrintPA10Ast(tree, output);
+    output << "end translation unit\n";
+  }
+  return EXIT_SUCCESS;
 }
 
 int run_emit_types_mode(const vector<string> & args)
