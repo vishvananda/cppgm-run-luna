@@ -60,6 +60,69 @@ checked-in suite should be grouped by translation, literal classification,
 Unicode encoding, or string-sequence semantics rather than handled as a
 fixture-specific exception.
 
+## Architecture Review
+
+The integrated PA2 path has three explicit layers. `dev/posttoken.cpp` owns
+the small application boundary: it buffers UTF-8 standard input, invokes
+`LexPostPPSource`, and passes the resulting preprocessing-token records to
+`RunPostToken`. `dev/src/posttoken_lexer.cpp` owns token-stream assembly,
+whitespace/comment skipping, raw and quoted preprocessing-token recognition,
+directive/header context, and longest-match punctuator handling.
+
+Phase 1 through phase 3 behavior is shared with PA1 instead of being copied
+into the PA2 driver. `dev/src/pptoken_translation.cpp/.h` owns strict UTF-8
+decode/encode, Annex-E identifier predicates, `SourceUnit` origin metadata,
+raw-span discovery, trigraph replacement, line splicing, UCN conversion, and
+the final synthetic newline. The source-set entry in
+`dev/frontend_source_sets.mk` links this module to both `pptoken` and
+`posttoken`, so the through-stage boundary uses one implementation.
+
+`dev/src/posttoken_semantics.cpp` is responsible only for converting typed
+preprocessing tokens to PA2 output: simple-token mapping, integer candidate
+selection, decimal/hexadecimal floating scanning, character escape decoding,
+ABI byte dumps, and maximal string-literal concatenation. The separate
+`posttoken_unicode` module supplies the semantic UTF-8 decode/encode helpers.
+Conversion failures are caught at this layer and emitted as `invalid` while
+phase 1–3 failures still escape to `main` and return failure, matching the
+assignment contract.
+
+The checkpoint review found the duplicated translation path, the hexadecimal
+float scanner issue, Unicode/raw translation gaps, and token-boundary/context
+edges recorded in `pa2/audit.md`. The cleanup keeps the public PA1 token
+stream unchanged while making PA2 consume the same translated source model.
+The normal path has no fixture-name branches, reference-binary dependency,
+subprocess, or host-toolchain shortcut.
+
+## Final Architecture Review
+
+The final stage flow is:
+
+    UTF-8 bytes -> shared phase 1-3 SourceUnit stream
+                 -> PA2 preprocessing-token lexer
+                 -> typed literal/simple/identifier semantics
+                 -> PA2 output and eof
+
+Raw protection is source metadata with origin bounds, not a PA2 test special
+case. The shared translation pass protects raw bodies before trigraph,
+splice, and UCN transformations, then performs a bounded follow-up discovery
+for prefixes formed by those transformations. The lexer consumes the result
+without reinterpreting protected body text. Identifier and pp-number scans
+use the same Unicode classification as PA1, and the `<::` exception remains
+at the tokenization boundary where it belongs.
+
+Ownership is now cohesive: `pptoken_translation.*` owns reusable source
+translation, `pptoken.cpp` owns the PA1 stream consumer, `posttoken_lexer.cpp`
+owns PA2 token records, and `posttoken_semantics.cpp` owns PA2 conversion and
+output. The implementation uses bounded delimiter checks, linear source
+passes for ordinary inputs, maximal-run string processing, and in-process
+numeric/Unicode conversion. It does not inspect tests or references and does
+not invoke another compiler or process.
+
+The final stage preserves PA1, as shown by the through-PA2 report and the
+independent PA1 report, while the PA2 local/course fixtures and source audit
+are green. The complete final audit, including checkpoint comparison and
+validation evidence, is recorded in `pa2/audit.md`.
+
 ## Next checkpoint group
 
 The next assignment checkpoint is PA3 preprocessing behavior, beginning with

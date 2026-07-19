@@ -1,6 +1,7 @@
 #include "posttoken_semantics.h"
 
 #include <climits>
+#include <cstdlib>
 #include <cstring>
 #include <iomanip>
 #include <iostream>
@@ -610,24 +611,15 @@ bool ParseFloatingSpec(const string& source, string* core, char* suffix)
 
 float PA2DecodeFloat(const string& source)
 {
-	istringstream input(source);
-	float value = 0;
-	input >> value;
-	return value;
+	return ::strtof(source.c_str(), 0);
 }
 double PA2DecodeDouble(const string& source)
 {
-	istringstream input(source);
-	double value = 0;
-	input >> value;
-	return value;
+	return ::strtod(source.c_str(), 0);
 }
 long double PA2DecodeLongDouble(const string& source)
 {
-	istringstream input(source);
-	long double value = 0;
-	input >> value;
-	return value;
+	return ::strtold(source.c_str(), 0);
 }
 
 template<typename T>
@@ -650,7 +642,7 @@ void EmitFloatingLiteral(const PostPPToken& token, const string& source)
 
 bool ValidUserSuffix(const string& suffix)
 {
-	if (suffix.size() < 2 || suffix[0] != '_') return false;
+	if (suffix.empty() || suffix[0] != '_') return false;
 	for (size_t i = 1; i < suffix.size(); ++i)
 		if (!IsSuffixBody(static_cast<unsigned char>(suffix[i]))) return false;
 	return true;

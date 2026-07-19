@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <string>
 #include <vector>
 
 struct SourceUnit
@@ -20,11 +21,21 @@ struct SourceUnit
 	{}
 };
 
-int RawPrefixLength(const std::vector<int>& source, std::size_t position);
-std::vector<bool> MarkRawLiteralSpans(const std::vector<int>& source);
+bool IsAsciiDigit(int code_point);
+bool IsAsciiOctalDigit(int code_point);
+bool IsHexDigit(int code_point);
+bool IsIdentifierNondigit(int code_point);
+bool IsIdentifierStart(int code_point);
+bool IsIdentifierBody(int code_point);
+bool IsSourceWhitespace(int code_point);
+bool IsRawDelimiterCodePoint(int code_point);
 
+std::string EncodeUTF8CodePoint(int code_point);
+std::string EncodeUnits(const std::vector<SourceUnit>& source,
+	std::size_t begin, std::size_t end);
 std::vector<SourceUnit> BuildSourceUnits(
 	const std::vector<int>& decoded,
 	const std::vector<bool>& raw_spans);
 bool AddTranslatedRawSpans(const std::vector<SourceUnit>& source,
 	std::vector<bool>* raw_spans);
+std::vector<SourceUnit> TranslateSource(const std::string& input);
