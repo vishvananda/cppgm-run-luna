@@ -213,10 +213,15 @@ string DecodeStringLiteral(const string& source)
 	return result;
 }
 
-string ProtectedControlSource(const vector<MacroToken>& tokens, size_t begin,
-	size_t end, vector<pair<string, string> >* protected_operands)
+vector<MacroToken> ProtectedControlTokens(const vector<MacroToken>& tokens,
+	size_t begin, size_t end, const string& file, int logical_line)
 {
 	vector<MacroToken> copy(tokens.begin() + begin, tokens.begin() + end);
+	for (size_t i = 0; i < copy.size(); ++i)
+	{
+		copy[i].file = file;
+		copy[i].line = logical_line;
+	}
 	for (size_t i = 0; i < copy.size(); ++i)
 	{
 		if (!IsIdentifier(copy[i]) || copy[i].text != "defined")
@@ -232,13 +237,9 @@ string ProtectedControlSource(const vector<MacroToken>& tokens, size_t begin,
 		if (copy[operand].kind != TOKEN_IDENTIFIER &&
 			copy[operand].kind != TOKEN_PUNCTUATOR)
 			continue;
-		const string original = copy[operand].text;
-		const string replacement = "__CPPGM_DEFINED_OPERAND_" +
-			to_string(protected_operands->size());
-		copy[operand].text = replacement;
-		protected_operands->push_back(make_pair(replacement, original));
+		copy[operand].protect_from_macro_expansion = true;
 	}
-	return Reconstruct(copy, 0, copy.size());
+	return copy;
 }
 
 class Preprocessor
@@ -403,20 +404,16 @@ private:
 	bool Evaluate(const vector<MacroToken>& tokens, size_t begin, size_t end,
 		int logical_line, const string& file)
 	{
-		vector<pair<string, string> > protected_operands;
-		const string source = ProtectedControlSource(tokens, begin, end,
-			&protected_operands);
-		vector<PostPPToken> expanded = macros_.Expand(source, file, logical_line);
-		for (size_t i = 0; i < expanded.size(); ++i)
-			for (size_t j = 0; j < protected_operands.size(); ++j)
-				if (expanded[i].source == protected_operands[j].first)
-					expanded[i].source = protected_operands[j].second;
+		const vector<MacroToken> control_tokens = ProtectedControlTokens(
+			tokens, begin, end, file, logical_line);
+		vector<PostPPToken> expanded = macros_.Expand(control_tokens);
 		set<string> defined;
 		// MacroState's public query is intentionally used to materialize the
 		// semantic fact consumed by the typed PA3 evaluator.
-		for (size_t i = 0; i < protected_operands.size(); ++i)
-			if (macros_.IsDefined(protected_operands[i].second))
-				defined.insert(protected_operands[i].second);
+		for (size_t i = 0; i < control_tokens.size(); ++i)
+			if (control_tokens[i].protect_from_macro_expansion &&
+				macros_.IsDefined(control_tokens[i].text))
+				defined.insert(control_tokens[i].text);
 		// Any identifier that appears as a defined operand is queried above;
 		// the evaluator only needs those names, while normal identifiers are 0.
 		bool value = false;
@@ -583,7 +580,7 @@ private:
 		}
 		else if (expanded.size() != 3)
 			throw logic_error("extra tokens after #line");
-		*line_delta = static_cast<int>(value) - (physical_line + 1);
+		*line_delta = static_cast<int>(value) - physical_line - 1;
 	}
 
 	void HandleInclude(const vector<MacroToken>& tokens, size_t begin,

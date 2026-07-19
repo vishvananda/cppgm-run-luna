@@ -855,13 +855,15 @@ vector<Token> NonSpaceTokens(const vector<Token>& input)
 }
 
 vector<Token> PasteTokens(const Token& left, const Token& right,
-	const Macro* replacement_owner)
+	const Macro* replacement_owner, const string& file, int line)
 {
 	if (left.kind == TOKEN_PLACEMARKER && right.kind == TOKEN_PLACEMARKER)
 		return vector<Token>(1, Token(TOKEN_PLACEMARKER));
 	if (left.kind == TOKEN_PLACEMARKER)
 	{
 		Token result = CopyToken(right);
+		result.file = file;
+		result.line = line;
 		return vector<Token>(1, result);
 	}
 	if (right.kind == TOKEN_PLACEMARKER && left.text == ",")
@@ -869,9 +871,12 @@ vector<Token> PasteTokens(const Token& left, const Token& right,
 	if (right.kind == TOKEN_PLACEMARKER)
 	{
 		Token result = CopyToken(left);
+		result.file = file;
+		result.line = line;
 		return vector<Token>(1, result);
 	}
-	vector<Token> pasted = NonSpaceTokens(Tokenize(left.text + right.text));
+	vector<Token> pasted = NonSpaceTokens(Tokenize(
+		left.text + right.text, file, line));
 	MacroBlockedNames blocked = left.blocked;
 	blocked.Merge(right.blocked);
 	const bool from_argument = left.from_argument || right.from_argument;
@@ -880,12 +885,15 @@ vector<Token> PasteTokens(const Token& left, const Token& right,
 			pasted[i].blocked = blocked;
 		pasted[i].from_argument = from_argument;
 		pasted[i].from_replacement = true;
+		pasted[i].file = file;
+		pasted[i].line = line;
 		pasted[i].replacement_owner = replacement_owner;
 	}
 	return pasted;
 }
 
-vector<Token> ProcessPastes(vector<Token> input, const Macro* replacement_owner)
+vector<Token> ProcessPastes(vector<Token> input, const Macro* replacement_owner,
+	const string& file, int line)
 {
 	for (size_t position = 0; position < input.size(); ++position)
 	{
@@ -896,7 +904,7 @@ vector<Token> ProcessPastes(vector<Token> input, const Macro* replacement_owner)
 		Require(left < input.size() && right < input.size(),
 			"invalid token paste");
 		vector<Token> pasted = PasteTokens(input[left], input[right],
-			replacement_owner);
+			replacement_owner, file, line);
 		input.erase(input.begin() + left, input.begin() + right + 1);
 		input.insert(input.begin() + left, pasted.begin(), pasted.end());
 		position = left == 0 ? 0 : left - 1;
@@ -948,6 +956,11 @@ public:
 		const string& file, int line)
 	{
 		const vector<Token> tokens = Tokenize(input, file, line);
+		return ExpandTokenVector(tokens);
+	}
+
+	vector<PostPPToken> ExpandTokenVector(const vector<Token>& tokens)
+	{
 		vector<Token> expanded = ExpandTokens(TrimAndCollapseSpaces(tokens));
 		vector<PostPPToken> result;
 		for (size_t i = 0; i < expanded.size(); ++i)
@@ -1091,7 +1104,7 @@ private:
 		{
 			Token head = work.back();
 			work.pop_back();
-			if (!IsIdentifier(head))
+			if (!IsIdentifier(head) || head.protect_from_macro_expansion)
 			{
 				output.push_back(head);
 				continue;
@@ -1342,7 +1355,7 @@ private:
 			copy.line = head.line;
 			result.push_back(copy);
 		}
-		return ProcessPastes(result, &macro);
+		return ProcessPastes(result, &macro, head.file, head.line);
 	}
 
 	void AppendPostToken(const Token& token, vector<PostPPToken>* output)
@@ -1407,6 +1420,12 @@ vector<PostPPToken> MacroState::Expand(const string& source,
 {
 	return static_cast<MacroProcessorImpl*>(implementation_)->ExpandSource(
 		source, file, line);
+}
+
+vector<PostPPToken> MacroState::Expand(const vector<MacroToken>& tokens)
+{
+	return static_cast<MacroProcessorImpl*>(implementation_)->ExpandTokenVector(
+		tokens);
 }
 
 void RunMacro(const string& input)

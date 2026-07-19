@@ -72,6 +72,7 @@ struct MacroToken
 	MacroBlockedNames blocked;
 	bool from_argument;
 	bool from_replacement;
+	bool protect_from_macro_expansion;
 	const void* replacement_owner;
 
 	MacroToken(MacroTokenKind kind = TOKEN_NON_WHITESPACE,
@@ -79,6 +80,7 @@ struct MacroToken
 		const std::string& file = std::string(), int line = 1)
 		: kind(kind), text(text), file(file), line(line),
 		  from_argument(false), from_replacement(false),
+		  protect_from_macro_expansion(false),
 		  replacement_owner(NULL)
 	{}
 };
@@ -103,6 +105,7 @@ public:
 	bool IsDefined(const std::string& name) const;
 	std::vector<PostPPToken> Expand(const std::string& source,
 		const std::string& file = std::string(), int line = 1);
+	std::vector<PostPPToken> Expand(const std::vector<MacroToken>& tokens);
 
 private:
 	void* implementation_;
