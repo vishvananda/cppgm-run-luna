@@ -3,6 +3,105 @@
 
 namespace recog_pa6 {
 
+Parser::Parser(const vector<RecognizerToken>& tokens)
+	: tokens_(tokens), position_(0), angle_depth_(0), ordinary_depth_(0),
+	  angle_floors_()
+{}
+
+Parser::Mark Parser::Save() const
+{
+	Mark mark = {position_, angle_depth_, ordinary_depth_, angle_floors_};
+	return mark;
+}
+
+void Parser::Restore(const Mark& mark)
+{
+	position_ = mark.position;
+	angle_depth_ = mark.angle_depth;
+	ordinary_depth_ = mark.ordinary_depth;
+	angle_floors_ = mark.angle_floors;
+}
+
+void Parser::EnterAngle()
+{
+	angle_floors_.push_back(ordinary_depth_);
+	++angle_depth_;
+}
+
+void Parser::LeaveAngle()
+{
+	if (!angle_floors_.empty()) angle_floors_.pop_back();
+	if (angle_depth_ != 0) --angle_depth_;
+}
+
+const RecognizerToken& Parser::Peek(size_t offset) const
+{
+	const size_t index = position_ + offset;
+	return index < tokens_.size() ? tokens_[index] : tokens_.back();
+}
+
+bool Parser::AtEnd() const
+{
+	return Peek().kind == RK_EOF;
+}
+
+bool Parser::Is(const string& text) const
+{
+	return Peek().text == text;
+}
+
+bool Parser::Take(const string& text)
+{
+	if (!Is(text)) return false;
+	++position_;
+	return true;
+}
+
+bool Parser::TakeIdentifier()
+{
+	if (!IsIdentifierToken(Peek())) return false;
+	++position_;
+	return true;
+}
+
+bool Parser::TakeLiteral()
+{
+	if (!IsLiteralToken(Peek())) return false;
+	++position_;
+	return true;
+}
+
+bool Parser::TakeCloseAngle()
+{
+	if (Peek().text == ">" || Peek().kind == RK_RSHIFT_1 ||
+		Peek().kind == RK_RSHIFT_2)
+	{
+		++position_;
+		return true;
+	}
+	return false;
+}
+
+bool Parser::TakeShiftRight()
+{
+	const bool nested_in_non_angle_brackets = angle_depth_ != 0 &&
+		!angle_floors_.empty() && ordinary_depth_ > angle_floors_.back();
+	if (angle_depth_ == 0 || nested_in_non_angle_brackets)
+	{
+		if (Peek().kind != RK_RSHIFT_1 || Peek(1).kind != RK_RSHIFT_2)
+			return false;
+		position_ += 2;
+		return true;
+	}
+	return false;
+}
+
+bool Parser::CloseAngleBlocked() const
+{
+	return angle_depth_ != 0 && !angle_floors_.empty() &&
+		ordinary_depth_ == angle_floors_.back();
+}
+
 bool IsLiteralKind(PostPPTokenKind kind)
 {
 	return kind == POST_PP_NUMBER || kind == POST_PP_CHARACTER ||
@@ -24,7 +123,8 @@ bool IsKeyword(const string& text)
 		"sizeof", "static", "static_assert", "static_cast", "struct", "switch",
 		"template", "this", "thread_local", "throw", "true", "try", "typedef",
 		"typeid", "typename", "union", "unsigned", "using", "virtual", "void",
-		"volatile", "wchar_t", "while"
+		"volatile", "wchar_t", "while", "and", "and_eq", "bitand", "bitor",
+		"compl", "not", "not_eq", "or", "or_eq", "xor", "xor_eq"
 	};
 	return keywords.find(text) != keywords.end();
 }
@@ -41,10 +141,7 @@ bool IsLiteralToken(const RecognizerToken& token)
 
 bool IsEmptyStringLiteral(const RecognizerToken& token)
 {
-	return IsLiteralToken(token) &&
-		(token.text == "\"\"" || token.text == "u8\"\"" ||
-		 token.text == "u\"\"" || token.text == "U\"\"" ||
-		 token.text == "L\"\"");
+	return IsLiteralToken(token) && token.text == "\"\"";
 }
 
 bool IsZeroLiteral(const RecognizerToken& token)
@@ -105,6 +202,7 @@ bool Parser::IsOperatorAlias(const string& text, const string& spelling) const
 	if (spelling == "!=") return text == "not_eq";
 	if (spelling == "&=") return text == "and_eq";
 	if (spelling == "|=") return text == "or_eq";
+	if (spelling == "^=") return text == "xor_eq";
 	return false;
 }
 

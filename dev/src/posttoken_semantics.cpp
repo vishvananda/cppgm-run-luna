@@ -6,8 +6,8 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
-#include <sstream>
 #include <stdexcept>
+#include <streambuf>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -17,6 +17,51 @@
 using namespace std;
 
 namespace {
+
+class ValidationBuffer : public streambuf
+{
+public:
+	ValidationBuffer() : invalid_(false), prefix_length_(0) {}
+
+	bool invalid() const { return invalid_; }
+
+protected:
+	virtual int_type overflow(int_type character = traits_type::eof())
+	{
+		if (!traits_type::eq_int_type(character, traits_type::eof()))
+			Consume(traits_type::to_char_type(character));
+		return character;
+	}
+
+	virtual streamsize xsputn(const char* text, streamsize length)
+	{
+		for (streamsize i = 0; i < length; ++i) Consume(text[i]);
+		return length;
+	}
+
+	virtual int sync() { return 0; }
+
+private:
+	bool invalid_;
+	size_t prefix_length_;
+
+	void Consume(char character)
+	{
+		static const char prefix[] = "invalid ";
+		if (prefix_length_ < sizeof(prefix) - 1)
+		{
+			if (character == prefix[prefix_length_])
+				++prefix_length_;
+			else
+				prefix_length_ = sizeof(prefix);
+			if (prefix_length_ == sizeof(prefix) - 1) invalid_ = true;
+		}
+		if (character == '\n')
+		{
+			prefix_length_ = 0;
+		}
+	}
+};
 
 enum FundamentalType
 {
@@ -725,4 +770,21 @@ void RunPostTokenImpl(const vector<PostPPToken>& tokens)
 void RunPostToken(const vector<PostPPToken>& tokens)
 {
 	RunPostTokenImpl(tokens);
+}
+
+bool ValidatePostTokens(const vector<PostPPToken>& tokens)
+{
+	ValidationBuffer discarded;
+	streambuf* old = cout.rdbuf(&discarded);
+	try
+	{
+		RunPostToken(tokens);
+	}
+	catch (...)
+	{
+		cout.rdbuf(old);
+		throw;
+	}
+	cout.rdbuf(old);
+	return !discarded.invalid();
 }

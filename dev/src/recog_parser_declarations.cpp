@@ -147,7 +147,7 @@ bool Parser::ParseElaboratedTypeSpecifier()
 		Peek().text == "union")
 	{
 		++position_;
-		ParseOptionalAttributes();
+		ParseRepeatedAttributes();
 		Mark qualified = Save();
 		ParseNestedNameSpecifier();
 		if (TakeIdentifier()) return true;
@@ -174,26 +174,27 @@ bool Parser::ParseEnumKey()
 
 bool Parser::ParseEnumHead()
 {
-	Mark mark = Save();
 	if (!ParseEnumKey()) return false;
-	ParseOptionalAttributes();
+	ParseRepeatedAttributes();
+	Mark name = Save();
 	if (TakeIdentifier())
 	{
-		ParseEnumBase();
-		return true;
-	}
-	Restore(mark);
-	if (ParseEnumKey())
-	{
-		ParseOptionalAttributes();
-		if (ParseNestedNameSpecifier() && TakeIdentifier())
+		if (!Is("::"))
 		{
 			ParseEnumBase();
 			return true;
 		}
 	}
-	Restore(mark);
-	return false;
+	Restore(name);
+	if (ParseNestedNameSpecifier() && TakeIdentifier())
+	{
+		ParseEnumBase();
+		return true;
+	}
+	Restore(name);
+	// The grammar permits an unnamed enum, with or without an underlying type.
+	ParseEnumBase();
+	return true;
 }
 
 bool Parser::ParseEnumSpecifier()
@@ -300,8 +301,9 @@ bool Parser::ParseClassSpecifier()
 bool Parser::ParseClassHead()
 {
 	if (!(Take("class") || Take("struct") || Take("union"))) return false;
-	ParseOptionalAttributes();
+	ParseRepeatedAttributes();
 	Mark name = Save();
+	ParseNestedNameSpecifier();
 	if (ParseClassName())
 	{
 		Take("final");
@@ -353,7 +355,7 @@ bool Parser::ParseBaseSpecifierList()
 bool Parser::ParseBaseSpecifier()
 {
 	Mark mark = Save();
-	ParseOptionalAttributes();
+	ParseRepeatedAttributes();
 	if (Take("virtual")) ParseAccessSpecifier();
 	else if (ParseAccessSpecifier()) Take("virtual");
 	if (ParseClassOrDecltype()) return true;
@@ -386,7 +388,11 @@ bool Parser::ParseAccessSpecifier()
 bool Parser::ParseDeclarator()
 {
 	Mark mark = Save();
-	if (ParsePtrDeclarator()) return true;
+	if (ParsePtrDeclarator())
+	{
+		if (!Is("->")) return true;
+		Restore(mark);
+	}
 	Restore(mark);
 	if (ParseNoptrDeclarator() && ParseTrailingReturnType()) return true;
 	Restore(mark);
@@ -422,7 +428,11 @@ bool Parser::ParseNoptrDeclarator()
 bool Parser::ParseNoptrDeclaratorRoot()
 {
 	Mark mark = Save();
-	if (ParseDeclaratorId()) return true;
+	if (ParseDeclaratorId())
+	{
+		ParseRepeatedAttributes();
+		return true;
+	}
 	Restore(mark);
 	if (Take("("))
 	{
@@ -659,7 +669,7 @@ bool Parser::ParseParameterDeclarationList()
 bool Parser::ParseParameterDeclaration()
 {
 	Mark mark = Save();
-	ParseOptionalAttributes();
+	ParseRepeatedAttributes();
 	if (!ParseDeclSpecifierSeq())
 	{
 		Restore(mark);
@@ -895,7 +905,7 @@ bool Parser::ParseMemberDeclaration()
 		return true;
 	Restore(mark);
 
-	ParseOptionalAttributes();
+	ParseRepeatedAttributes();
 	if (!ParseDeclSpecifierSeq())
 	{
 		Restore(mark);
@@ -935,6 +945,9 @@ bool Parser::ParseMemberDeclarator()
 	Mark mark = Save();
 	if (!ParseDeclarator())
 	{
+		Restore(mark);
+		ParseRepeatedAttributes();
+		if (Take(":") && ParseConditionalExpression()) return true;
 		Restore(mark);
 		return false;
 	}
@@ -1015,6 +1028,7 @@ bool Parser::ParseExceptionSpecification()
 					Restore(mark);
 					return false;
 				}
+				Take("...");
 				while (Take(","))
 				{
 					if (!ParseTypeId())
@@ -1022,6 +1036,7 @@ bool Parser::ParseExceptionSpecification()
 						Restore(mark);
 						return false;
 					}
+					Take("...");
 				}
 			}
 			if (!Take(")"))
@@ -1086,7 +1101,7 @@ bool Parser::ParseBlockDeclaration()
 bool Parser::ParseSimpleDeclaration()
 {
 	Mark mark = Save();
-	ParseOptionalAttributes();
+	ParseRepeatedAttributes();
 	if (!ParseDeclSpecifierSeq())
 	{
 		Restore(mark);
@@ -1156,7 +1171,7 @@ bool Parser::ParseAliasDeclaration()
 	Mark mark = Save();
 	if (Take("using") && TakeIdentifier())
 	{
-		ParseOptionalAttributes();
+		ParseRepeatedAttributes();
 		if (Take("=") && ParseTypeId() && Take(";")) return true;
 	}
 	Restore(mark);
@@ -1232,7 +1247,7 @@ bool Parser::ParseUsingDeclaration()
 bool Parser::ParseUsingDirective()
 {
 	Mark mark = Save();
-	ParseOptionalAttributes();
+	ParseRepeatedAttributes();
 	if (Take("using") && Take("namespace"))
 	{
 		Mark nns = Save();
@@ -1281,7 +1296,7 @@ bool Parser::ParseOpaqueEnumDeclaration()
 {
 	Mark mark = Save();
 	if (!ParseEnumKey()) return false;
-	ParseOptionalAttributes();
+	ParseRepeatedAttributes();
 	if (TakeIdentifier())
 	{
 		ParseEnumBase();
@@ -1294,7 +1309,7 @@ bool Parser::ParseOpaqueEnumDeclaration()
 bool Parser::ParseFunctionDefinition()
 {
 	Mark mark = Save();
-	ParseOptionalAttributes();
+	ParseRepeatedAttributes();
 	if (!ParseDeclSpecifierSeq() || !ParseDeclarator())
 	{
 		Restore(mark);

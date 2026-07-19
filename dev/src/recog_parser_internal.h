@@ -55,9 +55,7 @@ vector<RecognizerToken> NormalizeTokens(const vector<PostPPToken>& input);
 class Parser
 {
 public:
-	explicit Parser(const vector<RecognizerToken>& tokens)
-		: tokens_(tokens), position_(0), angle_depth_(0), ordinary_depth_(0),
-		  angle_floors_() {}
+	explicit Parser(const vector<RecognizerToken>& tokens);
 
 	bool Parse();
 
@@ -76,94 +74,19 @@ private:
 	int ordinary_depth_;
 	vector<int> angle_floors_;
 
-	Mark Save() const
-	{
-		Mark mark = {position_, angle_depth_, ordinary_depth_, angle_floors_};
-		return mark;
-	}
-
-	void Restore(const Mark& mark)
-	{
-		position_ = mark.position;
-		angle_depth_ = mark.angle_depth;
-		ordinary_depth_ = mark.ordinary_depth;
-		angle_floors_ = mark.angle_floors;
-	}
-
-	void EnterAngle()
-	{
-		angle_floors_.push_back(ordinary_depth_);
-		++angle_depth_;
-	}
-
-	void LeaveAngle()
-	{
-		if (!angle_floors_.empty()) angle_floors_.pop_back();
-		if (angle_depth_ != 0) --angle_depth_;
-	}
-
-	const RecognizerToken& Peek(size_t offset = 0) const
-	{
-		const size_t index = position_ + offset;
-		return index < tokens_.size() ? tokens_[index] : tokens_.back();
-	}
-
-	bool AtEnd() const { return Peek().kind == RK_EOF; }
-
-	bool Is(const string& text) const { return Peek().text == text; }
-
-	bool Take(const string& text)
-	{
-		if (!Is(text)) return false;
-		++position_;
-		return true;
-	}
-
-	bool TakeIdentifier()
-	{
-		if (!IsIdentifierToken(Peek())) return false;
-		++position_;
-		return true;
-	}
-
-	bool TakeLiteral()
-	{
-		if (!IsLiteralToken(Peek())) return false;
-		++position_;
-		return true;
-	}
-
-	bool TakeCloseAngle()
-	{
-		if (Peek().text == ">" || Peek().kind == RK_RSHIFT_1 ||
-			Peek().kind == RK_RSHIFT_2)
-		{
-			++position_;
-			return true;
-		}
-		return false;
-	}
-
-	bool TakeShiftRight()
-	{
-		const bool nested_in_non_angle_brackets = angle_depth_ != 0 &&
-			!angle_floors_.empty() && ordinary_depth_ > angle_floors_.back();
-		if (angle_depth_ == 0 || nested_in_non_angle_brackets)
-		{
-			if (Peek().kind != RK_RSHIFT_1 ||
-				Peek(1).kind != RK_RSHIFT_2)
-				return false;
-			position_ += 2;
-			return true;
-		}
-		return false;
-	}
-
-	bool CloseAngleBlocked() const
-	{
-		return angle_depth_ != 0 && !angle_floors_.empty() &&
-			ordinary_depth_ == angle_floors_.back();
-	}
+	Mark Save() const;
+	void Restore(const Mark& mark);
+	void EnterAngle();
+	void LeaveAngle();
+	const RecognizerToken& Peek(size_t offset = 0) const;
+	bool AtEnd() const;
+	bool Is(const string& text) const;
+	bool Take(const string& text);
+	bool TakeIdentifier();
+	bool TakeLiteral();
+	bool TakeCloseAngle();
+	bool TakeShiftRight();
+	bool CloseAngleBlocked() const;
 
 	bool IsOperatorAlias(const string& text, const string& spelling) const;
 	bool TakeOperator(const string& spelling);
@@ -201,7 +124,6 @@ private:
 	bool ParseJumpStatement();
 	bool ParseCondition();
 	bool ParseConditionDeclaration();
-	bool ParseForInitStatement();
 	bool ParseForRangeDeclaration();
 	bool ParseForRangeInitializer();
 	bool ParseTryBlock();
@@ -345,7 +267,6 @@ private:
 	bool ParseAttributeArgumentClause();
 	bool ParseBalancedToken();
 
-	bool ParseOptionalAttributes();
 	bool ParseRepeatedAttributes();
 	bool ParseOptionalInitializer();
 	bool StartsTypeSpecifier() const;

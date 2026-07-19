@@ -520,11 +520,18 @@ bool Parser::ParsePostfixRoot()
 		if (Take(*it) && Take("<") )
 		{
 			EnterAngle();
-			if (ParseTypeId() && ParseCloseAngleBracket() &&
-				Take("(") && ParseExpression() && Take(")"))
+			if (ParseTypeId() && ParseCloseAngleBracket())
 			{
 				LeaveAngle();
-				return true;
+				if (Take("("))
+				{
+					++ordinary_depth_;
+					if (ParseExpression() && Take(")"))
+					{
+						--ordinary_depth_;
+						return true;
+					}
+				}
 			}
 		}
 		Restore(cast_mark);
@@ -624,9 +631,11 @@ bool Parser::ParsePrimaryExpression()
 bool Parser::ParseLambdaExpression()
 {
 	Mark mark = Save();
-	if (ParseLambdaIntroducer() &&
-		(ParseLambdaDeclarator() || true) && ParseCompoundStatement())
-		return true;
+	if (ParseLambdaIntroducer())
+	{
+		ParseLambdaDeclarator();
+		if (ParseCompoundStatement()) return true;
+	}
 	Restore(mark);
 	return false;
 }
@@ -655,7 +664,12 @@ bool Parser::ParseLambdaCapture()
 	Mark mark = Save();
 	if (ParseCaptureDefault())
 	{
-		if (Take(",") && ParseCaptureList()) return true;
+		if (Take(","))
+		{
+			if (ParseCaptureList()) return true;
+			Restore(mark);
+			return false;
+		}
 		if (Is("]")) return true;
 	}
 	Restore(mark);

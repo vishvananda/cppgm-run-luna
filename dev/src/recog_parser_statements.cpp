@@ -33,14 +33,14 @@ bool Parser::ParseStatement()
 bool Parser::ParseLabeledStatement()
 {
 	Mark mark = Save();
-	ParseOptionalAttributes();
+	ParseRepeatedAttributes();
 	if (TakeIdentifier() && Take(":") && ParseStatement()) return true;
 	Restore(mark);
-	ParseOptionalAttributes();
+	ParseRepeatedAttributes();
 	if (Take("case") && ParseConditionalExpression() && Take(":") &&
 		ParseStatement()) return true;
 	Restore(mark);
-	ParseOptionalAttributes();
+	ParseRepeatedAttributes();
 	if (Take("default") && Take(":") && ParseStatement()) return true;
 	Restore(mark);
 	return false;
@@ -49,7 +49,7 @@ bool Parser::ParseLabeledStatement()
 bool Parser::ParseExpressionStatement()
 {
 	Mark mark = Save();
-	ParseOptionalAttributes();
+	ParseRepeatedAttributes();
 	if (!Is(";") && !ParseExpression())
 	{
 		Restore(mark);
@@ -63,6 +63,7 @@ bool Parser::ParseExpressionStatement()
 bool Parser::ParseCompoundStatement()
 {
 	Mark mark = Save();
+	ParseRepeatedAttributes();
 	if (!Take("{")) return false;
 	++ordinary_depth_;
 	while (!Is("}") && !AtEnd())
@@ -85,6 +86,7 @@ bool Parser::ParseCompoundStatement()
 bool Parser::ParseSelectionStatement()
 {
 	Mark mark = Save();
+	ParseRepeatedAttributes();
 	if (Take("if"))
 	{
 		if (Take("(") )
@@ -104,6 +106,7 @@ bool Parser::ParseSelectionStatement()
 		}
 	}
 	Restore(mark);
+	ParseRepeatedAttributes();
 	if (Take("switch") && Take("("))
 	{
 		++ordinary_depth_;
@@ -128,7 +131,7 @@ bool Parser::ParseCondition()
 bool Parser::ParseConditionDeclaration()
 {
 	Mark mark = Save();
-	ParseOptionalAttributes();
+	ParseRepeatedAttributes();
 	if (!ParseDeclSpecifierSeq() || !ParseDeclarator())
 	{
 		Restore(mark);
@@ -144,6 +147,7 @@ bool Parser::ParseConditionDeclaration()
 bool Parser::ParseIterationStatement()
 {
 	Mark mark = Save();
+	ParseRepeatedAttributes();
 	if (Take("while") && Take("("))
 	{
 		++ordinary_depth_;
@@ -154,6 +158,7 @@ bool Parser::ParseIterationStatement()
 		}
 	}
 	Restore(mark);
+	ParseRepeatedAttributes();
 	if (Take("do") && ParseStatement() && Take("while") && Take("("))
 	{
 		++ordinary_depth_;
@@ -164,6 +169,7 @@ bool Parser::ParseIterationStatement()
 		}
 	}
 	Restore(mark);
+	ParseRepeatedAttributes();
 	if (Take("for") && Take("("))
 	{
 		++ordinary_depth_;
@@ -175,18 +181,10 @@ bool Parser::ParseIterationStatement()
 			if (ParseStatement()) return true;
 		}
 		Restore(range);
-		if (ParseForInitStatement() &&
-			(ParseCondition() || true) && Take(";"))
-		{
-			// ParseForInitStatement includes the first semicolon.  The branch
-			// above is intentionally repaired below by restoring and using the
-			// explicit three-clause form.
-		}
 	}
 	Restore(mark);
 
-	// Keep the ordinary for-loop explicit; this separate attempt avoids
-	// treating the first semicolon as part of a condition.
+	ParseRepeatedAttributes();
 	if (Take("for") && Take("("))
 	{
 		++ordinary_depth_;
@@ -227,18 +225,10 @@ bool Parser::ParseIterationStatement()
 	return false;
 }
 
-bool Parser::ParseForInitStatement()
-{
-	Mark mark = Save();
-	if (ParseSimpleDeclaration()) return true;
-	Restore(mark);
-	return ParseExpressionStatement();
-}
-
 bool Parser::ParseForRangeDeclaration()
 {
 	Mark mark = Save();
-	ParseOptionalAttributes();
+	ParseRepeatedAttributes();
 	if (ParseDeclSpecifierSeq() && ParseDeclarator()) return true;
 	Restore(mark);
 	return false;
@@ -255,8 +245,10 @@ bool Parser::ParseForRangeInitializer()
 bool Parser::ParseJumpStatement()
 {
 	Mark mark = Save();
+	ParseRepeatedAttributes();
 	if (Take("break") || Take("continue")) return Take(";");
 	Restore(mark);
+	ParseRepeatedAttributes();
 	if (Take("return"))
 	{
 		if (Take("{"))
@@ -274,6 +266,7 @@ bool Parser::ParseJumpStatement()
 		return Take(";");
 	}
 	Restore(mark);
+	ParseRepeatedAttributes();
 	if (Take("goto") && TakeIdentifier() && Take(";")) return true;
 	Restore(mark);
 	return false;
@@ -282,6 +275,7 @@ bool Parser::ParseJumpStatement()
 bool Parser::ParseTryBlock()
 {
 	Mark mark = Save();
+	ParseRepeatedAttributes();
 	if (Take("try") && ParseCompoundStatement() && ParseHandler())
 	{
 		while (ParseHandler()) {}
@@ -325,9 +319,10 @@ bool Parser::ParseExceptionDeclaration()
 {
 	Mark mark = Save();
 	if (Take("...")) return true;
-	ParseOptionalAttributes();
+	ParseRepeatedAttributes();
 	if (ParseDeclSpecifierSeq())
 	{
+		ParseRepeatedAttributes();
 		Mark declarator = Save();
 		if (!ParseDeclarator()) Restore(declarator);
 		return true;
@@ -624,14 +619,6 @@ bool Parser::ParseBalancedToken()
 	}
 	++position_;
 	return true;
-}
-
-bool Parser::ParseOptionalAttributes()
-{
-	Mark mark = Save();
-	if (ParseAttributeSpecifier()) return true;
-	Restore(mark);
-	return false;
 }
 
 bool Parser::ParseRepeatedAttributes()

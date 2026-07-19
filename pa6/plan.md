@@ -1,4 +1,4 @@
-# PA6 checkpoint plan
+# PA6 stage plan and architecture review
 
 ## Baseline
 
@@ -33,13 +33,10 @@ Grouped by compiler behavior needed to turn the stub into a recognizer:
 
 ## Checkpoint Scope
 
-This checkpoint covers groups 1--3: a real PA5-compatible token stream and a
-recursive-descent recognizer for translation units' expressions, statements,
-attributes, and local declarations, including the PA6 mock-name and
-close-angle rules.  It is sized to move the current stage above its 0/43
-baseline while providing the foundation for group 4.  Validation is the full
-PA6 local report plus the through-PA5 report and file audit; group 4 is the
-next checkpoint if declaration-heavy cases remain.
+The checkpoint began with groups 1--3, then expanded through group 4 when the
+same parser state and token facts supported the declaration-heavy grammar.
+Validation is the full PA6 local report, the through-PA6 report, and the
+source-file audit.
 
 ## Checkpoint Result
 
@@ -56,22 +53,73 @@ Validation completed:
 
 - current PA6 report: **43/43 passed**;
 - through PA5 report: **224/224 passed**;
+- through PA6 report: **267/267 passed**;
 - `perl scripts/cppgm_file_audit.pl --stage pa6 --paths dev/src`: passed
   (one non-fatal header-body warning).
+
+## Architecture Review
+
+The implemented pipeline is intentionally layered:
+
+1. `recog.cpp` owns command-line handling, per-file `OK`/`BAD` isolation, and
+   output formatting.
+2. `preprocessor_engine.cpp` exposes the PA5 preprocessor as the shared
+   `PreprocessSourceFile` entry point.  `preproc` and `recog` therefore use the
+   same macro, conditional, include, pragma, and line-directive behavior.
+3. `ValidatePostTokens` reuses the PA5 post-token semantic checks before PA6
+   normalization.  Its discard-only stream buffer keeps the existing
+   presentation-oriented validator out of the recognizer's output while
+   avoiding a second full report string.
+4. `NormalizeTokens` converts post-preprocessor tokens to typed recognizer
+   tokens, records the PA6 mock-name facts, rejects non-whitespace/header
+   leftovers, adds `ST_EOF`, and expands `>>` into the two close-angle facts.
+5. `Parser` owns only grammar state and is split by responsibility across
+   `recog_parser.cpp`, `recog_parser_expressions.cpp`,
+   `recog_parser_statements.cpp`, and `recog_parser_declarations.cpp`.
+
+The parser preserves the assignment's deliberate boundaries: mock lookup is
+stored on normalized tokens rather than a future symbol table, and angle
+depth is tracked separately from ordinary bracket depth so a close-angle is
+not confused with a relational or shift operator.  Speculative recursive
+descent snapshots and restores all parser state, including angle floors.
+
+The final audit moved parser state/helper definitions out of the internal
+header and removed dead PA6 entry-point helpers.  The remaining file-audit
+warning names `recog_parser_internal.h` because its declaration-only class
+interface contains many grammar method declarations; no executable parser
+body remains there.  Splitting that cohesive interface solely to satisfy the
+heuristic would make ownership less clear.
+
+## Final Architecture Review
+
+The completed stage has one preprocessing implementation, one semantic token
+validation boundary, one typed-token normalization boundary, and one
+recursive-descent parser.  There is no test-specific dispatch, reference
+binary call, host compiler call, duplicated PA5 preprocessing path, or parser
+output dependency.  Invalid opening, preprocessing, token-validation, and
+grammar cases are caught at the per-source-file boundary and reported as
+`BAD`, while command-line/output failures remain process-level errors as
+required by the handout.
+
+The cleanup also covers correctness edges found during review: alternative
+operator keywords are not treated as identifiers, empty-string recognition is
+limited to the ordinary `""` spelling, lambda default captures reject a
+trailing comma without a capture, cast operands leave angle mode before
+parsing ordinary expressions, qualified enum/class heads are supported,
+trailing-return declarators are disambiguated, anonymous bit-fields are
+accepted, and repeated attribute specifiers follow the grammar.  The shared
+preprocessor is linked explicitly in both frontend source sets, so ownership
+and build dependency tracking remain visible to the build system.
 
 ## Remaining Work Map
 
 There is no remaining checked-in PA6 failure group.  The next general compiler
 group is PA7's semantic/name-state work; the PA6 recognizer's mock facts remain
-deliberately local to its typed token state.  A future hardening checkpoint can
-also expose the existing PA5 preprocessor engine as a reusable library entry
-point for `recog`, so PA6 clients with macro/include inputs use the same
-preprocessing path without duplicating it.
+deliberately local to its typed token state.  The PA5 preprocessing engine is
+already exposed through the shared `dev/src/preprocessor_engine.*` module for
+future front ends.
 
 ## Next Checkpoint Group
 
 Begin PA7 by replacing mock lookup with persistent symbol/type facts while
-keeping the PA6 grammar regression suite green.  If PA6 preprocessing reuse is
-required before that assignment, first extract the `Preprocessor::Process`
-engine from `dev/preproc.cpp` into a shared `dev/src` module and add a focused
-macro/include recognizer regression test.
+keeping the PA6 grammar regression suite green.

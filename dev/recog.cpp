@@ -3,51 +3,24 @@
 #include <vector>
 #include <string>
 #include <stdexcept>
-#include <sstream>
 #include <fstream>
 #include <iostream>
 
 #include "exceptions.h"
+#include "posttoken_semantics.h"
+#include "preprocessor_engine.h"
 #include "recog_parser.h"
-#include "posttoken_lexer.h"
 
 using namespace std;
 
-bool PA6_IsClassName(const string& identifier)
+void DoRecog(const string& path)
 {
-	return identifier.find('C') != string::npos;
-}
-
-bool PA6_IsTemplateName(const string& identifier)
-{
-	return identifier.find('T') != string::npos;
-}
-
-bool PA6_IsTypedefName(const string& identifier)
-{
-	return identifier.find('Y') != string::npos;
-}
-
-bool PA6_IsEnumName(const string& identifier)
-{
-	return identifier.find('E') != string::npos;
-}
-
-bool PA6_IsNamespaceName(const string& identifier)
-{
-	return identifier.find('N') != string::npos;
-}
-
-void DoRecog(istream& in)
-{
-	if (!in)
-		throw logic_error("unable to open source file");
-	ostringstream contents;
-	contents << in.rdbuf();
-	const vector<PostPPToken> tokens = LexPostPPSource(contents.str());
+	const vector<PostPPToken> tokens = PreprocessSourceFile(path);
+	if (!ValidatePostTokens(tokens))
+		throw logic_error("invalid token in preprocessed sequence");
 	if (!RecognizePA6(tokens))
 		throw logic_error("token sequence is not a translation-unit");
-};
+}
 
 int main(int argc, char** argv)
 {
@@ -65,6 +38,8 @@ int main(int argc, char** argv)
 		size_t nsrcfiles = args.size() - 2;
 
 		ofstream out(outfile);
+		if (!out)
+			throw logic_error("unable to open output file");
 
 		out << "recog " << nsrcfiles << endl;
 
@@ -74,8 +49,7 @@ int main(int argc, char** argv)
 
 			try
 			{
-				ifstream in(srcfile);
-				DoRecog(in);
+				DoRecog(srcfile);
 				out << srcfile << " OK" << endl;
 			}
 			catch (const exception& e)
