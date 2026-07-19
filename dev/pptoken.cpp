@@ -1,14 +1,9 @@
 #include <iostream>
 #include <sstream>
-#include <fstream>
 #include <stdexcept>
 #include <algorithm>
-#include <cstdint>
 #include <cstdlib>
-#include <limits>
-#include <set>
 #include <string>
-#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -17,6 +12,7 @@ using namespace std;
 #include "IPPTokenStream.h"
 #include "DebugPPTokenStream.h"
 #include "exceptions.h"
+#include "pptoken_translation.h"
 
 // Translation features you need to implement:
 // - utf8 decoder
@@ -134,15 +130,11 @@ const unordered_set<int> SimpleEscapeSequence_CodePoints =
 	'\'', '"', '?', '\\', 'a', 'b', 'f', 'n', 'r', 't', 'v'
 };
 
-struct SourceUnit
+SourceUnit MakeTranslatedUnit(int code_point, bool raw,
+	const SourceUnit& first, const SourceUnit& last)
 {
-	int code_point;
-	bool raw;
-
-	SourceUnit(int code_point = 0, bool raw = false)
-		: code_point(code_point), raw(raw)
-	{}
-};
+	return SourceUnit(code_point, raw, first.origin_begin, last.origin_end);
+}
 
 bool IsHexDigit(int c)
 {
@@ -480,7 +472,7 @@ size_t ConsumeScannerQuotedLiteral(const vector<int>& source,
 		if (source[i] == source[quote])
 		{
 			++i;
-			while (i < source.size() && IsAsciiIdentifierBody(source[i]))
+			while (i < source.size() && IsIdentifierBody(source[i]))
 				++i;
 			return i;
 		}
@@ -488,6 +480,37 @@ size_t ConsumeScannerQuotedLiteral(const vector<int>& source,
 			return source.size();
 	}
 	return source.size();
+}
+
+size_t ConsumeScannerPPNumber(const vector<int>& source, size_t position)
+{
+	size_t i = position;
+	if (source[i] == '.')
+		i += 2;
+	else
+		++i;
+
+	while (i < source.size())
+	{
+		const int code_point = source[i];
+		if (IsAsciiDigit(code_point) || IsIdentifierNondigit(code_point))
+		{
+			if ((code_point == 'e' || code_point == 'E') &&
+				i + 1 < source.size() &&
+				(source[i + 1] == '+' || source[i + 1] == '-'))
+				i += 2;
+			else
+				++i;
+			continue;
+		}
+		if (code_point == '.')
+		{
+			++i;
+			continue;
+		}
+		break;
+	}
+	return i;
 }
 
 vector<bool> MarkRawLiteralSpans(const vector<int>& source)
@@ -554,11 +577,18 @@ vector<bool> MarkRawLiteralSpans(const vector<int>& source)
 			continue;
 		}
 
-		if (IsAsciiIdentifierStart(source[i]))
+		if (IsIdentifierStart(source[i]))
 		{
 			++i;
-			while (i < source.size() && IsAsciiIdentifierBody(source[i]))
+			while (i < source.size() && IsIdentifierBody(source[i]))
 				++i;
+			continue;
+		}
+		if (IsAsciiDigit(source[i]) ||
+			(source[i] == '.' && i + 1 < source.size() &&
+				IsAsciiDigit(source[i + 1])))
+		{
+			i = ConsumeScannerPPNumber(source, i);
 			continue;
 		}
 		++i;
@@ -599,7 +629,8 @@ vector<SourceUnit> ApplyTrigraphs(const vector<SourceUnit>& source)
 				source[i + 2].code_point);
 			if (replacement >= 0)
 			{
-				result.push_back(SourceUnit(replacement));
+				result.push_back(MakeTranslatedUnit(
+					replacement, false, source[i], source[i + 2]));
 				i += 3;
 				continue;
 			}
@@ -613,16 +644,27 @@ vector<SourceUnit> ApplyTrigraphs(const vector<SourceUnit>& source)
 vector<SourceUnit> ApplyLineSplices(const vector<SourceUnit>& source)
 {
 	vector<SourceUnit> result;
+	size_t pending_origin_begin = SourceUnit::NoOrigin;
 	for (size_t i = 0; i < source.size(); ++i)
 	{
 		if (!source[i].raw && source[i].code_point == '\\' &&
 			i + 1 < source.size() && !source[i + 1].raw &&
 			source[i + 1].code_point == '\n')
 		{
+			if (pending_origin_begin == SourceUnit::NoOrigin)
+				pending_origin_begin = source[i].origin_begin;
 			++i;
 			continue;
 		}
-		result.push_back(source[i]);
+
+		SourceUnit unit = source[i];
+		if (pending_origin_begin != SourceUnit::NoOrigin &&
+			unit.origin_begin != SourceUnit::NoOrigin)
+		{
+			unit.origin_begin = pending_origin_begin;
+		}
+		pending_origin_begin = SourceUnit::NoOrigin;
+		result.push_back(unit);
 	}
 	return result;
 }
@@ -669,7 +711,8 @@ vector<SourceUnit> ApplyUniversalCharacterNames(
 					if (value == 0 || value > 0x10ffff ||
 						(value >= 0xd800 && value <= 0xdfff))
 						throw logic_error("invalid universal-character-name");
-					result.push_back(SourceUnit(value));
+					result.push_back(MakeTranslatedUnit(
+						value, false, source[i], source[i + 1 + digits]));
 					i += 2 + digits;
 					continue;
 				}
@@ -688,14 +731,17 @@ vector<SourceUnit> TranslateSource(const string& input)
 	if (!decoded.empty() && decoded[0] == 0xfeff)
 		decoded.erase(decoded.begin());
 
-	const vector<bool> raw_spans = MarkRawLiteralSpans(decoded);
+	vector<bool> raw_spans = MarkRawLiteralSpans(decoded);
 	vector<SourceUnit> source;
-	for (size_t i = 0; i < decoded.size(); ++i)
-		source.push_back(SourceUnit(decoded[i], raw_spans[i]));
-
-	source = ApplyTrigraphs(source);
-	source = ApplyLineSplices(source);
-	source = ApplyUniversalCharacterNames(source);
+	for (;;)
+	{
+		source = BuildSourceUnits(decoded, raw_spans);
+		source = ApplyTrigraphs(source);
+		source = ApplyLineSplices(source);
+		source = ApplyUniversalCharacterNames(source);
+		if (!AddTranslatedRawSpans(source, &raw_spans))
+			break;
+	}
 
 	if (!decoded.empty() && !source.empty() &&
 		source.back().code_point != '\n')
@@ -992,14 +1038,49 @@ struct PPTokenizer
 	{
 		const int opener = source[position].code_point;
 		const int closer = opener == '<' ? '>' : '"';
+		string data = EncodeUTF8CodePoint(opener);
 		size_t i = position + 1;
 		for (; i < source.size(); ++i)
 		{
+			if (!source[i].raw && source[i].code_point == '/' &&
+				i + 1 < source.size() && !source[i + 1].raw &&
+				source[i + 1].code_point == '*')
+			{
+				data += " ";
+				i += 2;
+				bool closed = false;
+				while (i + 1 < source.size())
+				{
+					if (source[i].code_point == '*' &&
+						source[i + 1].code_point == '/')
+					{
+						i += 2;
+						closed = true;
+						break;
+					}
+					++i;
+				}
+				if (!closed)
+					throw logic_error("unterminated header-name comment");
+				--i;
+				continue;
+			}
+			if (!source[i].raw && source[i].code_point == '/' &&
+				i + 1 < source.size() && !source[i + 1].raw &&
+				source[i + 1].code_point == '/')
+			{
+				while (i < source.size() && source[i].code_point != '\n')
+					++i;
+				throw logic_error("unterminated header-name line");
+			}
 			if (source[i].code_point == '\n')
 				throw logic_error("unterminated header name");
 			if (source[i].code_point == closer)
-				return LexedToken(PP_PREPROCESSING_OP_OR_PUNC,
-					i + 1, EncodeUnits(source, position, i + 1));
+			{
+				data += EncodeUTF8CodePoint(closer);
+				return LexedToken(PP_PREPROCESSING_OP_OR_PUNC, i + 1, data);
+			}
+			data += EncodeUTF8CodePoint(source[i].code_point);
 		}
 		throw logic_error("unterminated header name");
 	}

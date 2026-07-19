@@ -86,6 +86,70 @@ No PA1 work remains in the checked-in stage suites. Future compiler work is
 outside this checkpoint and must preserve the PA1 translation/tokenization
 behavior.
 
+## Architecture Review
+
+The checkpoint implementation keeps the assignment boundary intact. `main`
+buffers standard input and feeds byte values to `PPTokenizer::process`; the EOF
+call runs the translation pipeline once and emits through the existing
+`IPPTokenStream`/`DebugPPTokenStream` interface. The normal PA1 path is entirely
+in-process and does not inspect fixtures, reference outputs, or invoke another
+tool.
+
+Translation and tokenization have separate responsibilities:
+
+- `DecodeUTF8`, `EncodeUTF8CodePoint`, and the Annex E range predicates operate
+  on Unicode code points rather than signed input bytes.
+- `SourceUnit` carries the translated code point, raw-string protection, and
+  source-origin bounds. The type and raw-span provenance helpers live in
+  `dev/src/pptoken_translation.h/.cpp`; the per-tool source set wires that
+  module only into `pptoken`.
+- `TranslateSource` applies trigraph replacement, line splicing, and
+  universal-character-name conversion while retaining origins. A second raw
+  discovery pass protects a raw body when its prefix becomes recognizable only
+  after translation, without protecting an ordinary string that merely follows
+  an identifier or pp-number.
+- `PPTokenizer` performs longest-match recognition for identifiers,
+  pp-numbers, literals, punctuators, and fallback characters. Its line-start
+  state recognizes `#include` and `%:include` header names while comments and
+  whitespace are ignored for context. Literal parsing validates escapes but
+  preserves literal spelling after phase 3.
+
+The final review found three correctness gaps in the checkpoint code: the raw
+pre-scan did not skip all preceding identifier/pp-number tokens, raw prefixes
+formed by line splicing or UCN conversion could have translated bodies, and a
+comment inside a header name was not replaced with one whitespace character.
+The review also brought the tool source back under the repository's ownership
+limit by moving raw-span provenance into a named translation module. None of
+these changes alter the public token-stream interface or the existing PA1 test
+fixtures.
+
+## Final Architecture Review
+
+The integrated PA1 stage now has a stable source-to-token flow:
+
+    bytes -> strict UTF-8 code points -> protected translation passes
+          -> comments/whitespace and contextual header handling
+          -> longest-match preprocessing tokens -> IPPTokenStream
+
+Raw protection is represented as source metadata rather than as a special test
+case. Translation replacements retain origin ranges, so a later raw discovery
+can protect the original delimiter/body spelling on the next pass while still
+translating the prefix. Header parsing independently normalizes block comments
+to one space and rejects a line comment or unterminated comment before the
+header terminator. These choices preserve the intended phase ordering and keep
+ownership local to the translation module or tokenizer state that needs it.
+
+The final source layout is cohesive: `dev/pptoken.cpp` owns the PA1 driver and
+tokenizer, `dev/src/pptoken_translation.*` owns raw-span provenance, and
+`dev/frontend_source_sets.mk` explicitly links the helper only for `pptoken`.
+The normal path uses bounded range scans and linear source passes; it has no
+fixture-name branches, reference-binary dependency, subprocess, or generated
+script shortcut. Existing interfaces, build targets, and earlier-stage behavior
+are preserved, as demonstrated by the through-PA1 report.
+
+The final audit record, including the exact validation evidence and the
+checkpoint comparison, is in `pa1/audit.md`.
+
 ## Next checkpoint group
 
 PA2: build on the PA1 preprocessing-token stream with the assignment's next
