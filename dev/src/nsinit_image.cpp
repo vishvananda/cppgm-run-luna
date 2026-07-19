@@ -45,12 +45,12 @@ void PatchAddress(vector<unsigned char>* image, size_t offset,
 	}
 }
 
-void EmitEntity(const Entity& entity, vector<unsigned char>* image)
+void EmitEntity(Entity* entity, vector<unsigned char>* image)
 {
-	AppendPadding(image, entity.kind == FUNCTION_ENTITY ? 4 : TypeAlignment(entity.type));
+	AppendPadding(image, entity->kind == FUNCTION_ENTITY ? 4 : TypeAlignment(entity->type));
 	const size_t offset = image->size();
-	const_cast<Entity&>(entity).offset = offset;
-	if (entity.kind == FUNCTION_ENTITY)
+	entity->offset = offset;
+	if (entity->kind == FUNCTION_ENTITY)
 	{
 		image->push_back('f');
 		image->push_back('u');
@@ -58,13 +58,13 @@ void EmitEntity(const Entity& entity, vector<unsigned char>* image)
 		image->push_back('\0');
 		return;
 	}
-	const size_t size = TypeSize(entity.type);
+	const size_t size = TypeSize(entity->type);
 	AppendZeros(image, size);
-	if (entity.initializer.kind == INIT_BYTES)
+	if (entity->initializer.kind == INIT_BYTES)
 	{
-		if (entity.initializer.bytes.size() != size)
+		if (entity->initializer.bytes.size() != size)
 			throw logic_error("initializer size mismatch");
-		copy(entity.initializer.bytes.begin(), entity.initializer.bytes.end(),
+		copy(entity->initializer.bytes.begin(), entity->initializer.bytes.end(),
 			image->begin() + offset);
 	}
 }
@@ -90,11 +90,11 @@ void EmitString(StringLiteral* string, vector<unsigned char>* image)
 	image->insert(image->end(), string->bytes.begin(), string->bytes.end());
 }
 
-void PatchEntity(const Entity& entity, vector<unsigned char>* image)
+void PatchEntity(const Entity* entity, vector<unsigned char>* image)
 {
-	if (entity.kind != VARIABLE_ENTITY || !entity.has_definition) return;
-	if (entity.initializer.kind == INIT_ADDRESS)
-		PatchAddress(image, entity.offset, entity.initializer.address);
+	if (entity->kind != VARIABLE_ENTITY || !entity->has_definition) return;
+	if (entity->initializer.kind == INIT_ADDRESS)
+		PatchAddress(image, entity->offset, entity->initializer.address);
 }
 
 void PatchTemporary(const Temporary& temporary, vector<unsigned char>* image)
@@ -103,22 +103,10 @@ void PatchTemporary(const Temporary& temporary, vector<unsigned char>* image)
 		PatchAddress(image, temporary.offset, temporary.initializer.address);
 }
 
-void EnsureEntry(Program* program)
-{
-	for (size_t i = 0; i < program->ordered_entities().size(); ++i)
-		if (program->ordered_entities()[i]->kind == FUNCTION_ENTITY &&
-			program->ordered_entities()[i]->name == "main") return;
-	Type type = Type::Function(vector<Type>(), false, Type::Fundamental("void"));
-	Entity* entry = program->AddFunction(program->root(), "__cppgm_entry", type,
-		false, -1);
-	entry->function_definition = true;
-}
-
 } // namespace
 
 void BuildNSInitMockImage(Program* program, vector<unsigned char>* image)
 {
-	EnsureEntry(program);
 	image->clear();
 	image->push_back('P');
 	image->push_back('A');
@@ -130,14 +118,14 @@ void BuildNSInitMockImage(Program* program, vector<unsigned char>* image)
 		if (entity->kind == VARIABLE_ENTITY && !entity->has_definition) continue;
 		if (entity->kind == VARIABLE_ENTITY && TypeSize(entity->type) == 0)
 			throw logic_error("object has incomplete type");
-		EmitEntity(*entity, image);
+		EmitEntity(entity, image);
 	}
 	for (size_t i = 0; i < program->temporaries().size(); ++i)
 		EmitTemporary(program->temporaries()[i].get(), image);
 	for (size_t i = 0; i < program->strings().size(); ++i)
 		EmitString(program->strings()[i].get(), image);
 	for (size_t i = 0; i < program->ordered_entities().size(); ++i)
-		PatchEntity(*program->ordered_entities()[i], image);
+		PatchEntity(program->ordered_entities()[i], image);
 	for (size_t i = 0; i < program->temporaries().size(); ++i)
 		PatchTemporary(*program->temporaries()[i], image);
 }

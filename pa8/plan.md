@@ -73,8 +73,83 @@ Validation completed:
 There are no remaining checked-in PA8 test failures. The former four failure
 groups are all covered by this checkpoint.
 
+## Architecture Review
+
+The checkpoint implementation is an in-process translation and image-building
+pipeline with explicit ownership between its phases:
+
+1. `dev/nsinit.cpp` owns command-line validation, output-file handling, and
+   binary emission. `BuildNSInitImage` processes source paths in the exact
+   command-line order, runs the shared PA5 `PreprocessSourceFile` pipeline,
+   validates the resulting PA2 post-token stream, and then parses each
+   translation unit into one program model.
+2. `dev/src/nsinit_parser.cpp` owns PA8 grammar actions and semantic
+   annotation. It lowers declarations into recursive `Type` values, resolves
+   names through namespaces, aliases, using declarations/directives, inline
+   and unnamed namespaces, and merges linked declarations while retaining
+   first-declaration order. Initializers are represented as zero bytes,
+   constant bytes, or position-independent `Address` facts rather than as
+   presentation strings.
+3. `dev/src/nsinit_model.h/.cpp` is the shared semantic-model boundary.
+   `Program` owns namespaces, entities, lifetime-extended temporaries, and
+   string literals with `unique_ptr`; binding maps, parent links, declaration
+   order, and relocation addresses are non-owning views into those owners.
+   Lookup traversal is guarded by visited sets so using-directive and alias
+   cycles do not recurse indefinitely. The implementation is compiled once
+   through the explicit `nsinit` source set in
+   `dev/frontend_source_sets.mk`.
+4. `dev/src/nsinit_literals.cpp` decodes PA2 literal spellings and emits the
+   PA8 fundamental/string representations. `dev/src/nsinit_image.cpp` is a
+   separate layout/link phase: it writes the PA8 magic, aligns and emits
+   defined variables and declared functions in block 1, lifetime-extended
+   temporaries in block 2, strings in block 3, and applies little-endian
+   relocations after all offsets are known.
+
+The pipeline performs no reference-output lookup, host-compiler invocation,
+subprocess execution, fixture dispatch, or test-name branching. Layout and
+relocation are driven by the typed entity/address graph. Entity and string
+order vectors are append-only, so multi-translation-unit order and first-use
+order remain stable while linked declarations reuse their existing owners.
+
+## Final Architecture Review
+
+The final audit covered checkpoint commit `a524e5d` and the integrated PA8
+stage after cleanup. The checkpoint had the complete checked-in behavior, but
+the final review found two architectural issues that were not represented in
+the checkpoint record:
+
+- The new `nsinit_model.h` contained the complete type utilities, lookup
+  implementation, and ownership operations inline. That obscured the parser
+  and image-writer boundary and triggered a new substantial-header warning.
+  The implementation now lives in `dev/src/nsinit_model.cpp`; the header
+  contains the shared data contract and declarations, and the new source is
+  wired only to `nsinit`.
+- The image builder synthesized a `__cppgm_entry` function when no input
+  declared `main`. PA8 requires output for declared functions and defined
+  variables, not an implicit entry entity. The synthetic path was removed, so
+  an input containing only a defined variable emits only that variable after
+  the magic bytes.
+
+The image writer also no longer mutates an entity through `const_cast`; it
+receives the owned mutable entity pointer when assigning its final offset.
+These changes preserve all checked-in PA8 output while making ownership,
+source-set dependencies, and output eligibility explicit. The final source
+audit has no new PA8 warning; the remaining warning is the pre-existing
+declaration-heavy `dev/src/recog_parser_internal.h` heuristic from PA6.
+
+No PA8 failure group remains in the checked-in suite. The final cleanup keeps
+the PA1--PA7 preprocessing, token, expression, recognizer, and namespace
+stages on their existing source boundaries, and the through-PA8 validation
+below confirms that the integrated build still exercises all 333 tests.
+
+## Remaining Work Map
+
+There is no remaining checked-in PA8 work. PA9 may extend the model, but must
+retain the PA8 parser/image phases, explicit source-set ownership, and the
+through-PA8 regression result.
+
 ## Next checkpoint group
 
-Final handoff only: rebuild after cleanup, rerun the PA8 report, through-PA7
-regression, and file audit, then commit the cohesive PA8 implementation. PA9
-is the next assignment after this clean checkpoint.
+The final PA8 handoff is complete after the cleanup and validation recorded
+below. PA9 is the next assignment; future work must preserve the through-PA8
+report and the typed model/image boundary established here.
