@@ -6,13 +6,17 @@ Type::Type(TypeKind type_kind, const string& type_name)
 	: kind(type_kind), name(type_name), tag(), scoped_enum(false), complete(true),
 	  underlying_explicit(false), is_const(false), is_volatile(false), child(), bound(-1),
 	  parameters(), variadic(false), function_const(false), member_owner(), owned_scope(0),
-	  underlying() {}
+	  underlying(), class_members(), direct_base(), object_size(0), object_alignment(1),
+	  explicit_alignment(0), layout_complete(false), layout_in_progress(false),
+	  is_union(false) {}
 
 Binding::Binding(BindingKind binding_kind, const string& binding_name,
 	const TypePtr& binding_type)
 	: kind(binding_kind), name(binding_name), type(binding_type), has_value(false), value(0),
 	  type_override(), qualified_name(), injected_member(false), injected_object_name(),
-	  injected_owner() {}
+	  injected_owner(), is_static_member(false), is_mutable_member(false),
+	  is_bit_field(false), bit_width(0), member_offset(0), member_bit_offset(0),
+	  access(), declaration() {}
 
 Scope::Scope(ScopeKind scope_kind, const string& scope_name, Scope* scope_parent)
 	: kind(scope_kind), name(scope_name), parent(scope_parent), inline_namespace(false),

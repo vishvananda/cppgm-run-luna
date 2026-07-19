@@ -1,0 +1,245 @@
+# PA15 implementation plan
+
+## Baseline
+
+The turn-start PA15 report is **16 / 200** tests.  Earlier assignments pass,
+the source file audit passes, and the PA15 failures are real compiler gaps
+rather than driver stubs.  The current `--emit-lowir` implementation is the
+PA14 procedural lowerer: it already handles scalar procedural inputs, but it
+still treats every class as a one-byte opaque object and does not collect
+class members or object lifetime actions.
+
+## Remaining Work Map
+
+The complete current-PA failure set is grouped below by shared compiler
+behavior.  The 30 LowIR mismatches are listed separately from the exit-status
+failures so every one of the 184 failures is accounted for.
+
+1. **Class layout, object storage, and aggregate LowIR shape** — output
+   mismatches `100-class-local-sizeof`, `100-global-class-zero`,
+   `100-global-reference-incomplete-referent`, `100-large-class-local`,
+   `100-large-global-class-zero`, `100-self-pointer-layout`,
+   `200-comma-class-lvalue-reference-init`, `200-derived-pointer-member-init`,
+   `200-extern-class-object-declaration`, `200-external-ctor-overload-nonfirst-argument`,
+   `200-global-constructor`, `200-global-scalar-dynamic-init`,
+   `200-local-default-class-array-lifecycle`, `200-member-object-lifetime`,
+   `200-return-preserves-value`, and `200-static-thread-local-member`; and
+   `300-alignas-class-layout`, `300-bit-field-layout-sizeof`,
+   `300-zero-width-bit-field-layout`, `400-bit-field-constructor-member-init`,
+   and `400-bit-field-sparse-member-init`.  The same family has status
+   failures `100-default-member-initializer-aggregate-member`,
+   `100-default-member-initializer-class-member`,
+   `100-default-member-initializer-scalar-brace`,
+   `100-default-member-initializer-scalar`,
+   `100-default-member-initializer-user-ctor`,
+   `100-defaulted-constructor-default-member-initializer`,
+   `200-aggregate-array-member-brace-elision`,
+   `200-aggregate-class-member-subobject-init-target`,
+   `200-aggregate-reference-member-binds-storage`,
+   `200-global-class-array-enum-trivial-dtor`, `200-global-class-array-init`,
+   `200-in-class-member-initializer`, `200-local-struct-array-init`,
+   `200-member-initializer-aggregate-member`,
+   `200-member-initializer-overrides-default-member-initializer`,
+   `200-pointer-member-zero-brace-init`, `200-pointer-member-zero-paren-init`,
+   `200-reference-member-class-init`, `300-array-member-empty-paren-value-init`,
+   `300-value-init-aggregate-with-nontrivial-member`,
+   `400-bit-field-member-access-bad`, and `400-bitfield-aggregate-init`.
+
+2. **Member collection, `this`, member lookup, and non-static/static method
+   lowering** — output mismatches `100-qualified-typedef-cstyle-cast-same-name-operand`,
+   `100-this-arrow-member-binds-lvalue-ref`, `300-member-operator-bang-out-of-class`,
+   and `300-friend-function-definition-skip`; status failures
+   `100-member-methods`, `100-object-member-enumerator-constant`,
+   `100-out-of-class-methods`, `100-qualified-const-method-definition`,
+   `100-qualified-typedef-const-method-definition`,
+   `100-static-member-object-access`,
+   `100-static-member-overload-skips-nonstatic-this`,
+   `100-static-member-qualified-call`, `100-using-directive-imported-value-method-body`,
+   `200-const-member-call-prefers-const-object-overload`,
+   `200-const-subobject-member-call`, `200-derived-method-hides-base-field-call`,
+   `200-function-reference-return-expression-type`,
+   `200-implicit-member-call-suppresses-adl`, `200-member-call-implicit-object-cv-overload`,
+   `200-member-call-implicit-this-cv-overload`,
+   `200-member-call-return-type-overload-arity`,
+   `200-member-function-default-arguments`, `200-member-pointer-const-typedef-return`,
+   `200-method-cv-overload-preference`, `200-mutable-member-const-method`,
+   `200-nested-class-member-object-access`, `200-out-of-class-getter-only`,
+   `200-out-of-class-member-default-argument`,
+   `200-out-of-line-member-inherited-typedef-body`,
+   `200-parenthesized-member-call`, `200-pointer-subscript-class-reference-return`,
+   `200-protected-base-method`, `200-simple-class-member-object-access`,
+   `200-static-nonstatic-same-pointer-signature`,
+   `200-static-thread-local-member-object-call`, and
+   `300-member-callable-field-call`, `300-member-function-pointer-field-call`.
+
+3. **Constructors, destructors, recursive lifetime, and initialization
+   actions** — output mismatches `200-friend-noexcept-redeclaration` and
+   `200-member-object-lifetime`; status failures
+   `200-aliased-base-mem-initializer-match`,
+   `200-bad-implicit-default-ctor-with-nondefault-member`,
+   `200-base-default-argument-constructor-action`, `200-constructor-member-init`,
+   `200-constructor-overload-default-arg-nonfirst-argument`,
+   `200-defaulted-constructor-still-aggregate`, `200-deleted-constructor-still-aggregate`,
+   `200-derived-base-constructor-member-init`, `200-empty-class-member-declaration`,
+   `200-global-function-style-constructor`,
+   `200-local-class-direct-init-free-function`,
+   `200-local-class-direct-init-inherited-member-call`,
+   `200-local-class-direct-init-member-function`,
+   `200-local-class-direct-init-parameter-hides-type`,
+   `200-nested-out-of-class-constructor-enclosing-type`,
+   `200-placement-new-expression-constructor-call`,
+   `300-const-pointer-explicit-destructor-call`,
+   `300-explicit-destructor-call-enclosing-namespace-type`,
+   `300-header-static-class-init`, `300-scalar-pseudo-destructor-call`,
+   `300-static-class-member-object-definition`,
+   `300-synthesized-array-member-lifecycle`, `500-inheriting-constructors`, and
+   `500-inheriting-external-transitive-constructor`.
+
+4. **Inheritance, access control, nested-name lookup, references, and
+   conversions** — output mismatches `200-derived-pointer-member-init` and
+   `300-top-level-alias-anonymous-struct`; status failures
+   `200-base-field-access`, `200-const-cast-pointer-reference-alias`,
+   `200-derived-pointer-overload-prefers-base-over-void`,
+   `200-elaborated-member-forward-type`,
+   `200-friend-derived-access-inherited-protected-field`,
+   `200-friend-function-member-access`,
+   `200-friend-intermediate-derived-protected-base-method`,
+   `200-inherited-base-typedefs-in-derived-members`,
+   `200-inherited-injected-class-name-qualified-type`,
+   `200-inherited-member-overload-set`, `200-inherited-static-member-qualified-call`,
+   `200-multilevel-qualification-conversion-bad`,
+   `200-nested-injected-class-name-hides-base-name`,
+   `200-protected-member-typedef-access-bad`,
+   `200-qualified-friend-function-member-access`,
+   `200-qualified-inherited-member-typedef`,
+   `200-reference-member-conditional-lvalue`, `200-single-inheritance`,
+   `300-class-using-declaration-reexposes-protected-field`,
+   `300-lazy-nested-class-enclosing-alias-lookup`,
+   `300-private-base-using-method-call`,
+   `300-private-base-using-method-call`,
+   `300-prvalue-derived-base-friend-operator`,
+   `300-qualified-friend-function-access`,
+   `300-reference-member-same-name-as-class`,
+   `300-using-base-same-signature-derived-preferred`,
+   `300-using-declaration-public-private-base-member`, and spec failures
+   `200-conditional-derived-base-lvalue-reference`,
+   `200-const-reference-binds-derived-pointer-prvalue`,
+   `200-derived-base-reference-overload-rank`,
+   `200-nested-class-enclosing-access`, and
+   `300-inherited-const-method-base-pointer-cv-bad`.
+
+5. **Operator overload resolution, ADL, and callable/member expression
+   forms** — output mismatches `300-enum-class-nonmember-operator-bitand`,
+   `300-enum-operator-adl-selects-matching-overload`, and
+   `spec/300-operator-lookup-ordinary-adl-union`; status failures
+   `300-adl-associated-namespace-does-not-climb-parents`,
+   `300-basic-operator-overloads`, `300-chained-member-subscript-operator-call`,
+   `300-compound-assignment-adl-nonmember-after-member-reject`,
+   `300-derived-shift-prefers-free-char-pointer`,
+   `300-discarded-comma-reference-result-no-copy`,
+   `300-hidden-friend-definition-adl-call`,
+   `300-hidden-friend-operator-nullptr-compare`,
+   `300-late-member-subscript-shadows-type`, `300-member-binary-operator-eq`,
+   `300-member-binary-operator-ne-wrapper`, `300-member-deref-after-prefix-decrement`,
+   `300-member-postfix-increment-operator`, `300-member-prefix-decrement`,
+   `300-member-subscript-operator-call`, `300-mixed-member-free-shift-stress-chain`,
+   `300-operator-nullptr-t-from-zero`, `300-operator-shift-stress-chain`,
+   `300-operator-token-result-typing`, `300-out-of-class-member-trailing-return`,
+   `300-overloaded-arrow-star-operator`, `300-overloaded-deref-user-assignment`,
+   `300-overloaded-unary-deref-base-ref-return`,
+   `300-postfix-ref-return-deref-member-call`, `300-stream-shift-selection-chain`,
+   `300-subobject-member-deref-after-prefix-decrement`, `300-temporary-functor-call`,
+   `300-unary-address-of-builtin-fallback`, `300-user-defined-string-literal-operator`,
+   and spec failures `300-logical-operator-overload` and
+   `300-overloaded-comma-nonviable-falls-back-builtin`.
+
+6. **Remaining parser/diagnostic and LowIR metadata gaps** — output mismatch
+   `300-alignas-out-of-class-nested-type` is represented by the corresponding
+   status failure; status failures `100-function-pointer-nested-param-name-shadow`,
+   `200-function-boundary-metadata-emission`, `200-parameter-access-metadata-emission`,
+   `200-parameter-alias-metadata-emission`, and
+   `300-member-function-trailing-return`; plus the rejection/acceptance cases
+   `200-copy-init-explicit-ctor-bad`, `200-copy-init-explicit-ctor-overload-refinement`,
+   `200-copy-list-init-explicit-ctor-bad`, `200-list-init-narrowing-bad`,
+   `300-compound-assignment-adl-nonmember-after-member-reject`, and
+   `300-user-defined-string-literal-operator`.
+
+## Checkpoint Scope
+
+This checkpoint implements the typed class-layout service and its direct
+LowIR consumers.  It covers ordinary non-static fields in declaration order,
+pointer/reference/array and previously completed class-member sizes, empty
+classes, self-referential pointer members, the direct single base at offset
+zero, integral bit-field allocation units including unnamed zero-width
+separators, explicit class alignment, and the resulting `sizeof`/`alignof`
+constant evaluation.  It also changes zero-initialized class globals to the
+structured `global { zero <size> }` form and prevents PA14's scalar zero store
+from pretending to initialize a trivial class object.  The implementation
+preserves all earlier procedural behavior and keeps member/lifetime lowering
+as the next checkpoint rather than baking source-test answers into the
+emitter.
+
+Validation for this checkpoint is the focused layout/global subset, the full
+PA15 report, the through-PA14 report, and the PA15 source-file audit.  The
+next checkpoint group is member collection and field/member-function access;
+after that, constructor/destructor actions and then inheritance/access and
+operator/ADL resolution remain as grouped above.
+
+## Checkpoint Result
+
+Completed.  The semantic model now retains typed class-member and layout facts;
+the analyzer computes declaration-order offsets, base and bit-field storage,
+alignment, and final object size; and the PA14 lowerer consumes those facts for
+object slots, `sizeof`/`alignof`, structured zero-initialized class globals, and
+trivial local class declarations.  The parser also preserves `alignas` on class
+definitions long enough for semantic layout.
+
+The focused checkpoint set passed **9 / 9**:
+
+- `100-class-local-sizeof`
+- `100-global-class-zero`
+- `100-empty-class-sizeof`
+- `100-large-class-local`
+- `100-large-global-class-zero`
+- `100-self-pointer-layout`
+- `300-alignas-class-layout`
+- `300-bit-field-layout-sizeof`
+- `300-zero-width-bit-field-layout`
+
+The full required PA15 report improved from **16 / 200** to **26 / 200**.
+No test or reference fixture was changed.  The required through-PA14 report
+is clean at **819 / 819**.  The PA15 source audit passes with only the
+repository's existing header-division warnings.
+
+## Post-checkpoint Remaining Work
+
+The current report has **174 failures**: 154 exit-status mismatches and 20
+LowIR mismatches.  The remaining LowIR set is:
+
+- `100-global-reference-incomplete-referent`,
+  `100-qualified-typedef-cstyle-cast-same-name-operand`,
+  `100-this-arrow-member-binds-lvalue-ref`;
+- `200-comma-class-lvalue-reference-init`,
+  `200-derived-pointer-member-init`,
+  `200-external-ctor-overload-nonfirst-argument`,
+  `200-friend-noexcept-redeclaration`, `200-global-constructor`,
+  `200-global-scalar-dynamic-init`,
+  `200-local-default-class-array-lifecycle`,
+  `200-member-object-lifetime`, `200-return-preserves-value`,
+  `200-static-thread-local-member`;
+- `300-enum-class-nonmember-operator-bitand`,
+  `300-enum-operator-adl-selects-matching-overload`,
+  `300-friend-function-definition-skip`,
+  `300-member-operator-bang-out-of-class`;
+- `400-bit-field-constructor-member-init`,
+  `400-bit-field-sparse-member-init`, and
+  `spec/300-operator-lookup-ordinary-adl-union`.
+
+The status failures remain grouped by the shared behaviors in the turn-start
+map above: aggregate/default-member initialization and lifetime; member
+collection and access; constructors/destructors; inheritance and conversions;
+operator/ADL lookup; and parser/diagnostic metadata.  The next checkpoint is
+the member-collection slice: bind ordinary and static members with their
+typed offsets/access facts, lower `this` plus `.`/`->` field access, and start
+emitting member-function declarations while preserving the completed layout
+behavior.

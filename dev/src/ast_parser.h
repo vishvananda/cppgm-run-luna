@@ -75,6 +75,7 @@ private:
 		int angle_depth;
 		int ordinary_depth;
 		std::vector<int> angle_floors;
+		std::vector<std::string> pending_attributes;
 	};
 
 	const std::vector<Token>& tokens_;
@@ -86,6 +87,7 @@ private:
 	std::set<std::string> templates_;
 	std::set<std::string> namespaces_;
 	std::set<std::string> value_names_;
+	std::vector<std::string> pending_attributes_;
 	std::string current_class_;
 
 	Mark Save() const;

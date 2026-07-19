@@ -533,7 +533,7 @@ public:
 			return type->underlying ? TypeSize(type->underlying) : 4;
 		case TYPE_CLASS:
 			if (!type->complete) throw logic_error("sizeof incomplete class");
-			return 1;
+			return type->layout_complete ? type->object_size : 1;
 		case TYPE_TEMPLATE_PARAMETER:
 		case TYPE_TEMPLATE_TEMPLATE_PARAMETER: return 0;
 		}
@@ -546,6 +546,8 @@ public:
 		if (type->kind == TYPE_ARRAY) return TypeAlignment(type->child);
 		if (type->kind == TYPE_CLASS && !type->complete)
 			throw logic_error("alignof incomplete class");
+		if (type->kind == TYPE_CLASS && type->layout_complete)
+			return type->object_alignment;
 		if (type->kind == TYPE_ENUM && type->underlying) return TypeAlignment(type->underlying);
 		return TypeSize(type);
 	}
@@ -748,74 +750,27 @@ public:
 		return generated.str();
 	}
 
-	TypePtr ProcessClass(const CPPGMAstNodePtr& node, Scope* scope)
-	{
-		map<const CPPGMAstNode*, TypePtr>::const_iterator cached = class_types_.find(node.get());
-		if (cached != class_types_.end()) return cached->second;
-		const string raw_name = node->value;
-		const string name = LastComponent(raw_name);
-		const bool anonymous = name.empty() || name == "<unnamed>";
-		const string tag = ClassKey(node);
-		if (anonymous)
-		{
-			// The generated name is semantic state, not a source-test lookup:
-			// it is stable for the declaration order and keeps anonymous union
-			// member scopes printable and reusable by later passes.
-			const string generated = AnonymousTypeName(tag);
-			TypePtr type(new Type(TYPE_CLASS, generated));
-			type->tag = tag;
-			class_types_[node.get()] = type;
-			Scope* class_scope = ClassScope(type, scope, generated);
-			for (size_t i = 0; i < node->children.size(); ++i)
-				if (node->children[i]->kind != "class-key") Process(node->children[i], class_scope);
-			// Anonymous unions inject their members into the containing scope.
-			if (tag == "union")
-				for (size_t i = 0; i < class_scope->bindings.size(); ++i)
-					if (class_scope->bindings[i].kind != BIND_TYPE)
-					{
-						Binding injected = class_scope->bindings[i];
-						injected.injected_member = true;
-						injected.injected_owner = type;
-						scope->add(injected);
-					}
-			return type;
-		}
-		TypePtr type;
-		Binding* existing = scope->local(name);
-		if (existing && existing->kind == BIND_TYPE && existing->type &&
-			existing->type->kind == TYPE_CLASS)
-			type = existing->type;
-		else
-		{
-			type.reset(new Type(TYPE_CLASS, name));
-			type->tag = tag;
-			if (!scope->qualified_prefix.empty()) type->name = scope->qualified_prefix + "::" + name;
-			AddTypeBinding(scope, name, type);
-		}
-		type->tag = tag;
-		type->complete = true;
-		Scope* class_scope = ClassScope(type, scope, name);
-		for (size_t i = 0; i < node->children.size(); ++i)
-			if (node->children[i]->kind != "class-key") Process(node->children[i], class_scope);
-		class_types_[node.get()] = type;
-		return type;
-	}
+	static size_t AlignUp(size_t value, size_t alignment)
+	;
 
-	TypePtr ProcessForwardClass(const CPPGMAstNodePtr& node, Scope* scope)
-	{
-		const string name = LastComponent(node->value);
-		if (name.empty()) throw logic_error("anonymous class forward declaration");
-		Binding* existing = scope->local(name);
-		if (existing && existing->kind == BIND_TYPE) return existing->type;
-		existing = ResolveBinding(scope, name);
-		if (existing && (existing->kind == BIND_TYPE || existing->kind == BIND_TYPE_ALIAS) &&
-			existing->type && existing->type->kind == TYPE_CLASS) return existing->type;
-		TypePtr type(new Type(TYPE_CLASS, name));
-		type->tag = ClassKey(node);
-		type->complete = false;
-		AddTypeBinding(scope, name, type);
-		return type;
-	}
+	size_t AttributeAlignment(const string& spelling, Scope* scope) const
+	;
+
+	void ApplyClassAttributes(const CPPGMAstNodePtr& node, const TypePtr& type,
+		Scope* scope)
+	;
+
+	void ComputeClassLayout(const CPPGMAstNodePtr& node, const TypePtr& type,
+		Scope* class_scope)
+	;
+
+	void RecordClassMembers(const CPPGMAstNodePtr& node, const TypePtr& type,
+		Scope* scope, Scope* class_scope)
+	;
+
+	TypePtr ProcessClass(const CPPGMAstNodePtr& node, Scope* scope);
+
+	TypePtr ProcessForwardClass(const CPPGMAstNodePtr& node, Scope* scope);
 
 	TypePtr ProcessEnum(const CPPGMAstNodePtr& node, Scope* scope)
 	{

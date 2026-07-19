@@ -283,7 +283,7 @@ namespace cppgm_pa14_lowering {
 PA14Lowerer::PA14Lowerer(const vector<CPPGMAstNodePtr>& trees)
     : trees_(trees), program_(new CPPGMAstNode("translation-unit")), analyzer_(),
       functions_(), globals_(), function_by_key_(), global_by_key_(),
-      string_data_(), string_symbols_(), string_order_(), state_()
+      string_data_(), string_symbols_(), string_order_(), needs_init_helper_(false), state_()
 {}
 
 void PA14Lowerer::Lower(ostream& out)
@@ -554,6 +554,8 @@ void PA14Lowerer::CollectSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* s
         CollectFunction(wrapper, scope, false);
         continue;
       }
+      const bool is_extern = HasStorageSpecifier(node, "extern");
+      if(is_extern && item->children.size() < 2) continue;
       GlobalRecord record;
       record.node = node;
       record.scope = scope;
@@ -562,6 +564,12 @@ void PA14Lowerer::CollectSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* s
       record.initializer = item->children.size() > 1 ? item->children[1] : CPPGMAstNodePtr();
       record.internal = facts.is_const || facts.is_constexpr || HasStorageSpecifier(node, "static");
       record.dynamic_initializer = false;
+      TypePtr value_type = type_value(type);
+      if(!is_extern && value_type &&
+         (value_type->kind == TYPE_CLASS ||
+          (value_type->kind == TYPE_ARRAY && value_type->child &&
+           value_type->child->kind == TYPE_CLASS)))
+        needs_init_helper_ = true;
       const string key = global_key(record.qualified_name);
       map<string, GlobalRecord*>::iterator found = global_by_key_.find(key);
       if(found == global_by_key_.end()) {

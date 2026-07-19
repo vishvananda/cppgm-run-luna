@@ -84,7 +84,9 @@ void PA14Lowerer::EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr&
       return;
     }
     if(!expression) {
-      if(variable->type->kind != TYPE_FUNCTION)
+      TypePtr object_type = type_value(variable->type);
+      if(variable->type->kind != TYPE_FUNCTION &&
+         (!object_type || object_type->kind != TYPE_CLASS))
         emit_store(variable->type, "0", StorageForVariable(*variable));
       return;
     }
@@ -465,7 +467,9 @@ void PA14Lowerer::EmitStatement(const CPPGMAstNodePtr& node, Scope* scope)
             EmitInitializer(found->second, item->children[1], scope);
           else if(found != state_->plans.end() &&
                   found->second->type->kind != TYPE_ARRAY &&
-                  !type_is_reference(found->second->type))
+                  !type_is_reference(found->second->type) &&
+                  (!type_value(found->second->type) ||
+                   type_value(found->second->type)->kind != TYPE_CLASS))
             emit_store(found->second->type, "0", StorageForVariable(*found->second));
         }
       }
@@ -592,9 +596,9 @@ void PA14Lowerer::EmitDynamicInitializers(vector<string>& entries)
     vector<GlobalRecord*> dynamic;
     for(size_t i = 0; i < globals_.size(); ++i)
       if(globals_[i].dynamic_initializer) dynamic.push_back(&globals_[i]);
-    if(dynamic.empty()) return;
+    if(dynamic.empty() && !needs_init_helper_) return;
     ostringstream out;
-    out << "function @__cppgm_init() -> void [role=init] {\n";
+    out << "function @__cppgm_init() -> void [role=init, binding=internal] {\n";
     out << "  block ^entry:\n";
     unsigned int temp = 1;
     for(size_t i = 0; i < dynamic.size(); ++i) {

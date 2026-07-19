@@ -20,6 +20,26 @@ struct Scope;
 struct Type;
 typedef shared_ptr<Type> TypePtr;
 
+// The PA15 object model keeps layout facts in the semantic type rather than
+// rediscovering them from LowIR spelling.  This is deliberately small at the
+// PA11/PA14 handoff; later stages can extend the member record with access and
+// lifetime facts without changing the source AST boundary.
+struct ClassMemberInfo
+{
+	string name;
+	TypePtr type;
+	long long offset;
+	long long bit_offset;
+	long long bit_width;
+	bool bit_field;
+	bool is_static;
+	CPPGMAstNodePtr initializer;
+
+	ClassMemberInfo()
+		: name(), type(), offset(0), bit_offset(0), bit_width(0),
+		  bit_field(false), is_static(false), initializer() {}
+};
+
 enum TypeKind
 {
 	TYPE_FUNDAMENTAL,
@@ -53,6 +73,14 @@ struct Type
 	TypePtr member_owner;
 	Scope* owned_scope;
 	TypePtr underlying;
+	vector<ClassMemberInfo> class_members;
+	TypePtr direct_base;
+	size_t object_size;
+	size_t object_alignment;
+	size_t explicit_alignment;
+	bool layout_complete;
+	bool layout_in_progress;
+	bool is_union;
 
 	Type(TypeKind type_kind = TYPE_FUNDAMENTAL,
 		const string& type_name = string());
@@ -90,6 +118,14 @@ struct Binding
 	bool injected_member;
 	string injected_object_name;
 	TypePtr injected_owner;
+	bool is_static_member;
+	bool is_mutable_member;
+	bool is_bit_field;
+	long long bit_width;
+	long long member_offset;
+	long long member_bit_offset;
+	string access;
+	CPPGMAstNodePtr declaration;
 
 	Binding(BindingKind binding_kind = BIND_VARIABLE,
 		const string& binding_name = string(), const TypePtr& binding_type = TypePtr());

@@ -321,6 +321,13 @@ string PA14Lowerer::RenderGlobal(GlobalRecord& global)
     TypePtr type = global.type;
     CPPGMAstNodePtr expression = InitializerExpression(global.initializer);
     ostringstream out;
+    TypePtr value_type = type_value(type);
+    if(value_type && value_type->kind == TYPE_CLASS && !expression) {
+      out << "global @" << global.symbol << GlobalMetadata(global.internal) << " = {\n";
+      out << "  zero " << integer_text(static_cast<long long>(type_size(type))) << "\n";
+      out << "}";
+      return out.str();
+    }
     if(type->kind == TYPE_ARRAY) {
       out << "global @" << global.symbol << GlobalMetadata(global.internal) << " = {\n";
       TypePtr element = type->child;

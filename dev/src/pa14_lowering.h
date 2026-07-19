@@ -173,6 +173,7 @@ class PA14Lowerer
   map<string, vector<unsigned char> > string_data_;
   map<string, string> string_symbols_;
   vector<string> string_order_;
+  bool needs_init_helper_;
   FunctionState* state_;
 
 public:

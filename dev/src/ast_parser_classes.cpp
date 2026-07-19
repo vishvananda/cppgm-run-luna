@@ -27,6 +27,8 @@ CPPGMAstNodePtr Parser::ParseClassSpecifier(bool declaration_context)
 	if (!(Take("class") || Take("struct") || Take("union")))
 		return CPPGMAstNodePtr();
 	SkipAttributes();
+	const vector<string> attributes = pending_attributes_;
+	pending_attributes_.clear();
 	string name;
 	if (Peek().kind == AST_IDENTIFIER || Is("~"))
 	{
@@ -51,12 +53,16 @@ CPPGMAstNodePtr Parser::ParseClassSpecifier(bool declaration_context)
 	{
 		CPPGMAstNodePtr result = Node("class-forward-declaration", name);
 		Add(result, Node("class-key", TokenLabel(key) + ":" + key));
+		for (size_t i = 0; i < attributes.size(); ++i)
+			Add(result, Node("attribute", attributes[i]));
 		(void)declaration_context;
 		return result;
 	}
 	CPPGMAstNodePtr result = Node("class-specifier", name);
 	Add(result, Node("class-key", TokenLabel(key) + ":" + key));
 	Add(result, bases);
+	for (size_t i = 0; i < attributes.size(); ++i)
+		Add(result, Node("attribute", attributes[i]));
 	const string previous_class = current_class_;
 	current_class_ = name;
 	++ordinary_depth_;
