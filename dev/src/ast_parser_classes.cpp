@@ -98,7 +98,18 @@ CPPGMAstNodePtr Parser::ParseEnumSpecifier(bool declaration_context)
 		++position_;
 	}
 	string name;
-	if (Peek().kind == AST_IDENTIFIER) TakeIdentifier(&name);
+	// PA11 also accepts an out-of-class definition of a scoped member enum,
+	// e.g. `enum class writer::state : char { ... }`.  Keep the qualified
+	// declarator intact so the semantic layer can bind the definition to the
+	// existing member type.
+	if (Peek().kind == AST_IDENTIFIER)
+	{
+		if (!ParseName(&name, false))
+		{
+			Restore(mark);
+			return CPPGMAstNodePtr();
+		}
+	}
 	if (!name.empty()) RegisterType(name);
 	CPPGMAstNodePtr underlying;
 	if (Take(":"))

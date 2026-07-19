@@ -2,6 +2,7 @@
 
 #include "exceptions.h"
 #include "ast_parser.h"
+#include "pa11_semantics.h"
 #include "posttoken_semantics.h"
 #include "preprocessor_engine.h"
 #include "tool_help_text.h"
@@ -417,8 +418,22 @@ int run_emit_ast_mode(const vector<string> & args)
 
 int run_emit_types_mode(const vector<string> & args)
 {
-  parse_source_output_invocation(args, false);
-  return run_unimplemented_mode("--emit-types", "PA11");
+  const SourceOutputInvocation invocation = parse_source_output_invocation(args, false);
+  ofstream output(invocation.output.c_str());
+  if(!output) throw logic_error("unable to open output file");
+  output << invocation.inputs.size() << " translation units\n";
+  for(size_t i = 0; i < invocation.inputs.size(); ++i) {
+    const vector<PostPPToken> tokens = PreprocessSourceFile(invocation.inputs[i]);
+    if(!ValidatePostTokens(tokens)) {
+      throw logic_error("invalid token in preprocessed sequence");
+    }
+    const CPPGMAstNodePtr tree = ParsePA10TranslationUnit(tokens);
+    if(!tree) throw logic_error("token sequence is not a translation-unit");
+    output << "start translation unit " << (i + 1) << "\n";
+    EmitPA11Types(tree, output);
+    output << "end translation unit\n";
+  }
+  return EXIT_SUCCESS;
 }
 
 int run_emit_semantics_mode(const vector<string> & args)
