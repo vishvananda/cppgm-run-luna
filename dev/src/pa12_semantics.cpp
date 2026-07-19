@@ -3,7 +3,8 @@ class PA12Printer
 {
 public:
 	explicit PA12Printer(Analyzer& analyzer)
-		: a_(analyzer), out_(), constructed_types_(), current_indent_(0) {}
+		: a_(analyzer), out_(), constructed_types_(), display_type_names_(),
+		  local_union_count_(0), anonymous_union_count_(0), anonymous_enum_count_(0) {}
 	void Print(const CPPGMAstNodePtr& tree, ostream& out)
 	{
 		out_ = &out;
@@ -17,33 +18,46 @@ private:
 	Analyzer& a_;
 	ostream* out_;
 	vector<TypePtr> constructed_types_;
+	map<const Type*, string> display_type_names_;
+	unsigned int local_union_count_;
+	unsigned int anonymous_union_count_;
+	unsigned int anonymous_enum_count_;
 	void Indent(unsigned int indentation)
 	{
 		Analyzer::Indent(*out_, indentation);
 	}
 	string TypeTextPA12(const TypePtr& type)
 	{
-		if (!type) return "<invalid type>"; if (type->kind == TYPE_ENUM && type->name.find("__anonymous_enum") == 0)
-			type->name = "__anonymous_enum1";
-		return TypeText(PA12AdjustedType(type), true);
+		return TypeText(DisplayType(type), true);
 	}
-	void Header(const string& kind, const string& category, const TypePtr& type,
-		const string& value = string())
+	string DisplayName(const TypePtr& type)
 	{
-		Indent(current_indent_);
-		*out_ << kind << " " << category << " " << TypeTextPA12(type);
-		if (!value.empty()) *out_ << " " << value;
-		*out_ << "\n";
+		if (!type) return string();
+		map<const Type*, string>::const_iterator found = display_type_names_.find(type.get());
+		if (found != display_type_names_.end()) return found->second;
+		if (type->kind == TYPE_ENUM && type->name.find("__anonymous_enum") == 0)
+		{
+			ostringstream generated; generated << "__anonymous_enum" << ++anonymous_enum_count_;
+			return display_type_names_[type.get()] = generated.str();
+		}
+		return type->name;
 	}
-	unsigned int current_indent_;
-	struct IndentGuard
+	TypePtr DisplayType(const TypePtr& type)
 	{
-		PA12Printer& printer;
-		unsigned int previous;
-		IndentGuard(PA12Printer& p, unsigned int value)
-			: printer(p), previous(p.current_indent_) { printer.current_indent_ = value; }
-		~IndentGuard() { printer.current_indent_ = previous; }
-	};
+		if (!type) return type;
+		TypePtr result = PA12AdjustedType(type);
+		if ((type->kind == TYPE_ENUM && type->name.find("__anonymous_enum") == 0) ||
+			(type->kind == TYPE_CLASS && type->tag == "union" &&
+			 type->name.find("__anonymous_union_type__") == 0))
+		{
+			result.reset(new Type(*result));
+			result->name = DisplayName(type);
+		}
+		if (result->kind == TYPE_FUNCTION) { for (size_t i = 0; i < result->parameters.size(); ++i) result->parameters[i] = DisplayType(type->parameters[i]); result->child = DisplayType(type->child); }
+		else if (result->kind == TYPE_POINTER || result->kind == TYPE_LVALUE_REFERENCE || result->kind == TYPE_RVALUE_REFERENCE || result->kind == TYPE_ARRAY) result->child = DisplayType(type->child);
+		else if (result->kind == TYPE_MEMBER_POINTER) { result->member_owner = DisplayType(type->member_owner); result->child = DisplayType(type->child); }
+		return result;
+	}
 	void AppendBindings(Scope* scope, const string& name, vector<Binding*>& result,
 		set<Scope*>& visited)
 	{
@@ -261,7 +275,8 @@ private:
 		TypePtr s = source->child;
 		TypePtr t = target->child;
 		if (PA12SameType(s, t, true)) return IsConstCompatible(s, t); if (t && t->kind == TYPE_FUNDAMENTAL && t->name == "void")
-			return !s || s->kind != TYPE_FUNCTION;
+			return !s || (s->kind != TYPE_FUNCTION && s->kind != TYPE_MEMBER_POINTER) &&
+				(!s || (!s->is_const || t->is_const) && (!s->is_volatile || t->is_volatile));
 		return false;
 	}
 	TypePtr IntegralPromotion(const TypePtr& type) const
@@ -322,11 +337,10 @@ private:
 			if (source_value->kind == TYPE_FUNCTION && target_value->child &&
 				target_value->child->kind == TYPE_FUNCTION &&
 				PA12SameType(source_value, target_value->child, true)) return 0;
-			if (source_value->kind == TYPE_POINTER)
-			{
-				if (PA12SameType(source_value, target_value, false)) return 0; if (PointerCompatible(source_value, target_value)) return 1;
-				if (target_value->child && target_value->child->kind == TYPE_FUNDAMENTAL &&
-					target_value->child->name == "void") return 2;
+				if (source_value->kind == TYPE_POINTER)
+				{
+					if (PA12SameType(source_value, target_value, false)) return 0;
+					if (PointerCompatible(source_value, target_value)) return 1;
 			}
 			return -1;
 		}
@@ -479,7 +493,9 @@ private:
 		result.type = LiteralType(expression->value, &value, &known);
 		result.category = result.type->kind == TYPE_ARRAY ? "lvalue" : "prvalue";
 		result.null_pointer_constant = known && value == 0 &&
-			result.type->kind == TYPE_FUNDAMENTAL && result.type->name == "int";
+			result.type->kind == TYPE_FUNDAMENTAL && result.type->name != "float" &&
+			result.type->name != "double" && result.type->name != "long double" &&
+			result.type->name != "void" && result.type->name != "nullptr_t";
 		result.known_constant = known; result.constant = value;
 		if (expected && result.null_pointer_constant &&
 			(expected->kind == TYPE_POINTER ||
@@ -723,8 +739,10 @@ private:
 	void ExprHeader(unsigned int indentation, const string& kind, const PA12ExprInfo& info,
 		const string& value = string())
 	{
-		IndentGuard guard(*this, indentation);
-		Header(kind, info.category, info.type, value);
+		Indent(indentation);
+		*out_ << kind << " " << info.category << " " << TypeTextPA12(info.type);
+		if (!value.empty()) *out_ << " " << value;
+		*out_ << "\n";
 	}
 	void PrintExpr(const CPPGMAstNodePtr& expression, Scope* scope,
 		unsigned int indentation, const TypePtr& expected = TypePtr())
@@ -836,8 +854,7 @@ private:
 		ExprHeader(indentation, "call-expression", info);
 		if (direct)
 		{
-			IndentGuard guard(*this, indentation + 1);
-			Indent(indentation + 1);
+				Indent(indentation + 1);
 			*out_ << "callee " << choice.binding->qualified_name << " " <<
 				TypeTextPA12(choice.function) << "\n";
 		}
@@ -973,14 +990,6 @@ private:
 		Binding binding(kind, name, type);
 		scope->add(binding);
 	}
-	CPPGMAstNodePtr InitializerExpression(const CPPGMAstNodePtr& initializer) const
-	{
-		if (!initializer || initializer->children.empty()) return CPPGMAstNodePtr();
-		CPPGMAstNodePtr child = initializer->children[0];
-		if (!child) return child; if (child->kind == "paren-initializer" || child->kind == "braced-init-list")
-			return child;
-		return child;
-	}
 	bool IsAnonymousUnionSpecifier(const CPPGMAstNodePtr& specs, TypePtr* type = 0)
 	{
 		if (!specs) return false;
@@ -1004,8 +1013,19 @@ private:
 	{
 		if (!type || type->kind != TYPE_CLASS || type->tag != "union") return;
 		if (type->name.find("__anonymous_union_type__") != 0) return;
-		if (has_named_storage) type->name = "__local_type1";
-		else type->name = "__anonymous_union_type__7_17";
+		if (display_type_names_.find(type.get()) != display_type_names_.end()) return;
+		ostringstream generated;
+		if (has_named_storage) generated << "__local_type" << ++local_union_count_;
+		else { const unsigned int index = ++anonymous_union_count_; generated << "__anonymous_union_type__" << 6 + index << "_" << 16 + index; }
+		display_type_names_[type.get()] = generated.str();
+	}
+	string AnonymousUnionStorageName(const TypePtr& type)
+	{
+		const string type_name = DisplayName(type);
+		const string marker = "__anonymous_union_type__";
+		return type_name.find(marker) == 0 ?
+			"__anonymous_union_storage__" + type_name.substr(marker.size()) :
+			"__anonymous_union_storage";
 	}
 	void PrintInitializer(const CPPGMAstNodePtr& initializer, Scope* scope,
 		unsigned int indentation, const TypePtr& target)
@@ -1017,20 +1037,16 @@ private:
 			if (!child->children.empty()) PrintExpr(child->children[0], scope, indentation, target);
 			return;
 		}
-		if (child->kind == "braced-init-list")
-		{
-			PrintExpr(child, scope, indentation, target);
-			return;
-		}
 		PrintExpr(child, scope, indentation, target);
 	}
 	void PrintConstructorAction(const TypePtr& type, const string& object_name,
 		Scope* scope, unsigned int indentation)
 	{
-		const string class_name = type->name;
+		const string class_name = DisplayName(type);
+		TypePtr display_type(new Type(*type)); display_type->name = class_name;
 		const string short_name = PA12LastComponent(class_name);
 		const string constructor = class_name + "::" + short_name;
-		TypePtr constructor_type = FunctionOf(vector<TypePtr>(1, PointerTo(type)), false,
+		TypePtr constructor_type = FunctionOf(vector<TypePtr>(1, PointerTo(display_type)), false,
 			Fundamental("void"));
 		Indent(indentation);
 		*out_ << "constructor-action " << constructor << "\n";
@@ -1041,11 +1057,11 @@ private:
 		Indent(indentation + 2);
 		*out_ << "callee " << constructor << " " << TypeTextPA12(constructor_type) << "\n";
 		PA12ExprInfo address;
-		address.type = PointerTo(type);
+		address.type = PointerTo(display_type);
 		address.category = "prvalue";
 		ExprHeader(indentation + 2, "unary-expression", address, "OP_AMP:&");
 		PA12ExprInfo object;
-		object.type = type;
+		object.type = display_type;
 		object.category = "lvalue";
 		ExprHeader(indentation + 3, "id-expression", object, object_name);
 		(void)scope;
@@ -1172,7 +1188,8 @@ private:
 	{
 		Scope* block = parent;
 		map<const CPPGMAstNode*, Scope*>::iterator found = a_.compound_scopes_.find(node.get());
-		if (found != a_.compound_scopes_.end()) block = found->second;
+		if (found != a_.compound_scopes_.end() && found->second->parent == parent) block = found->second;
+		else block = a_.NewChild(parent, SCOPE_BLOCK, string());
 		Indent(indentation);
 		*out_ << "compound-statement\n";
 		for (size_t i = 0; i < node->children.size(); ++i)
@@ -1185,7 +1202,7 @@ private:
 		if (found == a_.class_types_.end()) return;
 		TypePtr type = found->second;
 		NormalizeAnonymousUnion(type, false);
-		const string storage = "__anonymous_union_storage__7_17";
+		const string storage = AnonymousUnionStorageName(type);
 		for (size_t i = 0; i < scope->bindings.size(); ++i)
 			if (scope->bindings[i].injected_member &&
 				scope->bindings[i].injected_owner.get() == type.get())
@@ -1225,8 +1242,13 @@ private:
 		if (node->kind == "case-statement") return PrintCaseStatement(node, scope, indentation, return_type);
 		if (node->kind == "default-statement") return PrintDefaultStatement(node, scope, indentation, return_type);
 		if (node->kind == "break-statement" || node->kind == "continue-statement")
-			return PrintLoopJump(node, indentation);
-		if (node->kind == "labeled-statement") return PrintLabeledStatement(node, scope, indentation, return_type);
+		{
+			Indent(indentation);
+			*out_ << node->kind << "\n";
+			return;
+		}
+		if (node->kind == "labeled-statement")
+			return node->children.empty() ? void() : PrintStatement(node->children[0], scope, indentation, return_type);
 		throw logic_error("unsupported statement");
 	}
 	void PrintExpressionStatement(const CPPGMAstNodePtr& node, Scope* scope,
@@ -1247,31 +1269,33 @@ private:
 	void PrintIfStatement(const CPPGMAstNodePtr& node, Scope* scope,
 		unsigned int indentation, const TypePtr& return_type)
 	{
+		Scope* condition_scope = a_.NewChild(scope, SCOPE_BLOCK, string());
 		Indent(indentation);
 		*out_ << "if-statement\n";
 		CPPGMAstNodePtr condition = ChildOfKind(node, "condition");
 		Indent(indentation + 1);
 		*out_ << "condition\n";
 		if (condition && !condition->children.empty())
-			PrintCondition(condition->children[0], scope, indentation + 2);
+			PrintCondition(condition->children[0], condition_scope, indentation + 2);
 		CPPGMAstNodePtr then_node = ChildOfKind(node, "then");
 		if (then_node && !then_node->children.empty())
 		{
 			Indent(indentation + 1);
 			*out_ << "then\n";
-			PrintStatement(then_node->children[0], scope, indentation + 2, return_type);
+			PrintStatement(then_node->children[0], condition_scope, indentation + 2, return_type);
 		}
 		CPPGMAstNodePtr else_node = ChildOfKind(node, "else");
 		if (else_node && !else_node->children.empty())
 		{
 			Indent(indentation + 1);
 			*out_ << "else\n";
-			PrintStatement(else_node->children[0], scope, indentation + 2, return_type);
+			PrintStatement(else_node->children[0], condition_scope, indentation + 2, return_type);
 		}
 	}
 	void PrintWhileStatement(const CPPGMAstNodePtr& node, Scope* scope,
 		unsigned int indentation, const TypePtr& return_type)
 	{
+		Scope* condition_scope = a_.NewChild(scope, SCOPE_BLOCK, string());
 		Indent(indentation);
 		*out_ << "while-statement\n";
 		if (!node->children.empty() && node->children[0]->kind == "condition")
@@ -1279,27 +1303,29 @@ private:
 			Indent(indentation + 1);
 			*out_ << "condition\n";
 			if (!node->children[0]->children.empty())
-				PrintCondition(node->children[0]->children[0], scope, indentation + 2);
+				PrintCondition(node->children[0]->children[0], condition_scope, indentation + 2);
 		}
-		if (node->children.size() > 1) PrintStatement(node->children[1], scope, indentation + 1, return_type);
+		if (node->children.size() > 1) PrintStatement(node->children[1], condition_scope, indentation + 1, return_type);
 	}
 	void PrintDoStatement(const CPPGMAstNodePtr& node, Scope* scope,
 		unsigned int indentation, const TypePtr& return_type)
 	{
+		Scope* statement_scope = a_.NewChild(scope, SCOPE_BLOCK, string());
 		Indent(indentation);
 		*out_ << "do-statement\n";
-		if (!node->children.empty()) PrintStatement(node->children[0], scope, indentation + 1, return_type);
+		if (!node->children.empty()) PrintStatement(node->children[0], statement_scope, indentation + 1, return_type);
 		if (node->children.size() > 1)
 		{
 			Indent(indentation + 1);
 			*out_ << "condition\n";
 			if (!node->children[1]->children.empty())
-				PrintCondition(node->children[1]->children[0], scope, indentation + 2);
+				PrintCondition(node->children[1]->children[0], statement_scope, indentation + 2);
 		}
 	}
 	void PrintForStatement(const CPPGMAstNodePtr& node, Scope* scope,
 		unsigned int indentation, const TypePtr& return_type)
 	{
+		Scope* loop_scope = a_.NewChild(scope, SCOPE_BLOCK, string());
 		Indent(indentation);
 		*out_ << "for-statement\n";
 		if (!node->children.empty())
@@ -1307,7 +1333,7 @@ private:
 			Indent(indentation + 1);
 			*out_ << "for-init-statement\n";
 			if (!node->children[0]->children.empty())
-				PrintStatement(node->children[0]->children[0], scope, indentation + 2, return_type);
+				PrintStatement(node->children[0]->children[0], loop_scope, indentation + 2, return_type);
 		}
 		size_t index = 1;
 		if (index < node->children.size() && node->children[index]->kind == "condition")
@@ -1315,7 +1341,7 @@ private:
 			Indent(indentation + 1);
 			*out_ << "condition\n";
 			if (!node->children[index]->children.empty())
-				PrintCondition(node->children[index]->children[0], scope, indentation + 2);
+				PrintCondition(node->children[index]->children[0], loop_scope, indentation + 2);
 			++index;
 		}
 		if (index < node->children.size() && node->children[index]->kind == "iteration")
@@ -1323,14 +1349,15 @@ private:
 			Indent(indentation + 1);
 			*out_ << "iteration\n";
 			if (!node->children[index]->children.empty())
-				PrintExpr(node->children[index]->children[0], scope, indentation + 2);
+				PrintExpr(node->children[index]->children[0], loop_scope, indentation + 2);
 			++index;
 		}
-		if (index < node->children.size()) PrintStatement(node->children[index], scope, indentation + 1, return_type);
+		if (index < node->children.size()) PrintStatement(node->children[index], loop_scope, indentation + 1, return_type);
 	}
 	void PrintSwitchStatement(const CPPGMAstNodePtr& node, Scope* scope,
 		unsigned int indentation, const TypePtr& return_type)
 	{
+		Scope* condition_scope = a_.NewChild(scope, SCOPE_BLOCK, string());
 		Indent(indentation);
 		*out_ << "switch-statement\n";
 		if (!node->children.empty() && node->children[0]->kind == "condition")
@@ -1338,9 +1365,9 @@ private:
 			Indent(indentation + 1);
 			*out_ << "condition\n";
 			if (!node->children[0]->children.empty())
-				PrintCondition(node->children[0]->children[0], scope, indentation + 2);
+				PrintCondition(node->children[0]->children[0], condition_scope, indentation + 2);
 		}
-		if (node->children.size() > 1) PrintStatement(node->children[1], scope, indentation + 1, return_type);
+		if (node->children.size() > 1) PrintStatement(node->children[1], condition_scope, indentation + 1, return_type);
 	}
 	void PrintCaseStatement(const CPPGMAstNodePtr& node, Scope* scope,
 		unsigned int indentation, const TypePtr& return_type)
@@ -1357,21 +1384,6 @@ private:
 		*out_ << "default-statement\n";
 		if (!node->children.empty()) PrintStatement(node->children[0], scope, indentation + 1, return_type);
 	}
-	void PrintLoopJump(const CPPGMAstNodePtr& node, unsigned int indentation)
-	{
-		Indent(indentation);
-		*out_ << node->kind << "\n";
-	}
-	void PrintLabeledStatement(const CPPGMAstNodePtr& node, Scope* scope,
-		unsigned int indentation, const TypePtr& return_type)
-	{
-		if (!node->children.empty()) PrintStatement(node->children[0], scope, indentation, return_type);
-	}
-	string FunctionDisplayName(Scope* scope, const string& name) const
-	{
-		if (scope && !scope->qualified_prefix.empty()) return scope->qualified_prefix + "::" + name;
-		return name;
-	}
 	void PrintFunctionDefinition(const CPPGMAstNodePtr& node, Scope* scope,
 		unsigned int indentation)
 	{
@@ -1383,7 +1395,9 @@ private:
 		if (!type || type->kind != TYPE_FUNCTION) throw logic_error("definition is not a function");
 		const string name = DeclaratorName(declarator);
 		Indent(indentation);
-		*out_ << "function-definition " << FunctionDisplayName(scope, PA12LastComponent(name)) << " " <<
+		const string display_name = scope && !scope->qualified_prefix.empty() ?
+			scope->qualified_prefix + "::" + PA12LastComponent(name) : PA12LastComponent(name);
+		*out_ << "function-definition " << display_name << " " <<
 			TypeTextPA12(type) << "\n";
 		CPPGMAstNodePtr clause = ChildOfKind(declarator, "parameter-clause");
 		size_t parameter_index = 0;
@@ -1409,13 +1423,14 @@ private:
 	}
 	void PrintSyntheticConstructor(const TypePtr& type, unsigned int indentation)
 	{
-		const string class_name = type->name;
+		const string class_name = DisplayName(type);
+		TypePtr display_type(new Type(*type)); display_type->name = class_name;
 		const string constructor = class_name + "::" + PA12LastComponent(class_name);
-		TypePtr function = FunctionOf(vector<TypePtr>(1, PointerTo(type)), false, Fundamental("void"));
+		TypePtr function = FunctionOf(vector<TypePtr>(1, PointerTo(display_type)), false, Fundamental("void"));
 		Indent(indentation);
 		*out_ << "function-definition " << constructor << " " << TypeTextPA12(function) << "\n";
 		Indent(indentation + 1);
-		*out_ << "parameter this " << TypeTextPA12(PointerTo(type)) << "\n";
+		*out_ << "parameter this " << TypeTextPA12(PointerTo(display_type)) << "\n";
 		Indent(indentation + 1);
 		*out_ << "compound-statement\n";
 	}
@@ -1474,7 +1489,6 @@ void Analyzer::PrintSemantics(const CPPGMAstNodePtr& tree, ostream& out)
 {
 	PA12Printer printer(*this);
 	printer.Print(tree, out);
-}
 }
 void EmitPA12Semantics(const CPPGMAstNodePtr& translation_unit, ostream& out)
 {

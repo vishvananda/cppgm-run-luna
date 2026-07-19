@@ -144,8 +144,3 @@ string PA12LastComponent(const string& value)
 	const size_t separator = value.rfind("::");
 	return separator == string::npos ? value : value.substr(separator + 2);
 }
-
-string PA12StripLeadingGlobal(const string& value)
-{
-	return value.compare(0, 2, "::") == 0 ? value.substr(2) : value;
-}
