@@ -11,22 +11,6 @@ namespace cppgm_pa10 { bool IsKeywordToken(const string& text); }
 
 namespace {
 
-const char* const kKeywords[] = {
-	"alignas", "alignof", "asm", "auto", "bool", "break", "case",
-	"catch", "char", "char16_t", "char32_t", "class", "const",
-	"constexpr", "const_cast", "continue", "decltype", "default", "delete",
-	"do", "double", "dynamic_cast", "else", "enum", "explicit", "extern",
-	"false", "float", "for", "friend", "goto", "if", "inline", "int",
-	"long", "mutable", "namespace", "new", "noexcept", "nullptr", "operator",
-	"private", "protected", "public", "register", "reinterpret_cast", "return",
-	"short", "signed", "sizeof", "static", "static_assert", "static_cast",
-	"struct", "switch", "template", "this", "thread_local", "throw", "true",
-	"try", "typedef", "typeid", "typename", "union", "unsigned", "using",
-	"virtual", "void", "volatile", "wchar_t", "while", "and", "and_eq",
-	"bitand", "bitor", "compl", "not", "not_eq", "or", "or_eq", "xor",
-	"xor_eq", "final", "override", "export", "asm", "__attribute__"
-};
-
 bool Contains(const char* const* begin, const char* const* end,
 	const string& value)
 {
@@ -158,12 +142,6 @@ void Parser::RegisterTemplate(const string& name)
 	}
 }
 
-bool Parser::IsKeyword(const string& text) const
-{
-	return Contains(kKeywords,
-		kKeywords + sizeof(kKeywords) / sizeof(*kKeywords), text);
-}
-
 bool Parser::IsFundamental(const string& text) const
 {
 	static const char* const values[] = {
@@ -240,13 +218,6 @@ string Parser::TokenLabel(const string& text) const
 	map<string, string>::const_iterator found = labels.find(text);
 	if (found != labels.end()) return found->second;
 	return text;
-}
-
-string Parser::Join(const vector<string>& parts) const
-{
-	string result;
-	for (size_t i = 0; i < parts.size(); ++i) result += parts[i];
-	return result;
 }
 
 bool Parser::LooksLikeTypeName(const Token& token) const

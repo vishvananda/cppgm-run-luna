@@ -1,6 +1,5 @@
 #include "ast_parser.h"
 
-#include <set>
 using namespace std;
 
 namespace {
@@ -306,6 +305,14 @@ CPPGMAstNodePtr Parser::ParseTypeTraitExpression()
 {
 	const string keyword = Peek().text;
 	++position_;
+	if (keyword == "sizeof" && !Is("("))
+	{
+		CPPGMAstNodePtr result = Node("sizeof-expression");
+		CPPGMAstNodePtr expression = ParseUnaryExpression();
+		if (!expression) return CPPGMAstNodePtr();
+		Add(result, expression);
+		return result;
+	}
 	if (!Take("(")) return CPPGMAstNodePtr();
 	++ordinary_depth_;
 	CPPGMAstNodePtr result;
@@ -360,18 +367,63 @@ CPPGMAstNodePtr Parser::ParseLambdaExpression()
 	CPPGMAstNodePtr introducer = Node("lambda-introducer", "[]");
 	if (!Is("]"))
 	{
-		if (Is("&") || Is("=")) ++position_;
-		while (true)
+		CPPGMAstNodePtr captures = Node("lambda-capture");
+		bool has_default = false;
+		const bool starts_default = Is("=") ||
+			(Is("&") && (Peek(1).text == "]" || Peek(1).text == ","));
+		if (starts_default)
 		{
-			if (Is("&")) ++position_;
-			if (!TakeIdentifier())
+			const string text = Peek().text;
+			++position_;
+			Add(captures, Node("capture-default", TokenLabel(text) + ":" + text));
+			has_default = true;
+			if (!Take(","))
+			{
+				if (!Is("]"))
+				{
+					Restore(mark);
+					return CPPGMAstNodePtr();
+				}
+			}
+			else if (Is("]"))
 			{
 				Restore(mark);
 				return CPPGMAstNodePtr();
 			}
-			Take("...");
-			if (!Take(",")) break;
 		}
+		if (!has_default || !Is("]"))
+		{
+			CPPGMAstNodePtr list = Node("capture-list");
+			while (true)
+			{
+				CPPGMAstNodePtr capture;
+				if (Take("this"))
+					capture = Node("capture", TokenLabel("this") + ":this");
+				else
+				{
+					const bool by_reference = Take("&");
+					string name;
+					if (!TakeIdentifier(&name))
+					{
+						Restore(mark);
+						return CPPGMAstNodePtr();
+					}
+					capture = Node("capture", name);
+					if (by_reference)
+						Add(capture, Node("capture-reference", TokenLabel("&") + ":&"));
+				}
+				if (Take("...")) Add(capture, Node("parameter-pack", "..."));
+				Add(list, capture);
+				if (!Take(",")) break;
+				if (Is("]"))
+				{
+					Restore(mark);
+					return CPPGMAstNodePtr();
+				}
+			}
+			Add(captures, list);
+		}
+		Add(introducer, captures);
 	}
 	if (!Take("]")) { Restore(mark); return CPPGMAstNodePtr(); }
 	--ordinary_depth_;
@@ -411,12 +463,72 @@ CPPGMAstNodePtr Parser::ParseLambdaExpression()
 	return result;
 }
 
+CPPGMAstNodePtr Parser::ParseNewInitializer()
+{
+	if (Is("("))
+	{
+		++position_;
+		++ordinary_depth_;
+		CPPGMAstNodePtr initializer = Node("initializer");
+		CPPGMAstNodePtr paren = Node("paren-initializer");
+		if (!Is(")"))
+		{
+			CPPGMAstNodePtr clause = ParseInitializerClause();
+			if (!clause) return CPPGMAstNodePtr();
+			Add(paren, clause);
+			while (Take(","))
+			{
+				clause = ParseInitializerClause();
+				if (!clause) return CPPGMAstNodePtr();
+				Add(paren, clause);
+			}
+		}
+		if (!Take(")")) return CPPGMAstNodePtr();
+		--ordinary_depth_;
+		Add(initializer, paren);
+		return initializer;
+	}
+	if (Is("{")) return ParseBracedInitList();
+	return CPPGMAstNodePtr();
+}
+
 CPPGMAstNodePtr Parser::ParseNewExpression()
 {
 	Mark mark = Save();
 	CPPGMAstNodePtr result = Node("new-expression");
 	if (Take("::")) Add(result, Node("global-scope"));
 	if (!Take("new")) { Restore(mark); return CPPGMAstNodePtr(); }
+	// The grammar has a second new-expression form whose first parenthesized
+	// group is a type-id rather than placement arguments.  Try that form only
+	// when the token after the group can be a new-initializer or an enclosing
+	// expression delimiter; an identifier-led group followed by a type remains
+	// the ordinary placement-new form.
+	if (Is("("))
+	{
+		const Mark type_form_mark = Save();
+		++position_;
+		++ordinary_depth_;
+		CPPGMAstNodePtr parenthesized_type = ParseTypeId();
+		if (parenthesized_type && Take(")"))
+		{
+			const bool delimiter_after_type =
+				Is("(") || Is("{") || Is(";") || Is(")") || Is("]") ||
+				Is(",") || Is("}") || Is(":") || Is("?") || AtEnd();
+			if (delimiter_after_type)
+			{
+				--ordinary_depth_;
+				Add(result, parenthesized_type);
+				if (Is("(") || Is("{"))
+				{
+					CPPGMAstNodePtr initializer = ParseNewInitializer();
+					if (!initializer) { Restore(mark); return CPPGMAstNodePtr(); }
+					Add(result, initializer);
+				}
+				return result;
+			}
+		}
+		Restore(type_form_mark);
+	}
 	if (Is("("))
 	{
 		const size_t begin = position_;
@@ -463,32 +575,9 @@ CPPGMAstNodePtr Parser::ParseNewExpression()
 		Add(type, abstract);
 	}
 	Add(result, type);
-	if (Is("("))
+	if (Is("(") || Is("{"))
 	{
-		++position_;
-		++ordinary_depth_;
-		CPPGMAstNodePtr initializer = Node("initializer");
-		CPPGMAstNodePtr paren = Node("paren-initializer");
-		if (!Is(")"))
-		{
-			CPPGMAstNodePtr clause = ParseInitializerClause();
-			if (!clause) { Restore(mark); return CPPGMAstNodePtr(); }
-			Add(paren, clause);
-			while (Take(","))
-			{
-				clause = ParseInitializerClause();
-				if (!clause) { Restore(mark); return CPPGMAstNodePtr(); }
-				Add(paren, clause);
-			}
-		}
-		if (!Take(")")) { Restore(mark); return CPPGMAstNodePtr(); }
-		--ordinary_depth_;
-		Add(initializer, paren);
-		Add(result, initializer);
-	}
-	else if (Is("{"))
-	{
-		CPPGMAstNodePtr initializer = ParseBracedInitList();
+		CPPGMAstNodePtr initializer = ParseNewInitializer();
 		if (!initializer) { Restore(mark); return CPPGMAstNodePtr(); }
 		Add(result, initializer);
 	}

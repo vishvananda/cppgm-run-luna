@@ -109,12 +109,10 @@ private:
 	void RegisterTemplate(const std::string& name);
 	bool IsTypeStart() const;
 	bool IsNamedTypeStart() const;
-	bool IsKeyword(const std::string& text) const;
 	bool IsFundamental(const std::string& text) const;
 	bool IsStorageOrFunctionSpecifier(const std::string& text) const;
 	bool IsCv(const std::string& text) const;
 	std::string TokenLabel(const std::string& text) const;
-	std::string Join(const std::vector<std::string>& parts) const;
 
 	CPPGMAstNodePtr ParseDeclaration(bool member_context = false);
 	CPPGMAstNodePtr ParseNamespaceDefinition();
@@ -178,11 +176,13 @@ private:
 		bool builtin_style);
 	CPPGMAstNodePtr ParseLambdaExpression();
 	CPPGMAstNodePtr ParseNewExpression();
+	CPPGMAstNodePtr ParseNewInitializer();
 	CPPGMAstNodePtr ParseDeleteExpression();
 	CPPGMAstNodePtr ParseTypeTraitExpression();
 	CPPGMAstNodePtr ParseKeywordCastExpression();
 
 	CPPGMAstNodePtr ParseIdExpression();
+	bool ParseOperatorName(std::string* value, bool allow_template);
 	bool ParseName(std::string* value, bool allow_operator = true,
 		bool allow_template = true);
 	bool ParseIdentifierName(std::string* value);

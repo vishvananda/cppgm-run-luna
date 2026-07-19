@@ -12,7 +12,7 @@ CPPGMAstNodePtr Parser::ParseDeclSpecifierSeq(bool type_id_context)
 	bool saw_type = false;
 	while (true)
 	{
-		if (saw_type && IsNamedTypeStart()) break;
+		if (saw_type && (IsNamedTypeStart() || Is("::"))) break;
 		Mark item = Save();
 		CPPGMAstNodePtr specifier = ParseDeclSpecifier(type_id_context);
 		if (!specifier)
@@ -63,6 +63,12 @@ CPPGMAstNodePtr Parser::ParseDeclSpecifier(bool type_id_context)
 			Restore(mark);
 			return CPPGMAstNodePtr();
 		}
+		return Node("decl-specifier", name);
+	}
+	if (text == "::")
+	{
+		string name;
+		if (!ParseName(&name, false)) return CPPGMAstNodePtr();
 		return Node("decl-specifier", name);
 	}
 	if (IsFundamental(text))
@@ -129,6 +135,12 @@ CPPGMAstNodePtr Parser::ParseTypeSpecifier()
 			Restore(mark);
 			return CPPGMAstNodePtr();
 		}
+		return Node("type-name", name);
+	}
+	if (text == "::")
+	{
+		string name;
+		if (!ParseName(&name, false)) return CPPGMAstNodePtr();
 		return Node("type-name", name);
 	}
 	if (IsFundamental(text))
@@ -373,6 +385,13 @@ bool Parser::ParseFunctionSuffixes(const CPPGMAstNodePtr& declarator)
 		const string text = Peek().text;
 		++position_;
 		Add(declarator, Node("ref-qualifier", TokenLabel(text) + ":" + text));
+		parsed = true;
+	}
+	while (Is("override") || Is("final"))
+	{
+		const string text = Peek().text;
+		++position_;
+		Add(declarator, Node("virt-specifier", TokenLabel(text) + ":" + text));
 		parsed = true;
 	}
 	if (Take("noexcept"))

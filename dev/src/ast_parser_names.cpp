@@ -64,6 +64,75 @@ bool Parser::ParseTemplateSuffix(string* value)
 	return true;
 }
 
+bool Parser::ParseOperatorName(string* value, bool allow_template)
+{
+	const Mark mark = Save();
+	if (!Take("operator")) return false;
+	string result = "operator";
+	if (Take("(") && Take(")")) result += "()";
+	else if (Take("[") && Take("]")) result += "[]";
+	else if (Is("new") || Is("delete"))
+	{
+		result += Peek().text;
+		++position_;
+		if (Take("[") && Take("]")) result += "[]";
+	}
+	else if (Peek().kind == AST_LITERAL && Peek().text == "\"\"")
+	{
+		++position_;
+		string suffix;
+		if (!ParseIdentifierName(&suffix))
+		{
+			Restore(mark);
+			return false;
+		}
+		result += "\"\"" + suffix;
+	}
+	else if (Peek().kind == AST_IDENTIFIER)
+	{
+		string type;
+		ParseIdentifierName(&type);
+		result += type;
+		if (allow_template) ParseTemplateSuffix(&result);
+	}
+	else if (IsFundamental(Peek().text))
+	{
+		result += " " + Peek().text;
+		++position_;
+	}
+	else if (Is("typename"))
+	{
+		++position_;
+		string type;
+		if (!ParseName(&type, false))
+		{
+			Restore(mark);
+			return false;
+		}
+		result += " typename " + type;
+	}
+	else
+	{
+		const string op = Peek().text;
+		static const char* const operators[] = {"+", "-", "*", "/", "%", "^", "&", "|",
+			"~", "!", "=", "<", ">", "+=", "-=", "*=", "/=", "%=", "^=", "&=", "|=",
+			"<<", ">>", "<<=", ">>=", "==", "!=", "<=", ">=", "&&", "||", "++", "--",
+			",", "->", "->*", ".*"};
+		bool found = false;
+		for (size_t i = 0; i < sizeof(operators) / sizeof(*operators); ++i)
+			if (op == operators[i]) found = true;
+		if (!found)
+		{
+			Restore(mark);
+			return false;
+		}
+		result += op;
+		++position_;
+	}
+	*value = result;
+	return true;
+}
+
 bool Parser::ParseName(string* value, bool allow_operator, bool allow_template)
 {
 	const Mark mark = Save();
@@ -94,57 +163,13 @@ bool Parser::ParseName(string* value, bool allow_operator, bool allow_template)
 		}
 		else if (allow_operator && Is("operator"))
 		{
-			++position_;
-			result += "operator";
-			if (Take("(") && Take(")")) result += "()";
-			else if (Take("[") && Take("]")) result += "[]";
-			else if (Is("new") || Is("delete"))
+			string operator_name;
+			if (!ParseOperatorName(&operator_name, allow_template))
 			{
-				result += Peek().text;
-				++position_;
-				if (Take("[") && Take("]")) result += "[]";
+				Restore(mark);
+				return false;
 			}
-			else if (Peek().kind == AST_IDENTIFIER)
-			{
-				string type;
-				ParseIdentifierName(&type);
-				result += type;
-				if (allow_template) ParseTemplateSuffix(&result);
-			}
-			else if (IsFundamental(Peek().text))
-			{
-				result += " " + Peek().text;
-				++position_;
-			}
-			else if (Is("typename"))
-			{
-				++position_;
-				string type;
-				if (!ParseName(&type, false))
-				{
-					Restore(mark);
-					return false;
-				}
-				result += " typename " + type;
-			}
-			else
-			{
-				const string op = Peek().text;
-				static const char* const operators[] = {"+", "-", "*", "/", "%", "^", "&", "|",
-					"~", "!", "=", "<", ">", "+=", "-=", "*=", "/=", "%=", "^=", "&=", "|=",
-					"<<", ">>", "<<=", ">>=", "==", "!=", "<=", ">=", "&&", "||", "++", "--",
-					",", "->", "->*", ".*"};
-				bool found = false;
-				for (size_t i = 0; i < sizeof(operators) / sizeof(*operators); ++i)
-					if (op == operators[i]) found = true;
-				if (!found)
-				{
-					Restore(mark);
-					return false;
-				}
-				result += op;
-				++position_;
-			}
+			result += operator_name;
 			any = true;
 		}
 		else if (Take("template"))

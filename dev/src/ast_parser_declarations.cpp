@@ -1,7 +1,5 @@
 #include "ast_parser.h"
 
-#include <sstream>
-
 using namespace std;
 
 namespace {
@@ -183,12 +181,7 @@ CPPGMAstNodePtr Parser::ParseUsingDeclaration(bool directive)
 		return result;
 	}
 	string name;
-	if (!TakeIdentifier(&name))
-	{
-		Restore(mark);
-		return CPPGMAstNodePtr();
-	}
-	if (Take("="))
+	if (TakeIdentifier(&name) && Take("="))
 	{
 		CPPGMAstNodePtr type = ParseTypeId();
 		if (!type || !Take(";"))
@@ -293,7 +286,11 @@ CPPGMAstNodePtr Parser::ParseExplicitInstantiation()
 	if (Is("class") || Is("struct") || Is("union"))
 	{
 		target = ParseClassSpecifier(true);
-		if (target) Take(";");
+		if (target && !Take(";"))
+		{
+			Restore(mark);
+			return CPPGMAstNodePtr();
+		}
 	}
 	else target = ParseSimpleOrFunctionDeclaration(false);
 	if (!target)

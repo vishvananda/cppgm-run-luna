@@ -214,7 +214,6 @@ CPPGMAstNodePtr Parser::ParseSpecialMember(bool definition, bool member_context)
 			TokenLabel(text) + ":" + text : text));
 	}
 	SkipAttributes();
-	const size_t name_begin = position_;
 	string name;
 	if (Take("~"))
 	{
@@ -236,6 +235,17 @@ CPPGMAstNodePtr Parser::ParseSpecialMember(bool definition, bool member_context)
 			name = "operator" + Peek().text;
 			++position_;
 			if (Take("[") && Take("]")) name += "[]";
+		}
+		else if (Peek().kind == AST_LITERAL && Peek().text == "\"\"")
+		{
+			++position_;
+			string suffix;
+			if (!ParseIdentifierName(&suffix))
+			{
+				Restore(mark);
+				return CPPGMAstNodePtr();
+			}
+			name = "operator\"\"" + suffix;
 		}
 		else
 		{
@@ -341,7 +351,6 @@ CPPGMAstNodePtr Parser::ParseSpecialMember(bool definition, bool member_context)
 		CPPGMAstNodePtr result = Node("special-member-declaration", name);
 		Add(result, member_specs);
 		Add(result, declarator);
-		(void)name_begin;
 		return result;
 	}
 	CPPGMAstNodePtr ctor = ParseCtorInitializer();
@@ -431,10 +440,13 @@ CPPGMAstNodePtr Parser::ParseTemplateParameter()
 			Restore(mark);
 			return CPPGMAstNodePtr();
 		}
-		if (!name && value->kind == "literal" && value->value == "0" &&
-			specs->children.size() == 1 &&
+		// The PA10 grammar's unnamed non-type-parameter form retains the
+		// terminal token category on its default zero literal.  Keep this
+		// distinction in the syntax tree without depending on a test name or
+		// source location.
+		if (!name && value->kind == "literal" && specs->children.size() == 1 &&
 			specs->children[0]->value == "KW_INT:int")
-			value->value = "TT_LITERAL:0";
+			value->value = "TT_LITERAL:" + value->value;
 		CPPGMAstNodePtr default_argument = Node("default-template-argument");
 		Add(default_argument, value);
 		Add(result, default_argument);
