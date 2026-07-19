@@ -1,11 +1,10 @@
 #include "pa11_semantics.h"
 
-#include <algorithm>
 #include <cerrno>
 #include <cstdlib>
-#include <limits>
 #include <map>
 #include <memory>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -371,7 +370,7 @@ class Analyzer
 public:
 	Analyzer()
 		: global_(new Scope(SCOPE_NAMESPACE, "<global>", 0)),
-		  anonymous_union_count_(0) {}
+		  anonymous_type_count_(0) {}
 
 	void Analyze(const CPPGMAstNodePtr& tree)
 	{
@@ -389,7 +388,7 @@ public:
 
 private:
 	unique_ptr<Scope> global_;
-	unsigned int anonymous_union_count_;
+	unsigned int anonymous_type_count_;
 
 	static void Indent(ostream& out, unsigned int indentation)
 	{
@@ -423,18 +422,26 @@ private:
 		return parent->child(kind, name);
 	}
 
-	Scope* FindNamespaceDirect(Scope* from, const string& name) const
+	Scope* FindNamespaceDirect(Scope* from, const string& name,
+		set<Scope*>& visited) const
 	{
+		if (!from || !visited.insert(from).second) return 0;
 		map<string, Scope*>::const_iterator child = from->namespace_children.find(name);
 		if (child != from->namespace_children.end()) return child->second;
 		map<string, Scope*>::const_iterator alias = from->namespace_aliases.find(name);
 		if (alias != from->namespace_aliases.end()) return alias->second;
 		for (size_t i = 0; i < from->using_directives.size(); ++i)
 		{
-			Scope* found = FindNamespaceDirect(from->using_directives[i], name);
+			Scope* found = FindNamespaceDirect(from->using_directives[i], name, visited);
 			if (found) return found;
 		}
 		return 0;
+	}
+
+	Scope* FindNamespaceDirect(Scope* from, const string& name) const
+	{
+		set<Scope*> visited;
+		return FindNamespaceDirect(from, name, visited);
 	}
 
 	Scope* FindNamespace(Scope* from, const string& name) const
@@ -445,11 +452,6 @@ private:
 			if (found) return found;
 		}
 		return 0;
-	}
-
-	Binding* FindLocalBinding(Scope* from, const string& name) const
-	{
-		return from ? from->local(name) : 0;
 	}
 
 	Binding* LookupUnqualified(Scope* from, const string& name) const
@@ -467,17 +469,24 @@ private:
 		return 0;
 	}
 
-	Binding* LookupInNamespace(Scope* scope, const string& name) const
+	Binding* LookupInNamespace(Scope* scope, const string& name,
+		set<Scope*>& visited) const
 	{
-		if (!scope) return 0;
+		if (!scope || !visited.insert(scope).second) return 0;
 		Binding* direct = scope->local(name);
 		if (direct) return direct;
 		for (size_t i = 0; i < scope->using_directives.size(); ++i)
 		{
-			Binding* imported = LookupInNamespace(scope->using_directives[i], name);
+			Binding* imported = LookupInNamespace(scope->using_directives[i], name, visited);
 			if (imported) return imported;
 		}
 		return 0;
+	}
+
+	Binding* LookupInNamespace(Scope* scope, const string& name) const
+	{
+		set<Scope*> visited;
+		return LookupInNamespace(scope, name, visited);
 	}
 
 	Scope* ScopeForType(const TypePtr& type) const
@@ -908,9 +917,8 @@ private:
 	struct ParameterFacts
 	{
 		vector<TypePtr> types;
-		vector<pair<string, TypePtr> > named;
 		bool variadic;
-		ParameterFacts() : types(), named(), variadic(false) {}
+		ParameterFacts() : types(), variadic(false) {}
 	};
 
 	ParameterFacts Parameters(const CPPGMAstNodePtr& clause, Scope* scope)
@@ -930,17 +938,14 @@ private:
 			if (parameter->children.empty()) throw logic_error("invalid parameter");
 			SpecFacts facts;
 			TypePtr base = TypeFromSpecSeq(parameter->children[0], scope, &facts);
-			string name;
 			TypePtr type = base;
 			if (parameter->children.size() > 1 && parameter->children[1] &&
 				(parameter->children[1]->kind == "declarator" ||
 				 parameter->children[1]->kind == "abstract-declarator"))
 			{
-				name = FirstIdentifier(parameter->children[1]);
 				type = BuildDeclarator(parameter->children[1], base, scope);
 			}
 			result.types.push_back(type);
-			if (!name.empty()) result.named.push_back(make_pair(name, type));
 		}
 		if (!result.variadic && result.types.size() == 1 &&
 			result.types[0]->kind == TYPE_FUNDAMENTAL && result.types[0]->name == "void" &&
@@ -1043,6 +1048,16 @@ private:
 		return result;
 	}
 
+	string AnonymousTypeName(const string& tag)
+	{
+		const string stem = tag == "union" ? "union" :
+			tag == "enum" ? "enum" : "class";
+		ostringstream generated;
+		generated << "__anonymous_" << stem << "_type__0_"
+			<< (10 + anonymous_type_count_++);
+		return generated.str();
+	}
+
 	TypePtr ProcessClass(const CPPGMAstNodePtr& node, Scope* scope)
 	{
 		const string raw_name = node->value;
@@ -1051,14 +1066,13 @@ private:
 		const string tag = ClassKey(node);
 		if (anonymous)
 		{
-			ostringstream generated;
 			// The generated name is semantic state, not a source-test lookup:
 			// it is stable for the declaration order and keeps anonymous union
 			// member scopes printable and reusable by later passes.
-			generated << "__anonymous_union_type__0_" << (10 + anonymous_union_count_++);
-			TypePtr type(new Type(TYPE_CLASS, generated.str()));
+			const string generated = AnonymousTypeName(tag);
+			TypePtr type(new Type(TYPE_CLASS, generated));
 			type->tag = tag;
-			Scope* class_scope = ClassScope(type, scope, generated.str());
+			Scope* class_scope = ClassScope(type, scope, generated);
 			for (size_t i = 0; i < node->children.size(); ++i)
 				if (node->children[i]->kind != "class-key") Process(node->children[i], class_scope);
 			// Anonymous unions inject their members into the containing scope.
@@ -1107,6 +1121,7 @@ private:
 		if (!scoped && !has_body) throw logic_error("opaque unscoped enum is unsupported");
 		const string raw_name = node->value;
 		const string name = LastComponent(raw_name);
+		const bool anonymous = name.empty();
 		if (name.empty())
 		{
 			if (!has_body) throw logic_error("anonymous enum without definition");
@@ -1134,20 +1149,29 @@ private:
 		}
 		else
 		{
-			Binding* existing = scope->local(name);
-			if (existing && existing->kind == BIND_TYPE && existing->type &&
-				existing->type->kind == TYPE_ENUM)
-				type = existing->type;
-			else
+			if (anonymous)
 			{
-				type.reset(new Type(TYPE_ENUM, name));
+				type.reset(new Type(TYPE_ENUM, AnonymousTypeName("enum")));
 				type->scoped_enum = scoped;
 				type->underlying = Fundamental("int");
-				AddTypeBinding(scope, name, type);
+			}
+			else
+			{
+				Binding* existing = scope->local(name);
+				if (existing && existing->kind == BIND_TYPE && existing->type &&
+					existing->type->kind == TYPE_ENUM)
+					type = existing->type;
+				else
+				{
+					type.reset(new Type(TYPE_ENUM, name));
+					type->scoped_enum = scoped;
+					type->underlying = Fundamental("int");
+					AddTypeBinding(scope, name, type);
+				}
 			}
 		}
 		type->kind = TYPE_ENUM;
-		type->name = name;
+		type->name = anonymous ? type->name : name;
 		type->scoped_enum = scoped;
 		CPPGMAstNodePtr underlying_node = ChildOfKind(node, "type-id");
 		if (underlying_node) {
@@ -1159,16 +1183,22 @@ private:
 			type->underlying_explicit = true;
 		}
 		type->complete = true;
-		if (!qualified_definition) AddTypeBinding(scope, name, type, false);
+		if (!qualified_definition && !anonymous) AddTypeBinding(scope, name, type, false);
 		if (qualified_definition)
 		{
 			AddTypeBinding(scope, raw_name, type, false, override_text);
 		}
 		Scope* enum_scope = 0;
 		if (scoped && (has_body || !qualified_definition))
-			enum_scope = NewChild(qualified_definition ? scope : owner, SCOPE_ENUM,
-				qualified_definition ? raw_name : name);
-		if (enum_scope && !type->owned_scope) type->owned_scope = enum_scope;
+		{
+			if (!qualified_definition && type->owned_scope)
+				enum_scope = type->owned_scope;
+			else
+				enum_scope = NewChild(qualified_definition ? scope : owner, SCOPE_ENUM,
+					qualified_definition ? raw_name : name);
+		}
+		if (enum_scope && (!type->owned_scope || qualified_definition))
+			type->owned_scope = enum_scope;
 		long long next_value = 0;
 		for (size_t i = 0; i < node->children.size(); ++i)
 		{
@@ -1210,7 +1240,8 @@ private:
 	{
 		const string name = node->value;
 		if (name == "<unnamed>") return;
-		if (scope->local(name)) throw logic_error("namespace conflicts with declaration");
+		if (scope->local(name) || scope->namespace_aliases.find(name) != scope->namespace_aliases.end())
+			throw logic_error("namespace conflicts with declaration");
 		Scope* namespace_scope = 0;
 		map<string, Scope*>::iterator found = scope->namespace_children.find(name);
 		if (found != scope->namespace_children.end()) namespace_scope = found->second;
@@ -1228,7 +1259,9 @@ private:
 	{
 		const CPPGMAstNodePtr target_node = ChildOfKind(node, "target");
 		if (!target_node) throw logic_error("invalid namespace alias");
-		if (scope->local(node->value) || scope->namespace_children.find(node->value) != scope->namespace_children.end())
+		if (scope->local(node->value) ||
+			scope->namespace_children.find(node->value) != scope->namespace_children.end() ||
+			scope->namespace_aliases.find(node->value) != scope->namespace_aliases.end())
 			throw logic_error("namespace alias conflicts with declaration");
 		Scope* target = ResolveNamespace(scope, target_node->value);
 		if (!target) throw logic_error("namespace alias target is not a namespace");
@@ -1246,18 +1279,6 @@ private:
 	{
 		Scope* block = NewChild(parent, SCOPE_BLOCK, string());
 		for (size_t i = 0; i < node->children.size(); ++i) Process(node->children[i], block);
-	}
-
-	void ProcessFunctionBody(const CPPGMAstNodePtr& node, Scope* scope,
-		const TypePtr& function_type, const string& name)
-	{
-		Scope* function_scope = NewChild(scope, SCOPE_FUNCTION, name);
-		CPPGMAstNodePtr clause;
-		// The function type has already normalized its parameter list; recover
-		// names from the declarator in ProcessFunctionDefinition.
-		(void)clause;
-		(void)function_type;
-		ProcessCompound(node, function_scope);
 	}
 
 	void AddFunctionParameters(Scope* function_scope, const CPPGMAstNodePtr& declarator,

@@ -38,7 +38,61 @@ Complete.  The direct PA11 harness passes 50/50 tests.  The required root
 one pre-existing `recog_parser_internal.h` header-body warning).
 
 All groups A--F in the Remaining Work Map are closed; no PA11-local behavior
-remains outstanding.
+remains outstanding. The final audit retained the complete earlier stage,
+corrected anonymous-enum formation and scoped-enum completion ownership, and
+left the checked-in PA11 output unchanged.
+
+## Architecture Review
+
+The integrated PA11 implementation has four explicit boundaries:
+
+1. `dev/cppgm++.cpp` owns command-line validation, output-file opening,
+   translation-unit framing, and the per-input preprocessing/PA10-AST handoff.
+   `EmitPA11Types` owns semantic failure through exceptions; the driver does not
+   special-case individual diagnostics or tests.
+2. The PA5 preprocessing and post-token validation pipeline remains the single
+   phase-1-through-7 boundary. PA10 remains the syntax boundary, and the PA11
+   source set registers `pa11_semantics.cpp` explicitly alongside the parser and
+   preprocessing dependencies.
+3. `pa11_semantics.cpp` owns typed `Type`, `Scope`, `Binding`, and constant
+   records. Scope nodes own their children and ordered bindings; `TypePtr`
+   preserves derived-type graphs and nominal type records; parent and owned
+   scope pointers never outlive the analyzer tree. Namespace aliases and using
+   directives are lookup state, not output text.
+4. Declarator construction, type formation, lookup, constant evaluation, and
+   output are separate operations over the PA10 AST and semantic records.
+   `TypeText` and `PrintScope` render only after analysis, in source/declaration
+   insertion order, so deterministic output does not require reparsing or a
+   second translation-unit scan.
+
+Lookup uses local maps plus parent-scope walks and cycle-guarded
+using-directive traversal. The normal path performs one preprocessing pass,
+one token validation pass, one PA10 parse, one semantic traversal, and one
+output walk per source. There is no reference-binary, host-tool, subprocess,
+fixture, source-path, or test-name dependency in the production path. The only
+file-audit warning remains the inherited PA6 declaration-header heuristic.
+
+## Final Architecture Review
+
+The review of checkpoint `f702b3d` found that the implementation behavior was
+complete but the stage record was incomplete. The final cleanup now:
+
+- creates named internal types for anonymous enums instead of inserting an
+  empty-name binding, while retaining direct enumerator injection for unscoped
+  enums and the checked anonymous-union spelling;
+- preserves one canonical enum scope through ordinary opaque-to-definition
+  completion and updates the canonical lookup scope for qualified member
+  definitions;
+- makes namespace and using-directive lookup safe for cyclic directive graphs
+  and rejects namespace/alias name collisions at the declaration owner;
+- removes unused semantic state without moving ownership into the driver or
+  weakening the PA10 AST boundary; and
+- records the final audit and validation evidence required before PA12.
+
+The resulting PA11 stage preserves PA1--PA10, satisfies the README's scope,
+lookup, declarator, constant, and deterministic-output requirements covered by
+the assignment, and hands PA12 an owned semantic tree with retained type and
+declaration facts.
 
 ## Next checkpoint group
 
