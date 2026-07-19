@@ -134,7 +134,7 @@ struct Type
   {
     return text == "i1" || text == "i8" || text == "u8" ||
            text == "i16" || text == "u16" || text == "i32" ||
-           text == "u32" || text == "i64" || text == "u64";
+           text == "u32" || text == "i64";
   }
   int width() const
   {
@@ -142,7 +142,7 @@ struct Type
     if(text == "i8" || text == "u8") return 8;
     if(text == "i16" || text == "u16") return 16;
     if(text == "i32" || text == "u32") return 32;
-    if(text == "i64" || text == "u64" || text == "ptr") return 64;
+    if(text == "i64" || text == "ptr") return 64;
     if(text == "f32") return 32;
     if(text == "f64") return 64;
     if(text == "f80") return 80;
@@ -478,21 +478,28 @@ class LowParser
     return 0;
   }
 
+  static void merge_metadata(Metadata & destination, const Metadata & source)
+  {
+    for(Metadata::const_iterator it = source.begin(); it != source.end(); ++it)
+      if(!destination.insert(*it).second) throw LowError("duplicate metadata");
+  }
+
   static void parse_global_definition_header(Cursor & cursor, Global & global, bool structured)
   {
     cursor.expect("global");
     global.name = parse_symbol_after(cursor, '@');
     if(cursor.take_if("readonly")) global.metadata["storage"] = "readonly";
+    else if(cursor.take_if("thread_local")) global.metadata["storage"] = "thread_local";
     if(structured) {
       global.structured = true;
-      global.metadata = parse_metadata(cursor);
+      merge_metadata(global.metadata, parse_metadata(cursor));
       cursor.expect("="); cursor.expect("{");
       require_end(cursor);
       return;
     }
     cursor.expect(":");
     global.type = parse_type(cursor); global.has_type = true;
-    global.metadata = parse_metadata(cursor);
+    merge_metadata(global.metadata, parse_metadata(cursor));
     cursor.expect("=");
     if(cursor.take_if("zero")) {
       global.init_kind = Global::INIT_ZERO;
@@ -528,7 +535,9 @@ class LowParser
     }
     if(cursor.take_if("zero")) {
       item.kind = DataItem::ZERO;
-      item.zero_bytes = static_cast<size_t>(parse_integer(cursor.take()));
+      const long long zero_bytes = parse_integer(cursor.take());
+      if(zero_bytes < 0) throw LowError("invalid zero byte count");
+      item.zero_bytes = static_cast<size_t>(zero_bytes);
       require_end(cursor);
       return item;
     }
@@ -811,6 +820,7 @@ static bool is_power_of_two(size_t value)
 
 static void validate_symbol_metadata(const Metadata & metadata, bool function, bool declaration)
 {
+  (void)declaration;
   static const set<string> function_keys = {"role", "linkage", "binding", "object", "tls_for",
                                             "keep_alias", "prefer_local", "trivial_lifecycle",
                                             "arity", "effects", "unwind", "return"};
@@ -845,8 +855,30 @@ static void validate_symbol_metadata(const Metadata & metadata, bool function, b
     if(!function && (key == "tls_for" || key == "trivial_lifecycle" || key == "arity" ||
                      key == "effects" || key == "unwind" || key == "return"))
       throw LowError("invalid global metadata");
-    if(declaration && key == "keep_alias") throw LowError("invalid declaration metadata");
   }
+}
+
+static void validate_call_metadata(const Metadata & metadata)
+{
+  static const set<string> allowed = {"arity", "effects", "unwind", "return"};
+  for(Metadata::const_iterator it = metadata.begin(); it != metadata.end(); ++it) {
+    if(allowed.find(it->first) == allowed.end()) throw LowError("invalid call metadata");
+    if(it->first == "arity" && it->second != "fixed" && it->second != "variadic" &&
+       it->second != "prototype_relaxed") throw LowError("invalid arity");
+    if(it->first == "effects" && it->second != "readnone" && it->second != "readonly" &&
+       it->second != "readwrite") throw LowError("invalid effects");
+    if(it->first == "unwind" && it->second != "may" && it->second != "no")
+      throw LowError("invalid unwind");
+    if(it->first == "return" && it->second != "returns" && it->second != "noreturn")
+      throw LowError("invalid return");
+  }
+}
+
+static bool valid_atomic_order(const Value & value)
+{
+  if(value.kind != Value::INTEGER) return false;
+  const long long order = parse_integer(value.text);
+  return order >= 0 && order <= 5;
 }
 
 static void validate_parameters(const vector<Parameter> & parameters, const Type & return_type)
@@ -898,6 +930,11 @@ class Validator
   const Program & program_;
   map<string, bool> globals_;
   map<string, bool> functions_;
+
+  bool is_function_name(const string & name) const
+  {
+    return functions_.find(name) != functions_.end();
+  }
 
   static bool same_scalar_family(const Type & left, const Type & right)
   {
@@ -956,6 +993,8 @@ class Validator
       if(projection != instruction.metadata.end() && projection->second != "array_element" &&
          projection->second != "field" && projection->second != "base_subobject" &&
          projection->second != "reference_field") throw LowError("invalid index projection");
+      for(Metadata::const_iterator it = instruction.metadata.begin(); it != instruction.metadata.end(); ++it)
+        if(it->first != "projection") throw LowError("unknown index metadata");
     }
     if(instruction.kind == IK_UNARY) {
       if(instruction.op == "decay" && (instruction.type != Type("ptr"))) throw LowError("invalid decay");
@@ -983,14 +1022,29 @@ class Validator
     if(instruction.kind == IK_CALL) {
       if(instruction.operands.empty()) throw LowError("invalid call");
       const Value & callee = instruction.operands[0];
-      if((callee.kind == Value::TEMP || callee.kind == Value::GLOBAL) && !instruction.signature.present) {
-        if(callee.kind == Value::TEMP) throw LowError("missing indirect call signature");
-      }
+      const bool direct_function = callee.kind == Value::GLOBAL && is_function_name(callee.text);
+      if((callee.kind == Value::TEMP || (callee.kind == Value::GLOBAL && !direct_function)) &&
+         !instruction.signature.present) throw LowError("missing indirect call signature");
       if(instruction.signature.present) {
         validate_parameters(instruction.signature.parameters, instruction.signature.return_type);
-        validate_symbol_metadata(instruction.signature.metadata, true, false);
+        validate_call_metadata(instruction.signature.metadata);
       }
     }
+    if(instruction.kind == IK_ATOMIC_LOAD && !valid_atomic_order(instruction.operands[1]))
+      throw LowError("invalid atomic order");
+    if(instruction.kind == IK_ATOMIC_STORE && !valid_atomic_order(instruction.operands[2]))
+      throw LowError("invalid atomic order");
+    if(instruction.kind == IK_ATOMIC_EXCHANGE && !valid_atomic_order(instruction.operands[2]))
+      throw LowError("invalid atomic order");
+    if(instruction.kind == IK_ATOMIC_ADD_FETCH && !valid_atomic_order(instruction.operands[2]))
+      throw LowError("invalid atomic order");
+    if(instruction.kind == IK_ATOMIC_COMPARE_EXCHANGE &&
+       (!valid_atomic_order(instruction.operands[3]) || !valid_atomic_order(instruction.operands[4])))
+      throw LowError("invalid atomic order");
+    if(instruction.kind == IK_ATOMIC_THREAD_FENCE && !valid_atomic_order(instruction.operands[0]))
+      throw LowError("invalid atomic order");
+    if(instruction.kind == IK_ATOMIC_SIGNAL_FENCE && !valid_atomic_order(instruction.operands[0]))
+      throw LowError("invalid atomic order");
     if(instruction.kind == IK_COPYOBJ || instruction.kind == IK_ZEROINIT) {
       if(instruction.bytes == 0 || !is_power_of_two(instruction.alignment)) throw LowError("invalid storage span");
     }
@@ -1003,11 +1057,19 @@ public:
   {
     set<string> symbols;
     set<string> aliases;
+    globals_.clear();
+    functions_.clear();
+    for(size_t i = 0; i < program_.globals.size(); ++i)
+      globals_[program_.globals[i].name] = !program_.globals[i].declaration;
+    for(size_t i = 0; i < program_.functions.size(); ++i)
+      functions_[program_.functions[i].name] = !program_.functions[i].declaration;
     for(size_t i = 0; i < program_.globals.size(); ++i) {
       const Global & global = program_.globals[i];
       if(!symbols.insert(global.name).second) throw LowError("duplicate top-level symbol");
       globals_[global.name] = !global.declaration;
       validate_symbol_metadata(global.metadata, false, global.declaration);
+      if(global.declaration && global.has_type && !valid_type(global.type, false))
+        throw LowError("invalid declared global type");
       if(!global.declaration && (!global.structured && !valid_type(global.type, false)))
         throw LowError("invalid global type");
       if(global.structured && global.data.empty()) throw LowError("empty structured global");
@@ -1033,25 +1095,17 @@ public:
         slots[function.slots[j].first] = function.slots[j].second;
       }
       set<string> blocks_seen;
+      map<string, Type> available_temps;
+      for(size_t p = 0; p < function.parameters.size(); ++p)
+        available_temps[function.parameters[p].name] = function.parameters[p].type;
       for(size_t j = 0; j < function.blocks.size(); ++j) {
         const Block & block = function.blocks[j];
         if(!blocks_seen.insert(block.name).second || block.instructions.empty()) throw LowError("invalid block");
         bool terminated = false;
-        map<string, Type> temps;
-        // Parameters are available in every block and are checked in source order.
-        for(size_t p = 0; p < function.parameters.size(); ++p) temps[function.parameters[p].name] = function.parameters[p].type;
-        for(size_t b = 0; b < function.blocks.size(); ++b) {
-          if(b == j) break;
-          for(size_t k = 0; k < function.blocks[b].instructions.size(); ++k) {
-            const Instruction & previous = function.blocks[b].instructions[k];
-            if(!previous.dest.empty()) {
-              Type result = previous.type;
-              if(previous.kind == IK_CMP || previous.kind == IK_ATOMIC_COMPARE_EXCHANGE) result = Type("i64");
-              if(previous.kind == IK_ADDR || previous.kind == IK_INDEX) result = Type("ptr");
-              temps[previous.dest] = result;
-            }
-          }
-        }
+        // Parameters and definitions in earlier source blocks are available;
+        // keep the prefix map incrementally instead of rescanning or copying
+        // every earlier block.
+        map<string, Type> & temps = available_temps;
         for(size_t k = 0; k < block.instructions.size(); ++k) {
           const Instruction & instruction = block.instructions[k];
           if(terminated) throw LowError("instruction after terminator");
@@ -1170,6 +1224,11 @@ static string reg_name(char name, int width)
   ostringstream result; result << name << width; return result.str();
 }
 
+static int machine_width(const Type & type)
+{
+  return type.width() == 1 ? 8 : type.width();
+}
+
 static string signed_literal(const string & value)
 {
   if(value == "-0") return "0";
@@ -1214,7 +1273,13 @@ class FunctionEmitter
 
   int allocate(const Type & type)
   {
-    next_offset_ += rounded_storage(type);
+    const int size = rounded_storage(type);
+    const size_t alignment = type.storage_alignment();
+    next_offset_ += size;
+    if(alignment > 1) {
+      const int remainder = next_offset_ % static_cast<int>(alignment);
+      if(remainder != 0) next_offset_ += static_cast<int>(alignment) - remainder;
+    }
     return -next_offset_;
   }
 
@@ -1265,6 +1330,31 @@ class FunctionEmitter
     } else if(value.kind == Value::GLOBAL) {
       line("move" + to_string(width) + " " + reg + " [" + output_label_global(value.text) + "]");
     } else throw LowError("cannot load scalar value");
+  }
+
+  void load_integer64(const Value & value, char target)
+  {
+    if(value.kind == Value::INTEGER || value.kind == Value::NULLPTR) {
+      load_scalar(value, Type("i64"), target);
+      return;
+    }
+    if(value.kind != Value::TEMP && value.kind != Value::SLOT)
+      throw LowError("expected integer value");
+    const Location location = location_for(value);
+    if(!location.type.is_integer()) throw LowError("expected integer value");
+    const int width = machine_width(location.type);
+    if(width == 64) {
+      load_scalar(value, location.type, target);
+      return;
+    }
+    line("move64 " + reg_name(target, 64) + " 0");
+    line("move" + to_string(width) + " " + reg_name(target, width) + " " + location_memory(location));
+    if(location.type.text.size() > 1 && location.type.text[0] == 'i' && location.type.width() > 1) {
+      const int shift = 64 - location.type.width();
+      line("move8 " + reg_name(target, 8) + " " + to_string(shift));
+      line("lshift64 " + reg_name(target, 64) + " " + reg_name(target, 64) + " " + reg_name(target, 8));
+      line("srshift64 " + reg_name(target, 64) + " " + reg_name(target, 64) + " " + reg_name(target, 8));
+    }
   }
 
   void store_scalar(const Location & destination, const Type & type, char source)
@@ -1434,7 +1524,7 @@ class FunctionEmitter
     const Value & base = instruction.operands[0];
     if(is_direct_object_value(base)) load_addressable(base, 'y');
     else load_pointer_address(base, 'y');
-    load_scalar(instruction.operands[1], Type("i64"), 'x');
+    load_integer64(instruction.operands[1], 'x');
     const size_t element_size = instruction.type.storage_size();
     if(element_size != 1) {
       line("move64 z64 " + to_string(element_size));
@@ -1546,8 +1636,8 @@ class FunctionEmitter
     }
     if(dst.is_float() && src.is_integer()) {
       load_scalar(instruction.operands[0], src, 'x');
-      line((instruction.op == "sitofp" ? "s" : "u") + to_string(src.width()) + "convf80 " +
-           mem_at("bp", scratch0_) + " x64");
+      line((instruction.op == "sitofp" ? "s" : "u") + to_string(machine_width(src)) + "convf80 " +
+           mem_at("bp", scratch0_) + " " + reg_name('x', machine_width(src)));
       emit_f80_pad(scratch0_);
       if(dst.is_f80()) store_f80_from_scratch(instruction.dest, scratch0_);
       else line("f80conv" + dst.text + " " + location_memory(locations_.find(instruction.dest)->second) + " " + mem_at("bp", scratch0_));
@@ -1560,12 +1650,16 @@ class FunctionEmitter
         line(src.text + "convf80 " + mem_at("bp", scratch0_) + " " + reg_name('x', src.width()));
         emit_f80_pad(scratch0_);
       }
-      line(string("f80conv") + (instruction.op == "fptosi" ? "s" : "u") + to_string(dst.width()) + " " +
+      line(string("f80conv") + (instruction.op == "fptosi" ? "s" : "u") + to_string(machine_width(dst)) + " " +
            location_memory(locations_.find(instruction.dest)->second) + " " + mem_at("bp", scratch0_));
       return;
     }
     // Integer width changes use a shift pair for sign extension and a narrow
     // memory/register move for zero extension and truncation.
+    const bool narrow_source = src.width() < 32 &&
+      (instruction.operands[0].kind == Value::TEMP || instruction.operands[0].kind == Value::SLOT ||
+       instruction.operands[0].kind == Value::GLOBAL);
+    if(narrow_source) line("move64 x64 0");
     load_scalar(instruction.operands[0], src, 'x');
     if(instruction.op == "sext") {
       const int shift = 64 - src.width();
@@ -1573,8 +1667,6 @@ class FunctionEmitter
       line("lshift64 x64 x64 t8"); line("srshift64 x64 x64 t8");
       store_result_scalar(instruction.dest, dst, 'x');
     } else if(instruction.op == "zext") {
-      if(src.width() < 64 && instruction.operands[0].kind != Value::INTEGER &&
-         instruction.operands[0].kind != Value::NULLPTR) line("move64 x64 " + reg_name('x', src.width()));
       store_result_scalar(instruction.dest, dst, 'x');
     } else if(instruction.op == "trunc") {
       store_result_scalar(instruction.dest, dst, 'x');
@@ -1593,15 +1685,17 @@ class FunctionEmitter
     size_t arg_begin = 1;
     const bool indirect = callee.kind == Value::TEMP || (callee.kind == Value::GLOBAL && !target);
     const size_t arg_count = instruction.operands.size() - arg_begin;
-    size_t stack_count = arg_count > 4 ? arg_count - 4 : 0;
-    if(indirect) ++stack_count;
+    const size_t register_count = direct_object_return ? 3 : 4;
+    const size_t stack_argument_count = arg_count > register_count ? arg_count - register_count : 0;
+    const size_t stack_count = stack_argument_count + (indirect ? 1 : 0);
+    const int indirect_slot_offset = static_cast<int>(stack_argument_count * 8);
     if(indirect) {
       if(callee.kind == Value::GLOBAL && function_map_.find(callee.text) == function_map_.end())
         load_scalar(callee, Type("ptr"), 'x');
       else load_pointer_address(callee, 'x');
     }
     for(size_t i = 0; i < stack_count; ++i) line("isub64 sp sp 8");
-    if(indirect) line("move64 [sp] x64");
+    if(indirect) line("move64 " + mem_at("sp", indirect_slot_offset) + " x64");
 
     if(direct_object_return) {
       const Location result = locations_.find(instruction.dest)->second;
@@ -1623,7 +1717,7 @@ class FunctionEmitter
       else if(target && i < target->parameters.size()) parameter = &target->parameters[i];
       const bool by_address = parameter && parameter->metadata.find("pass") != parameter->metadata.end() &&
         parameter->metadata.find("pass")->second != "direct";
-      if(i < 4) {
+      if(i < register_count) {
         const char reg = registers[register_index++];
         if((by_address || argument_type.is_f80() || argument_type.is_object()) &&
            (argument.kind == Value::SLOT || argument.kind == Value::TEMP)) {
@@ -1636,12 +1730,18 @@ class FunctionEmitter
       } else {
         if(by_address || argument_type.is_f80() || argument_type.is_object()) load_addressable(argument, 'x');
         else load_scalar(argument, argument_type, 'x');
-        line("move64 [sp] 0");
-        line("move64 [sp] x64");
+        const int argument_offset = static_cast<int>((i - register_count) * 8);
+        line("move64 " + mem_at("sp", argument_offset) + " 0");
+        line("move64 " + mem_at("sp", argument_offset) + " x64");
       }
     }
+    if(direct_object_return && stack_argument_count != 0) {
+      const Location result = locations_.find(instruction.dest)->second;
+      line("isub64 x64 bp " + to_string(-result.offset));
+      line("move64 x64 x64");
+    }
     if(indirect) {
-      line("call [sp]");
+      line("call " + mem_at("sp", indirect_slot_offset));
     } else line("call " + output_label_function(callee.text));
     for(size_t i = 0; i < stack_count; ++i) line("iadd64 sp sp 8");
     if(!instruction.dest.empty() && !direct_object_return && instruction.type != Type("void"))
@@ -1650,20 +1750,25 @@ class FunctionEmitter
 
   void emit_atomic_compare_exchange(const Instruction & instruction)
   {
+    const int width = machine_width(instruction.type);
+    const string value_reg = reg_name('x', width);
+    const string old_reg = reg_name('t', width);
     load_pointer_address(instruction.operands[0], 'y');
     load_pointer_address(instruction.operands[1], 'z');
-    line("move64 t64 [y64]");
-    line("move64 x64 [z64]");
-    line("ieq64 x8 t64 x64");
+    line("move" + to_string(width) + " " + old_reg + " [y64]");
+    line("move" + to_string(width) + " " + value_reg + " [z64]");
+    line("ieq" + to_string(width) + " x8 " + old_reg + " " + value_reg);
     const int serial = (*eh_serial_)++; // shared monotonically increasing internal labels are not EH-only.
     const string success = "__atomic_cmpxchg_success__" + to_string(serial);
     const string end = "__atomic_cmpxchg_end__" + to_string((*eh_serial_)++);
     line("jumpif x8 " + success);
-    line("move64 [z64] t64"); line("move64 x64 0"); store_result_scalar(instruction.dest, Type("i64"), 'x');
+    line("move" + to_string(width) + " [z64] " + old_reg);
+    line("move64 x64 0"); store_result_scalar(instruction.dest, Type("i64"), 'x');
     line("jump " + end);
     label(success);
     load_scalar(instruction.operands[2], instruction.type, 'x');
-    line("move64 [y64] x64"); line("move64 x64 1"); store_result_scalar(instruction.dest, Type("i64"), 'x');
+    line("move" + to_string(width) + " [y64] " + value_reg);
+    line("move64 x64 1"); store_result_scalar(instruction.dest, Type("i64"), 'x');
     label(end);
   }
 
@@ -1732,11 +1837,12 @@ class FunctionEmitter
       case IK_ATOMIC_LOAD:
         if(instruction.type.is_f80()) { load_f80_storage(instruction.operands[0], scratch0_); store_f80_from_scratch(instruction.dest, scratch0_); }
         else if(instruction.operands[0].kind == Value::GLOBAL) { load_scalar(instruction.operands[0], instruction.type, 'x'); store_result_scalar(instruction.dest, instruction.type, 'x'); }
-        else if(instruction.operands[0].kind == Value::SLOT) { const Location l = location_for(instruction.operands[0]); line("move" + to_string(instruction.type.width()) + " " + reg_name('x', instruction.type.width()) + " " + location_memory(l)); store_result_scalar(instruction.dest, instruction.type, 'x'); }
+        else if(instruction.operands[0].kind == Value::SLOT) { const Location l = location_for(instruction.operands[0]); const int width = machine_width(instruction.type); line("move" + to_string(width) + " " + reg_name('x', width) + " " + location_memory(l)); store_result_scalar(instruction.dest, instruction.type, 'x'); }
         else {
           const char pointer_reg = instruction.kind == IK_ATOMIC_LOAD ? 'y' : 'x';
           load_pointer_address(instruction.operands[0], pointer_reg);
-          line("move" + to_string(instruction.type.width()) + " " + reg_name('x', instruction.type.width()) + " [" + reg_name(pointer_reg, 64) + "]");
+          const int width = machine_width(instruction.type);
+          line("move" + to_string(width) + " " + reg_name('x', width) + " [" + reg_name(pointer_reg, 64) + "]");
           store_result_scalar(instruction.dest, instruction.type, 'x');
         }
         break;
@@ -1744,8 +1850,9 @@ class FunctionEmitter
       case IK_ATOMIC_STORE:
         if(instruction.type.is_f80()) { load_f80_to_scratch(instruction.operands[0], scratch0_); store_f80_storage(instruction.operands[1], scratch0_); }
         else {
-          if(instruction.operands[1].kind == Value::GLOBAL) { load_scalar(instruction.operands[0], instruction.type, 'x'); line("move" + to_string(instruction.type.width()) + " [" + output_label_global(instruction.operands[1].text) + "] " + reg_name('x', instruction.type.width())); }
-          else if(instruction.operands[1].kind == Value::SLOT) { load_scalar(instruction.operands[0], instruction.type, 'x'); line("move" + to_string(instruction.type.width()) + " " + location_memory(location_for(instruction.operands[1])) + " " + reg_name('x', instruction.type.width())); }
+          const int width = machine_width(instruction.type);
+          if(instruction.operands[1].kind == Value::GLOBAL) { load_scalar(instruction.operands[0], instruction.type, 'x'); line("move" + to_string(width) + " [" + output_label_global(instruction.operands[1].text) + "] " + reg_name('x', width)); }
+          else if(instruction.operands[1].kind == Value::SLOT) { load_scalar(instruction.operands[0], instruction.type, 'x'); line("move" + to_string(width) + " " + location_memory(location_for(instruction.operands[1])) + " " + reg_name('x', width)); }
           else {
             if(instruction.kind == IK_ATOMIC_STORE) {
               load_pointer_address(instruction.operands[1], 'y');
@@ -1754,7 +1861,7 @@ class FunctionEmitter
               load_scalar(instruction.operands[0], instruction.type, 'x');
               load_pointer_address(instruction.operands[1], 'y');
             }
-            line("move" + to_string(instruction.type.width()) + " [y64] " + reg_name('x', instruction.type.width()));
+            line("move" + to_string(width) + " [y64] " + reg_name('x', width));
           }
         }
         break;
@@ -1770,15 +1877,18 @@ class FunctionEmitter
           } else throw LowError("unsupported f80 unary op");
         } else if(instruction.op == "neg") {
           load_scalar(instruction.operands[0], instruction.type, 'x'); line("move64 y64 0");
-          line("isub" + to_string(instruction.type.width()) + " " + reg_name('x', instruction.type.width()) + " " + reg_name('y', instruction.type.width()) + " " + reg_name('x', instruction.type.width()));
+          const int width = machine_width(instruction.type);
+          line("isub" + to_string(width) + " " + reg_name('x', width) + " " + reg_name('y', width) + " " + reg_name('x', width));
           store_result_scalar(instruction.dest, instruction.type, 'x');
         } else if(instruction.op == "not") {
           load_scalar(instruction.operands[0], instruction.type, 'x');
-          line("ieq" + to_string(instruction.type.width()) + " z8 " + reg_name('x', instruction.type.width()) + " 0");
+          const int width = machine_width(instruction.type);
+          line("ieq" + to_string(width) + " z8 " + reg_name('x', width) + " 0");
           emit_canonical_bool(instruction.dest);
         } else if(instruction.op == "bitnot") {
           load_scalar(instruction.operands[0], instruction.type, 'x');
-          line("not" + to_string(instruction.type.width()) + " " + reg_name('x', instruction.type.width()) + " " + reg_name('x', instruction.type.width()));
+          const int width = machine_width(instruction.type);
+          line("not" + to_string(width) + " " + reg_name('x', width) + " " + reg_name('x', width));
           store_result_scalar(instruction.dest, instruction.type, 'x');
         } else if(instruction.op == "bswap") {
           const int width = instruction.type.width();
@@ -1793,25 +1903,34 @@ class FunctionEmitter
       case IK_COPYOBJ: emit_copy_bytes(instruction.operands[0], instruction.operands[1], instruction.bytes, is_direct_object_value(instruction.operands[0])); break;
       case IK_ZEROINIT: emit_zero_bytes(instruction.operands[0], instruction.bytes); break;
       case IK_ATOMIC_EXCHANGE:
+        { const int width = machine_width(instruction.type); const string reg = reg_name('x', width);
         load_pointer_address(instruction.operands[0], 'y'); load_scalar(instruction.operands[1], instruction.type, 'x');
-        line("move64 t64 [y64]"); line("move64 [y64] x64"); line("move64 x64 0"); line("move64 x64 t64");
+        line("move" + to_string(width) + " " + reg_name('t', width) + " [y64]");
+        line("move" + to_string(width) + " [y64] " + reg);
+        line("move64 x64 0"); line("move" + to_string(width) + " " + reg + " " + reg_name('t', width));
         store_result_scalar(instruction.dest, instruction.type, 'x'); break;
+        }
       case IK_ATOMIC_ADD_FETCH:
+        { const int width = machine_width(instruction.type);
         load_pointer_address(instruction.operands[0], 'y');
-        line("move64 x64 [y64]"); load_scalar(instruction.operands[1], instruction.type, 'z');
-        line("iadd64 x64 x64 z64"); line("move64 [y64] x64"); store_result_scalar(instruction.dest, instruction.type, 'x'); break;
+        line("move" + to_string(width) + " " + reg_name('x', width) + " [y64]");
+        load_scalar(instruction.operands[1], instruction.type, 'z');
+        line("iadd" + to_string(width) + " " + reg_name('x', width) + " " + reg_name('x', width) + " " + reg_name('z', width));
+        line("move" + to_string(width) + " [y64] " + reg_name('x', width));
+        store_result_scalar(instruction.dest, instruction.type, 'x'); break;
+        }
       case IK_ATOMIC_COMPARE_EXCHANGE: emit_atomic_compare_exchange(instruction); break;
       case IK_ATOMIC_THREAD_FENCE:
       case IK_ATOMIC_SIGNAL_FENCE: break;
       case IK_JUMP: line("jump " + output_label_function(function_.name) + "__" + instruction.label); break;
       case IK_BRANCH:
-        load_scalar(instruction.operands[0], Type("i64"), 'x'); line("ieq64 z8 x64 0");
+        load_integer64(instruction.operands[0], 'x'); line("ieq64 z8 x64 0");
         line("jumpif z8 " + output_label_function(function_.name) + "__" + instruction.label2);
         line("jump " + output_label_function(function_.name) + "__" + instruction.label); break;
       case IK_SWITCH:
-        load_scalar(instruction.operands[0], Type("i64"), 'x');
+        load_integer64(instruction.operands[0], 'x');
         for(size_t i = 0; i < instruction.cases.size(); ++i) {
-          load_scalar(instruction.cases[i].first, Type("i64"), 't');
+          load_integer64(instruction.cases[i].first, 't');
           line("ieq64 z8 x64 t64");
           line("jumpif z8 " + output_label_function(function_.name) + "__" + instruction.cases[i].second);
         }
@@ -1830,13 +1949,26 @@ class FunctionEmitter
         } else if(instruction.type.is_object()) {
           load_addressable(instruction.operands[0], 'x');
           line("move64 y64 " + location_memory(Location(Type("ptr"), hidden_return_offset_)));
-          line("move64 z64 [x64]"); line("move64 [y64] z64");
-          size_t copied = 8;
-          while(copied < instruction.type.object_bytes) {
-            line("move64 z64 [x64+" + to_string(copied) + "]");
-            line("move64 [y64+" + to_string(copied) + "] z64"); copied += 8;
+          size_t copied = 0;
+          while(copied + 8 <= instruction.type.object_bytes) {
+            const string source = copied == 0 ? "[x64]" : "[x64+" + to_string(copied) + "]";
+            const string destination = copied == 0 ? "[y64]" : "[y64+" + to_string(copied) + "]";
+            line("move64 z64 " + source); line("move64 " + destination + " z64"); copied += 8;
           }
-        } else { load_scalar(instruction.operands[0], instruction.type, 'x'); }
+          if(copied + 4 <= instruction.type.object_bytes) {
+            line("move32 z32 [x64+" + to_string(copied) + "]");
+            line("move32 [y64+" + to_string(copied) + "] z32"); copied += 4;
+          }
+          if(copied + 2 <= instruction.type.object_bytes) {
+            line("move16 z16 [x64+" + to_string(copied) + "]");
+            line("move16 [y64+" + to_string(copied) + "] z16"); copied += 2;
+          }
+          if(copied < instruction.type.object_bytes) {
+            line("move8 z8 [x64+" + to_string(copied) + "]");
+            line("move8 [y64+" + to_string(copied) + "] z8");
+          }
+        } else if(instruction.type.is_integer()) { load_integer64(instruction.operands[0], 'x'); }
+        else { load_scalar(instruction.operands[0], instruction.type, 'x'); }
         line("jump " + output_label_function(function_.name) + "__epilogue"); break;
       case IK_EH_TRY:
       case IK_EH_CLEANUP: emit_eh_setup(instruction.label); break;
@@ -1876,13 +2008,14 @@ class FunctionEmitter
           locations_[instruction.dest] = Location(type, allocate(type));
       }
     }
-    bool f80 = function_.return_type.is_f80();
+    bool needs_f80_scratch = false;
     bool integer_conversion_scratch = false;
-    for(map<string, Location>::const_iterator it = locations_.begin(); it != locations_.end(); ++it)
-      if(it->second.type.is_f80()) f80 = true;
     for(size_t b = 0; b < function_.blocks.size(); ++b) {
       for(size_t i = 0; i < function_.blocks[b].instructions.size(); ++i) {
-        if(function_.blocks[b].instructions[i].source_type.is_f80() || function_.blocks[b].instructions[i].type.is_f80()) f80 = true;
+        const Instruction & instruction = function_.blocks[b].instructions[i];
+        if((instruction.type.is_f80() || instruction.source_type.is_f80()) &&
+           instruction.kind != IK_CALL && instruction.kind != IK_RETURN)
+          needs_f80_scratch = true;
         if(function_.blocks[b].instructions[i].kind == IK_CONVERT &&
            (function_.blocks[b].instructions[i].op == "sext" || function_.blocks[b].instructions[i].op == "zext" ||
             function_.blocks[b].instructions[i].op == "trunc")) integer_conversion_scratch = true;
@@ -1890,7 +2023,7 @@ class FunctionEmitter
     }
     f80_return_temp_ = 0;
     if(function_.return_type.is_f80()) f80_return_temp_ = allocate(Type("f80"));
-    has_f80_scratch_ = f80 && !function_.return_type.is_f80();
+    has_f80_scratch_ = needs_f80_scratch;
     if(has_f80_scratch_) {
       scratch0_ = -(next_offset_ + 16); scratch1_ = -(next_offset_ + 32); scratch2_ = -(next_offset_ + 48);
       frame_size_ = next_offset_ + 64;
@@ -1918,9 +2051,21 @@ class FunctionEmitter
       } else if(location.type.is_object()) {
         line("move64 x64 " + source);
         size_t copied = 0;
-        while(copied < location.type.object_bytes) {
+        while(copied + 8 <= location.type.object_bytes) {
           line("move64 z64 [x64+" + to_string(copied) + "]");
           line("move64 " + mem_at("bp", location.offset + static_cast<int>(copied)) + " z64"); copied += 8;
+        }
+        if(copied + 4 <= location.type.object_bytes) {
+          line("move32 z32 [x64+" + to_string(copied) + "]");
+          line("move32 " + mem_at("bp", location.offset + static_cast<int>(copied)) + " z32"); copied += 4;
+        }
+        if(copied + 2 <= location.type.object_bytes) {
+          line("move16 z16 [x64+" + to_string(copied) + "]");
+          line("move16 " + mem_at("bp", location.offset + static_cast<int>(copied)) + " z16"); copied += 2;
+        }
+        if(copied < location.type.object_bytes) {
+          line("move8 z8 [x64+" + to_string(copied) + "]");
+          line("move8 " + mem_at("bp", location.offset + static_cast<int>(copied)) + " z8");
         }
       } else line("move64 " + location_memory(location) + " " + source);
     }
@@ -2030,15 +2175,16 @@ static vector<string> build_cy86(const Program & program)
 {
   map<string, const Function *> functions;
   map<string, const Global *> globals;
-  for(size_t i = 0; i < program.functions.size(); ++i) if(!program.functions[i].declaration) functions[program.functions[i].name] = &program.functions[i];
+  for(size_t i = 0; i < program.functions.size(); ++i)
+    functions[program.functions[i].name] = &program.functions[i];
   for(size_t i = 0; i < program.globals.size(); ++i) if(!program.globals[i].declaration) globals[program.globals[i].name] = &program.globals[i];
 
   string entry, init, fini;
-  for(map<string, const Function *>::const_iterator it = functions.begin(); it != functions.end(); ++it) {
-    const string role = function_role(*it->second);
-    if(role == "entry") entry = it->first;
-    else if(role == "init") init = it->first;
-    else if(role == "fini") fini = it->first;
+  for(size_t i = 0; i < program.functions.size(); ++i) if(!program.functions[i].declaration) {
+    const string role = function_role(program.functions[i]);
+    if(role == "entry") entry = program.functions[i].name;
+    else if(role == "init") init = program.functions[i].name;
+    else if(role == "fini") fini = program.functions[i].name;
   }
   if(entry.empty()) throw LowError("missing LowIR entry function");
   bool has_eh = false;

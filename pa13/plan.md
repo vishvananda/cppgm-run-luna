@@ -61,6 +61,85 @@ including its 25 structural/metadata rejection cases. The broader PA13 tree
 still contains 18 debuginfo wrapper tests for later tools; those are outside
 the PA13 `lowir2cy86` driver contract and are not remaining adapter work.
 
+## Architecture Review
+
+The integrated PA13 stage keeps the intended adapter boundary explicit in
+`dev/lowir2cy86.cpp`:
+
+1. `run_lowir2cy86` owns the PA13 driver contract, reads the command-line
+   inputs in order, and converts parser, validation, translation, and output
+   failures to `EXIT_FAILURE`. It does not invoke a host compiler, a reference
+   binary, a shell command, or a later native/object backend.
+2. `LowParser` is the text boundary. It lexes one line at a time, removes
+   comments and optional `!dbg` transport metadata, and builds value-owned
+   `Program`, `Global`, `Function`, `Block`, `Instruction`, `Type`, operand,
+   signature, and metadata records. Multiple input files are concatenated in
+   command-line order without losing source order inside a file.
+3. `Validator` is a separate semantic/structural pass. It checks top-level
+   symbol and alias ownership, declaration types, roles and metadata domains,
+   parameter passing rules, TLS wrappers, block/terminator structure, target
+   definitions, temporary/slot references, indirect-call signatures, atomic
+   order values, conversion widths, object spans, and the required entry role.
+   Symbol maps are populated before instruction validation, so forward direct
+   calls to either definitions or declarations resolve consistently. Temporary
+   visibility is carried through blocks incrementally rather than rescanning
+   every earlier block for each block.
+4. `FunctionEmitter` lowers the validated function model to deterministic PA9
+   CY86 source. It owns frame locations for parameters, slots, temporaries,
+   hidden object/f80 return storage, alignment padding, and scratch storage;
+   handles direct and indirect calls with explicit overflow-argument slots;
+   preserves f80's 16-byte storage with a 10-byte payload and zero padding;
+   and emits scalar, object, atomic, control-flow, and exception forms through
+   small lowering helpers. Object copies use exact 8/4/2/1-byte tails.
+5. `build_cy86` emits the stable `start` wrapper, optional init/entry/fini
+   calls, function bodies in source order, runtime EH support when needed, and
+   globals in source order. Declarations and object aliases remain semantic
+   validation facts and are not emitted as definitions.
+
+The model is compiler-owned by value: strings, vectors, maps, operands, and
+metadata do not retain references into lexer lines or temporary parser state.
+The PA13 executable is intentionally a PA13-local module rather than a new
+shared `dev/src` implementation unit, so no source-set registration is needed;
+the required `dev/src` audit remains limited to the inherited header-body
+warnings recorded in the final audit.
+
+## Final Architecture Review
+
+The final review covered checkpoint commit `7093941`, its PA12 handoff, the
+complete PA13 contract, all active PA13 fixtures, the changed adapter, and the
+integrated through-stage implementation. The checkpoint behavior was green,
+but the review found correctness and ownership risks outside the narrow
+fixture set. The final implementation closes them without changing existing
+checked-in CY86 fixtures:
+
+- Bare `readonly` and `thread_local` global spellings are now preserved and
+  merged with bracket metadata instead of being dropped or rejected.
+- Function declarations are included in the direct-call symbol map. A call to
+  a declared function is a direct call; only a pointer/global-value callee
+  requires an explicit indirect signature. Call-signature metadata is limited
+  to the call-boundary keys defined by LowIR.
+- Calls reserve one slot per overflow argument and keep an indirect callee
+  pointer in a separate slot. This also accounts for the hidden result
+  pointer consumed by direct object/f80 returns, avoiding register-vector
+  overrun and stack-argument overwrite for larger valid calls.
+- Narrow i1/i8/i16 accesses, atomic operations, unary operations, branch and
+  switch selectors, and integer returns use legal CY86 widths. Signed narrow
+  values are extended when a 64-bit address/control value is required.
+- Object parameter and object-return copies honor non-8-byte tails, frame
+  allocation honors direct-object alignment, and f80-returning functions get
+  scratch storage when their body actually performs f80 work rather than
+  reusing the frame base.
+- Atomic memory orders, declared global types, index metadata keys, negative
+  structured zero spans, declaration metadata, and the PA13 type family are
+  validated at the LowIR boundary. The validation prefix map is incremental,
+  avoiding repeated scans and copies of every earlier block.
+
+No tests, reference outputs, grammar, or harness scripts were edited. The
+adapter remains a mechanical LowIR-to-CY86 translation boundary; roles,
+passing modes, TLS facts, aliases, and call signatures are retained in the
+typed model for validation, while native ABI binding and object/debug output
+remain outside PA13.
+
 ## Next Checkpoint Group
 
 PA14: begin the next assignment's source-to-LowIR-facing increment while
