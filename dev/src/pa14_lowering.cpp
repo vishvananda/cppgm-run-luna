@@ -283,7 +283,7 @@ namespace cppgm_pa14_lowering {
 PA14Lowerer::PA14Lowerer(const vector<CPPGMAstNodePtr>& trees)
     : trees_(trees), program_(new CPPGMAstNode("translation-unit")), analyzer_(),
       functions_(), globals_(), function_by_key_(), global_by_key_(),
-      string_data_(), string_order_(), state_()
+      string_data_(), string_symbols_(), string_order_(), state_()
 {}
 
 void PA14Lowerer::Lower(ostream& out)
@@ -295,27 +295,18 @@ void PA14Lowerer::Lower(ostream& out)
         program_->children.push_back(trees_[i]->children[j]);
     }
     analyzer_.Analyze(program_);
-    // Bindings and function records keep pointers into these vectors.  The
-    // procedural PA14 inputs are small, but reserving here makes those
-    // pointers stable while all translation units are collected.
-    functions_.reserve(256);
-    globals_.reserve(256);
     CollectTopLevel(program_, analyzer_.global_.get());
     FinalizeSymbols();
+    CollectStringLiterals(program_);
 
     vector<string> entries;
-    EmitGlobals(entries);
     EmitDeclarations(entries);
-    const size_t emitted_strings = string_order_.size();
+    EmitGlobals(entries);
     for(size_t i = 0; i < functions_.size(); ++i) {
       if(!functions_[i].definition) continue;
       entries.push_back(EmitFunction(functions_[i]));
     }
     EmitDynamicInitializers(entries);
-    for(size_t i = emitted_strings; i < string_order_.size(); ++i) {
-      const string symbol = "__strlit__" + integer_text(static_cast<long long>(i + 1));
-      entries.push_back(RenderStringGlobal(symbol, string_data_[string_order_[i]]));
-    }
 
     for(size_t i = 0; i < entries.size(); ++i) {
       if(i != 0) out << "\n";
@@ -473,6 +464,15 @@ void PA14Lowerer::CollectTopLevel(const CPPGMAstNodePtr& node, Scope* scope)
       CollectSimpleDeclaration(node, scope);
       return;
     }
+  }
+
+void PA14Lowerer::CollectStringLiterals(const CPPGMAstNodePtr& node)
+{
+    if(!node) return;
+    if(node->kind == "literal" && !node->value.empty() && node->value[0] == '"')
+      InternString(node->value);
+    for(size_t i = 0; i < node->children.size(); ++i)
+      CollectStringLiterals(node->children[i]);
   }
 
 void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, bool definition)

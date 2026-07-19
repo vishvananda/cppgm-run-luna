@@ -317,7 +317,6 @@ void PA14Lowerer::PlanStatement(const CPPGMAstNodePtr& node, Scope* scope)
 
 void PA14Lowerer::PlanFunction(FunctionState& state)
 {
-    state.variables.reserve(512);
     state.environments.push_back(map<string, VariablePlan*>());
     const vector<string> names = ParameterNames(*state.record);
     for(size_t i = 0; i < names.size(); ++i)

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <iosfwd>
+#include <deque>
 #include <map>
 #include <memory>
 #include <set>
@@ -129,7 +130,7 @@ class PA14Lowerer
   {
     PA14Lowerer* owner;
     FunctionRecord* record;
-    vector<VariablePlan> variables;
+    deque<VariablePlan> variables;
     map<const CPPGMAstNode*, VariablePlan*> plans;
     vector<string> special_slots;
     map<string, string> special_slot_types;
@@ -165,11 +166,12 @@ class PA14Lowerer
   vector<CPPGMAstNodePtr> trees_;
   CPPGMAstNodePtr program_;
   Analyzer analyzer_;
-  vector<FunctionRecord> functions_;
-  vector<GlobalRecord> globals_;
+  deque<FunctionRecord> functions_;
+  deque<GlobalRecord> globals_;
   map<string, FunctionRecord*> function_by_key_;
   map<string, GlobalRecord*> global_by_key_;
   map<string, vector<unsigned char> > string_data_;
+  map<string, string> string_symbols_;
   vector<string> string_order_;
   FunctionState* state_;
 
@@ -244,6 +246,10 @@ bool HasStorageSpecifier(const CPPGMAstNodePtr& node, const string& word) const
 ;
 
 void FinalizeSymbols()
+
+;
+
+void CollectStringLiterals(const CPPGMAstNodePtr& node)
 
 ;
 

@@ -135,15 +135,15 @@ string PA14Lowerer::EmitTruthValue(const Value& value)
 
 string PA14Lowerer::InternString(const string& raw)
 {
-    map<string, vector<unsigned char> >::iterator found = string_data_.find(raw);
-    if(found != string_data_.end()) {
-      for(size_t i = 0; i < string_order_.size(); ++i)
-        if(string_order_[i] == raw) return "__strlit__" + integer_text(static_cast<long long>(i + 1));
-    }
+    map<string, string>::const_iterator found = string_symbols_.find(raw);
+    if(found != string_symbols_.end()) return found->second;
+    const string symbol = "__strlit__" + integer_text(
+      static_cast<long long>(string_order_.size() + 1));
     string_data_[raw] = decode_string_literal(raw);
     string_order_.push_back(raw);
-    return "__strlit__" + integer_text(static_cast<long long>(string_order_.size()));
-  }
+    string_symbols_[raw] = symbol;
+    return symbol;
+}
 
 bool PA14Lowerer::FoldInteger(const CPPGMAstNodePtr& node, Scope* scope,
                   long long* result, TypePtr* type)
@@ -600,10 +600,9 @@ string PA14Lowerer::EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
       if(binding->kind == BIND_FUNCTION) {
         FunctionRecord* function = RecordForBinding(binding);
         if(!function) {
-          const vector<FunctionRecord>& records = functions_;
-          for(size_t i = 0; i < records.size(); ++i)
-            if(records[i].qualified_name == binding->qualified_name) {
-              function = const_cast<FunctionRecord*>(&records[i]);
+          for(size_t i = 0; i < functions_.size(); ++i)
+            if(functions_[i].qualified_name == binding->qualified_name) {
+              function = const_cast<FunctionRecord*>(&functions_[i]);
               break;
             }
         }
