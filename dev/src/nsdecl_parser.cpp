@@ -1,7 +1,7 @@
 #include "nsdecl_parser.h"
 
+#include <cerrno>
 #include <cstdlib>
-#include <fstream>
 #include <limits>
 #include <map>
 #include <memory>
@@ -9,7 +9,6 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
-#include <utility>
 #include <vector>
 
 #include "posttoken_semantics.h"
@@ -235,12 +234,12 @@ struct Namespace
 	bool unnamed;
 	bool inline_namespace;
 	Namespace* parent;
-	vector<Namespace*> children;
+	vector<unique_ptr<Namespace> > children;
 	map<string, Namespace*> named_children;
 	map<string, Namespace*> namespace_aliases;
 	vector<Namespace*> using_directives;
 	map<string, vector<Entity*> > bindings;
-	vector<Entity*> owned_entities;
+	vector<unique_ptr<Entity> > owned_entities;
 	vector<Entity*> variables;
 	vector<Entity*> functions;
 
@@ -252,12 +251,7 @@ struct Namespace
 		  functions()
 	{}
 
-	~Namespace()
-	{
-		for (size_t i = 0; i < children.size(); ++i) delete children[i];
-		for (size_t i = 0; i < owned_entities.size(); ++i)
-			delete owned_entities[i];
-	}
+	~Namespace() {}
 
 	Entity* AddTypeDef(const string& entity_name, const Type& type)
 	{
@@ -271,7 +265,7 @@ struct Namespace
 			}
 		}
 		Entity* entity = new Entity(TYPEDEF_ENTITY, entity_name, type);
-		owned_entities.push_back(entity);
+		owned_entities.push_back(unique_ptr<Entity>(entity));
 		entries.push_back(entity);
 		return entity;
 	}
@@ -289,7 +283,7 @@ struct Namespace
 		}
 
 		Entity* entity = new Entity(kind, entity_name, type);
-		owned_entities.push_back(entity);
+		owned_entities.push_back(unique_ptr<Entity>(entity));
 		entries.push_back(entity);
 		if (kind == FUNCTION_ENTITY) functions.push_back(entity);
 		else variables.push_back(entity);
@@ -489,7 +483,7 @@ private:
 			return found->second;
 		}
 		Namespace* child = new Namespace(name, false, inline_namespace, parent);
-		parent->children.push_back(child);
+		parent->children.push_back(unique_ptr<Namespace>(child));
 		parent->named_children[name] = child;
 		return child;
 	}
@@ -500,10 +494,10 @@ private:
 		{
 			if (!parent->children[i]->unnamed) continue;
 			if (inline_namespace) parent->children[i]->inline_namespace = true;
-			return parent->children[i];
+			return parent->children[i].get();
 		}
 		Namespace* child = new Namespace(string(), true, inline_namespace, parent);
-		parent->children.push_back(child);
+		parent->children.push_back(unique_ptr<Namespace>(child));
 		return child;
 	}
 
@@ -520,7 +514,7 @@ private:
 
 		for (size_t i = 0; i < scope->children.size(); ++i)
 		{
-			Namespace* child = scope->children[i];
+			Namespace* child = scope->children[i].get();
 			if (!child->unnamed && !child->inline_namespace) continue;
 			Namespace* result = FindNamespaceIn(child, name, visited);
 			if (result != NULL) return result;
@@ -545,7 +539,7 @@ private:
 
 		for (size_t i = 0; i < scope->children.size(); ++i)
 		{
-			Namespace* child = scope->children[i];
+			Namespace* child = scope->children[i].get();
 			if (!child->unnamed && !child->inline_namespace) continue;
 			Entity* result = FindEntityIn(child, name, visited);
 			if (result != NULL) return result;
@@ -574,7 +568,7 @@ private:
 
 		for (size_t i = 0; i < scope->children.size(); ++i)
 		{
-			Namespace* child = scope->children[i];
+			Namespace* child = scope->children[i].get();
 			if (!child->unnamed && !child->inline_namespace) continue;
 			Entity* result = FindTypeIn(child, name, visited);
 			if (result != NULL) return result;
@@ -805,9 +799,53 @@ private:
 			throw logic_error("nsdecl: array bound is not a literal");
 		const string text = Peek().source;
 		++position_;
+		size_t suffix_begin = text.size();
+		while (suffix_begin != 0)
+		{
+			const char suffix = text[suffix_begin - 1];
+			if (suffix != 'u' && suffix != 'U' && suffix != 'l' &&
+				suffix != 'L')
+				break;
+			--suffix_begin;
+		}
+		const string suffix = text.substr(suffix_begin);
+		size_t suffix_position = 0;
+		bool is_unsigned = false;
+		if (suffix_position < suffix.size() &&
+			(suffix[suffix_position] == 'u' || suffix[suffix_position] == 'U'))
+		{
+			is_unsigned = true;
+			++suffix_position;
+		}
+		int long_count = 0;
+		while (suffix_position < suffix.size() &&
+			(suffix[suffix_position] == 'l' || suffix[suffix_position] == 'L'))
+		{
+			++long_count;
+			++suffix_position;
+		}
+		if (suffix_position < suffix.size() &&
+			(suffix[suffix_position] == 'u' || suffix[suffix_position] == 'U'))
+		{
+			if (is_unsigned) throw logic_error("nsdecl: invalid array bound");
+			is_unsigned = true;
+			++suffix_position;
+		}
+		if (suffix_position != suffix.size() || long_count > 2)
+			throw logic_error("nsdecl: invalid array bound");
+
+		const string core = text.substr(0, suffix_begin);
+		if (core.empty()) throw logic_error("nsdecl: invalid array bound");
+		int base = 10;
+		if (core.size() > 1 && core[0] == '0' &&
+			(core[1] == 'x' || core[1] == 'X'))
+			base = 16;
+		else if (core[0] == '0')
+			base = 8;
 		char* end = NULL;
-		unsigned long long value = strtoull(text.c_str(), &end, 0);
-		if (end == text.c_str() || *end != '\0' || value == 0 ||
+		errno = 0;
+		const unsigned long long value = strtoull(core.c_str(), &end, base);
+		if (errno == ERANGE || end == core.c_str() || *end != '\0' || value == 0 ||
 			value > static_cast<unsigned long long>(numeric_limits<long long>::max()))
 			throw logic_error("nsdecl: invalid array bound");
 		return static_cast<long long>(value);
@@ -820,8 +858,15 @@ private:
 		const bool starts_type = IsFundamentalWord(next) || IsCvWord(next) ||
 			next == "typedef" || next == "static" || next == "extern" ||
 			next == "thread_local";
-		return next == ")" || next == "..." || starts_type ||
-			Peek(1).kind == POST_PP_IDENTIFIER || next == "::";
+		if (next == ")" || next == "..." || starts_type || next == "::")
+			return true;
+		if (Peek(1).kind != POST_PP_IDENTIFIER) return false;
+		if (Peek(2).source == "::") return true;
+		// An identifier in a parenthesized declarator is a parameter name unless
+		// lookup proves that it is a typedef-name starting an abstract function
+		// type.  Treating every identifier as a type rejects valid declarations
+		// such as `void f(int (x));`.
+		return LookupType(next, current_) != NULL;
 	}
 
 	DeclaratorShape ParseDeclarator(DeclaratorMode mode)
@@ -1138,12 +1183,6 @@ void EmitNSDeclTranslationUnit(const string& source_path, ostream& out)
 	Namespace root(string(), true, false, NULL);
 	Parser parser(tokens, &root);
 	parser.ParseTranslationUnit();
-	if (!tokens.empty())
-	{
-		// ParseTranslationUnit intentionally accepts only the PA7 grammar; the
-		// parser's normal loop must have consumed every translated token.
-		// (The EOF token is synthetic and is not present in this stream.)
-	}
 
 	EmitNamespace(root, out);
 }

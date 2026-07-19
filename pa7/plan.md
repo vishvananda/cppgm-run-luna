@@ -59,6 +59,70 @@ point in `dev/nsdecl.cpp` and the compiled semantic parser in
 `dev/src/nsdecl_parser.cpp`, with the PA5 preprocessing dependencies explicit
 in `dev/frontend_source_sets.mk`.
 
+## Architecture Review
+
+The final integrated implementation has one semantic pipeline with explicit
+stage boundaries:
+
+1. `dev/nsdecl.cpp` owns command-line validation, output-file creation,
+   translation-unit framing, and the command-line spelling of each source
+   path.
+2. `EmitNSDeclTranslationUnit` consumes the shared PA5
+   `PreprocessSourceFile` result and runs `ValidatePostTokens` before any PA7
+   grammar action.  PA7 therefore inherits the established phase 1--5
+   translation, macro, include, and literal-validation behavior rather than
+   maintaining a second front end.
+3. The recursive-descent `Parser` normalizes the relevant digraph
+   punctuators, parses the PA7 grammar, and performs semantic actions against
+   the current namespace.  `ParseDeclSpecifierSeq` creates canonical
+   fundamental or looked-up typedef types; `ApplyDeclarator` lowers pointer,
+   reference, array, and function operations; and parameter adjustment and
+   reference collapsing are applied at the point where the standard requires
+   them.
+4. `Namespace` is the persistent scope model.  Named namespaces are reopened
+   through `named_children`, unnamed/inline namespaces remain in declaration
+   order, and lookup traverses enclosing scopes, imports, and inline/unnamed
+   visibility with visited-set guards for cycles.  Namespace aliases,
+   using-directives, and using-declarations retain non-owning references to
+   their resolved targets, so imports do not duplicate emitted entities.
+5. `Entity` objects are owned by their namespace through C++11
+   `unique_ptr` storage; namespace children are owned the same way.  Binding,
+   variable/function-order, alias, and parent pointers are non-owning views
+   into those stable owners.  `Type` values recursively describe the PA7
+   type language and share immutable child nodes, avoiding lifetime coupling
+   between copied declarations.
+6. `EmitNamespace` walks the same model after parsing and emits variables,
+   functions, and child namespaces in the required separate lists and first
+   declaration order.  Typedefs and imports remain lookup state and are not
+   incorrectly printed as variables or functions.
+
+The parser performs one pass over the normalized token stream and uses
+cycle-guarded namespace traversal for lookup.  It does not invoke a host
+compiler, reference binary, subprocess, fixture reader, or test-specific
+branch to produce output.  The explicit PA7 object list in
+`dev/frontend_source_sets.mk` keeps ownership of the new parser and its
+shared preprocessing dependencies visible to the build.
+
+## Final Architecture Review
+
+The checkpoint implementation preserved PA1--PA6 and passed its PA7 fixture
+set, but the final audit found two valid grammar/semantic edges and one
+ownership cleanup opportunity.  Parenthesized parameter names are now
+distinguished from abstract function types using typedef lookup, so a name
+such as `int (x)` is not forced through type lookup.  Integer array bounds now
+validate C++11 `u`/`l` suffix combinations and parse decimal, octal, and
+hexadecimal values with overflow checks.  Namespace and entity ownership now
+uses `unique_ptr`, leaving imported and binding pointers explicitly
+non-owning.  The redundant end-of-parse no-op and unused includes were also
+removed.
+
+The remaining file-audit output is the known non-fatal declaration-density
+warning for `dev/src/recog_parser_internal.h`.  That file contains the
+declaration-only PA6 parser interface; moving its method declarations into a
+`.cpp` file would obscure the shared parser contract and would not remove
+implementation bodies.  The PA7 files themselves remain within the audit's
+size/function-shape limits, and the stage audit passes.
+
 ## Remaining Work Map
 
 There is no remaining checked-in PA7 failure group.  Future work belongs to
