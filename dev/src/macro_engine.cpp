@@ -16,42 +16,8 @@ using namespace std;
 
 namespace {
 
-enum TokenKind
-{
-	TOKEN_SPACE,
-	TOKEN_NEWLINE,
-	TOKEN_IDENTIFIER,
-	TOKEN_NUMBER,
-	TOKEN_CHARACTER,
-	TOKEN_USER_CHARACTER,
-	TOKEN_STRING,
-	TOKEN_USER_STRING,
-	TOKEN_PUNCTUATOR,
-	TOKEN_HEADER,
-	TOKEN_NON_WHITESPACE,
-	TOKEN_PASTE,
-	TOKEN_PLACEMARKER
-};
-
 struct Macro;
-
-struct Token
-{
-	TokenKind kind;
-	string text;
-	set<string> blocked;
-	bool from_argument;
-	bool from_replacement;
-	// Non-owning provenance for the current text-sequence expansion. Macro
-	// objects stay in the table until that expansion has finished.
-	const Macro* replacement_owner;
-
-	Token(TokenKind kind = TOKEN_NON_WHITESPACE,
-		const string& text = string())
-		: kind(kind), text(text), from_argument(false), from_replacement(false),
-		  replacement_owner(NULL)
-	{}
-};
+typedef MacroToken Token;
 
 bool IsSpace(const Token& token)
 {
@@ -146,10 +112,14 @@ struct PhaseTokenizer
 	bool line_start;
 	bool expecting_directive_name;
 	bool after_include;
+	string file;
+	int logical_line;
 
-	PhaseTokenizer(const string& input)
+	PhaseTokenizer(const string& input, const string& file = string(),
+		int line = 1)
 		: source(TranslateSource(input)), position(0), line_start(true),
-		  expecting_directive_name(false), after_include(false)
+		  expecting_directive_name(false), after_include(false), file(file),
+		  logical_line(line)
 	{}
 
 	vector<Token> Run()
@@ -161,8 +131,9 @@ struct PhaseTokenizer
 				continue;
 			if (source[position].code_point == '\n')
 			{
-				result.push_back(Token(TOKEN_NEWLINE, "\n"));
+				result.push_back(Token(TOKEN_NEWLINE, "\n", file, logical_line));
 				++position;
+				++logical_line;
 				line_start = true;
 				expecting_directive_name = false;
 				after_include = false;
@@ -170,13 +141,18 @@ struct PhaseTokenizer
 			}
 			if (after_include && IsHeaderOpener())
 			{
-				result.push_back(ParseHeader());
+				Token token = ParseHeader();
+				token.file = file;
+				token.line = logical_line;
+				result.push_back(token);
 				after_include = false;
 				line_start = false;
 				continue;
 			}
 			const bool was_line_start = line_start;
 			Token token = NextToken();
+			token.file = file;
+			token.line = logical_line;
 			UpdateDirectiveState(token, was_line_start);
 			result.push_back(token);
 		}
@@ -215,7 +191,7 @@ struct PhaseTokenizer
 			break;
 		}
 		if (found)
-			result->push_back(Token(TOKEN_SPACE, " "));
+			result->push_back(Token(TOKEN_SPACE, " ", file, logical_line));
 		return found;
 	}
 
@@ -244,6 +220,8 @@ struct PhaseTokenizer
 				position += 2;
 				return;
 			}
+			if (source[position].code_point == '\n')
+				++logical_line;
 			++position;
 		}
 		throw logic_error("unterminated comment");
@@ -591,20 +569,22 @@ struct PhaseTokenizer
 	}
 };
 
-vector<Token> Tokenize(const string& source)
+vector<Token> Tokenize(const string& source, const string& file = string(),
+	int line = 1)
 {
-	return PhaseTokenizer(source).Run();
+	return PhaseTokenizer(source, file, line).Run();
 }
 
 struct Macro
 {
 	string name;
+	size_t id;
 	bool function_like;
 	bool variadic;
 	vector<string> parameters;
 	vector<Token> replacement;
 
-	Macro() : function_like(false), variadic(false) {}
+	Macro() : name(), id(0), function_like(false), variadic(false) {}
 };
 
 struct Invocation
@@ -855,7 +835,8 @@ string StringizeText(const vector<Token>& argument)
 	return result;
 }
 
-Token Stringize(const vector<Token>& argument, const set<string>& blocked)
+Token Stringize(const vector<Token>& argument,
+	const MacroBlockedNames& blocked)
 {
 	Token result(TOKEN_STRING, "\"");
 	result.text += StringizeText(argument);
@@ -891,12 +872,12 @@ vector<Token> PasteTokens(const Token& left, const Token& right,
 		return vector<Token>(1, result);
 	}
 	vector<Token> pasted = NonSpaceTokens(Tokenize(left.text + right.text));
-	set<string> blocked = left.blocked;
-	blocked.insert(right.blocked.begin(), right.blocked.end());
+	MacroBlockedNames blocked = left.blocked;
+	blocked.Merge(right.blocked);
 	const bool from_argument = left.from_argument || right.from_argument;
 	for (size_t i = 0; i < pasted.size(); ++i)
 	{
-		pasted[i].blocked.insert(blocked.begin(), blocked.end());
+			pasted[i].blocked = blocked;
 		pasted[i].from_argument = from_argument;
 		pasted[i].from_replacement = true;
 		pasted[i].replacement_owner = replacement_owner;
@@ -930,9 +911,50 @@ vector<Token> ProcessPastes(vector<Token> input, const Macro* replacement_owner)
 	return input;
 }
 
-class MacroProcessor
+class MacroProcessorImpl
 {
 public:
+	MacroProcessorImpl() : macros(), next_macro_id(1) {}
+
+	void DefineSource(const string& input, const string& file, int line)
+	{
+		const vector<Token> tokens = Tokenize(input, file, line);
+		const size_t end = FindLineEnd(tokens, 0);
+		string directive;
+		size_t hash = tokens.size();
+		Require(FindDirective(tokens, 0, end, &directive, &hash) &&
+			directive == "define", "invalid define directive");
+		DefineMacro(ParseDefine(tokens, hash, end));
+	}
+
+	void UndefineSource(const string& input, const string& file, int line)
+	{
+		const vector<Token> tokens = Tokenize(input, file, line);
+		const size_t end = FindLineEnd(tokens, 0);
+		string directive;
+		size_t hash = tokens.size();
+		Require(FindDirective(tokens, 0, end, &directive, &hash) &&
+			directive == "undef", "invalid undef directive");
+		ParseUndef(tokens, hash, end, &macros);
+	}
+
+	bool IsDefined(const string& name) const
+	{
+		return name == "__FILE__" || name == "__LINE__" ||
+			macros.find(name) != macros.end();
+	}
+
+	vector<PostPPToken> ExpandSource(const string& input,
+		const string& file, int line)
+	{
+		const vector<Token> tokens = Tokenize(input, file, line);
+		vector<Token> expanded = ExpandTokens(TrimAndCollapseSpaces(tokens));
+		vector<PostPPToken> result;
+		for (size_t i = 0; i < expanded.size(); ++i)
+			AppendPostToken(expanded[i], &result);
+		return result;
+	}
+
 	void Run(const string& input)
 	{
 		const vector<Token> tokens = Tokenize(input);
@@ -947,6 +969,7 @@ public:
 
 private:
 	map<string, Macro> macros;
+	size_t next_macro_id;
 
 	void ProcessLines(const vector<Token>& tokens, vector<Token>* output)
 	{
@@ -989,7 +1012,11 @@ private:
 			Require(EqualMacros(found->second, macro),
 				"incompatible macro redefinition");
 		else
-			macros[macro.name] = macro;
+		{
+			Macro stored = macro;
+			stored.id = next_macro_id++;
+			macros[stored.name] = stored;
+		}
 	}
 
 	void ExpandText(const vector<Token>& input, vector<Token>* output)
@@ -1071,10 +1098,39 @@ private:
 			}
 			if (head.text == "__VA_ARGS__")
 				throw logic_error("__VA_ARGS__ outside variadic macro");
+			if (head.text == "__LINE__")
+			{
+				output.push_back(Token(TOKEN_NUMBER, to_string(head.line),
+					head.file, head.line));
+				continue;
+			}
+			if (head.text == "__FILE__")
+			{
+				string quoted = "\"";
+				for (size_t i = 0; i < head.file.size(); ++i)
+				{
+					if (head.file[i] == '\\' || head.file[i] == '"')
+						quoted.push_back('\\');
+					quoted.push_back(head.file[i]);
+				}
+				quoted += "\"";
+				output.push_back(Token(TOKEN_STRING, quoted,
+					head.file, head.line));
+				continue;
+			}
+			if (head.text == "defined")
+			{
+				// In a controlling expression the operand of `defined` is
+				// protected by the PA5 driver. Keeping this token opaque here
+				// also prevents a user macro named `defined` from corrupting
+				// that operator while ordinary text is being rescanned.
+				output.push_back(head);
+				continue;
+			}
 			map<string, Macro>::const_iterator found =
 				macros.find(head.text);
 			bool blocked = found != macros.end() &&
-				head.blocked.find(found->first) != head.blocked.end();
+				head.blocked.Contains(found->second.id);
 			if (blocked && found->second.function_like &&
 				!head.from_argument &&
 				head.replacement_owner != &found->second)
@@ -1123,21 +1179,21 @@ private:
 	}
 
 	void AddInheritedPaint(vector<Token>* argument,
-		const set<string>& inherited) const
+		const MacroBlockedNames& inherited) const
 	{
 		for (size_t i = 0; i < argument->size(); ++i)
 		{
 			if (IsSpace((*argument)[i]))
 				continue;
-			(*argument)[i].blocked.insert(inherited.begin(), inherited.end());
+			(*argument)[i].blocked.Merge(inherited);
 		}
 	}
 
-	void PaintCurrentMacro(vector<Token>* argument, const string& current) const
+	void PaintCurrentMacro(vector<Token>* argument, size_t current) const
 	{
 		for (size_t i = 0; i < argument->size(); ++i)
 			if (!IsSpace((*argument)[i]))
-				(*argument)[i].blocked.insert(current);
+				(*argument)[i].blocked.Add(current);
 	}
 
 	bool NeedsExpandedArgument(const Macro& macro, const string& name) const
@@ -1190,8 +1246,8 @@ private:
 			if (NeedsExpandedArgument(macro, parameter_name))
 				expanded_argument = ExpandTokens(raw_argument);
 			AddInheritedPaint(&expanded_argument, head.blocked);
-			PaintCurrentMacro(&raw_argument, macro.name);
-			PaintCurrentMacro(&expanded_argument, macro.name);
+			PaintCurrentMacro(&raw_argument, macro.id);
+			PaintCurrentMacro(&expanded_argument, macro.id);
 			raw_arguments.push_back(raw_argument);
 			expanded_arguments.push_back(expanded_argument);
 		}
@@ -1219,8 +1275,9 @@ private:
 		const map<string, vector<Token> >& raw,
 		const map<string, vector<Token> >& expanded)
 	{
-		set<string> blocked = head.from_argument ? set<string>() : head.blocked;
-		blocked.insert(macro.name);
+		MacroBlockedNames blocked = head.from_argument ?
+			MacroBlockedNames() : head.blocked;
+		blocked.Add(macro.id);
 		vector<Token> result;
 		for (size_t i = 0; i < macro.replacement.size(); ++i)
 		{
@@ -1234,6 +1291,8 @@ private:
 				Token stringized = Stringize(raw.find(name)->second, blocked);
 				stringized.from_replacement = true;
 				stringized.replacement_owner = &macro;
+				stringized.file = head.file;
+				stringized.line = head.line;
 				result.push_back(stringized);
 				i = parameter;
 				continue;
@@ -1279,6 +1338,8 @@ private:
 			copy.blocked = blocked;
 			copy.from_replacement = true;
 			copy.replacement_owner = &macro;
+			copy.file = head.file;
+			copy.line = head.line;
 			result.push_back(copy);
 		}
 		return ProcessPastes(result, &macro);
@@ -1309,7 +1370,46 @@ private:
 
 } // namespace
 
+vector<MacroToken> TokenizeMacroSource(const string& input,
+	const string& file, int line)
+{
+	return Tokenize(input, file, line);
+}
+
+MacroState::MacroState()
+	: implementation_(new MacroProcessorImpl())
+{}
+
+MacroState::~MacroState()
+{
+	delete static_cast<MacroProcessorImpl*>(implementation_);
+}
+
+void MacroState::Define(const string& source, const string& file, int line)
+{
+	static_cast<MacroProcessorImpl*>(implementation_)->DefineSource(
+		source, file, line);
+}
+
+void MacroState::Undefine(const string& source, const string& file, int line)
+{
+	static_cast<MacroProcessorImpl*>(implementation_)->UndefineSource(
+		source, file, line);
+}
+
+bool MacroState::IsDefined(const string& name) const
+{
+	return static_cast<const MacroProcessorImpl*>(implementation_)->IsDefined(name);
+}
+
+vector<PostPPToken> MacroState::Expand(const string& source,
+	const string& file, int line)
+{
+	return static_cast<MacroProcessorImpl*>(implementation_)->ExpandSource(
+		source, file, line);
+}
+
 void RunMacro(const string& input)
 {
-	MacroProcessor().Run(input);
+	MacroProcessorImpl().Run(input);
 }

@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <iostream>
 #include <limits>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -651,7 +652,11 @@ class Parser
 {
 public:
 	explicit Parser(const vector<PostPPToken>& tokens, vector<Node>* nodes)
-		: tokens(tokens), position(0), nodes(nodes) {}
+		: tokens(tokens), position(0), nodes(nodes), defined_names(NULL) {}
+
+	Parser(const vector<PostPPToken>& tokens, vector<Node>* nodes,
+		const set<string>* defined_names)
+		: tokens(tokens), position(0), nodes(nodes), defined_names(defined_names) {}
 
 	size_t Parse()
 	{
@@ -667,6 +672,7 @@ private:
 	const vector<PostPPToken>& tokens;
 	size_t position;
 	vector<Node>* nodes;
+	const set<string>* defined_names;
 
 	size_t MakeNode(Node::Kind kind, Type type)
 	{
@@ -809,7 +815,7 @@ private:
 		if (Match("("))
 		{
 			if (position >= tokens.size() ||
-				tokens[position].kind != POST_PP_IDENTIFIER)
+				!IsDefinedOperand(tokens[position]))
 				throw LineError();
 			identifier = tokens[position++].source;
 			if (!Match(")"))
@@ -818,13 +824,29 @@ private:
 		else
 		{
 			if (position >= tokens.size() ||
-				tokens[position].kind != POST_PP_IDENTIFIER)
+				!IsDefinedOperand(tokens[position]))
 				throw LineError();
 			identifier = tokens[position++].source;
 		}
+		if (defined_names != NULL)
+			return Literal(SignedValue(defined_names->find(identifier) !=
+				defined_names->end()));
 		const unsigned char first = identifier.empty() ? 0 :
 			static_cast<unsigned char>(identifier[0]);
 		return Literal(SignedValue(first & 1));
+	}
+
+	bool IsDefinedOperand(const PostPPToken& token) const
+	{
+		if (token.kind == POST_PP_IDENTIFIER)
+			return true;
+		if (token.kind != POST_PP_PUNCTUATOR)
+			return false;
+		static const set<string> operator_names = {
+			"new", "delete", "and", "and_eq", "bitand", "bitor", "compl",
+			"not", "not_eq", "or", "or_eq", "xor", "xor_eq"
+		};
+		return operator_names.find(token.source) != operator_names.end();
 	}
 
 	size_t Literal(Value value)
@@ -983,6 +1005,25 @@ void EvaluateLine(const vector<PostPPToken>& tokens, vector<Node>* nodes)
 }
 
 } // namespace
+
+bool EvaluateControlExpression(const vector<PostPPToken>& tokens,
+	const set<string>& defined_names, bool* result)
+{
+	if (result == NULL)
+		return false;
+	try
+	{
+		vector<Node> nodes;
+		Parser parser(tokens, &nodes, &defined_names);
+		const size_t root = parser.Parse();
+		*result = Evaluate(root, nodes).bits != 0;
+		return true;
+	}
+	catch (const LineError&)
+	{
+		return false;
+	}
+}
 
 void RunCtrlExpr(const string& input)
 {
