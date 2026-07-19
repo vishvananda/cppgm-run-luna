@@ -120,6 +120,8 @@ struct Binding
 	bool injected_member;
 	string injected_object_name;
 	TypePtr injected_owner;
+	bool is_member;
+	bool is_static;
 	// ClassMemberInfo is the canonical owner of layout and member-kind facts.
 	// Bindings retain lookup identity and refer to that record through a stable
 	// owner/index pair rather than a pointer into a relocatable member vector.
@@ -137,6 +139,8 @@ struct Scope
 	ScopeKind kind;
 	string name;
 	Scope* parent;
+	// Class scopes retain their owning type for typed member lowering.
+	TypePtr owner_type;
 	bool inline_namespace;
 	vector<Binding> bindings;
 	map<string, size_t> local_bindings;

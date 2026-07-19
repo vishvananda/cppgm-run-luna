@@ -72,6 +72,10 @@ PA14Lowerer::Value PA14Lowerer::ConvertValue(Value value, const TypePtr& target,
        source_low != target_low) {
       Value result = value;
       result.type = target_value;
+      if(value.known_constant) {
+        result.operand = integer_text(value.constant);
+        return result;
+      }
       result.operand = new_temp();
       AddInstruction(result.operand + " = copy " + target_low + " " + value.operand);
       return result;
@@ -600,7 +604,14 @@ string PA14Lowerer::EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
       return node->children.empty() ? string() : EmitAddress(node->children[0], scope);
     if(node->kind == "id-expression") {
       VariablePlan* local = LocalForName(node->value);
-      if(local) return local_address(local);
+      if(local) {
+        if(!local->initialization_address.empty()) {
+          const string address = local->initialization_address;
+          local->initialization_address.clear();
+          return address;
+        }
+        return local_address(local);
+      }
       vector<Binding*> candidates = Lookup(node->value, scope);
       if(candidates.empty()) throw logic_error("unknown address expression");
       Binding* binding = candidates.size() == 1 ? candidates[0] : candidates[0];
@@ -617,8 +628,16 @@ string PA14Lowerer::EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
       }
       GlobalRecord* global = FindGlobal(binding->qualified_name);
       if(global) return global_address(global);
+      if(binding->is_member && !binding->is_static) {
+        CPPGMAstNodePtr this_node(new CPPGMAstNode("keyword-literal", "KW_THIS:this"));
+        CPPGMAstNodePtr member(new CPPGMAstNode("member-expression", "OP_ARROW:->"));
+        member->children.push_back(this_node);
+        member->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("identifier", binding->name)));
+        return EmitMemberAddress(member, scope);
+      }
       throw logic_error("cannot take address of expression");
     }
+    if(node->kind == "member-expression") return EmitMemberAddress(node, scope);
     if(node->kind == "literal" && !node->value.empty() && node->value[0] == '"') {
       const string symbol = InternString(node->value);
       const string temp = new_temp();
@@ -652,6 +671,60 @@ string PA14Lowerer::EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
       if(type_is_reference(info.type)) return EmitCall(node, scope).operand;
     }
     throw logic_error("expression is not addressable");
+  }
+
+string PA14Lowerer::EmitMemberAddress(const CPPGMAstNodePtr& node, Scope* scope)
+{
+    ExprInfo object_info;
+    Binding* member = MemberBinding(node, scope, &object_info);
+    if(!member) throw logic_error("unknown member");
+    if(member->kind == BIND_FUNCTION)
+      throw logic_error("member function is not an lvalue");
+    if(member->is_static) {
+      GlobalRecord* global = FindGlobal(member->qualified_name);
+      if(!global) throw logic_error("static member has no storage");
+      return global_address(global);
+    }
+    if(member->member_index == static_cast<size_t>(-1) || !member->member_owner ||
+       member->member_index >= member->member_owner->class_members.size())
+      throw logic_error("member has no layout record");
+    const ClassMemberInfo& fact = member->member_owner->class_members[member->member_index];
+    string base;
+    const string op = PA12Operator(node->value);
+    if(op == "->") {
+      TypePtr object = expression_value_type(object_info);
+      if(!object || object->kind != TYPE_POINTER) throw logic_error("arrow requires a pointer to class");
+      object = type_value(object->child);
+      base = EmitValue(node->children[0], scope).operand;
+    } else {
+      TypePtr object = expression_value_type(object_info);
+      base = EmitAddress(node->children[0], scope);
+      object = type_value(object);
+      if(object && object->kind == TYPE_POINTER) object = type_value(object->child);
+    }
+    TypePtr object = expression_value_type(object_info);
+    if(op == "->") object = object && object->kind == TYPE_POINTER ?
+      type_value(object->child) : TypePtr();
+    else if(object && object->kind == TYPE_POINTER) object = type_value(object->child);
+    base = AdjustBaseAddress(base, object, member->member_owner);
+    const string result = new_temp();
+    AddInstruction(result + " = index i8 [projection=field] " + base + ", " +
+      integer_text(fact.offset));
+    return result;
+  }
+
+string PA14Lowerer::AdjustBaseAddress(const string& base, const TypePtr& raw_derived,
+                                      const TypePtr& target)
+{
+    TypePtr derived = type_value(raw_derived);
+    TypePtr wanted = type_value(target);
+    if(!derived || !wanted || PA12SameType(derived, wanted, true)) return base;
+    if(derived->kind != TYPE_CLASS || wanted->kind != TYPE_CLASS)
+      throw logic_error("member owner is not a base class");
+    if(!derived->direct_base) throw logic_error("member owner is not a base class");
+    const string adjusted = new_temp();
+    AddInstruction(adjusted + " = index i8 [projection=base_subobject] " + base + ", 0");
+    return AdjustBaseAddress(adjusted, derived->direct_base, wanted);
   }
 
 } // namespace cppgm_pa14_lowering

@@ -53,15 +53,26 @@ class PA14Lowerer
     CPPGMAstNodePtr node;
     Scope* scope;
     TypePtr type;
+    TypePtr source_type;
+    TypePtr member_owner;
     string qualified_name;
     string symbol;
     bool definition;
+    bool member;
+    bool static_member;
+    bool constructor;
+    bool destructor;
+    bool needed;
+    bool emitted;
     bool variadic;
+    CPPGMAstNodePtr special_initializer;
     vector<CPPGMAstNodePtr> default_arguments;
 
     FunctionRecord()
-      : node(), scope(), type(), qualified_name(), symbol(), definition(false),
-        variadic(false), default_arguments() {}
+      : node(), scope(), type(), source_type(), member_owner(), qualified_name(),
+        symbol(), definition(false), member(false), static_member(false),
+        constructor(false), destructor(false), needed(false), emitted(false), variadic(false),
+        special_initializer(), default_arguments() {}
   };
 
   struct GlobalRecord
@@ -84,6 +95,7 @@ class PA14Lowerer
   {
     string source_name;
     string slot_name;
+    string initialization_address;
     TypePtr type;
     CPPGMAstNodePtr declarator;
     CPPGMAstNodePtr initializer;
@@ -108,12 +120,16 @@ class PA14Lowerer
   {
     Binding* binding;
     TypePtr function;
+    CPPGMAstNodePtr object;
     bool direct;
+    bool member;
+    bool static_member;
     int worst;
     int total;
 
     CallChoice()
-      : binding(), function(), direct(false), worst(1000000), total(1000000) {}
+      : binding(), function(), object(), direct(false), member(false),
+        static_member(false), worst(1000000), total(1000000) {}
   };
 
   struct Block
@@ -230,7 +246,23 @@ void CollectTopLevel(const CPPGMAstNodePtr& node, Scope* scope)
 
 ;
 
+void CollectClassMembers(const CPPGMAstNodePtr& node, Scope* scope)
+
+;
+
 void CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, bool definition)
+
+;
+
+void CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope, bool definition)
+
+;
+
+void CollectImplicitConstructor(const TypePtr& owner, Scope* scope)
+
+;
+
+void CollectImplicitDestructor(const TypePtr& owner, Scope* scope)
 
 ;
 
@@ -284,6 +316,15 @@ vector<Binding*> Lookup(const string& raw, Scope* from) const
 
 ;
 
+vector<Binding*> MemberBindings(const TypePtr& object, const string& name) const
+
+;
+
+Binding* MemberBinding(const CPPGMAstNodePtr& node, Scope* scope,
+                       ExprInfo* object_info = 0)
+
+;
+
 TypePtr expression_value_type(const ExprInfo& info) const
 
 ;
@@ -306,6 +347,10 @@ VariablePlan* FindLocalPlan(const string& name) const
 
 ExprInfo InferIdentifier(const CPPGMAstNodePtr& node, Scope* scope,
                          const TypePtr& expected) const
+
+;
+
+ExprInfo InferMember(const CPPGMAstNodePtr& node, Scope* scope) const
 
 ;
 
@@ -542,6 +587,15 @@ string EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
 
 ;
 
+string EmitMemberAddress(const CPPGMAstNodePtr& node, Scope* scope)
+
+;
+
+string AdjustBaseAddress(const string& base, const TypePtr& derived,
+                         const TypePtr& target)
+
+;
+
 Value EmitIdentifier(const CPPGMAstNodePtr& node, Scope* scope,
                      const TypePtr& expected)
 
@@ -619,6 +673,38 @@ Value ValueWithNullptr() const
 
 void EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr& initializer,
                      Scope* scope)
+
+;
+
+bool EmitObjectConstructor(VariablePlan* variable, const TypePtr& object_type,
+                           const vector<CPPGMAstNodePtr>& arguments, Scope* scope)
+
+;
+
+bool EmitConstructorAt(const TypePtr& object_type, const string& address,
+                       const vector<CPPGMAstNodePtr>& arguments, Scope* scope)
+
+;
+
+bool EmitDestructorAt(const TypePtr& object_type, const string& address, Scope* scope)
+
+;
+
+void EmitConstructorInitializers(FunctionRecord& function, Scope* scope)
+
+;
+
+void EmitDestructorBody(FunctionRecord& function, Scope* scope)
+
+;
+
+void EmitAggregateAt(const string& base, const TypePtr& type,
+                     const CPPGMAstNodePtr& expression, Scope* scope)
+
+;
+
+bool HasNonSizeofReference(const CPPGMAstNodePtr& node,
+                           const string& name, bool inside_sizeof = false) const
 
 ;
 

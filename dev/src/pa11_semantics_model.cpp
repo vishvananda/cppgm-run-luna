@@ -14,11 +14,12 @@ Binding::Binding(BindingKind binding_kind, const string& binding_name,
 	const TypePtr& binding_type)
 	: kind(binding_kind), name(binding_name), type(binding_type), has_value(false), value(0),
 	  type_override(), qualified_name(), injected_member(false), injected_object_name(),
-	  injected_owner(), member_owner(), member_index(static_cast<size_t>(-1)),
+	  injected_owner(), is_member(false), is_static(false), member_owner(),
+	  member_index(static_cast<size_t>(-1)),
 	  access(), declaration() {}
 
 Scope::Scope(ScopeKind scope_kind, const string& scope_name, Scope* scope_parent)
-	: kind(scope_kind), name(scope_name), parent(scope_parent), inline_namespace(false),
+	: kind(scope_kind), name(scope_name), parent(scope_parent), owner_type(), inline_namespace(false),
 	  bindings(), local_bindings(), children(), namespace_children(), namespace_aliases(),
 	  using_directives(), qualified_prefix(scope_parent ? scope_parent->qualified_prefix : string())
 {

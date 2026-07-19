@@ -742,6 +742,7 @@ public:
 	{
 		if (type->owned_scope) return type->owned_scope;
 		Scope* result = NewChild(parent, SCOPE_CLASS, name);
+		result->owner_type = type;
 		type->owned_scope = result;
 		return result;
 	}
@@ -984,15 +985,36 @@ public:
 		SpecFacts facts;
 		TypePtr base = TypeFromSpecSeq(node->children[0], scope, &facts);
 		CPPGMAstNodePtr declarator = node->children[1];
-		const string name = FirstIdentifier(declarator);
-		if (name.empty()) throw logic_error("function has no name");
+		const string raw_name = FirstIdentifier(declarator);
+		if (raw_name.empty()) throw logic_error("function has no name");
 		TypePtr function_type = BuildDeclarator(declarator, base, scope);
 		if (!function_type || function_type->kind != TYPE_FUNCTION)
 			throw logic_error("definition is not a function");
-		scope->add(Binding(BIND_FUNCTION, name, function_type));
-		Scope* function_scope = NewChild(scope, SCOPE_FUNCTION, name);
+		Scope* declaration_scope = scope;
+		TypePtr member_owner;
+		string name = raw_name;
+		const size_t separator = raw_name.rfind("::");
+		if (separator != string::npos)
+		{
+			PathTarget owner = ResolvePath(scope, raw_name.substr(0, separator));
+			if (owner.binding) member_owner = owner.binding->type;
+			else if (owner.scope) member_owner = owner.scope->owner_type;
+			if (member_owner && member_owner->kind == TYPE_CLASS && member_owner->owned_scope)
+			{
+				declaration_scope = member_owner->owned_scope;
+				name = LastComponent(raw_name);
+			}
+		}
+		else if (scope->kind == SCOPE_CLASS)
+			member_owner = scope->owner_type;
+		Binding binding(BIND_FUNCTION, name, function_type);
+		binding.is_member = static_cast<bool>(member_owner);
+		binding.is_static = facts.is_static;
+		binding.member_owner = member_owner;
+		declaration_scope->add(binding);
+		Scope* function_scope = NewChild(declaration_scope, SCOPE_FUNCTION, name);
 		function_scopes_[node.get()] = function_scope;
-		AddFunctionParameters(function_scope, declarator, scope);
+		AddFunctionParameters(function_scope, declarator, declaration_scope);
 		ProcessCompound(node->children[2], function_scope);
 	}
 
@@ -1055,8 +1077,15 @@ public:
 			{
 				const string name = node->value;
 				TypePtr function = BuildDeclarator(declarator, Fundamental("void"), scope);
-				scope->add(Binding(BIND_FUNCTION, name, function));
+				Binding* binding = scope->add(Binding(BIND_FUNCTION, name, function));
+				binding->is_member = scope->kind == SCOPE_CLASS;
+				binding->is_static = false;
+				binding->member_owner = scope->owner_type;
+				binding->access = scope->owner_type && scope->owner_type->tag == "class" ?
+					"private" : "public";
+				binding->declaration = node;
 				Scope* function_scope = NewChild(scope, SCOPE_FUNCTION, name);
+				function_scopes_[node.get()] = function_scope;
 				AddFunctionParameters(function_scope, declarator, scope);
 				ProcessCompound(body, function_scope);
 			}

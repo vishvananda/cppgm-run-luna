@@ -75,6 +75,42 @@ PA14Lowerer::Value PA14Lowerer::EmitIdentifier(const CPPGMAstNodePtr& node, Scop
       result.constant = binding->value;
       return result;
     }
+    if(binding->is_member && binding->member_owner) {
+      if(binding->kind == BIND_FUNCTION) {
+        FunctionRecord* function = RecordForBinding(binding);
+        if(!function) throw logic_error("unknown member function symbol during lowering");
+        if(function->member) function->needed = true;
+        result.type = function->type;
+        result.function = true;
+        result.operand = function_address(function);
+        return result;
+      }
+      result.type = binding->type;
+      if(binding->is_static) {
+        if(binding->has_value) {
+          result.known_constant = true;
+          result.constant = binding->value;
+          result.operand = integer_text(result.constant);
+          return result;
+        }
+        GlobalRecord* global_member = FindGlobal(binding->qualified_name);
+        if(!global_member) throw logic_error("unknown static member during lowering");
+        result.type = global_member->type;
+        result.operand = global_member->type->kind == TYPE_ARRAY ?
+          EmitArrayDecay(node, scope) : emit_load("@" + global_member->symbol, global_member->type);
+        result.array = global_member->type->kind == TYPE_ARRAY;
+        return result;
+      }
+      CPPGMAstNodePtr this_node(new CPPGMAstNode("keyword-literal", "KW_THIS:this"));
+      CPPGMAstNodePtr member(new CPPGMAstNode("member-expression", "OP_ARROW:->"));
+      member->children.push_back(this_node);
+      member->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("identifier", binding->name)));
+      ExprInfo member_info = InferMember(member, scope);
+      result.type = member_info.type;
+      result.operand = emit_load(EmitMemberAddress(member, scope), result.type);
+      result.lvalue = false;
+      return result;
+    }
     if(binding->kind == BIND_FUNCTION) {
       FunctionRecord* function = RecordForBinding(binding);
       if(!function) throw logic_error("unknown function symbol during lowering");
@@ -435,6 +471,24 @@ PA14Lowerer::Value PA14Lowerer::EmitCall(const CPPGMAstNodePtr& node, Scope* sco
       }
     }
     vector<string> operands;
+    if(choice.member && !choice.static_member) {
+      if(!choice.object) throw logic_error("member call has no object");
+      string object_operand;
+      if(callee_node->kind == "member-expression" &&
+         PA12Operator(callee_node->value) == "->")
+        object_operand = EmitValue(choice.object, scope).operand;
+      else if(choice.object->kind == "keyword-literal" &&
+              PA12Operator(choice.object->value) == "this")
+        object_operand = EmitValue(choice.object, scope).operand;
+      else object_operand = EmitAddress(choice.object, scope);
+      ExprInfo object_info = Infer(choice.object, scope);
+      TypePtr object_type = expression_value_type(object_info);
+      if(object_type && object_type->kind == TYPE_POINTER)
+        object_type = type_value(object_type->child);
+      object_operand = AdjustBaseAddress(object_operand, object_type,
+        choice.binding ? choice.binding->member_owner : TypePtr());
+      operands.push_back(object_operand);
+    }
     for(size_t i = 0; i < all_arguments.size(); ++i) {
       TypePtr target = i < choice.function->parameters.size() ? choice.function->parameters[i] : TypePtr();
       if(target && type_is_reference(target)) {
@@ -692,8 +746,15 @@ PA14Lowerer::Value PA14Lowerer::EmitValue(const CPPGMAstNodePtr& node, Scope* sc
       result.constant = constant;
       return result;
     }
-    if(node->kind == "keyword-literal") return InferKeyword(node).type->name == "nullptr_t" ?
-      ValueWithNullptr() : ValueFromInfo(InferKeyword(node));
+    if(node->kind == "keyword-literal") {
+      const string op = PA12Operator(node->value);
+      if(op == "this") {
+        CPPGMAstNodePtr this_id(new CPPGMAstNode("id-expression", "this"));
+        return EmitIdentifier(this_id, scope, expected);
+      }
+      return InferKeyword(node).type->name == "nullptr_t" ?
+        ValueWithNullptr() : ValueFromInfo(InferKeyword(node));
+    }
     if(node->kind == "id-expression") return EmitIdentifier(node, scope, expected);
     if(node->kind == "parenthesized-expression")
       return node->children.empty() ? Value() : EmitValue(node->children[0], scope, expected);
@@ -727,6 +788,23 @@ PA14Lowerer::Value PA14Lowerer::EmitValue(const CPPGMAstNodePtr& node, Scope* sc
       Value result;
       result.type = info.type;
       result.operand = emit_load(EmitSubscriptAddress(node, scope), info.type);
+      return result;
+    }
+    if(node->kind == "member-expression") {
+      ExprInfo info = InferMember(node, scope);
+      Value result;
+      result.type = info.type;
+      if(info.binding && info.binding->is_member && info.binding->is_static &&
+         info.binding->has_value) {
+        result.operand = integer_text(info.binding->value);
+        result.known_constant = true;
+        result.constant = info.binding->value;
+        return result;
+      }
+      if(info.type && info.type->kind == TYPE_ARRAY) {
+        result.array = true;
+        result.operand = EmitArrayDecay(node, scope);
+      } else result.operand = emit_load(EmitMemberAddress(node, scope), info.type);
       return result;
     }
     if(node->kind == "cast-expression") {

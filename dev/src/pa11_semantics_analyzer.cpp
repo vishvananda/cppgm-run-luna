@@ -274,8 +274,16 @@ void Analyzer::RecordClassMembers(const CPPGMAstNodePtr& node, const TypePtr& ty
 			if (declarator)
 			{
 				const string name = FirstIdentifier(declarator);
-				Binding* binding = class_scope->local(name);
-				if (binding) { binding->access = access; binding->declaration = child; }
+				for (size_t k = 0; k < class_scope->bindings.size(); ++k)
+				{
+					Binding& binding = class_scope->bindings[k];
+					if (binding.name != name || binding.kind != BIND_FUNCTION) continue;
+					binding.access = access;
+					binding.declaration = child;
+					binding.is_member = true;
+					binding.is_static = facts.is_static;
+					binding.member_owner = type;
+				}
 			}
 			continue;
 		}
@@ -292,6 +300,9 @@ void Analyzer::RecordClassMembers(const CPPGMAstNodePtr& node, const TypePtr& ty
 				binding->type = field_type;
 				binding->access = access;
 				binding->declaration = child;
+				binding->is_member = true;
+				binding->is_static = facts.is_static;
+				binding->member_owner = type;
 			}
 			if (facts.is_typedef || field_type->kind == TYPE_FUNCTION || name.empty()) continue;
 			ClassMemberInfo member;
@@ -307,11 +318,13 @@ void Analyzer::RecordClassMembers(const CPPGMAstNodePtr& node, const TypePtr& ty
 	{
 		ClassMemberInfo& member = type->class_members[i];
 		if (member.name.empty()) continue;
-		Binding* binding = class_scope->local(member.name);
-		if (binding)
+		for (size_t j = 0; j < class_scope->bindings.size(); ++j)
 		{
-			binding->member_owner = type;
-			binding->member_index = i;
+			Binding& binding = class_scope->bindings[j];
+			if (binding.name != member.name || binding.kind != BIND_VARIABLE) continue;
+			binding.is_member = true;
+			binding.member_owner = type;
+			binding.member_index = i;
 		}
 	}
 	(void)scope;

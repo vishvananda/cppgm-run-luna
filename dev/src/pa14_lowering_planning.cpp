@@ -32,12 +32,50 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
       arguments.push_back(Infer(argument_nodes[i], scope));
 
     CallChoice best;
-    if(DirectFunctionName(callee_node, scope)) {
-      const vector<Binding*> candidates = Lookup(callee_node->value, scope);
+    vector<Binding*> candidates;
+    bool direct = false;
+    bool explicit_member_object = false;
+    ExprInfo object_info;
+    if(callee_node->kind == "member-expression" && callee_node->children.size() >= 2) {
+      explicit_member_object = true;
+      object_info = Infer(callee_node->children[0], scope);
+      TypePtr object = expression_value_type(object_info);
+      if(PA12Operator(callee_node->value) == "->") {
+        if(!object || object->kind != TYPE_POINTER) throw logic_error("arrow requires a pointer to class");
+        object = type_value(object->child);
+      }
+      candidates = MemberBindings(object, callee_node->children[1]->value);
+      direct = true;
+    } else if(callee_node->kind == "id-expression") {
+      candidates = Lookup(callee_node->value, scope);
+      if(candidates.empty() && state_ && state_->record && state_->record->member_owner)
+        candidates = MemberBindings(state_->record->member_owner, callee_node->value);
+      for(size_t i = 0; i < candidates.size(); ++i)
+        if(candidates[i]->kind == BIND_FUNCTION && function_target_type(candidates[i]->type)) {
+          direct = true;
+          break;
+        }
+    }
+    if(direct) {
       for(size_t i = 0; i < candidates.size(); ++i) {
         Binding* binding = candidates[i];
         TypePtr function = function_target_type(binding->type);
         if(!function) continue;
+        const bool member = binding->is_member && binding->member_owner &&
+          binding->kind == BIND_FUNCTION;
+        const bool static_member = member && binding->is_static;
+        if(member && !static_member && !explicit_member_object) {
+          bool implicit_object = callee_node->kind == "id-expression" &&
+            callee_node->value.find("::") == string::npos;
+          if(!implicit_object && state_ && state_->record && state_->record->member_owner) {
+            TypePtr current = state_->record->member_owner;
+            while(current) {
+              if(current == binding->member_owner) { implicit_object = true; break; }
+              current = current->direct_base;
+            }
+          }
+          if(!implicit_object) continue;
+        }
         if(arguments.size() > function->parameters.size() && !function->variadic) continue;
         if(arguments.size() < function->parameters.size()) {
           bool defaults = true;
@@ -48,6 +86,20 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
         int worst = 0;
         int total = 0;
         bool viable = true;
+        if(member && !static_member) {
+          TypePtr object = expression_value_type(object_info);
+          if(!explicit_member_object) {
+            CPPGMAstNodePtr this_node(new CPPGMAstNode("keyword-literal", "KW_THIS:this"));
+            object_info = Infer(this_node, scope);
+            object = expression_value_type(object_info);
+          }
+          if(object && object->kind == TYPE_POINTER) object = type_value(object->child);
+          if(object && object->is_const && !function->function_const) viable = false;
+          const int object_rank = object && object->is_const ? 0 :
+            (function->function_const ? 1 : 0);
+          worst = max(worst, object_rank);
+          total += object_rank;
+        }
         for(size_t a = 0; a < arguments.size(); ++a) {
           const int rank = a < function->parameters.size() ?
             ConversionRank(arguments[a], function->parameters[a]) : 2;
@@ -60,7 +112,11 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
            (worst == best.worst && total < best.total)) {
           best.binding = binding;
           best.function = function;
+          best.object = explicit_member_object ? callee_node->children[0] :
+            CPPGMAstNodePtr(new CPPGMAstNode("keyword-literal", "KW_THIS:this"));
           best.direct = true;
+          best.member = member;
+          best.static_member = static_member;
           best.worst = worst;
           best.total = total;
         } else if(worst == best.worst && total == best.total &&
@@ -69,6 +125,8 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
         }
       }
       if(!best.binding) throw logic_error("no viable function");
+      FunctionRecord* selected = RecordForBinding(best.binding);
+      if(selected && selected->member) selected->needed = true;
       return best;
     }
 
@@ -141,9 +199,14 @@ string PA14Lowerer::parameter_name(const CPPGMAstNodePtr& declarator, size_t ind
 vector<string> PA14Lowerer::ParameterNames(const FunctionRecord& function) const
 {
     vector<string> result;
-    CPPGMAstNodePtr clause = function.node ? ChildOfKind(function.node->children[1], "parameter-clause") :
+    if(function.member && !function.static_member) result.push_back("this");
+    CPPGMAstNodePtr declarator;
+    if(function.node) declarator = function.constructor || function.destructor ?
+      ChildOfKind(function.node, "declarator") :
+      (function.node->children.size() > 1 ? function.node->children[1] : CPPGMAstNodePtr());
+    CPPGMAstNodePtr clause = declarator ? ChildOfKind(declarator, "parameter-clause") :
       CPPGMAstNodePtr();
-    size_t index = 0;
+    size_t index = function.member && !function.static_member ? 1 : 0;
     if(clause) {
       for(size_t i = 0; i < clause->children.size(); ++i) {
         CPPGMAstNodePtr parameter = clause->children[i];
@@ -153,7 +216,7 @@ vector<string> PA14Lowerer::ParameterNames(const FunctionRecord& function) const
       }
     }
     while(result.size() < function.type->parameters.size())
-      result.push_back("__param" + integer_text(static_cast<long long>(result.size())));
+      result.push_back("__param" + integer_text(static_cast<long long>(index++)));
     return result;
   }
 
@@ -323,10 +386,13 @@ void PA14Lowerer::PlanFunction(FunctionState& state)
       state.reserved_value_names.insert(names[i]);
     for(size_t i = 0; i < state.record->type->parameters.size(); ++i)
       AddVariablePlan(names[i], state.record->type->parameters[i], CPPGMAstNodePtr(), CPPGMAstNodePtr());
-    if(!state.record->node || state.record->node->children.size() < 3) return;
+    if(!state.record->node) return;
     Scope* scope = analyzer_.function_scopes_[state.record->node.get()];
     if(!scope) scope = state.record->scope;
-    PlanStatement(state.record->node->children[2], scope);
+    CPPGMAstNodePtr body = state.record->constructor || state.record->destructor ?
+      ChildOfKind(state.record->node, "compound-statement") :
+      (state.record->node->children.size() > 2 ? state.record->node->children[2] : CPPGMAstNodePtr());
+    if(body) PlanStatement(body, scope);
   }
 
 string PA14Lowerer::FunctionSymbolForBinding(Binding* binding, const TypePtr& fallback) const

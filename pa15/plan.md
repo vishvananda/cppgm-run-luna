@@ -252,3 +252,86 @@ the member-collection slice: bind ordinary and static members with their
 typed offsets/access facts, lower `this` plus `.`/`->` field access, and start
 emitting member-function declarations while preserving the completed layout
 behavior.
+
+## Turn 32 Checkpoint Scope
+
+The complete failure map above remains the authoritative grouping for this
+checkpoint.  This increment targets the member-collection group: extend the
+typed semantic bindings so class fields, static fields, and ordinary member
+functions retain their owning class, access, storage kind, and declaration;
+collect in-class and qualified out-of-class member definitions; lower `this`,
+direct `.` and `->` field lvalues using the completed layout offsets; and lower
+ordinary non-static member calls with an explicit hidden object pointer.  It
+also covers static member lookup/calls and cv-qualified overload selection
+based on the object expression.  The validation target is the direct-member
+and method subset of `tests/general`, plus the full PA15 local report, the
+through-PA14 report, and the source-file audit.  Constructors, recursive
+lifetime, inherited lookup, access diagnostics, and operator/ADL resolution
+remain grouped for subsequent checkpoints unless this implementation exposes
+them as required shared dependencies.
+
+## Turn 32 Checkpoint Result
+
+Completed.  The typed member facts are now carried from the PA11 semantic
+model into lowering: ordinary and static fields and member functions retain
+their owner, access, storage kind, declaration, and layout index; in-class
+and qualified out-of-class definitions are collected; `this`, implicit
+member lookup, `.`/`->` field lvalues, static access, base-subobject address
+adjustment, and hidden-object member calls are lowered.  Member overload
+selection accounts for the object's cv-qualification, and demand-driven
+member-function emission avoids emitting unused wrappers.
+
+The member collection work exposed the lifetime dependencies needed by this
+slice, so this checkpoint also includes typed constructor/destructor records,
+implicit special-member synthesis for supported subobjects, constructor
+mem-initializers/default member initializers, local object initialization,
+reverse-order local finalization, and recursive base/member destruction.
+
+The focused validation set passed, including:
+
+- `100-member-methods`, `100-out-of-class-methods`,
+  `100-qualified-const-method-definition`, and
+  `100-qualified-typedef-const-method-definition`;
+- `100-static-member-object-access`, `200-simple-class-member-object-access`,
+  `200-base-field-access`, and `200-protected-base-method`;
+- `200-member-call-implicit-object-cv-overload`,
+  `200-const-member-call-prefers-const-object-overload`, and
+  `200-const-subobject-member-call`;
+- `200-constructor-member-init`,
+  `200-constructor-overload-default-arg-nonfirst-argument`,
+  `100-default-member-initializer-class-member`,
+  `100-default-member-initializer-user-ctor`,
+  `200-local-class-direct-init-member-function`, and
+  `200-member-object-lifetime`.
+
+The required current-PA report is **46 / 200**, above the turn-start
+baseline of **26 / 200**.  The through-PA14 report remains clean at
+**819 / 819**, `git diff --check` is clean, and the PA15 source audit passes
+with only the repository's three existing header-division warnings.  No
+tests or reference fixtures were changed.
+
+## Turn 32 Remaining Work Map and Next Checkpoint
+
+The current report has **154 failures**.  They group into these shared
+behaviors:
+
+- aggregate, reference, array, bit-field, and default-member initialization,
+  including ordering and nontrivial subobject cases;
+- namespace-scope and static/thread-local object lifetime, dynamic startup,
+  and global constructor/destructor helper emission;
+- constructor policy details still missing for deleted/explicit/inherited
+  constructors and several derived/base conversion paths;
+- access, friend, nested-class, using-declaration, inherited lookup, and
+  typedef resolution diagnostics;
+- ordinary operator overload, ADL, callable-field, pointer/reference
+  conversion, and pseudo-destructor lowering;
+- trailing-return, `noexcept`, declaration metadata, and other parser/type
+  boundary cases.
+
+The next checkpoint covers the first two groups: complete aggregate and
+default-member initializer lowering for arrays, references, bit-fields, and
+nontrivial members, then connect the same typed plans to namespace-scope
+dynamic initialization and finalization.  Its validation is the matching
+`general/100` through `general/400` lifetime/initializer subset, the full
+PA15 report, the through-PA14 report, and the source audit.  Access/inherited
+lookup and operator/ADL groups remain queued after that checkpoint.
