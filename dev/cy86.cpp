@@ -101,18 +101,33 @@ static bool StartsWith(const string& value, const string& prefix)
 		value.compare(0, prefix.size(), prefix) == 0;
 }
 
-static int WidthSuffix(const string& value)
+static int ExactWidthSuffix(const string& value, const string& prefix,
+	bool allow_float80 = false)
 {
-	if (value.size() >= 2 && value[value.size() - 2] == '8' &&
-		value[value.size() - 1] == '0') return 80;
-	if (value.empty()) return 0;
-	const char last = value[value.size() - 1];
-	if (last == '8') return 8;
-	if (last == '6') return 16;
-	if (last == '2') return 32;
-	if (last == '4') return 64;
+	if (!StartsWith(value, prefix)) return 0;
+	const string suffix = value.substr(prefix.size());
+	if (suffix == "8") return 8;
+	if (suffix == "16") return 16;
+	if (suffix == "32") return 32;
+	if (suffix == "64") return 64;
+	if (allow_float80 && suffix == "80") return 80;
 	return 0;
 }
+
+static int ExactFloatWidthSuffix(const string& value, const string& prefix)
+{
+	if (!StartsWith(value, prefix)) return 0;
+	const string suffix = value.substr(prefix.size());
+	if (suffix == "32") return 32;
+	if (suffix == "64") return 64;
+	if (suffix == "80") return 80;
+	return 0;
+}
+
+enum CY86QuotedEncoding
+{
+	CY86_QUOTED_CHAR, CY86_QUOTED_UTF16, CY86_QUOTED_UTF32, CY86_QUOTED_WCHAR
+};
 
 struct Literal
 {
@@ -124,10 +139,13 @@ struct Literal
 	uint64_t bits;
 	long double real;
 	vector<unsigned char> bytes;
+	CY86QuotedEncoding string_encoding;
+	vector<int> string_values;
 
 	Literal()
 		: integral(false), floating(false), string_literal(false),
-		  signed_value(false), width(0), bits(0), real(0), bytes()
+		  signed_value(false), width(0), bits(0), real(0), bytes(),
+		  string_encoding(CY86_QUOTED_CHAR), string_values()
 	{}
 };
 
@@ -141,117 +159,237 @@ static int HexValue(char c)
 
 static bool IsOctal(char c) { return c >= '0' && c <= '7'; }
 
-static void AppendCodePoint(vector<unsigned char>* out, int value)
+static size_t CY86QuotedPrefix(const vector<int>& units,
+	CY86QuotedEncoding* encoding, bool* raw)
 {
-	if (value < 0 || value > 0x10ffff ||
-		(value >= 0xd800 && value <= 0xdfff))
-		throw logic_error("invalid character code point");
-	const string encoded = PostEncodeUTF8(value);
-	out->insert(out->end(), encoded.begin(), encoded.end());
+	*encoding = CY86_QUOTED_CHAR;
+	*raw = false;
+	if (units.empty()) return 0;
+	if (units[0] == 'u' && units.size() > 1 && units[1] == '8')
+	{
+		if (units.size() > 2 && units[2] == 'R') { *raw = true; return 3; }
+		return 2;
+	}
+	if (units[0] == 'u' || units[0] == 'U' || units[0] == 'L')
+	{
+		*encoding = units[0] == 'u' ? CY86_QUOTED_UTF16 :
+			(units[0] == 'U' ? CY86_QUOTED_UTF32 : CY86_QUOTED_WCHAR);
+		if (units.size() > 1 && units[1] == 'R') { *raw = true; return 2; }
+		return 1;
+	}
+	if (units[0] == 'R') { *raw = true; return 1; }
+	return 0;
 }
 
-static int ParseEscape(const string& source, size_t* position)
+static vector<int> CY86DecodeQuotedBody(const vector<int>& units,
+	size_t begin, size_t end)
 {
-	if (*position >= source.size()) throw logic_error("unterminated escape");
-	const char c = source[(*position)++];
-	switch (c)
+	vector<int> result;
+	for (size_t i = begin; i < end; ++i)
 	{
-	case '\\': return '\\';
-	case '\'': return '\'';
-	case '"': return '"';
-	case '?': return '?';
-	case 'a': return '\a';
-	case 'b': return '\b';
-	case 'f': return '\f';
-	case 'n': return '\n';
-	case 'r': return '\r';
-	case 't': return '\t';
-	case 'v': return '\v';
-	case 'x':
-	{
-		if (*position >= source.size() || HexValue(source[*position]) < 0)
-			throw logic_error("invalid hexadecimal escape");
-		int value = 0;
-		while (*position < source.size() && HexValue(source[*position]) >= 0)
-			value = value * 16 + HexValue(source[(*position)++]);
-		return value;
-	}
-	case 'u':
-	case 'U':
-	{
-		const size_t digits = c == 'u' ? 4 : 8;
-		if (*position + digits > source.size())
-			throw logic_error("truncated Unicode escape");
-		int value = 0;
-		for (size_t i = 0; i < digits; ++i)
+		if (units[i] != '\\')
 		{
-			const int digit = HexValue(source[(*position)++]);
-			if (digit < 0) throw logic_error("invalid Unicode escape");
-			value = value * 16 + digit;
+			result.push_back(units[i]);
+			continue;
 		}
-		return value;
-	}
-	default:
-		if (!IsOctal(c)) throw logic_error("invalid escape");
-	{
-		int value = c - '0';
-		int count = 1;
-		while (count < 3 && *position < source.size() &&
-			IsOctal(source[*position]))
+		if (++i >= end) throw logic_error("invalid escape");
+		const int next = units[i];
+		switch (next)
 		{
-			value = value * 8 + source[(*position)++] - '0';
-			++count;
+		case '\'': result.push_back('\''); continue;
+		case '"': result.push_back('"'); continue;
+		case '?': result.push_back('?'); continue;
+		case '\\': result.push_back('\\'); continue;
+		case 'a': result.push_back('\a'); continue;
+		case 'b': result.push_back('\b'); continue;
+		case 'f': result.push_back('\f'); continue;
+		case 'n': result.push_back('\n'); continue;
+		case 'r': result.push_back('\r'); continue;
+		case 't': result.push_back('\t'); continue;
+		case 'v': result.push_back('\v'); continue;
+		case 'u':
+		case 'U':
+		{
+			const size_t digits = next == 'u' ? 4 : 8;
+			if (i + digits >= end) throw logic_error("invalid Unicode escape");
+			int value = 0;
+			for (size_t j = 0; j < digits; ++j)
+			{
+				const int digit = HexValue(static_cast<char>(units[++i]));
+				if (digit < 0) throw logic_error("invalid Unicode escape");
+				value = value * 16 + digit;
+			}
+			result.push_back(value);
+			continue;
 		}
-		return value;
+		case 'x':
+		{
+			if (i + 1 >= end || HexValue(static_cast<char>(units[i + 1])) < 0)
+				throw logic_error("invalid hexadecimal escape");
+			int value = 0;
+			while (i + 1 < end &&
+				HexValue(static_cast<char>(units[i + 1])) >= 0)
+				value = value * 16 + HexValue(static_cast<char>(units[++i]));
+			result.push_back(value);
+			continue;
+		}
+		default:
+			if (!IsOctal(static_cast<char>(next))) throw logic_error("invalid escape");
+		{
+			int value = next - '0';
+			for (int count = 1; count < 3 && i + 1 < end &&
+				IsOctal(static_cast<char>(units[i + 1])); ++count)
+				value = value * 8 + (units[++i] - '0');
+			result.push_back(value);
+		}
+		}
 	}
+	for (size_t i = 0; i < result.size(); ++i)
+		if (!PostIsValidCodePoint(result[i]))
+			throw logic_error("invalid literal code point");
+	return result;
+}
+
+static void CY86AppendLittleEndian(vector<unsigned char>* bytes,
+	unsigned long long value, size_t width)
+{
+	for (size_t i = 0; i < width; ++i)
+	{
+		bytes->push_back(static_cast<unsigned char>(value & 0xff));
+		value >>= 8;
 	}
 }
 
-static Literal ParseQuotedLiteral(const string& source, bool character)
+static vector<unsigned char> CY86EncodeStringValues(
+	const vector<int>& values, CY86QuotedEncoding encoding)
 {
-	Literal result;
-	result.integral = character;
-	result.string_literal = !character;
-	result.width = character ? 1 : 1;
+	const size_t width = encoding == CY86_QUOTED_CHAR ? 1 :
+		(encoding == CY86_QUOTED_UTF16 ? 2 : 4);
+	vector<unsigned char> result;
+	for (size_t i = 0; i < values.size(); ++i)
+	{
+		const unsigned long long value = static_cast<unsigned long long>(values[i]);
+		if (encoding == CY86_QUOTED_CHAR)
+		{
+			const string encoded = PostEncodeUTF8(values[i]);
+			result.insert(result.end(), encoded.begin(), encoded.end());
+		}
+		else if (encoding == CY86_QUOTED_UTF16 && values[i] > 0xffff)
+		{
+			const unsigned long long adjusted = value - 0x10000;
+			CY86AppendLittleEndian(&result, 0xd800 + (adjusted >> 10), 2);
+			CY86AppendLittleEndian(&result, 0xdc00 + (adjusted & 0x3ff), 2);
+		}
+		else CY86AppendLittleEndian(&result, value, width);
+	}
+	CY86AppendLittleEndian(&result, 0, width);
+	return result;
+}
 
-	const size_t quote = source.find(character ? '\'' : '"');
-	if (quote == string::npos) throw logic_error("invalid quoted literal");
-
-	// Raw strings are useful in the common CY86 headers and cost little to
-	// support here.  Their delimiter is copied without escape processing.
-	const bool raw = quote > 0 && source[quote - 1] == 'R';
+static Literal ParseQuotedLiteralPA2(const string& source, bool character)
+{
+	const vector<int> units = PostDecodeUTF8(source);
+	CY86QuotedEncoding encoding;
+	bool raw = false;
+	const size_t quote = CY86QuotedPrefix(units, &encoding, &raw);
+	if (character && quote == 2)
+		throw logic_error("UTF-8 character literal is not supported");
+	if (quote >= units.size() || units[quote] != (character ? '\'' : '"'))
+		throw logic_error("invalid quoted literal");
 	vector<int> values;
 	if (raw)
 	{
-		const size_t open = source.find('(', quote + 1);
-		if (open == string::npos) throw logic_error("invalid raw literal");
-		const string delimiter = source.substr(quote + 1, open - quote - 1);
-		const string close = ")" + delimiter + (character ? "'" : "\"");
-		const size_t end = source.find(close, open + 1);
-		if (end == string::npos) throw logic_error("unterminated raw literal");
-		for (size_t i = open + 1; i < end; ++i)
-			values.push_back(static_cast<unsigned char>(source[i]));
+		if (character) throw logic_error("raw character literal is not supported");
+		size_t open = quote + 1;
+		while (open < units.size() && units[open] != '(') ++open;
+		if (open >= units.size()) throw logic_error("invalid raw literal");
+		const size_t delimiter_begin = quote + 1;
+		const size_t delimiter_length = open - delimiter_begin;
+		size_t body_end = units.size();
+		for (size_t close = open + 1; close < units.size(); ++close)
+		{
+			if (units[close] != ')') continue;
+			if (close + delimiter_length + 1 >= units.size() ||
+				units[close + delimiter_length + 1] != '"') continue;
+			bool match = true;
+			for (size_t i = 0; i < delimiter_length; ++i)
+				if (units[close + 1 + i] != units[delimiter_begin + i]) match = false;
+			if (match) { body_end = close; break; }
+		}
+		if (body_end == units.size()) throw logic_error("unterminated raw literal");
+		values.assign(units.begin() + open + 1, units.begin() + body_end);
 	}
 	else
 	{
-		for (size_t i = quote + 1; i < source.size();)
+		size_t body_end = units.size();
+		for (size_t i = quote + 1; i < units.size(); ++i)
 		{
-			const char c = source[i++];
-			if (c == (character ? '\'' : '"')) break;
-			if (c == '\\') values.push_back(ParseEscape(source, &i));
-			else values.push_back(static_cast<unsigned char>(c));
+			if (units[i] == '\\') { ++i; continue; }
+			if (units[i] == (character ? '\'' : '"'))
+			{
+				body_end = i;
+				break;
+			}
 		}
+		if (body_end == units.size()) throw logic_error("unterminated quoted literal");
+		values = CY86DecodeQuotedBody(units, quote + 1, body_end);
 	}
+	Literal result;
 	if (character)
 	{
 		if (values.size() != 1) throw logic_error("invalid character literal");
-		result.bits = static_cast<uint64_t>(values[0]);
-		result.signed_value = values[0] <= 127;
+		const int value = values[0];
+		if (encoding == CY86_QUOTED_CHAR)
+		{
+			result.width = value <= 127 ? 1 : 4;
+			result.signed_value = true;
+		}
+		else if (encoding == CY86_QUOTED_UTF16)
+		{
+			if (value > 0xffff) throw logic_error("character does not fit char16_t");
+			result.width = 2;
+			result.signed_value = false;
+		}
+		else
+		{
+			result.width = 4;
+			result.signed_value = encoding == CY86_QUOTED_WCHAR;
+		}
+		result.integral = true;
+		result.bits = static_cast<uint64_t>(value);
 		return result;
 	}
-	for (size_t i = 0; i < values.size(); ++i)
-		AppendCodePoint(&result.bytes, values[i]);
-	result.bytes.push_back(0);
+	result.string_literal = true;
+	result.string_encoding = encoding;
+	result.string_values = values;
+	result.width = encoding == CY86_QUOTED_CHAR ? 1 :
+		(encoding == CY86_QUOTED_UTF16 ? 2 : 4);
+	result.bytes = CY86EncodeStringValues(values, encoding);
+	return result;
+}
+
+static Literal ConcatenateStringLiterals(const vector<Literal>& parts)
+{
+	if (parts.empty()) throw logic_error("empty string literal sequence");
+	CY86QuotedEncoding encoding = CY86_QUOTED_CHAR;
+	for (size_t i = 0; i < parts.size(); ++i)
+	{
+		if (parts[i].string_encoding == CY86_QUOTED_CHAR) continue;
+		if (encoding != CY86_QUOTED_CHAR && encoding != parts[i].string_encoding)
+			throw logic_error("incompatible string literal encodings");
+		encoding = parts[i].string_encoding;
+	}
+	vector<int> values;
+	for (size_t i = 0; i < parts.size(); ++i)
+		values.insert(values.end(), parts[i].string_values.begin(),
+			parts[i].string_values.end());
+	Literal result;
+	result.string_literal = true;
+	result.string_encoding = encoding;
+	result.string_values = values;
+	result.width = encoding == CY86_QUOTED_CHAR ? 1 :
+		(encoding == CY86_QUOTED_UTF16 ? 2 : 4);
+	result.bytes = CY86EncodeStringValues(values, encoding);
 	return result;
 }
 
@@ -326,24 +464,63 @@ static Literal ParseNumberLiteral(const string& source)
 		throw logic_error("invalid integer literal");
 	bool unsig = false;
 	int longs = 0;
-	for (size_t i = 0; i < suffix.size(); ++i)
+	size_t suffix_position = 0;
+	if (suffix_position < suffix.size() &&
+		(suffix[suffix_position] == 'u' || suffix[suffix_position] == 'U'))
 	{
-		if (suffix[i] == 'u' || suffix[i] == 'U') unsig = true;
-		else if (suffix[i] == 'l' || suffix[i] == 'L') ++longs;
-		else throw logic_error("invalid integer suffix");
+		unsig = true;
+		++suffix_position;
 	}
-	if (longs > 2) throw logic_error("invalid integer suffix");
+	if (suffix_position < suffix.size() &&
+		(suffix[suffix_position] == 'l' || suffix[suffix_position] == 'L'))
+	{
+		const char mark = suffix[suffix_position++];
+		longs = 1;
+		if (suffix_position < suffix.size() && suffix[suffix_position] == mark)
+		{
+			++suffix_position;
+			longs = 2;
+		}
+	}
+	if (!unsig && suffix_position < suffix.size() &&
+		(suffix[suffix_position] == 'u' || suffix[suffix_position] == 'U'))
+	{
+		unsig = true;
+		++suffix_position;
+	}
+	if (suffix_position != suffix.size()) throw logic_error("invalid integer suffix");
 	result.integral = true;
 	result.bits = value;
-	if (unsig)
+	if (unsig && longs == 0 && value <= 0xffffffffULL)
 	{
-		result.width = longs == 0 && value <= 0xffffffffULL ? 4 : 8;
+		result.width = 4;
 		result.signed_value = false;
 	}
-	else if (longs > 0)
+	else if (unsig)
 	{
 		result.width = 8;
+		result.signed_value = false;
+	}
+	else if (longs == 2)
+	{
+		if (value > 0x7fffffffffffffffULL)
+			throw logic_error("integer literal is out of range");
+		result.width = 8;
 		result.signed_value = true;
+	}
+	else if (longs == 1)
+	{
+		if (value <= 0x7fffffffffffffffULL)
+		{
+			result.width = 8;
+			result.signed_value = true;
+		}
+		else if (base != 10)
+		{
+			result.width = 8;
+			result.signed_value = false;
+		}
+		else throw logic_error("integer literal is out of range");
 	}
 	else if (value <= 0x7fffffffULL)
 	{
@@ -357,8 +534,9 @@ static Literal ParseNumberLiteral(const string& source)
 	}
 	else
 	{
+		if (base == 10) throw logic_error("integer literal is out of range");
 		result.width = 8;
-		result.signed_value = value <= 0x7fffffffffffffffULL;
+		result.signed_value = false;
 	}
 	result.bits &= MaskForWidth(result.width * 8);
 	return result;
@@ -370,9 +548,9 @@ static Literal ParseLiteral(const PostPPToken& token, bool negative = false)
 	if (token.kind == POST_PP_USER_CHARACTER || token.kind == POST_PP_USER_STRING)
 		throw logic_error("user-defined literals are not valid in CY86");
 	if (token.kind == POST_PP_CHARACTER)
-		result = ParseQuotedLiteral(token.source, true);
+		result = ParseQuotedLiteralPA2(token.source, true);
 	else if (token.kind == POST_PP_STRING)
-		result = ParseQuotedLiteral(token.source, false);
+		result = ParseQuotedLiteralPA2(token.source, false);
 	else if (token.kind == POST_PP_NUMBER)
 		result = ParseNumberLiteral(token.source);
 	else throw logic_error("expected CY86 literal");
@@ -458,6 +636,28 @@ static RegisterDesc GetRegister(const string& name)
 	return RegisterDesc();
 }
 
+static bool IsReservedKeyword(const string& name)
+{
+	static const set<string> keywords = {
+		"alignas", "alignof", "asm", "auto", "bool", "break", "case",
+		"catch", "char", "char16_t", "char32_t", "class", "const",
+		"constexpr", "const_cast", "continue", "decltype", "default",
+		"delete", "do", "double", "dynamic_cast", "else", "enum",
+		"explicit", "export", "extern", "false", "float", "for",
+		"friend", "goto", "if", "inline", "int", "long", "mutable",
+		"namespace", "new", "noexcept", "nullptr", "operator", "private",
+		"protected", "public", "register", "reinterpret_cast", "return",
+		"short", "signed", "sizeof", "static", "static_assert",
+		"static_cast", "struct", "switch", "template", "this",
+		"thread_local", "throw", "true", "try", "typedef", "typeid",
+		"typename", "union", "unsigned", "using", "virtual", "void",
+		"volatile", "wchar_t", "while", "and", "and_eq", "bitand",
+		"bitor", "compl", "not", "not_eq", "or", "or_eq", "xor",
+		"xor_eq"
+	};
+	return keywords.find(name) != keywords.end();
+}
+
 enum ExprKind { EXPR_LITERAL, EXPR_LABEL, EXPR_REGISTER };
 
 struct Expr
@@ -491,11 +691,10 @@ struct LabelInfo
 	bool defined;
 	bool assigned;
 	bool code;
-	size_t code_index;
 	uint64_t address;
 
 	LabelInfo()
-		: defined(false), assigned(false), code(false), code_index(0), address(0)
+		: defined(false), assigned(false), code(false), address(0)
 	{}
 };
 
@@ -542,110 +741,137 @@ static OpInfo DescribeOpcode(const string& opcode)
 	{
 		result.family = F_CALL; result.width = 64; result.count = 1; return result;
 	}
-	if (StartsWith(opcode, "data") && WidthSuffix(opcode) != 0)
+	const int data_width = ExactWidthSuffix(opcode, "data");
+	if (data_width != 0)
 	{
-		result.family = F_DATA; result.width = WidthSuffix(opcode);
+		result.family = F_DATA; result.width = data_width;
 		result.count = 1; return result;
 	}
-	if (StartsWith(opcode, "move") && WidthSuffix(opcode) != 0)
+	const int move_width = ExactWidthSuffix(opcode, "move", true);
+	if (move_width != 0)
 	{
-		result.family = F_MOVE; result.width = WidthSuffix(opcode);
+		result.family = F_MOVE; result.width = move_width;
 		result.count = 2; return result;
 	}
-	if (StartsWith(opcode, "not") && WidthSuffix(opcode) != 0)
+	const int not_width = ExactWidthSuffix(opcode, "not");
+	if (not_width != 0)
 	{
-		result.family = F_NOT; result.width = WidthSuffix(opcode);
+		result.family = F_NOT; result.width = not_width;
 		result.count = 2; return result;
 	}
 	const char* logic_names[] = {"and", "or", "xor"};
 	for (size_t i = 0; i < sizeof(logic_names) / sizeof(logic_names[0]); ++i)
-		if (StartsWith(opcode, logic_names[i]) && WidthSuffix(opcode) != 0)
+	{
+		const int width = ExactWidthSuffix(opcode, logic_names[i]);
+		if (width != 0)
 		{
-			result.family = F_LOGIC; result.width = WidthSuffix(opcode);
+			result.family = F_LOGIC; result.width = width;
 			result.count = 3; return result;
 		}
-	if ((StartsWith(opcode, "lshift") || StartsWith(opcode, "srshift") ||
-		StartsWith(opcode, "urshift")) && WidthSuffix(opcode) != 0)
+	}
+	const int lshift_width = ExactWidthSuffix(opcode, "lshift");
+	const int srshift_width = ExactWidthSuffix(opcode, "srshift");
+	const int urshift_width = ExactWidthSuffix(opcode, "urshift");
+	if (lshift_width != 0 || srshift_width != 0 || urshift_width != 0)
 	{
-		result.family = F_SHIFT; result.width = WidthSuffix(opcode);
-		result.count = 3; result.signed_op = StartsWith(opcode, "srshift");
+		result.family = F_SHIFT;
+		result.width = lshift_width != 0 ? lshift_width :
+			srshift_width != 0 ? srshift_width : urshift_width;
+		result.count = 3; result.signed_op = srshift_width != 0;
 		return result;
 	}
-	const size_t to_float = opcode.find("convf80");
-	if (to_float != string::npos && to_float > 0)
+	const string to_float_suffix = "convf80";
+	const size_t to_float = opcode.find(to_float_suffix);
+	if (to_float != string::npos && to_float > 0 &&
+		to_float + to_float_suffix.size() == opcode.size())
 	{
 		const string prefix = opcode.substr(0, to_float);
 		if (prefix.size() < 2) throw logic_error("invalid conversion opcode");
+		const char kind = prefix[0];
+		const int source_width = ExactWidthSuffix(prefix, string(1, kind));
+		if ((kind != 's' && kind != 'u' && kind != 'f') ||
+			source_width == 0 || (kind == 'f' && source_width != 32 &&
+				source_width != 64))
+			throw logic_error("invalid conversion opcode");
 		result.family = F_TO_FLOAT;
-		result.source_width = WidthSuffix(prefix);
+		result.source_width = source_width;
 		result.width = 80;
 		result.count = 2;
-		result.signed_op = prefix[0] == 's';
-		if (prefix[0] != 's' && prefix[0] != 'u' && prefix[0] != 'f')
-			throw logic_error("invalid conversion opcode");
-		if (prefix[0] == 'f') result.signed_op = false;
+		result.signed_op = kind == 's';
 		return result;
 	}
 	if (StartsWith(opcode, "f80conv"))
 	{
 		const string suffix = opcode.substr(7);
 		if (suffix.size() < 2) throw logic_error("invalid conversion opcode");
+		const char kind = suffix[0];
+		const int destination_width = ExactWidthSuffix(suffix, string(1, kind));
+		if ((kind != 's' && kind != 'u' && kind != 'f') ||
+			destination_width == 0 || (kind == 'f' && destination_width != 32 &&
+				destination_width != 64))
+			throw logic_error("invalid conversion opcode");
 		result.family = F_FROM_FLOAT;
 		result.source_width = 80;
-		result.width = WidthSuffix(suffix);
+		result.width = destination_width;
 		result.count = 2;
-		result.signed_op = suffix[0] == 's';
-		if (suffix[0] != 's' && suffix[0] != 'u' && suffix[0] != 'f')
-			throw logic_error("invalid conversion opcode");
-		if (suffix[0] == 'f') result.signed_op = false;
+		result.signed_op = kind == 's';
 		return result;
 	}
 	const char* int_arith[] = {"iadd", "isub", "smul", "umul", "sdiv",
 		"udiv", "smod", "umod"};
 	for (size_t i = 0; i < sizeof(int_arith) / sizeof(int_arith[0]); ++i)
-		if (StartsWith(opcode, int_arith[i]) && WidthSuffix(opcode) != 0)
+	{
+		const int width = ExactWidthSuffix(opcode, int_arith[i]);
+		if (width != 0)
 		{
-			result.family = F_INT_ARITH; result.width = WidthSuffix(opcode);
+			result.family = F_INT_ARITH; result.width = width;
 			result.count = 3;
 			result.signed_op = int_arith[i][0] == 's';
 			return result;
 		}
+	}
 	const char* float_arith[] = {"fadd", "fsub", "fmul", "fdiv"};
 	for (size_t i = 0; i < sizeof(float_arith) / sizeof(float_arith[0]); ++i)
-		if (StartsWith(opcode, float_arith[i]) && WidthSuffix(opcode) != 0)
+	{
+		const int width = ExactFloatWidthSuffix(opcode, float_arith[i]);
+		if (width != 0)
 		{
-			result.family = F_FLOAT_ARITH; result.width = WidthSuffix(opcode);
+			result.family = F_FLOAT_ARITH; result.width = width;
 			result.count = 3; return result;
 		}
+	}
 	const char* int_compare[] = {"ieq", "ine", "slt", "ult", "sgt", "ugt",
 		"sle", "ule", "sge", "uge"};
 	const char* int_conditions[] = {"e", "ne", "l", "b", "g", "a", "le", "be", "ge", "ae"};
 	for (size_t i = 0; i < sizeof(int_compare) / sizeof(int_compare[0]); ++i)
-		if (StartsWith(opcode, int_compare[i]) && WidthSuffix(opcode) != 0)
+	{
+		const int width = ExactWidthSuffix(opcode, int_compare[i]);
+		if (width != 0)
 		{
-			result.family = F_INT_COMPARE; result.width = WidthSuffix(opcode);
+			result.family = F_INT_COMPARE; result.width = width;
 			result.count = 3; result.condition = int_conditions[i];
 			return result;
 		}
+	}
 	const char* float_compare[] = {"feq", "fne", "flt", "fgt", "fle", "fge"};
 	const char* float_conditions[] = {"e", "ne", "b", "a", "be", "ae"};
 	for (size_t i = 0; i < sizeof(float_compare) / sizeof(float_compare[0]); ++i)
-		if (StartsWith(opcode, float_compare[i]) && WidthSuffix(opcode) != 0)
+	{
+		const int width = ExactFloatWidthSuffix(opcode, float_compare[i]);
+		if (width != 0)
 		{
-			result.family = F_FLOAT_COMPARE; result.width = WidthSuffix(opcode);
+			result.family = F_FLOAT_COMPARE; result.width = width;
 			result.count = 3; result.condition = float_conditions[i];
 			return result;
 		}
+	}
 	if (StartsWith(opcode, "syscall"))
 	{
 		const string number = opcode.substr(7);
-		if (number.empty()) throw logic_error("invalid syscall opcode");
-		char* end = NULL;
-		const long n = strtol(number.c_str(), &end, 10);
-		if (*end != '\0' || n < 0 || n > 6)
+		if (number.size() != 1 || number[0] < '0' || number[0] > '6')
 			throw logic_error("invalid syscall opcode");
 		result.family = F_SYSCALL; result.width = 64;
-		result.count = static_cast<int>(n) + 2;
+		result.count = static_cast<int>(number[0] - '0') + 2;
 		return result;
 	}
 	throw logic_error("unknown CY86 opcode: " + opcode);
@@ -701,8 +927,13 @@ public:
 				bool negative = false;
 				if (Peek().source == "-") { negative = true; ++position_; }
 				statement.static_literal = true;
-				statement.literal = ParseLiteral(Peek(), negative);
-				++position_;
+				if (!negative && Peek().kind == POST_PP_STRING)
+					statement.literal = ParseStringSequence();
+				else
+				{
+					statement.literal = ParseLiteral(Peek(), negative);
+					++position_;
+				}
 			}
 			else if (IsIdentifier(Peek()))
 			{
@@ -744,9 +975,21 @@ private:
 			token.kind == POST_PP_USER_STRING;
 	}
 
+	Literal ParseStringSequence()
+	{
+		vector<Literal> parts;
+		while (Peek().kind == POST_PP_STRING)
+		{
+			parts.push_back(ParseLiteral(Peek()));
+			++position_;
+		}
+		return ConcatenateStringLiterals(parts);
+	}
+
 	void DefineLabel(const string& name)
 	{
-		if (GetRegister(name).valid || IsKnownOpcode(name))
+		if (IsReservedKeyword(name) || GetRegister(name).valid ||
+			IsKnownOpcode(name))
 			throw logic_error("label collides with CY86 name: " + name);
 		LabelInfo& info = (*labels_)[name];
 		if (info.defined) throw logic_error("duplicate CY86 label: " + name);
@@ -816,6 +1059,8 @@ private:
 			else result = ParsePrimary(false);
 			if (Peek().source == "+" || Peek().source == "-")
 			{
+				if (result.kind != EXPR_LABEL)
+					throw logic_error("immediate offset requires a label");
 				const bool minus = Peek().source == "-";
 				++position_;
 				if (!IsLiteral(Peek())) throw logic_error("expected immediate offset");
@@ -840,6 +1085,9 @@ private:
 			result.expr = ParsePrimary(true);
 			if (Peek().source == "+" || Peek().source == "-")
 			{
+				if (result.expr.kind != EXPR_REGISTER &&
+					result.expr.kind != EXPR_LABEL)
+					throw logic_error("memory offset requires a register or label");
 				const bool minus = Peek().source == "-";
 				++position_;
 				if (!IsLiteral(Peek())) throw logic_error("expected memory offset");
@@ -905,7 +1153,8 @@ class Compiler
 public:
 	Compiler(const vector<PostPPToken>& tokens)
 		: labels_(), statements_(), data_relocations_(), relocations_(),
-		  internal_labels_(), image_(), first_statement_address_(0),
+		  internal_labels_(), internal_label_serial_(0), image_(),
+		  first_statement_address_(0),
 		  first_statement_seen_(false)
 	{
 		Parser parser(tokens, &labels_);
@@ -971,6 +1220,7 @@ private:
 	vector<DataRelocation> data_relocations_;
 	vector<Relocation> relocations_;
 	map<string, size_t> internal_labels_;
+	unsigned long internal_label_serial_;
 	vector<unsigned char> image_;
 	uint64_t first_statement_address_;
 	bool first_statement_seen_;
@@ -1100,7 +1350,6 @@ private:
 	void LayoutData()
 	{
 		image_.assign(ELF_PREFIX_SIZE, 0);
-		size_t code_index = 0;
 		for (size_t i = 0; i < statements_.size(); ++i)
 		{
 			Statement& statement = statements_[i];
@@ -1114,9 +1363,7 @@ private:
 				for (size_t j = 0; j < statement.labels.size(); ++j)
 				{
 					labels_[statement.labels[j]].code = true;
-					labels_[statement.labels[j]].code_index = code_index;
 				}
-				++code_index;
 			}
 		}
 
@@ -1128,7 +1375,8 @@ private:
 				EncodeStaticLiteral(statement.literal).size() :
 				static_cast<size_t>(statement.info.width / 8);
 			const size_t alignment = statement.static_literal ?
-				(statement.literal.string_literal ? 1 : width) : width;
+				(statement.literal.string_literal ?
+					static_cast<size_t>(statement.literal.width) : width) : width;
 			Align(&image_, max<size_t>(1, alignment));
 			statement.data_offset = image_.size();
 			AssignDataLabels(statement,
@@ -1165,11 +1413,6 @@ private:
 	}
 
 	void Put8(unsigned int value) { image_.push_back(static_cast<unsigned char>(value)); }
-
-	void Put16(uint16_t value)
-	{
-		Put8(value); Put8(value >> 8);
-	}
 
 	void Put32(uint32_t value)
 	{
@@ -1385,6 +1628,16 @@ private:
 				literal.bytes.empty() ? 0 : literal.bytes.size() - 1);
 			for (size_t i = 0; i < count && i < 8; ++i)
 				value |= static_cast<uint64_t>(literal.bytes[i]) << (8 * i);
+			return value;
+		}
+		if (literal.floating)
+		{
+			const vector<unsigned char> bytes = EncodeFloating(literal);
+			uint64_t value = 0;
+			const size_t count = min<size_t>(static_cast<size_t>(width / 8),
+				min<size_t>(bytes.size(), 8));
+			for (size_t i = 0; i < count; ++i)
+				value |= static_cast<uint64_t>(bytes[i]) << (8 * i);
 			return value;
 		}
 		if (!literal.integral)
@@ -1792,9 +2045,8 @@ private:
 
 	string NewInternalLabel()
 	{
-		static unsigned long serial = 0;
 		ostringstream stream;
-		stream << "@cy86_internal_" << serial++;
+		stream << "@cy86_internal_" << internal_label_serial_++;
 		return stream.str();
 	}
 
@@ -1829,7 +2081,6 @@ private:
 
 	void EmitCode()
 	{
-		size_t code_index = 0;
 		for (size_t i = 0; i < statements_.size(); ++i)
 		{
 			Statement& statement = statements_[i];
@@ -1848,9 +2099,7 @@ private:
 			{
 				throw logic_error(statement.opcode + ": " + exception.what());
 			}
-			++code_index;
 		}
-		(void)code_index;
 	}
 
 	uint64_t RelocationTarget(const string& target) const
@@ -1913,25 +2162,10 @@ private:
 
 } // namespace cy86
 
-static bool HasBatchStdinArg(int argc, char** argv)
-{
-	for (int i = 1; i < argc; ++i)
-		if (string(argv[i]) == "--batch-stdin") return true;
-	return false;
-}
-
-static int RunNotImplementedBatchMode()
-{
-	string line;
-	while (getline(cin, line)) cout << "EXIT_NOT_IMPLEMENTED" << endl;
-	return EXIT_SUCCESS;
-}
-
 int main(int argc, char** argv)
 {
 	try
 	{
-		if (HasBatchStdinArg(argc, argv)) return RunNotImplementedBatchMode();
 		string outfile;
 		vector<string> source_files;
 		for (int i = 1; i < argc; ++i)
