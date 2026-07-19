@@ -268,6 +268,7 @@ PA14Lowerer::VariablePlan* PA14Lowerer::AddVariablePlan(const string& name, cons
     plan.type = type;
     plan.declarator = declarator;
     plan.initializer = initializer;
+    plan.global = 0;
     if(declarator) state_->plans[declarator.get()] = &plan;
     if(state_->environments.empty()) state_->environments.push_back(map<string, VariablePlan*>());
     state_->environments.back()[name] = &plan;
@@ -425,6 +426,7 @@ PA14Lowerer::VariablePlan* PA14Lowerer::LocalForName(const string& name) const
 
 string PA14Lowerer::StorageForVariable(const VariablePlan& variable) const
 {
+    if(variable.global) return "@" + variable.global->symbol;
     return "$" + variable.slot_name;
   }
 

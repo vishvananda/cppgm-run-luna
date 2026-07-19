@@ -107,7 +107,14 @@ PA14Lowerer::Value PA14Lowerer::EmitIdentifier(const CPPGMAstNodePtr& node, Scop
       member->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("identifier", binding->name)));
       ExprInfo member_info = InferMember(member, scope);
       result.type = member_info.type;
-      result.operand = emit_load(EmitMemberAddress(member, scope), result.type);
+      const string address = EmitMemberAddress(member, scope);
+      if(IsBitField(binding)) {
+        TypePtr read_type = expected ? type_value(expected) : result.type;
+        result = EmitBitFieldLoad(binding, address, read_type,
+          static_cast<bool>(expected));
+      }
+      else
+        result.operand = emit_load(address, result.type);
       result.lvalue = false;
       return result;
     }
@@ -183,12 +190,115 @@ PA14Lowerer::Value PA14Lowerer::EmitUnary(const CPPGMAstNodePtr& node, Scope* sc
     return result;
   }
 
+PA14Lowerer::Value PA14Lowerer::EmitBitFieldLoad(Binding* binding, const string& address,
+                                      const TypePtr& type, bool copy_result)
+{
+    long long bit_offset = 0;
+    long long bit_width = 0;
+    if(!IsBitField(binding, &bit_offset, &bit_width)) {
+      Value result;
+      result.type = type;
+      result.operand = emit_load(address, type);
+      return result;
+    }
+    const string low = low_type(type);
+    const unsigned int bits = static_cast<unsigned int>(max<size_t>(1, type_size(type)) * 8);
+    const unsigned long long mask = bit_width >= 64 ? ~0ULL :
+      ((1ULL << static_cast<unsigned int>(bit_width)) - 1ULL);
+    const string loaded = emit_load(address, type);
+    const string masked = new_temp();
+    AddInstruction(masked + " = binary and " + low + " " + loaded + ", " +
+      integer_text(static_cast<long long>(mask)));
+    string operand = masked;
+    if(bit_offset != 0) {
+      const string shifted = new_temp();
+      AddInstruction(shifted + " = binary shr " + low + " " + masked + ", " +
+        integer_text(bit_offset));
+      operand = shifted;
+    }
+    Value result;
+    result.type = type;
+    result.operand = operand;
+    if(copy_result) {
+      const string copied = new_temp();
+      AddInstruction(copied + " = copy " + low + " " + operand);
+      result.operand = copied;
+    }
+    (void)bits;
+    return result;
+  }
+
+string PA14Lowerer::PrepareBitFieldValue(Binding* binding, const TypePtr& type,
+                                          const string& value)
+{
+    long long bit_offset = 0;
+    long long bit_width = 0;
+    if(!IsBitField(binding, &bit_offset, &bit_width)) return value;
+    const string low = low_type(type);
+    const unsigned long long field_mask = bit_width >= 64 ? ~0ULL :
+      ((1ULL << static_cast<unsigned int>(bit_width)) - 1ULL);
+    const string masked = new_temp();
+    AddInstruction(masked + " = binary and " + low + " " +
+      integer_text(static_cast<long long>(field_mask)) + ", " + value);
+    if(bit_offset == 0) return masked;
+    const string shifted = new_temp();
+    AddInstruction(shifted + " = binary shl " + low + " " + masked + ", " +
+      integer_text(bit_offset));
+    return shifted;
+  }
+
+string PA14Lowerer::MergeBitFieldValue(Binding* binding, const string& address,
+                                        const TypePtr& type, const string& value,
+                                        bool preserve)
+{
+    long long bit_offset = 0;
+    long long bit_width = 0;
+    if(!IsBitField(binding, &bit_offset, &bit_width)) return value;
+    if(!preserve) return value;
+    const string low = low_type(type);
+    const unsigned int bits = static_cast<unsigned int>(max<size_t>(1, type_size(type)) * 8);
+    const unsigned long long field_mask = bit_width >= 64 ? ~0ULL :
+      ((1ULL << static_cast<unsigned int>(bit_width)) - 1ULL);
+    const unsigned long long shifted_mask = bit_offset >= 64 ? 0ULL :
+      (field_mask << static_cast<unsigned int>(bit_offset));
+    const string old = emit_load(address, type);
+    const unsigned long long full_mask = bits >= 64 ? ~0ULL : ((1ULL << bits) - 1ULL);
+    const string retained = new_temp();
+    AddInstruction(retained + " = binary and " + low + " " + old + ", " +
+      integer_text(static_cast<long long>(full_mask ^ shifted_mask)));
+    const string prepared = PrepareBitFieldValue(binding, type, value);
+    const string combined = new_temp();
+    AddInstruction(combined + " = binary or " + low + " " + retained + ", " + prepared);
+    return combined;
+  }
+
+void PA14Lowerer::StoreBitField(Binding* binding, const string& address,
+                                const TypePtr& type, const string& value,
+                                bool initializing)
+{
+    if(!IsBitField(binding)) {
+      emit_store(type, value, address);
+      return;
+    }
+    const bool preserve = !initializing;
+    const string merged = MergeBitFieldValue(binding, address, type, value, preserve);
+    const string stored = preserve ? merged : PrepareBitFieldValue(binding, type, value);
+    emit_store(type, stored, address);
+  }
+
 void PA14Lowerer::StoreLValue(const CPPGMAstNodePtr& node, Scope* scope,
                    const TypePtr& type, const string& value)
 {
     if(node && node->kind == "parenthesized-expression" && !node->children.empty()) {
       StoreLValue(node->children[0], scope, type, value);
       return;
+    }
+    if(node && node->kind == "member-expression") {
+      Binding* binding = MemberBinding(node, scope);
+      if(binding && IsBitField(binding)) {
+        StoreBitField(binding, EmitMemberAddress(node, scope), type, value);
+        return;
+      }
     }
     if(node && node->kind == "id-expression") {
       VariablePlan* local = LocalForName(node->value);
@@ -198,6 +308,16 @@ void PA14Lowerer::StoreLValue(const CPPGMAstNodePtr& node, Scope* scope,
       }
       if(!local) {
         vector<Binding*> candidates = Lookup(node->value, scope);
+        if(candidates.size() == 1 && candidates[0]->is_member &&
+           !candidates[0]->is_static && IsBitField(candidates[0])) {
+          CPPGMAstNodePtr member(new CPPGMAstNode("member-expression", "OP_ARROW:->"));
+          member->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
+            "keyword-literal", "KW_THIS:this")));
+          member->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
+            "identifier", candidates[0]->name)));
+          StoreBitField(candidates[0], EmitMemberAddress(member, scope), type, value);
+          return;
+        }
         if(candidates.size() == 1 && candidates[0]->kind == BIND_VARIABLE) {
           GlobalRecord* global = FindGlobal(candidates[0]->qualified_name);
           if(global) { emit_store(type, value, "@" + global->symbol); return; }
@@ -310,8 +430,16 @@ PA14Lowerer::Value PA14Lowerer::EmitCompare(const CPPGMAstNodePtr& node, Scope* 
     TypePtr common = CommonType(left_type, right_type, PA12Operator(node->value));
     if(left_type && right_type && left_type->kind == TYPE_POINTER && right_type->kind == TYPE_POINTER)
       common = left_type;
-    Value left = EmitValue(node->children[0], scope, common);
-    Value right = EmitValue(node->children[1], scope, common);
+    const bool left_bit_field = node->children[0] &&
+      node->children[0]->kind == "member-expression" &&
+      IsBitField(MemberBinding(node->children[0], scope));
+    const bool right_bit_field = node->children[1] &&
+      node->children[1]->kind == "member-expression" &&
+      IsBitField(MemberBinding(node->children[1], scope));
+    Value left = left_bit_field ? EmitValue(node->children[0], scope) :
+      EmitValue(node->children[0], scope, common);
+    Value right = right_bit_field ? EmitValue(node->children[1], scope) :
+      EmitValue(node->children[1], scope, common);
     CPPGMAstNodePtr difference = node->children[0];
     while(difference && difference->kind == "parenthesized-expression" &&
           !difference->children.empty()) difference = difference->children[0];
@@ -558,7 +686,10 @@ PA14Lowerer::Value PA14Lowerer::EmitConditionalValue(const CPPGMAstNodePtr& node
     // materialize their short-circuit result before selecting the arm; direct
     // statement conditions use EmitCondition and keep the branch-only form.
     Value condition = EmitValue(node->children[0], scope);
-    condition.operand = EmitTruthValue(condition);
+    TypePtr condition_type = type_value(condition.type);
+    if(is_floating_type(condition_type) ||
+       (condition_type && condition_type->kind == TYPE_POINTER))
+      condition.operand = EmitTruthValue(condition);
     Terminate("branch " + condition.operand + ", ^" + then_label + ", ^" + else_label);
     AddBlock(then_label);
     Value when_true = EmitValue(node->children[1], scope, type);
@@ -804,7 +935,15 @@ PA14Lowerer::Value PA14Lowerer::EmitValue(const CPPGMAstNodePtr& node, Scope* sc
       if(info.type && info.type->kind == TYPE_ARRAY) {
         result.array = true;
         result.operand = EmitArrayDecay(node, scope);
-      } else result.operand = emit_load(EmitMemberAddress(node, scope), info.type);
+      } else {
+        const string address = EmitMemberAddress(node, scope);
+        if(info.binding && IsBitField(info.binding)) {
+          TypePtr read_type = expected ? type_value(expected) : info.type;
+          result = EmitBitFieldLoad(info.binding, address, read_type,
+            static_cast<bool>(expected));
+        }
+        else result.operand = emit_load(address, info.type);
+      }
       return result;
     }
     if(node->kind == "cast-expression") {

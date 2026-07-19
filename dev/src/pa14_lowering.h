@@ -61,6 +61,8 @@ class PA14Lowerer
     bool member;
     bool static_member;
     bool constructor;
+    bool implicit_constructor;
+    bool aggregate_constructor;
     bool destructor;
     bool needed;
     bool emitted;
@@ -71,7 +73,9 @@ class PA14Lowerer
     FunctionRecord()
       : node(), scope(), type(), source_type(), member_owner(), qualified_name(),
         symbol(), definition(false), member(false), static_member(false),
-        constructor(false), destructor(false), needed(false), emitted(false), variadic(false),
+        constructor(false), implicit_constructor(false), aggregate_constructor(false),
+        destructor(false), needed(false),
+        emitted(false), variadic(false),
         special_initializer(), default_arguments() {}
   };
 
@@ -85,10 +89,11 @@ class PA14Lowerer
     CPPGMAstNodePtr initializer;
     bool internal;
     bool dynamic_initializer;
+    bool dynamic_finalizer;
 
     GlobalRecord()
       : node(), scope(), type(), qualified_name(), symbol(), initializer(),
-        internal(false), dynamic_initializer(false) {}
+        internal(false), dynamic_initializer(false), dynamic_finalizer(false) {}
   };
 
   struct VariablePlan
@@ -99,6 +104,7 @@ class PA14Lowerer
     TypePtr type;
     CPPGMAstNodePtr declarator;
     CPPGMAstNodePtr initializer;
+    GlobalRecord* global;
   };
 
   struct Value
@@ -190,6 +196,7 @@ class PA14Lowerer
   map<string, string> string_symbols_;
   vector<string> string_order_;
   bool needs_init_helper_;
+  bool needs_fini_helper_;
   FunctionState* state_;
 
 public:
@@ -282,7 +289,7 @@ void FinalizeSymbols()
 
 ;
 
-void CollectStringLiterals(const CPPGMAstNodePtr& node)
+void CollectStringLiterals(const CPPGMAstNodePtr& node, unsigned int braced_depth = 0)
 
 ;
 
@@ -379,7 +386,24 @@ FunctionRecord* RecordForBinding(Binding* binding) const
 
 ;
 
+FunctionRecord* EnsureAggregateConstructor(const TypePtr& type)
+
+;
+
 bool HasDefaultArgument(Binding* binding, size_t index) const
+
+;
+
+bool HasConstructor(const TypePtr& type) const
+
+;
+
+bool HasDestructor(const TypePtr& type) const
+
+;
+
+bool IsBitField(Binding* binding, long long* bit_offset = 0,
+                long long* bit_width = 0) const
 
 ;
 
@@ -611,6 +635,28 @@ void StoreLValue(const CPPGMAstNodePtr& node, Scope* scope,
 
 ;
 
+Value EmitBitFieldLoad(Binding* binding, const string& address,
+                       const TypePtr& type, bool copy_result)
+
+;
+
+string PrepareBitFieldValue(Binding* binding, const TypePtr& type,
+                            const string& value)
+
+;
+
+string MergeBitFieldValue(Binding* binding, const string& address,
+                          const TypePtr& type, const string& value,
+                          bool preserve)
+
+;
+
+void StoreBitField(Binding* binding, const string& address,
+                   const TypePtr& type, const string& value,
+                   bool initializing = false)
+
+;
+
 Value EmitAssignment(const CPPGMAstNodePtr& node, Scope* scope)
 
 ;
@@ -698,8 +744,36 @@ void EmitDestructorBody(FunctionRecord& function, Scope* scope)
 
 ;
 
+void EmitLiveDestructors(Scope* scope)
+
+;
+
+void EmitAggregateConstructorBody(FunctionRecord& function, Scope* scope)
+
+;
+
 void EmitAggregateAt(const string& base, const TypePtr& type,
-                     const CPPGMAstNodePtr& expression, Scope* scope)
+                     const CPPGMAstNodePtr& expression, Scope* scope,
+                     const CPPGMAstNodePtr& refresh_node = CPPGMAstNodePtr())
+
+;
+
+void EmitAggregateArrayAt(const string& base, const TypePtr& type,
+                          const CPPGMAstNodePtr& expression, Scope* scope)
+
+;
+
+void EmitAggregateClassFields(const string& base, const TypePtr& type,
+                              const CPPGMAstNodePtr& expression, Scope* scope,
+                              const CPPGMAstNodePtr& refresh_node,
+                              size_t* child_index)
+
+;
+
+void EmitAggregateClassDefaults(const string& base, const TypePtr& type,
+                                const CPPGMAstNodePtr& expression, Scope* scope,
+                                const CPPGMAstNodePtr& refresh_node,
+                                size_t child_index)
 
 ;
 
@@ -771,6 +845,14 @@ string EmitFunction(FunctionRecord& function)
 ;
 
 void EmitDynamicInitializers(vector<string>& entries)
+
+;
+
+void EmitGlobalInitializer(GlobalRecord& global, Scope* scope)
+
+;
+
+void EmitGlobalFinalizer(GlobalRecord& global, Scope* scope)
 
 ;
 

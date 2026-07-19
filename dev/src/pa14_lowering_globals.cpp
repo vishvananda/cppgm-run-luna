@@ -326,7 +326,7 @@ string PA14Lowerer::RenderGlobal(GlobalRecord& global)
     CPPGMAstNodePtr expression = InitializerExpression(global.initializer);
     ostringstream out;
     TypePtr value_type = type_value(type);
-    if(value_type && value_type->kind == TYPE_CLASS && !expression) {
+    if(value_type && value_type->kind == TYPE_CLASS) {
       out << "global @" << global.symbol << GlobalMetadata(global.internal) << " = {\n";
       out << "  zero " << integer_text(static_cast<long long>(type_size(type))) << "\n";
       out << "}";
@@ -335,6 +335,12 @@ string PA14Lowerer::RenderGlobal(GlobalRecord& global)
     if(type->kind == TYPE_ARRAY) {
       out << "global @" << global.symbol << GlobalMetadata(global.internal) << " = {\n";
       TypePtr element = type->child;
+      TypePtr element_value = type_value(element);
+      if(element_value && element_value->kind == TYPE_CLASS) {
+        out << "  zero " << integer_text(static_cast<long long>(type_size(type))) << "\n";
+        out << "}";
+        return out.str();
+      }
       vector<GlobalDataItem> items;
       if(expression && expression->kind == "literal" && !expression->value.empty() && expression->value[0] == '"' &&
          element->kind == TYPE_FUNDAMENTAL && element->name == "char") {
@@ -389,10 +395,15 @@ string PA14Lowerer::RenderGlobal(GlobalRecord& global)
       out << "addr @" << address.symbol;
       if(address.addend) out << " + " << address.addend;
     } else {
-      if(address.function) global.dynamic_initializer = true;
       long long value = 0;
       TypePtr source;
-      if(expression && FoldInteger(expression, global.scope, &value, &source)) out << integer_text(value);
+      const bool folded = expression && FoldInteger(expression, global.scope, &value, &source);
+      if(address.function || (expression && !folded &&
+         !(type_value(type)->kind == TYPE_POINTER && address.valid))) {
+        global.dynamic_initializer = true;
+        needs_init_helper_ = true;
+      }
+      if(folded) out << integer_text(value);
       else if(expression && expression->kind == "literal" && !expression->value.empty() &&
               expression->value[0] != '"') out << canonical_literal(expression->value);
       else out << "zero";
@@ -482,6 +493,7 @@ void PA14Lowerer::emit_store(const TypePtr& type, const string& value, const str
 string PA14Lowerer::local_address(VariablePlan* variable)
 {
     if(!variable) throw logic_error("missing local variable");
+    if(variable->global) return global_address(variable->global);
     if(type_is_reference(variable->type)) return emit_load(StorageForVariable(*variable), PointerTo(Fundamental("char")));
     const string temp = new_temp();
     AddInstruction(temp + " = addr " + StorageForVariable(*variable));
@@ -539,10 +551,21 @@ string PA14Lowerer::EmitSubscriptAddress(const CPPGMAstNodePtr& node, Scope* sco
     string base = base_type->kind == TYPE_ARRAY ? EmitArrayDecay(base_node, scope) :
       EmitValue(base_node, scope).operand;
     Value index = EmitValue(index_node, scope);
-    string text = new_temp();
-    AddInstruction(text + " = index " + low_type(element) +
-      " [projection=array_element] " + base + ", " + index.operand);
-    return text;
+    TypePtr element_value = type_value(element);
+    if(base_type->kind == TYPE_ARRAY && element_value &&
+       (element_value->kind == TYPE_CLASS || element_value->kind == TYPE_ARRAY)) {
+      const string offset = new_temp();
+      AddInstruction(offset + " = binary mul i64 " + index.operand + ", " +
+        integer_text(static_cast<long long>(type_size(element))));
+      const string text = new_temp();
+      AddInstruction(text + " = index i8 [projection=array_element] " + base + ", " + offset);
+      return text;
+    } else {
+      const string text = new_temp();
+      AddInstruction(text + " = index " + low_type(element) +
+        " [projection=array_element] " + base + ", " + index.operand);
+      return text;
+    }
   }
 
 string PA14Lowerer::EmitPointerOffset(const CPPGMAstNodePtr& node, Scope* scope)
@@ -637,7 +660,13 @@ string PA14Lowerer::EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
       }
       throw logic_error("cannot take address of expression");
     }
-    if(node->kind == "member-expression") return EmitMemberAddress(node, scope);
+    if(node->kind == "member-expression") {
+      const string address = EmitMemberAddress(node, scope);
+      Binding* member = MemberBinding(node, scope);
+      if(member && type_is_reference(member->type))
+        return emit_load(address, PointerTo(Fundamental("char")));
+      return address;
+    }
     if(node->kind == "literal" && !node->value.empty() && node->value[0] == '"') {
       const string symbol = InternString(node->value);
       const string temp = new_temp();
@@ -708,7 +737,9 @@ string PA14Lowerer::EmitMemberAddress(const CPPGMAstNodePtr& node, Scope* scope)
     else if(object && object->kind == TYPE_POINTER) object = type_value(object->child);
     base = AdjustBaseAddress(base, object, member->member_owner);
     const string result = new_temp();
-    AddInstruction(result + " = index i8 [projection=field] " + base + ", " +
+    const bool raw_bit_field = IsBitField(member) && op == ".";
+    AddInstruction(result + " = index i8 " +
+      (raw_bit_field ? string() : "[projection=field] ") + base + ", " +
       integer_text(fact.offset));
     return result;
   }

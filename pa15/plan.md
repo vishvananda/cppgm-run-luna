@@ -335,3 +335,54 @@ dynamic initialization and finalization.  Its validation is the matching
 `general/100` through `general/400` lifetime/initializer subset, the full
 PA15 report, the through-PA14 report, and the source audit.  Access/inherited
 lookup and operator/ADL groups remain queued after that checkpoint.
+
+## Turn 33 Checkpoint Scope
+
+This increment targets the initializer/lifetime group above.  It will make
+global class and scalar initializers first-class typed plans, render their
+zero/static storage separately from dynamic actions, and emit the required
+namespace-scope startup and shutdown calls in declaration order with reverse
+finalization order.  It will also extend the existing local aggregate path to
+construct class-array elements and recursively apply aggregate/default-member
+initialization for nested nontrivial subobjects.  The scope is validated with
+the affected `general/200` and `general/300` global/lifetime cases, class-array
+and aggregate cases in `general/200` and `general/400`, the full PA15 report,
+the through-PA14 report, and the source audit.
+
+## Turn 33 Checkpoint Result
+
+Completed.  Global class objects now have typed zero/static storage and an
+explicit initialization phase; dynamic scalar, class, and class-array
+initializers lower into the startup helper, with finalizers emitted in reverse
+global order.  Defaulted constructors and empty scalar/pointer member
+initializers are collected and lowered.  Local class arrays now construct and
+finalize each element, including early-return cleanup.  Aggregate lowering
+handles nested class/array subobjects, brace elision, reference-member
+binding/address semantics, empty array value-initialization, value-initialized
+nontrivial aggregates, and bit-field mask/merge storage with stable LowIR
+ordering.  Aggregate/lifetime lowering was split into
+`pa14_lowering_objects.cpp` so the source audit remains clean.
+
+Focused validation passed for the Turn 33 scope, including global zero and
+class-array initialization, local class-array lifecycle, aggregate array
+brace elision, aggregate reference members, empty array value-initialization,
+value-initialized nontrivial aggregates, and all four PA15 bit-field cases.
+The full required PA15 report is **86 / 200**, up from the checkpoint baseline
+of **46 / 200**; through-PA14 remains **819 / 819**, and the file audit passes
+with only the three existing header-division warnings.  No tests or reference
+fixtures were changed.
+
+## Turn 33 Remaining Work Map and Next Checkpoint
+
+The remaining failures stay grouped by shared behavior: default-member and
+aggregate edge cases still involving class-member target selection; ordinary
+and static member collection/cv/access behavior; constructor policy for
+deleted, explicit, inherited, and derived/base cases; references and
+inheritance conversions; operator/ADL and callable expressions; and parser,
+friend, `noexcept`, declaration-metadata, and diagnostic boundaries.
+
+The next checkpoint should take the member-collection group: improve typed
+member binding and lookup for ordinary/static methods and fields, then cover
+`this`/`.`/`->` calls, access checks, and cv-qualified overload selection.
+Validate with the direct-member and method subset, the full PA15 report,
+through-PA14, and the source audit.
