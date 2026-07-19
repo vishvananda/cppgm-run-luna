@@ -3,7 +3,6 @@
 #include <cstdint>
 #include <iostream>
 #include <limits>
-#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -638,24 +637,27 @@ struct Node
 	Type type;
 	string op;
 	Value value;
-	unique_ptr<Node> left;
-	unique_ptr<Node> right;
-	unique_ptr<Node> third;
+	size_t left;
+	size_t right;
+	size_t third;
 
-	Node(Kind kind, Type type) : kind(kind), type(type), value() {}
+	Node(Kind kind, Type type)
+		: kind(kind), type(type), op(), value(),
+		  left(static_cast<size_t>(-1)), right(static_cast<size_t>(-1)),
+		  third(static_cast<size_t>(-1)) {}
 };
 
 class Parser
 {
 public:
-	explicit Parser(const vector<PostPPToken>& tokens)
-		: tokens(tokens), position(0) {}
+	explicit Parser(const vector<PostPPToken>& tokens, vector<Node>* nodes)
+		: tokens(tokens), position(0), nodes(nodes) {}
 
-	unique_ptr<Node> Parse()
+	size_t Parse()
 	{
 		if (tokens.empty())
 			throw LineError();
-		unique_ptr<Node> result = ParseConditional();
+		const size_t result = ParseConditional();
 		if (position != tokens.size())
 			throw LineError();
 		return result;
@@ -664,6 +666,13 @@ public:
 private:
 	const vector<PostPPToken>& tokens;
 	size_t position;
+	vector<Node>* nodes;
+
+	size_t MakeNode(Node::Kind kind, Type type)
+	{
+		nodes->push_back(Node(kind, type));
+		return nodes->size() - 1;
+	}
 
 	bool Match(const string& text)
 	{
@@ -687,24 +696,24 @@ private:
 		return false;
 	}
 
-	unique_ptr<Node> ParseConditional()
+	size_t ParseConditional()
 	{
-		unique_ptr<Node> condition = ParseBinaryLevel(9);
+		size_t condition = ParseBinaryLevel(9);
 		if (!Match("?"))
 			return condition;
-		unique_ptr<Node> when_true = ParseConditional();
+		const size_t when_true = ParseConditional();
 		if (!Match(":"))
 			throw LineError();
-		unique_ptr<Node> when_false = ParseConditional();
-		unique_ptr<Node> result(new Node(Node::CONDITIONAL,
-			CommonType(when_true->type, when_false->type)));
-		result->left = move(condition);
-		result->right = move(when_true);
-		result->third = move(when_false);
+		const size_t when_false = ParseConditional();
+		const size_t result = MakeNode(Node::CONDITIONAL,
+			CommonType((*nodes)[when_true].type, (*nodes)[when_false].type));
+		(*nodes)[result].left = condition;
+		(*nodes)[result].right = when_true;
+		(*nodes)[result].third = when_false;
 		return result;
 	}
 
-	unique_ptr<Node> ParseBinaryLevel(int level)
+	size_t ParseBinaryLevel(int level)
 	{
 		static const vector<string> operators[] = {
 			vector<string>{"*", "/", "%"},
@@ -718,50 +727,51 @@ private:
 			vector<string>{"&&", "and"},
 			vector<string>{"||", "or"}
 		};
-		unique_ptr<Node> left = level == 0 ? ParseUnary() :
+		size_t left = level == 0 ? ParseUnary() :
 			ParseBinaryLevel(level - 1);
 		string op;
 		while (MatchAny(operators[level], &op))
 		{
-			unique_ptr<Node> right = level == 0 ? ParseUnary() :
+			const size_t right = level == 0 ? ParseUnary() :
 				ParseBinaryLevel(level - 1);
 			Type type;
 			if (level == 2)
-				type = left->type;
+				type = (*nodes)[left].type;
 			else if ((level >= 3 && level <= 4) || level >= 8)
 				type = Type(false);
 			else
-				type = CommonType(left->type, right->type);
-			unique_ptr<Node> result(new Node(Node::BINARY, type));
-			result->op = op;
-			result->left = move(left);
-			result->right = move(right);
-			left = move(result);
+				type = CommonType((*nodes)[left].type, (*nodes)[right].type);
+			const size_t result = MakeNode(Node::BINARY, type);
+			(*nodes)[result].op = op;
+			(*nodes)[result].left = left;
+			(*nodes)[result].right = right;
+			left = result;
 		}
 		return left;
 	}
 
-	unique_ptr<Node> ParseUnary()
+	size_t ParseUnary()
 	{
 		static const vector<string> operators = {"+", "-", "!", "~", "not", "compl"};
 		string op;
 		if (MatchAny(operators, &op))
 		{
-			unique_ptr<Node> operand = ParseUnary();
-			const Type type = (op == "!" || op == "not") ? Type(false) : operand->type;
-			unique_ptr<Node> result(new Node(Node::UNARY, type));
-			result->op = op;
-			result->left = move(operand);
+			const size_t operand = ParseUnary();
+			const Type type = (op == "!" || op == "not") ? Type(false) :
+				(*nodes)[operand].type;
+			const size_t result = MakeNode(Node::UNARY, type);
+			(*nodes)[result].op = op;
+			(*nodes)[result].left = operand;
 			return result;
 		}
 		return ParsePrimary();
 	}
 
-	unique_ptr<Node> ParsePrimary()
+	size_t ParsePrimary()
 	{
 		if (Match("("))
 		{
-			unique_ptr<Node> result = ParseConditional();
+			const size_t result = ParseConditional();
 			if (!Match(")"))
 				throw LineError();
 			return result;
@@ -793,7 +803,7 @@ private:
 		throw LineError();
 	}
 
-	unique_ptr<Node> ParseDefined()
+	size_t ParseDefined()
 	{
 		string identifier;
 		if (Match("("))
@@ -817,10 +827,10 @@ private:
 		return Literal(SignedValue(first & 1));
 	}
 
-	unique_ptr<Node> Literal(Value value)
+	size_t Literal(Value value)
 	{
-		unique_ptr<Node> result(new Node(Node::LITERAL, Type(value.is_unsigned)));
-		result->value = value;
+		const size_t result = MakeNode(Node::LITERAL, Type(value.is_unsigned));
+		(*nodes)[result].value = value;
 		return result;
 	}
 };
@@ -844,13 +854,14 @@ uint64_t ShiftCount(Value value)
 	return static_cast<uint64_t>(count);
 }
 
-Value Evaluate(const Node& node)
+Value Evaluate(size_t index, const vector<Node>& nodes)
 {
+	const Node& node = nodes[index];
 	if (node.kind == Node::LITERAL)
 		return node.value;
 	if (node.kind == Node::UNARY)
 	{
-		const Value operand = Evaluate(*node.left);
+		const Value operand = Evaluate(node.left, nodes);
 		if (node.op == "!" || node.op == "not")
 			return SignedValue(operand.bits == 0 ? 1 : 0);
 		if (node.op == "~" || node.op == "compl")
@@ -861,31 +872,31 @@ Value Evaluate(const Node& node)
 	}
 	if (node.kind == Node::CONDITIONAL)
 	{
-		const Value condition = Evaluate(*node.left);
+		const Value condition = Evaluate(node.left, nodes);
 		const Value selected = condition.bits != 0 ?
-			Evaluate(*node.right) : Evaluate(*node.third);
+			Evaluate(node.right, nodes) : Evaluate(node.third, nodes);
 		return Convert(selected, node.type);
 	}
 
-	const Value left = Evaluate(*node.left);
+	const Value left = Evaluate(node.left, nodes);
 	if (node.op == "&&" || node.op == "and")
 	{
 		if (left.bits == 0)
 			return SignedValue(0);
-		return SignedValue(Evaluate(*node.right).bits == 0 ? 0 : 1);
+		return SignedValue(Evaluate(node.right, nodes).bits == 0 ? 0 : 1);
 	}
 	if (node.op == "||" || node.op == "or")
 	{
 		if (left.bits != 0)
 			return SignedValue(1);
-		return SignedValue(Evaluate(*node.right).bits == 0 ? 0 : 1);
+		return SignedValue(Evaluate(node.right, nodes).bits == 0 ? 0 : 1);
 	}
-	const Value right = Evaluate(*node.right);
+	const Value right = Evaluate(node.right, nodes);
 	const bool comparison = node.op == "<" || node.op == ">" ||
 		node.op == "<=" || node.op == ">=" || node.op == "==" ||
 		node.op == "!=";
 	const Type operand_type = comparison ?
-		CommonType(node.left->type, node.right->type) : node.type;
+		CommonType(nodes[node.left].type, nodes[node.right].type) : node.type;
 	const Value a = Convert(left, operand_type);
 	const Value b = Convert(right, operand_type);
 	if (node.op == "+") return Value(node.type.is_unsigned, a.bits + b.bits);
@@ -954,15 +965,16 @@ void PrintValue(Value value)
 		cout << static_cast<intmax_t>(SignedFromBits(value.bits)) << endl;
 }
 
-void EvaluateLine(const vector<PostPPToken>& tokens)
+void EvaluateLine(const vector<PostPPToken>& tokens, vector<Node>* nodes)
 {
+	nodes->clear();
 	if (tokens.empty())
 		return;
 	try
 	{
-		Parser parser(tokens);
-		unique_ptr<Node> root = parser.Parse();
-		PrintValue(Evaluate(*root));
+		Parser parser(tokens, nodes);
+		const size_t root = parser.Parse();
+		PrintValue(Evaluate(root, *nodes));
 	}
 	catch (const LineError&)
 	{
@@ -976,7 +988,8 @@ void RunCtrlExpr(const string& input)
 {
 	CtrlLexer lexer(input);
 	vector<PostPPToken> line;
+	vector<Node> nodes;
 	while (lexer.NextLine(&line))
-		EvaluateLine(line);
+		EvaluateLine(line, &nodes);
 	cout << "eof" << endl;
 }

@@ -88,6 +88,83 @@ grammar parsing, and typed evaluation—are all covered by the passing report.
 Future work is outside this stage and must preserve the shared translation
 module, PA2 post-tokenizer, and PA3 evaluator boundary.
 
+## Architecture Review
+
+The integrated PA3 flow has an explicit application boundary and four owned
+layers:
+
+    dev/ctrlexpr.cpp
+        UTF-8 stdin -> RunCtrlExpr -> process exit/error boundary
+
+    dev/src/ctrlexpr.cpp
+        shared translated source -> line-preserving PA3 lexer
+        -> typed recursive-descent parse tree -> lazy evaluation -> output
+
+    dev/src/pptoken_translation.cpp/.h
+        phase 1-3 decoding, raw-span protection, trigraphs, line splices,
+        universal-character names, and source encoding
+
+    dev/src/posttoken_unicode.cpp and posttoken_lexer.h
+        UTF-8 semantic decoding and the shared PA2 preprocessing-token record
+        kinds used by the PA3 line lexer
+
+`dev/frontend_source_sets.mk` links the translation and Unicode modules into
+`ctrlexpr`; the same translation module is linked by `pptoken` and
+`posttoken`. This preserves the PA1/PA2 translation contract while allowing
+PA3 to retain new-line boundaries instead of routing through PA2's whole-stream
+consumer. `CtrlLexer` discards whitespace and comments, returns one token
+sequence per translated logical line, and lets phase 1-3 exceptions escape to
+the application boundary. Parser/evaluation errors are contained per line and
+produce `error`, followed by the final `eof` record.
+
+The parser is a hand-written predictive parser matching the PA3 grammar. Its
+ten binary precedence levels use iteration for left associativity, while the
+conditional parser recurses on both arms for the grammar's right associativity.
+Each node records static signedness. `Value` stores a 64-bit bit pattern and
+signedness, so the evaluator can apply the course-defined `intmax_t` and
+`uintmax_t` domains, usual arithmetic conversions, sign-preserving right
+shifts, and conditional result conversion without evaluating an unselected
+branch. `&&`, `||`, and `?:` retain this static type information while keeping
+their runtime evaluation lazy.
+
+The checkpoint implementation was behaviorally complete, but its eight-digit
+UCN accumulator used signed `int`, and its translation passes temporarily
+allocated replacement vectors for the full input. The final cleanup moves UCN
+accumulation to `uint32_t`, compacts the three shrinking translation passes in
+place while retaining `SourceUnit` provenance, and stores parse nodes in a
+reusable vector arena rather than allocating a `unique_ptr` object for every
+AST node. These changes keep ownership local and bounded for the generated
+large-expression case without changing the grammar or evaluator semantics.
+
+## Final Architecture Review
+
+The final stage boundary is:
+
+    UTF-8 bytes
+      -> shared phase 1-3 SourceUnit stream with raw/origin metadata
+      -> PA3 line lexer and PA2-compatible token kinds
+      -> precedence parser with a reusable indexed node arena
+      -> lazy typed evaluator using signed/unsigned 64-bit state
+      -> decimal result, error, and eof output
+
+Raw literal bodies remain protected by translation metadata, comments are
+removed only at the line-lexer boundary, and translated new-lines continue to
+define the required logical-line output behavior. Invalid phase input still
+escapes as process failure, while invalid tokens, grammar, literal, division,
+modulo, and shift cases are converted to a line-level `error`. No reference
+fixture, test name, subprocess, host compiler, or generated answer is used by
+the production path.
+
+The final ownership model is cohesive across the completed stages:
+`pptoken_translation.*` owns reusable source translation; PA1 and PA2 consume
+that module through their source sets; PA3 owns only its line adapter, parser,
+typed evaluator, and output; and the node arena is cleared and reused for each
+line. Translation compaction avoids simultaneous full-size phase buffers, and
+the large checked-in PA3 stress input completes below the normal per-test
+timeout. The through-PA3 report and the final source audit verify that the
+cleanup preserves all earlier assignments and the intended staged compiler
+architecture.
+
 ## Next checkpoint group
 
 PA4 macro replacement and preprocessor state, built on the PA3 token and

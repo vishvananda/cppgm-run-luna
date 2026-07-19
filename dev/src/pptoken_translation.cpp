@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -582,114 +583,120 @@ int TrigraphReplacement(int first, int second, int third)
 	}
 }
 
-vector<SourceUnit> ApplyTrigraphs(const vector<SourceUnit>& source)
+void ApplyTrigraphs(vector<SourceUnit>* source)
 {
-	vector<SourceUnit> result;
-	for (size_t i = 0; i < source.size();)
+	vector<SourceUnit>& units = *source;
+	size_t read = 0;
+	size_t write = 0;
+	while (read < units.size())
 	{
-		if (!source[i].raw && i + 2 < source.size() &&
-			!source[i + 1].raw && !source[i + 2].raw)
+		if (!units[read].raw && read + 2 < units.size() &&
+			!units[read + 1].raw && !units[read + 2].raw)
 		{
 			const int replacement = TrigraphReplacement(
-				source[i].code_point,
-				source[i + 1].code_point,
-				source[i + 2].code_point);
+				units[read].code_point,
+				units[read + 1].code_point,
+				units[read + 2].code_point);
 			if (replacement >= 0)
 			{
-				result.push_back(MakeTranslatedUnit(
-					replacement, false, source[i], source[i + 2]));
-				i += 3;
+				const SourceUnit first = units[read];
+				const SourceUnit last = units[read + 2];
+				units[write++] = MakeTranslatedUnit(
+					replacement, false, first, last);
+				read += 3;
 				continue;
 			}
 		}
-		result.push_back(source[i]);
-		++i;
+		units[write++] = units[read++];
 	}
-	return result;
+	units.resize(write);
 }
 
-vector<SourceUnit> ApplyLineSplices(const vector<SourceUnit>& source)
+void ApplyLineSplices(vector<SourceUnit>* source)
 {
-	vector<SourceUnit> result;
+	vector<SourceUnit>& units = *source;
 	size_t pending_origin_begin = SourceUnit::NoOrigin;
-	for (size_t i = 0; i < source.size(); ++i)
+	size_t read = 0;
+	size_t write = 0;
+	while (read < units.size())
 	{
-		if (!source[i].raw && source[i].code_point == '\\' &&
-			i + 1 < source.size() && !source[i + 1].raw &&
-			source[i + 1].code_point == '\n')
+		if (!units[read].raw && units[read].code_point == '\\' &&
+			read + 1 < units.size() && !units[read + 1].raw &&
+			units[read + 1].code_point == '\n')
 		{
 			if (pending_origin_begin == SourceUnit::NoOrigin)
-				pending_origin_begin = source[i].origin_begin;
-			++i;
+				pending_origin_begin = units[read].origin_begin;
+			read += 2;
 			continue;
 		}
 
-		SourceUnit unit = source[i];
+		SourceUnit unit = units[read++];
 		if (pending_origin_begin != SourceUnit::NoOrigin &&
 			unit.origin_begin != SourceUnit::NoOrigin)
 		{
 			unit.origin_begin = pending_origin_begin;
 		}
 		pending_origin_begin = SourceUnit::NoOrigin;
-		result.push_back(unit);
+		units[write++] = unit;
 	}
-	return result;
+	units.resize(write);
 }
 
-vector<SourceUnit> ApplyUniversalCharacterNames(
-	const vector<SourceUnit>& source)
+void ApplyUniversalCharacterNames(vector<SourceUnit>* source)
 {
-	vector<SourceUnit> result;
-	for (size_t i = 0; i < source.size();)
+	vector<SourceUnit>& units = *source;
+	size_t read = 0;
+	size_t write = 0;
+	while (read < units.size())
 	{
-		if (!source[i].raw && source[i].code_point == '\\' &&
-			i + 1 < source.size() && !source[i + 1].raw &&
-			source[i + 1].code_point == '\\')
+		if (!units[read].raw && units[read].code_point == '\\' &&
+			read + 1 < units.size() && !units[read + 1].raw &&
+			units[read + 1].code_point == '\\')
 		{
-			result.push_back(source[i]);
-			result.push_back(source[i + 1]);
-			i += 2;
+			units[write++] = units[read++];
+			units[write++] = units[read++];
 			continue;
 		}
 
-		if (!source[i].raw && source[i].code_point == '\\' &&
-			i + 1 < source.size() && !source[i + 1].raw &&
-			(source[i + 1].code_point == 'u' ||
-			 source[i + 1].code_point == 'U'))
+		if (!units[read].raw && units[read].code_point == '\\' &&
+			read + 1 < units.size() && !units[read + 1].raw &&
+			(units[read + 1].code_point == 'u' ||
+			 units[read + 1].code_point == 'U'))
 		{
-			const size_t digits = source[i + 1].code_point == 'u' ? 4 : 8;
-			if (i + 2 + digits <= source.size())
+			const size_t digits = units[read + 1].code_point == 'u' ? 4 : 8;
+			if (read + 2 + digits <= units.size())
 			{
 				bool valid = true;
-				int value = 0;
+				uint32_t value = 0;
 				for (size_t j = 0; j < digits; ++j)
 				{
-					if (source[i + 2 + j].raw ||
-						!IsHexDigit(source[i + 2 + j].code_point))
+					if (units[read + 2 + j].raw ||
+						!IsHexDigit(units[read + 2 + j].code_point))
 					{
 						valid = false;
 						break;
 					}
 					value = (value << 4) |
-						HexCharToValue(source[i + 2 + j].code_point);
+						HexCharToValue(units[read + 2 + j].code_point);
 				}
 				if (valid)
 				{
 					if (value == 0 || value > 0x10ffff ||
 						(value >= 0xd800 && value <= 0xdfff))
 						throw logic_error("invalid universal-character-name");
-					result.push_back(MakeTranslatedUnit(
-						value, false, source[i], source[i + 1 + digits]));
-					i += 2 + digits;
+					const SourceUnit first = units[read];
+					const SourceUnit last = units[read + 1 + digits];
+					units[write++] = MakeTranslatedUnit(
+						static_cast<int>(value), false, first, last);
+					read += 2 + digits;
 					continue;
 				}
 			}
 		}
 
-		result.push_back(source[i]);
-		++i;
+		units[write++] = units[read++];
 	}
-	return result;
+	units.resize(write);
 }
 
 vector<SourceUnit> TranslateSource(const string& input)
@@ -703,9 +710,9 @@ vector<SourceUnit> TranslateSource(const string& input)
 	for (;;)
 	{
 		source = BuildSourceUnits(decoded, raw_spans);
-		source = ApplyTrigraphs(source);
-		source = ApplyLineSplices(source);
-		source = ApplyUniversalCharacterNames(source);
+		ApplyTrigraphs(&source);
+		ApplyLineSplices(&source);
+		ApplyUniversalCharacterNames(&source);
 		if (!AddTranslatedRawSpans(source, &raw_spans))
 			break;
 	}
