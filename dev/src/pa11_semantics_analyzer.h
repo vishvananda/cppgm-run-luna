@@ -1062,8 +1062,21 @@ public:
 			{
 				CPPGMAstNodePtr expression = initializer->children.empty() ?
 					CPPGMAstNodePtr() : initializer->children[0];
-				ConstantValue value = Evaluate(expression, scope);
-				if (value.known) { binding.has_value = true; binding.value = value.value; }
+				// The PA11 constant table stores integer values.  A floating
+				// const object is still a valid typed binding; leave it out of
+				// that integer-only table rather than asking ParseLiteral to
+				// interpret a floating token as an integer expression.
+				const bool floating_literal = expression && expression->kind == "literal" &&
+					(expression->value.find('.') != string::npos ||
+					 expression->value.find('e') != string::npos ||
+					 expression->value.find('E') != string::npos ||
+					 expression->value.find('p') != string::npos ||
+					 expression->value.find('P') != string::npos);
+				if (!floating_literal)
+				{
+					ConstantValue value = Evaluate(expression, scope);
+					if (value.known) { binding.has_value = true; binding.value = value.value; }
+				}
 			}
 			scope->add(binding);
 		}

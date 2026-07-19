@@ -27,18 +27,18 @@ struct PA12CallChoice
 		: binding(), function(), worst(1000000), total(1000000) {}
 };
 
-bool PA12IsReference(const TypePtr& type)
+inline bool PA12IsReference(const TypePtr& type)
 {
 	return type && (type->kind == TYPE_LVALUE_REFERENCE ||
 		type->kind == TYPE_RVALUE_REFERENCE);
 }
 
-TypePtr PA12ValueType(const TypePtr& type)
+inline TypePtr PA12ValueType(const TypePtr& type)
 {
 	return PA12IsReference(type) ? type->child : type;
 }
 
-TypePtr PA12AdjustedType(const TypePtr& type)
+inline TypePtr PA12AdjustedType(const TypePtr& type)
 {
 	if (!type) return type;
 	if (type->kind == TYPE_FUNCTION)
@@ -72,7 +72,7 @@ TypePtr PA12AdjustedType(const TypePtr& type)
 	return type;
 }
 
-bool PA12IsIntegral(const TypePtr& type)
+inline bool PA12IsIntegral(const TypePtr& type)
 {
 	if (!type) return false;
 	if (type->kind == TYPE_ENUM) return !type->scoped_enum;
@@ -82,24 +82,24 @@ bool PA12IsIntegral(const TypePtr& type)
 		type->name != "void" && type->name != "nullptr_t";
 }
 
-bool PA12IsArithmetic(const TypePtr& type)
+inline bool PA12IsArithmetic(const TypePtr& type)
 {
 	return PA12IsIntegral(type) || (type && type->kind == TYPE_FUNDAMENTAL &&
 		(type->name == "bool" || type->name == "float" || type->name == "double" ||
 		 type->name == "long double"));
 }
 
-bool PA12HasConst(const TypePtr& type)
+inline bool PA12HasConst(const TypePtr& type)
 {
 	return type && type->is_const;
 }
 
-bool PA12HasVolatile(const TypePtr& type)
+inline bool PA12HasVolatile(const TypePtr& type)
 {
 	return type && type->is_volatile;
 }
 
-bool PA12SameType(const TypePtr& left, const TypePtr& right, bool ignore_cv = true)
+inline bool PA12SameType(const TypePtr& left, const TypePtr& right, bool ignore_cv = true)
 {
 	if (!left || !right) return left == right;
 	if (left->kind != right->kind) return false;
@@ -133,13 +133,13 @@ bool PA12SameType(const TypePtr& left, const TypePtr& right, bool ignore_cv = tr
 	return false;
 }
 
-string PA12Operator(const string& value)
+inline string PA12Operator(const string& value)
 {
 	const size_t colon = value.find(':');
 	return colon == string::npos ? value : value.substr(colon + 1);
 }
 
-string PA12LastComponent(const string& value)
+inline string PA12LastComponent(const string& value)
 {
 	const size_t separator = value.rfind("::");
 	return separator == string::npos ? value : value.substr(separator + 2);

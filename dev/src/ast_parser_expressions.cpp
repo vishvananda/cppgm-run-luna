@@ -131,7 +131,11 @@ CPPGMAstNodePtr Parser::ParseUnaryExpression()
 		return result ? ParsePostfixSuffix(result) : CPPGMAstNodePtr();
 	}
 	if (Is("static_cast") || Is("dynamic_cast") || Is("const_cast") ||
-		Is("reinterpret_cast")) return ParseKeywordCastExpression();
+		Is("reinterpret_cast"))
+	{
+		CPPGMAstNodePtr cast = ParseKeywordCastExpression();
+		return cast ? ParsePostfixSuffix(cast) : CPPGMAstNodePtr();
+	}
 	if (Is("new") || (Is("::") && Peek(1).text == "new")) return ParseNewExpression();
 	if (Is("delete") || (Is("::") && Peek(1).text == "delete"))
 		return ParseDeleteExpression();

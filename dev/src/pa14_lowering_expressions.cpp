@@ -1,0 +1,774 @@
+#include "pa14_lowering.h"
+
+#include <algorithm>
+#include <cctype>
+#include <cerrno>
+#include <cstdlib>
+#include <iomanip>
+#include <limits>
+#include <map>
+#include <memory>
+#include <set>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <utility>
+
+using namespace std;
+
+namespace cppgm_pa14_lowering {
+
+PA14Lowerer::Value PA14Lowerer::EmitIdentifier(const CPPGMAstNodePtr& node, Scope* scope,
+                       const TypePtr& expected)
+{
+    Value result;
+    VariablePlan* local = LocalForName(node->value);
+    if(local) {
+      if(local->type->kind == TYPE_ARRAY) {
+        result.type = local->type;
+        result.array = true;
+        result.operand = EmitArrayDecay(node, scope);
+        return result;
+      }
+      if(type_is_reference(local->type)) {
+        TypePtr referred = local->type->child;
+        const string address = local_address(local);
+        if(referred && referred->kind == TYPE_FUNCTION) {
+          result.type = referred;
+          result.function = true;
+          result.operand = address;
+          const string decay = new_temp();
+          AddInstruction(decay + " = unary decay ptr " + result.operand);
+          result.operand = decay;
+          return result;
+        }
+        result.type = referred;
+        result.operand = emit_load(address, referred);
+        return result;
+      }
+      result.type = local->type;
+      result.operand = emit_load(StorageForVariable(*local), local->type);
+      return result;
+    }
+    vector<Binding*> candidates = Lookup(node->value, scope);
+    if(candidates.empty()) throw logic_error("unknown identifier during lowering");
+    Binding* binding = candidates.size() == 1 ? candidates[0] : 0;
+    if(expected && !binding) {
+      TypePtr target = type_value(expected);
+      int best = 1000000;
+      for(size_t i = 0; i < candidates.size(); ++i) {
+        TypePtr function = function_target_type(candidates[i]->type);
+        if(!function) continue;
+        ExprInfo source;
+        source.type = function;
+        source.category = "lvalue";
+        const int rank = ConversionRank(source, target);
+        if(rank >= 0 && rank < best) { best = rank; binding = candidates[i]; }
+      }
+    }
+    if(!binding && candidates.size() == 1) binding = candidates[0];
+    if(!binding) throw logic_error("ambiguous identifier during lowering");
+    if(binding->kind == BIND_ENUMERATOR) {
+      result.type = binding->type;
+      result.operand = integer_text(binding->value);
+      result.known_constant = binding->has_value;
+      result.constant = binding->value;
+      return result;
+    }
+    if(binding->kind == BIND_FUNCTION) {
+      FunctionRecord* function = RecordForBinding(binding);
+      if(!function) throw logic_error("unknown function symbol during lowering");
+      result.type = function->type;
+      result.function = true;
+      result.operand = function_address(function);
+      return result;
+    }
+    GlobalRecord* global = FindGlobal(binding->qualified_name);
+    if(!global) throw logic_error("unknown global during lowering");
+    result.type = global->type;
+    if(global->type->kind == TYPE_ARRAY) {
+      result.array = true;
+      result.operand = EmitArrayDecay(node, scope);
+    } else result.operand = emit_load("@" + global->symbol, global->type);
+    return result;
+  }
+
+PA14Lowerer::Value PA14Lowerer::EmitUnary(const CPPGMAstNodePtr& node, Scope* scope,
+                  const TypePtr& expected)
+{
+    const string op = PA12Operator(node->value);
+    if(op == "&") {
+      Value result;
+      result.type = PointerTo(expression_value_type(Infer(node->children[0], scope)));
+      result.operand = EmitAddress(node->children[0], scope);
+      return result;
+    }
+    if(op == "*") {
+      Value result;
+      ExprInfo child_info = Infer(node->children[0], scope);
+      TypePtr child_type = expression_value_type(child_info);
+      if(!child_type || (child_type->kind != TYPE_POINTER && child_type->kind != TYPE_ARRAY))
+        throw logic_error("invalid dereference");
+      result.type = child_type->child;
+      result.operand = emit_load(EmitAddress(node, scope), result.type);
+      return result;
+    }
+    if(op == "++" || op == "--") return EmitUpdate(node, scope, false);
+    Value child = EmitValue(node->children[0], scope);
+    Value result;
+    if(op == "+") {
+      if(child.type && type_value(child.type)->kind == TYPE_ARRAY) {
+        result.type = PointerTo(type_value(child.type)->child);
+        result.operand = child.operand;
+        return result;
+      }
+      result.type = IntegralPromotion(child.type);
+      return ConvertValue(child, result.type);
+    }
+    result.type = op == "!" ? Fundamental("bool") : IntegralPromotion(child.type);
+    if(op == "!") {
+      TypePtr type = type_value(child.type);
+      string compare_type = low_type(type);
+      string zero = compare_type == "ptr" ? "nullptr" :
+        is_floating_type(type) ? (compare_type == "f80" ? "0.0L" : compare_type == "f32" ? "0.0f" : "0.0") : "0";
+      string operand = child.operand;
+      if(is_integral_type(type) && compare_type != "i64" && compare_type != "u64") {
+        Value widened = ConvertValue(child, Fundamental(is_unsigned_type(type) ? "unsigned long int" : "long int"));
+        operand = widened.operand;
+        compare_type = "i64";
+      }
+      result.operand = new_temp();
+      AddInstruction(result.operand + " = cmp eq " + compare_type + " " + operand + ", " + zero);
+      return result;
+    }
+    result.operand = new_temp();
+    const string unary = op == "-" ? "neg" : op == "~" ? "bitnot" : op;
+    AddInstruction(result.operand + " = unary " + unary + " " + low_type(result.type) + " " + child.operand);
+    return result;
+  }
+
+void PA14Lowerer::StoreLValue(const CPPGMAstNodePtr& node, Scope* scope,
+                   const TypePtr& type, const string& value)
+{
+    if(node && node->kind == "parenthesized-expression" && !node->children.empty()) {
+      StoreLValue(node->children[0], scope, type, value);
+      return;
+    }
+    if(node && node->kind == "id-expression") {
+      VariablePlan* local = LocalForName(node->value);
+      if(local && !type_is_reference(local->type)) {
+        emit_store(type, value, StorageForVariable(*local));
+        return;
+      }
+      if(!local) {
+        vector<Binding*> candidates = Lookup(node->value, scope);
+        if(candidates.size() == 1 && candidates[0]->kind == BIND_VARIABLE) {
+          GlobalRecord* global = FindGlobal(candidates[0]->qualified_name);
+          if(global) { emit_store(type, value, "@" + global->symbol); return; }
+        }
+      }
+    }
+    emit_store(type, value, EmitAddress(node, scope));
+  }
+
+PA14Lowerer::Value PA14Lowerer::EmitAssignment(const CPPGMAstNodePtr& node, Scope* scope)
+{
+    if(!node || node->children.size() < 2) throw logic_error("invalid assignment");
+    const string op = PA12Operator(node->value);
+    ExprInfo left_info = Infer(node->children[0], scope);
+    TypePtr left_type = expression_value_type(left_info);
+    if(!left_type) throw logic_error("assignment has no target type");
+    Value right;
+    if(op == "=") right = EmitValue(node->children[1], scope, left_type);
+    else {
+      Value left = EmitValue(node->children[0], scope);
+      Value raw_right = EmitValue(node->children[1], scope);
+      TypePtr common = CommonType(left.type, raw_right.type, op);
+      if(!common || common->kind == TYPE_POINTER) common = left_type;
+      left = ConvertValue(left, common);
+      right = ConvertValue(raw_right, common);
+      string binary;
+      if(op == "+=") binary = "add";
+      else if(op == "-=") binary = "sub";
+      else if(op == "*=") binary = "mul";
+      else if(op == "/=") binary = "div";
+      else if(op == "%=") binary = "mod";
+      else if(op == "&=") binary = "and";
+      else if(op == "|=") binary = "or";
+      else if(op == "^=") binary = "xor";
+      else if(op == "<<=") binary = "shl";
+      else if(op == ">>=") binary = "shr";
+      else throw logic_error("unsupported compound assignment");
+      if(left_type->kind == TYPE_POINTER && (op == "+=" || op == "-=")) {
+        // Pointer compound assignment uses the same element-scaled index
+        // operation as ordinary pointer arithmetic.
+        const long long size = static_cast<long long>(type_size(left_type->child));
+        const string scale = new_temp();
+        AddInstruction(scale + " = binary mul i64 " + raw_right.operand + ", " + integer_text(size));
+        string offset = scale;
+        if(op == "-=") {
+          const string neg = new_temp();
+          AddInstruction(neg + " = binary sub i64 0, " + scale);
+          offset = neg;
+        }
+        right.type = left_type;
+        right.operand = new_temp();
+        AddInstruction(right.operand + " = index i8 " + left.operand + ", " + offset);
+      } else {
+        const string right_operand = right.operand;
+        right.type = common;
+        right.operand = new_temp();
+        AddInstruction(right.operand + " = binary " + binary + " " + low_type(common) +
+          " " + left.operand + ", " + right_operand);
+      }
+    }
+    right = ConvertValue(right, left_type);
+    StoreLValue(node->children[0], scope, left_type, right.operand);
+    right.lvalue = true;
+    right.type = left_type;
+    return right;
+  }
+
+PA14Lowerer::Value PA14Lowerer::EmitUpdate(const CPPGMAstNodePtr& node, Scope* scope, bool address_only)
+{
+    const CPPGMAstNodePtr child_node = node->children[0];
+    ExprInfo child_info = Infer(child_node, scope);
+    TypePtr type = expression_value_type(child_info);
+    Value old = EmitValue(child_node, scope);
+    Value result;
+    result.type = type;
+    result.lvalue = true;
+    if(type && type->kind == TYPE_POINTER) {
+      const long long size = static_cast<long long>(type_size(type->child));
+      string offset;
+      if(size == 1 && PA12Operator(node->value) == "++") offset = "1";
+      else {
+        const string scale = new_temp();
+        AddInstruction(scale + " = binary mul i64 1, " + integer_text(size));
+        offset = scale;
+        if(PA12Operator(node->value) == "--") {
+          const string neg = new_temp();
+          AddInstruction(neg + " = binary sub i64 0, " + scale);
+          offset = neg;
+        }
+      }
+      result.operand = new_temp();
+      AddInstruction(result.operand + " = index i8 " + old.operand + ", " + offset);
+    } else {
+      result.operand = new_temp();
+      AddInstruction(result.operand + " = binary " +
+        (PA12Operator(node->value) == "++" ? "add" : "sub") + " " + low_type(type) +
+        " " + old.operand + ", 1");
+    }
+    StoreLValue(child_node, scope, type, result.operand);
+    (void)address_only;
+    return node->kind == "postfix-expression" ? old : result;
+  }
+
+PA14Lowerer::Value PA14Lowerer::EmitCompare(const CPPGMAstNodePtr& node, Scope* scope)
+{
+    ExprInfo left_info = Infer(node->children[0], scope);
+    ExprInfo right_info = Infer(node->children[1], scope);
+    TypePtr left_type = expression_value_type(left_info);
+    TypePtr right_type = expression_value_type(right_info);
+    TypePtr common = CommonType(left_type, right_type, PA12Operator(node->value));
+    if(left_type && right_type && left_type->kind == TYPE_POINTER && right_type->kind == TYPE_POINTER)
+      common = left_type;
+    Value left = EmitValue(node->children[0], scope, common);
+    Value right = EmitValue(node->children[1], scope, common);
+    CPPGMAstNodePtr difference = node->children[0];
+    while(difference && difference->kind == "parenthesized-expression" &&
+          !difference->children.empty()) difference = difference->children[0];
+    const bool pointer_difference = difference && difference->kind == "binary-expression" &&
+      PA12Operator(difference->value) == "-" && difference->children.size() >= 2 &&
+      expression_value_type(Infer(difference->children[0], scope)) &&
+      expression_value_type(Infer(difference->children[0], scope))->kind == TYPE_POINTER &&
+      expression_value_type(Infer(difference->children[1], scope)) &&
+      expression_value_type(Infer(difference->children[1], scope))->kind == TYPE_POINTER;
+    if(pointer_difference && left.known_constant && is_integral_type(left.type) && is_integral_type(common) &&
+       type_size(common) > type_size(left.type)) {
+      left.type = common;
+      left.operand = integer_text(left.constant);
+    } else left = ConvertValue(left, common);
+    if(pointer_difference && right.known_constant && is_integral_type(right.type) && is_integral_type(common) &&
+       type_size(common) > type_size(right.type)) {
+      right.type = common;
+      right.operand = integer_text(right.constant);
+    } else if(right.known_constant && is_integral_type(right.type) && right.constant == 0 &&
+       common && type_value(common)->kind == TYPE_FUNDAMENTAL &&
+       is_unsigned_type(common) && low_type(common) == "u32") {
+      right.type = common;
+      right.operand = "0";
+    } else if(right.known_constant && right.type && type_value(right.type)->kind == TYPE_FUNDAMENTAL &&
+       (type_value(right.type)->name == "char" ||
+        type_value(right.type)->name == "signed char" ||
+        type_value(right.type)->name == "unsigned char")) {
+      right.type = common;
+      right.operand = integer_text(right.constant);
+    } else right = ConvertValue(right, common);
+    const string op = PA12Operator(node->value);
+    string predicate;
+    const bool unsigned_compare = common && is_unsigned_type(common) &&
+      !is_floating_type(common);
+    if(op == "==") predicate = "eq";
+    else if(op == "!=" || op == "not_eq") predicate = "ne";
+    else if(op == "<") predicate = unsigned_compare ? "ult" : "lt";
+    else if(op == ">") predicate = unsigned_compare ? "ugt" : "gt";
+    else if(op == "<=") predicate = unsigned_compare ? "ule" : "le";
+    else if(op == ">=") predicate = unsigned_compare ? "uge" : "ge";
+    else throw logic_error("unsupported comparison");
+    Value result;
+    result.type = Fundamental("bool");
+    result.operand = new_temp();
+    AddInstruction(result.operand + " = cmp " + predicate + " " + low_type(common) +
+      " " + left.operand + ", " + right.operand);
+    return result;
+  }
+
+PA14Lowerer::Value PA14Lowerer::EmitBinary(const CPPGMAstNodePtr& node, Scope* scope)
+{
+    const string op = PA12Operator(node->value);
+    if(op == "&&" || op == "||" || op == "and" || op == "or") return EmitLogicalValue(node, scope);
+    if(op == ",") {
+      EmitDiscard(node->children[0], scope);
+      return EmitValue(node->children[1], scope);
+    }
+    if(op == "==" || op == "!=" || op == "not_eq" || op == "<" ||
+       op == ">" || op == "<=" || op == ">=") return EmitCompare(node, scope);
+    ExprInfo info = Infer(node, scope);
+    TypePtr result_type = expression_value_type(info);
+    ExprInfo left_info = Infer(node->children[0], scope);
+    ExprInfo right_info = Infer(node->children[1], scope);
+    TypePtr left_type = expression_value_type(left_info);
+    TypePtr right_type = expression_value_type(right_info);
+    if((op == "+" || op == "-") &&
+       ((left_type && (left_type->kind == TYPE_POINTER || left_type->kind == TYPE_ARRAY)) ||
+        (right_type && (right_type->kind == TYPE_POINTER || right_type->kind == TYPE_ARRAY)))) {
+      if(op == "-" && left_type && right_type && left_type->kind == TYPE_POINTER &&
+         right_type->kind == TYPE_POINTER) {
+        Value left = EmitValue(node->children[0], scope);
+        Value right = EmitValue(node->children[1], scope);
+        const string difference = new_temp();
+        AddInstruction(difference + " = binary sub ptr " + left.operand + ", " + right.operand);
+        const string result = new_temp();
+        AddInstruction(result + " = binary div i64 " + difference + ", " +
+          integer_text(static_cast<long long>(type_size(left_type->child))));
+        Value value;
+        value.type = result_type;
+        value.operand = result;
+        return value;
+      }
+      Value value;
+      value.type = result_type;
+      value.operand = EmitPointerOffset(node, scope);
+      return value;
+    }
+    TypePtr common = CommonType(left_type, right_type, op);
+    Value left_raw = EmitValue(node->children[0], scope, common);
+    Value right_raw = EmitValue(node->children[1], scope, common);
+    Value left = left_raw;
+    Value right = right_raw;
+    if(left_raw.known_constant && is_integral_type(left_raw.type) &&
+       is_integral_type(common) && type_size(common) > type_size(left_raw.type)) {
+      left.type = common;
+      left.operand = integer_text(left_raw.constant);
+    } else left = ConvertValue(left_raw, common);
+    if(right_raw.known_constant && is_integral_type(right_raw.type) &&
+       is_integral_type(common) && type_size(common) > type_size(right_raw.type)) {
+      right.type = common;
+      right.operand = integer_text(right_raw.constant);
+    } else right = ConvertValue(right_raw, common);
+    string binary;
+    if(op == "+") binary = "add";
+    else if(op == "-") binary = "sub";
+    else if(op == "*") binary = "mul";
+    else if(op == "/") binary = "div";
+    else if(op == "%") binary = "mod";
+    else if(op == "&" || op == "bitand") binary = "and";
+    else if(op == "|") binary = "or";
+    else if(op == "^") binary = "xor";
+    else if(op == "<<") binary = "shl";
+    else if(op == ">>") binary = "shr";
+    else throw logic_error("unsupported binary operator");
+    Value result;
+    result.type = result_type;
+    result.operand = new_temp();
+    AddInstruction(result.operand + " = binary " + binary + " " + low_type(common) +
+      " " + left.operand + ", " + right.operand);
+    return result;
+  }
+
+string PA14Lowerer::EmitReferenceArgument(const CPPGMAstNodePtr& node, Scope* scope,
+                               const TypePtr& target)
+{
+    TypePtr referred = target->child;
+    ExprInfo source = Infer(node, scope);
+    TypePtr source_type = expression_value_type(source);
+    const bool direct_address = source.category == "lvalue" &&
+      PA12SameType(source_type, referred, true) &&
+      (!referred->is_const || !source_type->is_const || referred->is_const);
+    if(direct_address) return EmitAddress(node, scope);
+    const string slot = new_special_slot("refarg", low_type(referred));
+    Value value = EmitValue(node, scope, referred);
+    value = ConvertValue(value, referred);
+    emit_store(referred, value.operand, "$" + slot);
+    const string address = new_temp();
+    AddInstruction(address + " = addr $" + slot);
+    return address;
+  }
+
+PA14Lowerer::Value PA14Lowerer::EmitCall(const CPPGMAstNodePtr& node, Scope* scope)
+{
+    CallChoice choice = ChooseCall(node, scope);
+    CPPGMAstNodePtr callee_node = node->children[0];
+    CPPGMAstNodePtr argument_list = node->children.size() > 1 ? node->children[1] : CPPGMAstNodePtr();
+    vector<CPPGMAstNodePtr> arguments = argument_list ? argument_list->children : vector<CPPGMAstNodePtr>();
+    FunctionRecord* function_record = choice.binding ? RecordForBinding(choice.binding) : 0;
+    vector<CPPGMAstNodePtr> all_arguments = arguments;
+    if(function_record) {
+      while(all_arguments.size() < choice.function->parameters.size()) {
+        const size_t index = all_arguments.size();
+        if(index >= function_record->default_arguments.size() ||
+           !function_record->default_arguments[index]) break;
+        CPPGMAstNodePtr initializer = function_record->default_arguments[index];
+        all_arguments.push_back(InitializerExpression(initializer));
+      }
+    }
+    vector<string> operands;
+    for(size_t i = 0; i < all_arguments.size(); ++i) {
+      TypePtr target = i < choice.function->parameters.size() ? choice.function->parameters[i] : TypePtr();
+      if(target && type_is_reference(target)) {
+        operands.push_back(EmitReferenceArgument(all_arguments[i], scope, target));
+        continue;
+      }
+      Value value = EmitValue(all_arguments[i], scope, target);
+      if(target) value = ConvertValue(value, target);
+      else if(value.type && type_value(value.type)->kind == TYPE_FUNDAMENTAL &&
+              type_value(value.type)->name == "float") {
+        value = ConvertValue(value, Fundamental("double"));
+      } else if(target && type_value(target)->kind == TYPE_FUNDAMENTAL &&
+                type_value(target)->name == "double" && value.type &&
+                type_value(value.type)->name == "float") {
+        value = ConvertValue(value, target);
+      }
+      operands.push_back(value.operand);
+    }
+    ostringstream arguments_text;
+    for(size_t i = 0; i < operands.size(); ++i) {
+      if(i != 0) arguments_text << ", ";
+      arguments_text << operands[i];
+    }
+    string callee;
+    ostringstream signature;
+    if(choice.direct) {
+      if(!function_record) throw logic_error("missing direct function record");
+      callee = "@" + function_record->symbol;
+    } else {
+      Value callee_value = EmitValue(callee_node, scope);
+      callee = callee_value.operand;
+      signature << " as (";
+      for(size_t i = 0; i < choice.function->parameters.size(); ++i) {
+        if(i != 0) signature << ", ";
+        signature << "%arg" << i << " : " << low_type(choice.function->parameters[i]);
+        if(type_is_reference(choice.function->parameters[i])) signature << " [pass=reference]";
+      }
+      signature << ") -> " << low_type(choice.function->child);
+    }
+    TypePtr return_type = choice.function->child;
+    const string return_low = low_type(return_type);
+    Value result;
+    result.type = type_is_reference(return_type) ? return_type->child : return_type;
+    result.lvalue = type_is_reference(return_type);
+    if(return_low == "void") {
+      AddInstruction("call void " + callee + "(" + arguments_text.str() + ")" + signature.str());
+      result.operand.clear();
+      return result;
+    }
+    result.operand = new_temp();
+    AddInstruction(result.operand + " = call " + return_low + " " + callee + "(" +
+      arguments_text.str() + ")" + signature.str());
+    return result;
+  }
+
+PA14Lowerer::Value PA14Lowerer::EmitConditionalValue(const CPPGMAstNodePtr& node, Scope* scope,
+                              const TypePtr& expected)
+{
+    ExprInfo info = Infer(node, scope, expected);
+    TypePtr type = expression_value_type(info);
+    if(expected) type = type_value(expected);
+    const string slot = new_special_slot("cond", low_type(type));
+    const string then_label = new_label("cond_then");
+    const string else_label = new_label("cond_else");
+    const string end_label = new_label("cond_end");
+    // The condition of ?: is a value context.  Logical operators therefore
+    // materialize their short-circuit result before selecting the arm; direct
+    // statement conditions use EmitCondition and keep the branch-only form.
+    Value condition = EmitValue(node->children[0], scope);
+    condition.operand = EmitTruthValue(condition);
+    Terminate("branch " + condition.operand + ", ^" + then_label + ", ^" + else_label);
+    AddBlock(then_label);
+    Value when_true = EmitValue(node->children[1], scope, type);
+    when_true = ConvertValue(when_true, type);
+    emit_store(type, when_true.operand, "$" + slot);
+    if(!state_->current->terminated) Terminate("jump ^" + end_label);
+    AddBlock(else_label);
+    Value when_false = EmitValue(node->children[2], scope, type);
+    when_false = ConvertValue(when_false, type);
+    emit_store(type, when_false.operand, "$" + slot);
+    if(!state_->current->terminated) Terminate("jump ^" + end_label);
+    AddBlock(end_label);
+    Value result;
+    result.type = type;
+    result.operand = emit_load("$" + slot, type);
+    return result;
+  }
+
+string PA14Lowerer::EmitConditionalAddress(const CPPGMAstNodePtr& node, Scope* scope)
+{
+    ExprInfo info = Infer(node, scope);
+    TypePtr type = expression_value_type(info);
+    const string slot = new_special_slot("condaddr", "ptr");
+    const string then_label = new_label("condaddr_then");
+    const string else_label = new_label("condaddr_else");
+    const string end_label = new_label("condaddr_end");
+    EmitCondition(node->children[0], scope, then_label, else_label);
+    AddBlock(then_label);
+    const string true_address = EmitAddress(node->children[1], scope);
+    emit_store(PointerTo(Fundamental("char")), true_address, "$" + slot);
+    Terminate("jump ^" + end_label);
+    AddBlock(else_label);
+    const string false_address = EmitAddress(node->children[2], scope);
+    emit_store(PointerTo(Fundamental("char")), false_address, "$" + slot);
+    Terminate("jump ^" + end_label);
+    AddBlock(end_label);
+    (void)type;
+    return emit_load("$" + slot, PointerTo(Fundamental("char")));
+  }
+
+string PA14Lowerer::EmitLogicalRightTruth(const CPPGMAstNodePtr& node, Scope* scope)
+{
+    CPPGMAstNodePtr value_node = node;
+    while(value_node && value_node->kind == "parenthesized-expression" &&
+          !value_node->children.empty()) value_node = value_node->children[0];
+    Value value = EmitValue(value_node, scope);
+    if(value_node && (value_node->kind == "binary-expression" &&
+       (PA12Operator(value_node->value) == "&&" || PA12Operator(value_node->value) == "||" ||
+        PA12Operator(value_node->value) == "and" || PA12Operator(value_node->value) == "or"))) {
+      const string temp = new_temp();
+      AddInstruction(temp + " = cmp ne i64 " + value.operand + ", 0");
+      return temp;
+    }
+    if(value_node && (value_node->kind == "binary-expression" &&
+       (PA12Operator(value_node->value) == "==" || PA12Operator(value_node->value) == "!=" ||
+        PA12Operator(value_node->value) == "<" || PA12Operator(value_node->value) == ">" ||
+        PA12Operator(value_node->value) == "<=" || PA12Operator(value_node->value) == ">="))) {
+      const string temp = new_temp();
+      AddInstruction(temp + " = cmp ne i64 " + value.operand + ", 0");
+      return temp;
+    }
+    if(value.type && (is_integral_type(value.type) ||
+                      (type_value(value.type)->kind == TYPE_FUNDAMENTAL &&
+                       type_value(value.type)->name == "bool"))) {
+      const string temp = new_temp();
+      AddInstruction(temp + " = cmp ne i64 " + value.operand + ", 0");
+      return temp;
+    }
+    return EmitTruthValue(value);
+  }
+
+PA14Lowerer::Value PA14Lowerer::EmitLogicalValue(const CPPGMAstNodePtr& node, Scope* scope)
+{
+    const string op = PA12Operator(node->value);
+    const string slot = new_special_slot(op == "||" || op == "or" ? "lor" : "land", "i64");
+    const string rhs_label = new_label(op == "||" || op == "or" ? "lor_rhs" : "land_rhs");
+    const string short_label = new_label(op == "||" || op == "or" ? "lor_short" : "land_short");
+    const string end_label = new_label(op == "||" || op == "or" ? "lor_end" : "land_end");
+    const CPPGMAstNodePtr left_node = node->children[0];
+    const bool left_is_logical = left_node && left_node->kind == "binary-expression" &&
+      (PA12Operator(left_node->value) == "&&" || PA12Operator(left_node->value) == "||" ||
+       PA12Operator(left_node->value) == "and" || PA12Operator(left_node->value) == "or");
+    if(left_is_logical) {
+      Value left = EmitValue(left_node, scope);
+      Terminate("branch " + left.operand + ", ^" +
+        (op == "||" || op == "or" ? short_label : rhs_label) + ", ^" +
+        (op == "||" || op == "or" ? rhs_label : short_label));
+    } else if(op == "||" || op == "or") {
+      EmitCondition(left_node, scope, short_label, rhs_label);
+    } else EmitCondition(left_node, scope, rhs_label, short_label);
+    AddBlock(rhs_label);
+    const string right = EmitLogicalRightTruth(node->children[1], scope);
+    emit_store(Fundamental("long int"), right, "$" + slot);
+    Terminate("jump ^" + end_label);
+    AddBlock(short_label);
+    emit_store(Fundamental("long int"), op == "||" || op == "or" ? "1" : "0", "$" + slot);
+    Terminate("jump ^" + end_label);
+    AddBlock(end_label);
+    Value result;
+    result.type = Fundamental("bool");
+    result.operand = emit_load("$" + slot, Fundamental("long int"));
+    return result;
+  }
+
+void PA14Lowerer::EmitCondition(const CPPGMAstNodePtr& node, Scope* scope,
+                     const string& true_label, const string& false_label)
+{
+    if(!node) { Terminate("branch 0, ^" + false_label + ", ^" + false_label); return; }
+    if(node->kind == "parenthesized-expression" && !node->children.empty()) {
+      EmitCondition(node->children[0], scope, true_label, false_label);
+      return;
+    }
+    if(node->kind == "condition-declaration") {
+      VariablePlan* variable = BindCondition(node);
+      if(!variable || node->children.size() < 3) throw logic_error("invalid condition declaration");
+      EmitInitializer(variable, node->children[2], scope);
+      Value value = EmitValue(node->children[1] && node->children[1]->children.size() ?
+        CPPGMAstNodePtr(new CPPGMAstNode("id-expression", variable->source_name)) :
+        CPPGMAstNodePtr(new CPPGMAstNode("id-expression", variable->source_name)), scope);
+      string operand = value.operand;
+      if(is_floating_type(value.type)) operand = EmitTruthValue(value);
+      Terminate("branch " + operand + ", ^" + true_label + ", ^" + false_label);
+      return;
+    }
+    if(node->kind == "binary-expression") {
+      const string op = PA12Operator(node->value);
+      if(op == "&&" || op == "and") {
+        const string rhs_label = new_label("land_rhs");
+        EmitCondition(node->children[0], scope, rhs_label, false_label);
+        AddBlock(rhs_label);
+        EmitCondition(node->children[1], scope, true_label, false_label);
+        return;
+      }
+      if(op == "||" || op == "or") {
+        const string rhs_label = new_label("lor_rhs");
+        EmitCondition(node->children[0], scope, true_label, rhs_label);
+        AddBlock(rhs_label);
+        EmitCondition(node->children[1], scope, true_label, false_label);
+        return;
+      }
+      if(op == "==" || op == "!=" || op == "not_eq" || op == "<" ||
+         op == ">" || op == "<=" || op == ">=") {
+        Value value = EmitCompare(node, scope);
+        Terminate("branch " + value.operand + ", ^" + true_label + ", ^" + false_label);
+        return;
+      }
+    }
+    if(node->kind == "unary-expression" && PA12Operator(node->value) == "!") {
+      Value child = EmitValue(node->children[0], scope);
+      TypePtr type = type_value(child.type);
+      if(type && (is_integral_type(type) ||
+                  (type->kind == TYPE_FUNDAMENTAL && type->name == "bool"))) {
+        const string temp = new_temp();
+        AddInstruction(temp + " = cmp eq i64 " + child.operand + ", 0");
+        Terminate("branch " + temp + ", ^" + true_label + ", ^" + false_label);
+      } else {
+        const string operand = EmitTruthValue(child);
+        Terminate("branch " + operand + ", ^" + false_label + ", ^" + true_label);
+      }
+      return;
+    }
+    Value value = EmitValue(node, scope);
+    string operand = value.operand;
+    TypePtr type = type_value(value.type);
+    if(is_floating_type(type) || (type && type->kind == TYPE_POINTER)) operand = EmitTruthValue(value);
+    Terminate("branch " + operand + ", ^" + true_label + ", ^" + false_label);
+  }
+
+PA14Lowerer::Value PA14Lowerer::EmitValue(const CPPGMAstNodePtr& node, Scope* scope,
+                  const TypePtr& expected)
+{
+    if(!node) throw logic_error("missing value during LowIR lowering");
+    if(node->kind == "literal") {
+      Value result;
+      if(!node->value.empty() && node->value[0] == '"') {
+        result.type = ArrayOf(-1, Fundamental("char"));
+        result.array = true;
+        result.operand = EmitAddress(node, scope);
+        return result;
+      }
+      bool known = false;
+      long long constant = 0;
+      result.operand = canonical_literal(node->value, &result.type, &constant, &known);
+      result.known_constant = known;
+      result.constant = constant;
+      return result;
+    }
+    if(node->kind == "keyword-literal") return InferKeyword(node).type->name == "nullptr_t" ?
+      ValueWithNullptr() : ValueFromInfo(InferKeyword(node));
+    if(node->kind == "id-expression") return EmitIdentifier(node, scope, expected);
+    if(node->kind == "parenthesized-expression")
+      return node->children.empty() ? Value() : EmitValue(node->children[0], scope, expected);
+    if(node->kind == "call-expression") {
+      Value result = EmitCall(node, scope);
+      if(result.lvalue && result.type) {
+        result.operand = emit_load(result.operand, result.type);
+        result.lvalue = false;
+      }
+      return expected ? ConvertValue(result, type_value(expected)) : result;
+    }
+    if(node->kind == "unary-expression") return EmitUnary(node, scope, expected);
+    if(node->kind == "postfix-expression") {
+      return EmitUpdate(node, scope, false);
+    }
+    if(node->kind == "binary-expression") return EmitBinary(node, scope);
+    if(node->kind == "assignment-expression") return EmitAssignment(node, scope);
+    if(node->kind == "conditional-expression") {
+      ExprInfo info = Infer(node, scope, expected);
+      if(info.category == "lvalue" && expected && type_is_reference(expected)) {
+        Value result;
+        result.type = info.type;
+        result.operand = EmitConditionalAddress(node, scope);
+        result.lvalue = true;
+        return result;
+      }
+      return EmitConditionalValue(node, scope, expected);
+    }
+    if(node->kind == "subscript-expression") {
+      ExprInfo info = Infer(node, scope);
+      Value result;
+      result.type = info.type;
+      result.operand = emit_load(EmitSubscriptAddress(node, scope), info.type);
+      return result;
+    }
+    if(node->kind == "cast-expression") {
+      TypePtr target = analyzer_.TypeFromTypeId(node->children[0], scope);
+      if(type_is_reference(target)) {
+        Value result;
+        result.type = target->child;
+        result.operand = EmitAddress(node->children[1], scope);
+        result.lvalue = true;
+        if(result.type && result.type->kind == TYPE_FUNCTION) {
+          const string decay = new_temp();
+          AddInstruction(decay + " = unary decay ptr " + result.operand);
+          result.operand = decay;
+          result.lvalue = false;
+        } else if(result.type) {
+          result.operand = emit_load(result.operand, result.type);
+          result.lvalue = false;
+        }
+        return result;
+      }
+      Value value = EmitValue(node->children[1], scope, target);
+      return ConvertValue(value, target);
+    }
+    if(node->kind == "sizeof-expression" || node->kind == "type-trait-expression") {
+      ExprInfo info = Infer(node, scope);
+      Value result;
+      result.type = Fundamental("long int");
+      result.operand = new_temp();
+      AddInstruction(result.operand + " = const i64 " + integer_text(info.constant));
+      result.known_constant = true;
+      result.constant = info.constant;
+      return result;
+    }
+    if(node->kind == "braced-init-list") {
+      Value result;
+      result.type = expected ? type_value(expected) : Fundamental("int");
+      result.operand = "0";
+      result.known_constant = true;
+      result.constant = 0;
+      return result;
+    }
+    throw logic_error("unsupported value node in LowIR lowering: " + node->kind);
+  }
+
+} // namespace cppgm_pa14_lowering

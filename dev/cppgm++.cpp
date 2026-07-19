@@ -3,6 +3,7 @@
 #include "exceptions.h"
 #include "ast_parser.h"
 #include "pa11_semantics.h"
+#include "pa14_lowering.h"
 #include "posttoken_semantics.h"
 #include "preprocessor_engine.h"
 #include "tool_help_text.h"
@@ -461,8 +462,24 @@ int run_emit_semantics_mode(const vector<string> & args)
 
 int run_emit_lowir_mode(const vector<string> & args)
 {
-  parse_source_output_invocation(args, true);
-  return run_unimplemented_mode("--emit-lowir", "PA14");
+  const SourceOutputInvocation invocation = parse_source_output_invocation(args, true);
+  vector<CPPGMAstNodePtr> trees;
+  trees.reserve(invocation.inputs.size());
+  for(size_t i = 0; i < invocation.inputs.size(); ++i) {
+    const vector<PostPPToken> tokens = PreprocessSourceFile(invocation.inputs[i]);
+    if(!ValidatePostTokens(tokens)) {
+      throw logic_error("invalid token in preprocessed sequence");
+    }
+    const CPPGMAstNodePtr tree = ParsePA10TranslationUnit(tokens);
+    if(!tree) throw logic_error("token sequence is not a translation-unit");
+    trees.push_back(tree);
+  }
+  ostringstream buffer;
+  EmitPA14LowIR(trees, buffer);
+  ofstream output(invocation.output.c_str());
+  if(!output) throw logic_error("unable to open output file");
+  output << buffer.str();
+  return EXIT_SUCCESS;
 }
 
 int run_driver_mode(const vector<string> & args)
