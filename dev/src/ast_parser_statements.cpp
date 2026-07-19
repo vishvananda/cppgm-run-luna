@@ -61,7 +61,7 @@ CPPGMAstNodePtr Parser::ParseStatement()
 	}
 	if ((declaration_start && !(Peek().kind == AST_IDENTIFIER && Peek(1).text == "(" &&
 		Peek(2).text == "&")) || Is("static_assert") || Is("using") || Is("class") ||
-		Is("struct") || Is("union") || Is("enum") || Is("typedef"))
+		Is("struct") || Is("union") || Is("enum") || Is("typedef") || Is("namespace"))
 	{
 		result = ParseDeclaration(false);
 		if (result) return result;

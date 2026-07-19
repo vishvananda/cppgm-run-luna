@@ -2,6 +2,22 @@
 
 using namespace std;
 
+namespace {
+
+string FirstDeclaratorIdentifier(const CPPGMAstNodePtr& node)
+{
+	if (!node) return string();
+	if (node->kind == "identifier") return node->value;
+	for (size_t i = 0; i < node->children.size(); ++i)
+	{
+		const string result = FirstDeclaratorIdentifier(node->children[i]);
+		if (!result.empty()) return result;
+	}
+	return string();
+}
+
+} // namespace
+
 namespace cppgm_pa10 {
 
 CPPGMAstNodePtr Parser::ParseDeclSpecifierSeq(bool type_id_context)
@@ -521,9 +537,14 @@ CPPGMAstNodePtr Parser::ParseParameterDeclaration()
 		}
 		CPPGMAstNodePtr initializer = Node("initializer");
 		Add(initializer, clause);
-		CPPGMAstNodePtr default_argument = Node("default-argument");
+	CPPGMAstNodePtr default_argument = Node("default-argument");
 		Add(default_argument, initializer);
 		Add(result, default_argument);
+	}
+	if (declarator)
+	{
+		const string name = FirstDeclaratorIdentifier(declarator);
+		if (!name.empty()) value_names_.insert(name);
 	}
 	return result;
 }

@@ -30,7 +30,7 @@ Parser::Parser(const vector<Token>& tokens)
 {
 	const char* const fundamentals[] = {
 		"bool", "char", "char16_t", "char32_t", "double", "float", "int",
-		"long", "short", "signed", "unsigned", "void", "wchar_t", "auto"
+		"long", "short", "signed", "unsigned", "void", "wchar_t", "auto", "nullptr_t"
 	};
 	for (size_t i = 0; i < sizeof(fundamentals) / sizeof(*fundamentals); ++i)
 		types_.insert(fundamentals[i]);
@@ -146,7 +146,7 @@ bool Parser::IsFundamental(const string& text) const
 {
 	static const char* const values[] = {
 		"bool", "char", "char16_t", "char32_t", "double", "float", "int",
-		"long", "short", "signed", "unsigned", "void", "wchar_t", "auto"
+		"long", "short", "signed", "unsigned", "void", "wchar_t", "auto", "nullptr_t"
 	};
 	return Contains(values, values + sizeof(values) / sizeof(*values), text);
 }

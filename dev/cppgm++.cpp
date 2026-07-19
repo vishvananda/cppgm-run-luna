@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -438,8 +439,24 @@ int run_emit_types_mode(const vector<string> & args)
 
 int run_emit_semantics_mode(const vector<string> & args)
 {
-  parse_source_output_invocation(args, false);
-  return run_unimplemented_mode("--emit-semantics", "PA12");
+  const SourceOutputInvocation invocation = parse_source_output_invocation(args, false);
+  ofstream output(invocation.output.c_str());
+  if(!output) throw logic_error("unable to open output file");
+  ostringstream buffer;
+  buffer << invocation.inputs.size() << " translation units\n";
+  for(size_t i = 0; i < invocation.inputs.size(); ++i) {
+    const vector<PostPPToken> tokens = PreprocessSourceFile(invocation.inputs[i]);
+    if(!ValidatePostTokens(tokens)) {
+      throw logic_error("invalid token in preprocessed sequence");
+    }
+    const CPPGMAstNodePtr tree = ParsePA10TranslationUnit(tokens);
+    if(!tree) throw logic_error("token sequence is not a translation-unit");
+    buffer << "start translation unit " << (i + 1) << "\n";
+    EmitPA12Semantics(tree, buffer);
+    buffer << "end translation unit\n";
+  }
+  output << buffer.str();
+  return EXIT_SUCCESS;
 }
 
 int run_emit_lowir_mode(const vector<string> & args)

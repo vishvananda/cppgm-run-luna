@@ -52,7 +52,7 @@ bool Parser::ParseTemplateSuffix(string* value)
 			tokens_[i - 1].text == "template")) raw += " ";
 		raw += tokens_[i].text;
 	}
-	if (templates_.find(*value) == templates_.end() &&
+	if (ordinary_depth_ != 0 && templates_.find(*value) == templates_.end() &&
 		value->find("::") == string::npos && raw.find("||") != string::npos &&
 		Peek().text != "{" && Peek().text != ";" && Peek().text != "," &&
 		Peek().text != ">" && Peek().text != ")" && Peek().text != "::")

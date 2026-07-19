@@ -251,8 +251,55 @@ CPPGMAstNodePtr Parser::ParsePrimaryExpression()
 		++position_;
 		return Node("keyword-literal", TokenLabel(keyword) + ":" + keyword);
 	}
+	if (Is("decltype"))
+	{
+		Mark decltype_mark = Save();
+		CPPGMAstNodePtr type = ParseDecltypeSpecifier();
+		if (type && Take("("))
+		{
+			++ordinary_depth_;
+			CPPGMAstNodePtr argument;
+			if (!Is(")")) argument = ParseInitializerClause();
+			if (Take(")"))
+			{
+				--ordinary_depth_;
+				CPPGMAstNodePtr arguments = Node("argument-list");
+				Add(arguments, argument);
+				CPPGMAstNodePtr result = Node("call-expression");
+				Add(result, type);
+				Add(result, arguments);
+				return result;
+			}
+			--ordinary_depth_;
+		}
+		Restore(decltype_mark);
+	}
 	if (IsFundamental(Peek().text))
 	{
+		// A multi-word fundamental type followed by parentheses is a
+		// functional cast.  The ordinary one-word path below deliberately
+		// remains a call-shaped node because the semantic printer also uses
+		// that form for aliases and single-word fundamental casts.
+		Mark functional_mark = Save();
+		CPPGMAstNodePtr functional_type = ParseTypeId();
+		if (functional_type && !functional_type->children.empty() &&
+			functional_type->children[0] &&
+			functional_type->children[0]->children.size() > 1 && Take("("))
+		{
+			++ordinary_depth_;
+			CPPGMAstNodePtr argument;
+			if (!Is(")")) argument = ParseExpression();
+			if (Take(")"))
+			{
+				--ordinary_depth_;
+				CPPGMAstNodePtr result = Node("cast-expression");
+				Add(result, functional_type);
+				Add(result, argument);
+				return result;
+			}
+			--ordinary_depth_;
+		}
+		Restore(functional_mark);
 		const string keyword = Peek().text;
 		++position_;
 		return Node("id-expression", keyword);
