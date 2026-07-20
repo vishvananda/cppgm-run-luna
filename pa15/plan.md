@@ -561,3 +561,69 @@ new PA14 units.  Validation remains **200 / 200** for PA15, **819 / 819**
 through PA14, and the PA15 file audit passes with only the three existing
 header-division warnings.  No behavior group remains for PA15; the next
 checkpoint group is PA16.
+
+## Architecture Review
+
+The completed PA15 stage preserves the staged compiler boundary described by
+the assignment:
+
+- `ast_parser*` remains the syntax boundary. It records initializer form,
+  typed standard `alignas` arguments, qualified member/special-member forms,
+  and user-defined literal operator tokens without turning source spelling
+  into LowIR policy.
+- `pa11_semantics_model.*` owns typed entities: `Type` carries complete class
+  layout and base metadata, `ClassMemberInfo` owns declaration-order offsets,
+  bit-field units, static/member flags, and default initializers, and `Scope`
+  owns lookup bindings and class scopes. Bindings identify member facts by a
+  stable `TypePtr` owner plus index.
+- `pa11_semantics_analyzer.*` resolves named types, class members, access and
+  friend relationships, inheritance, alignment, and constant layout facts.
+  Incomplete and recursive layouts fail at the semantic boundary instead of
+  receiving a fabricated size or alignment.
+- `pa14_lowering.*` is still the one typed LowIR lowering path. Collection,
+  semantic selection, planning, global emission, expression/control lowering,
+  constructor/destructor actions, and aggregate/object lowering are split into
+  cohesive implementation units and linked through
+  `dev/frontend_source_sets.mk`.
+- The final checkpoint's aggregate, hidden-friend, and UDL behavior stays in
+  those same typed paths: aggregate value initialization creates storage
+  actions, ADL chooses and marks hidden-friend records, and UDL lowering uses
+  interned decoded bytes plus a length argument. None of these paths invoke a
+  reference executable or a host compiler.
+
+The lifetime architecture is explicit and order-preserving. Local object
+plans attach construction and cleanup to declaration/control-flow lowering;
+class constructors recursively initialize direct bases and members; class
+destructors walk members and arrays in reverse order; namespace-scope objects
+use `@__cppgm_init` and `@__cppgm_fini` with declaration-order initialization
+and reverse-order finalization. Demand-driven function roots and fixed-point
+member/helper emission keep unused special members out of the output while
+retaining transitive dependencies.
+
+The ownership review found and resolved a late-synthesis hazard: semantic
+`Binding*` values can outlive the append that creates synthesized PA15
+entities, so `Scope::bindings` now uses stable-address `deque` storage. The
+other long-lived records use `TypePtr`, `unique_ptr` scopes, and `deque`
+function/global/variable storage, so their references have an explicit owner.
+
+## Final Architecture Review
+
+The final implementation is a clean PA15 extension of PA14 rather than a
+second object backend. It satisfies the intended non-polymorphic object-model
+boundary: complete layout, member access and calls, single inheritance,
+constructors/destructors, aggregate/reference/bit-field initialization,
+namespace-scope lifetime, ordinary operators/ADL, and the tested metadata and
+literal paths all lower through shared typed semantic records into the PA13
+LowIR format. Copy/move value semantics, virtual dispatch, templates, and
+other PA15 out-of-scope features remain cleanly deferred to later stages.
+
+The final checkpoint was re-audited against the source tests and the full
+stage, not just its focused cases. The direct PA15 suite passes **200 / 200**;
+the current root through-stage report passes **1019 / 1019**; and the source
+file audit passes with no fatal findings. The three reported header-division
+warnings are inherited repository structure, already recorded by the earlier
+PA14/PA15 audits, and are not implementation shortcuts or unchecked files.
+The stable-binding cleanup preserves all of those results and removes the only
+new ownership risk found in the final review. PA15 is therefore consolidated
+and ready for the PA16 value-semantics handoff once the audit commit leaves the
+worktree clean.

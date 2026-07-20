@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <deque>
 #include <limits>
 #include <map>
 #include <memory>
@@ -151,7 +152,10 @@ struct Scope
 	// Class scopes retain their owning type for typed member lowering.
 	TypePtr owner_type;
 	bool inline_namespace;
-	vector<Binding> bindings;
+	// Lowering may append synthesized constructors, destructors, and aggregate
+	// bindings after expression facts have retained Binding pointers.  A deque
+	// keeps those semantic identities stable while preserving indexed lookup.
+	deque<Binding> bindings;
 	map<string, size_t> local_bindings;
 	vector<unique_ptr<Scope> > children;
 	map<string, Scope*> namespace_children;

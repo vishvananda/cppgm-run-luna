@@ -1023,13 +1023,15 @@ public:
 			}
 		}
 		else if (scope->kind == SCOPE_CLASS)
+		{
 			member_owner = scope->owner_type;
-			Binding binding(BIND_FUNCTION, name, function_type);
-			binding.hidden_friend = facts.is_friend;
-			binding.friend_owner = facts.is_friend ? member_owner : TypePtr();
-			binding.is_member = static_cast<bool>(member_owner) && !facts.is_friend;
-			binding.is_static = facts.is_static;
-			binding.member_owner = member_owner;
+		}
+		Binding binding(BIND_FUNCTION, name, function_type);
+		binding.hidden_friend = facts.is_friend;
+		binding.friend_owner = facts.is_friend ? member_owner : TypePtr();
+		binding.is_member = static_cast<bool>(member_owner) && !facts.is_friend;
+		binding.is_static = facts.is_static;
+		binding.member_owner = member_owner;
 		declaration_scope->add(binding);
 		Scope* function_scope = NewChild(declaration_scope, SCOPE_FUNCTION, name);
 		function_scopes_[node.get()] = function_scope;
