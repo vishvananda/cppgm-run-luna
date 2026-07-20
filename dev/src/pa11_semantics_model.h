@@ -101,6 +101,11 @@ struct Type
 	TypePtr underlying;
 	vector<ClassMemberInfo> class_members;
 	TypePtr direct_base;
+	// Offset of the direct base subobject within the complete object.  The
+	// supported PA17 layout normally keeps a single-inheritance base at zero;
+	// a class that introduces its first vpointer reserves offset zero for that
+	// pointer and records the non-polymorphic base's adjusted address here.
+	size_t direct_base_offset;
 	size_t object_size;
 	size_t object_alignment;
 	size_t explicit_alignment;

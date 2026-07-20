@@ -97,3 +97,79 @@ Validation result: `make test-report ACTIVE_TEST_REPORT_PAS='pa17'` passes all
 PA17 file audit passes with only the repository's existing header-division
 warnings.  The PA17 remaining-work map is empty; no current-PA checkpoint
 remains.  The next checkpoint is PA18.
+
+## Architecture Review
+
+The completed stage follows the intended monotonic PA11/PA12/PA14 object-model
+architecture described by the assignment README.  PA17 does not introduce a
+second polymorphic backend or infer virtual behavior from emitted LowIR:
+
+- `ast_parser_types.cpp` preserves the PA17 function-suffix syntax as AST
+  facts, including cv/ref qualifiers, `override`, `final`, `noexcept`, and
+  trailing return information.
+- `pa11_semantics_model.h` owns `VirtualMethodInfo`, effective inherited slot
+  facts, class polymorphism flags, and the direct-base subobject offset.
+  `pa11_semantics_analyzer.cpp` builds the inherited slot map, validates exact
+  overrides, covariant pointer/reference returns, pure/final constraints, and
+  computes the class layout before lowering.  A first vpointer is placed at
+  complete-object offset zero; a non-polymorphic direct base is assigned a
+  typed adjusted offset so member and base operations agree with that layout.
+- The existing PA14 `FunctionRecord`, `Binding`, `Scope`, `ExprInfo`, and
+  `CallChoice` records remain the ownership and resolution boundary.  The
+  polymorphic lowering unit adds vtable/RTTI emission and slot lookup, while
+  `ChooseCall` keeps qualified base calls direct and represents ordinary
+  virtual calls as typed indirect calls.
+- Constructor, destructor, value-special-member, delete, and object-adjustment
+  paths remain in the shared PA14 lowering units.  They use the same semantic
+  base offset and vpointer metadata, so constructor/destructor transitions,
+  base copies, member access, and virtual dispatch address the same subobject.
+- `PreparePolymorphicModel` is demand-driven.  It discovers vtable roots and
+  inherited base tables, materializes pure and destructor entries, and marks
+  member definitions whose receivers are actually typed virtual calls.  All
+  order-sensitive type emission uses a semantic-name ordering rather than
+  raw heap-pointer ordering.
+
+The non-polymorphic path remains monotonic: classes with no virtual slots do
+not gain vtables, vpointer stores, or indirect calls, and their PA16 layout,
+direct calls, value operations, and lifetime actions continue through the
+existing code.  PA17 remains deliberately limited to the README's supported
+single-inheritance slice; multiple/virtual inheritance, RTTI use by source
+programs, thunks, class-level `final`, templates, and generalized deleting
+cleanup are not silently introduced.
+
+## Final Architecture Review
+
+The final audit rechecked the green checkpoint at `5603c19` against the PA17
+README, this plan, the PA16 final audit, recent PA16 history, all changed PA17
+source files, and the complete PA17 and through-stage tests.  The checkpoint
+was functionally complete, but the integrated review found four correctness
+and implementation-quality seams and closed them in the final cleanup:
+
+1. When a polymorphic derived class introduced the first vpointer over a
+   non-polymorphic base, the original layout reserved the pointer after the
+   base while ordinary base/member access still addressed offset zero.  The
+   semantic model now records `direct_base_offset`, reserves offset zero for
+   the vpointer, and applies the same adjustment in all shared base paths.
+2. Virtual slot lookup and `delete` previously assumed a destructor was first
+   or last in the compact semantic slot vector.  Slot lookup now expands the
+   complete/deleting pair while walking the declared slots, and delete finds
+   the actual deleting entry through that same helper.
+3. Vtable, RTTI, and constructor preparation iterated `set<const Type*>`
+   directly.  The final implementation orders those types by semantic identity
+   before emitting order-sensitive globals or synthesizing functions, removing
+   heap-address-dependent output.
+4. Demand discovery previously treated any member call whose spelling matched
+   a virtual name as a dependency.  It now resolves the receiver through typed
+   expression facts and the actual virtual slot map, including the `this->`
+   form, so unrelated same-name members cannot manufacture demand edges.
+
+These fixes preserve ownership: long-lived functions and globals remain in
+`deque` storage, semantic bindings remain stable in their owning scopes, and
+virtual metadata holds owner/type facts rather than owning duplicate records.
+The implementation has no fixture-name gates, reference-binary or host
+compiler invocation, alternate backend, dummy output, skipped frontend phase,
+or test-specific LowIR answer.  The file audit still reports only the three
+inherited warning-only header-division findings documented by PA15 and PA16;
+there is no new fatal or unchecked implementation path.  The resulting
+architecture is ready for the PA18 template layer without mixing templates
+into PA17's single-inheritance polymorphism model.

@@ -8,7 +8,7 @@ Type::Type(TypeKind type_kind, const string& type_name)
 	  parameters(), variadic(false), function_const(false), function_volatile(false),
 	  function_lvalue_ref_qualified(false), function_rvalue_ref_qualified(false),
 	  member_owner(), owned_scope(0),
-	  underlying(), class_members(), direct_base(), object_size(0), object_alignment(1),
+	  underlying(), class_members(), direct_base(), direct_base_offset(0), object_size(0), object_alignment(1),
 	  explicit_alignment(0), layout_complete(false), layout_in_progress(false),
 	  is_union(false), enclosing_type(), friend_names(), virtual_methods(),
 	  polymorphic(false), has_vpointer(false) {}

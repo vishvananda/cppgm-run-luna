@@ -1045,8 +1045,18 @@ string PA14Lowerer::AdjustBaseAddress(const string& base, const TypePtr& raw_der
       throw logic_error("member owner is not a base class");
     if(!IsDerivedFrom(derived, wanted))
       throw logic_error("member owner is not a base class");
+    size_t offset = 0;
+    TypePtr current = derived;
+    while(current && !PA12SameType(current, wanted, true)) {
+      if(!current->direct_base)
+        throw logic_error("member owner is not a base class");
+      offset += current->direct_base_offset;
+      current = type_value(current->direct_base);
+    }
+    if(!current) throw logic_error("member owner is not a base class");
     const string adjusted = new_temp();
-    AddInstruction(adjusted + " = index i8 [projection=base_subobject] " + base + ", 0");
+    AddInstruction(adjusted + " = index i8 [projection=base_subobject] " + base + ", " +
+      integer_text(static_cast<long long>(offset)));
     return adjusted;
   }
 

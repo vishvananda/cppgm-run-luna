@@ -62,13 +62,9 @@ bool PA14Lowerer::EmitValueSpecialMemberBody(FunctionRecord& function, Scope* sc
       if(owner->direct_base) {
         TypePtr base = type_value(owner->direct_base);
         if(!IsEmptyBaseStorage(base)) {
-          const string destination_base = new_temp();
-          AddInstruction(destination_base + " = index i8 [projection=base_subobject] " +
-            destination + ", 0");
+          const string destination_base = AdjustBaseAddress(destination, owner, base);
           source = emit_load(source_storage, PointerTo(Fundamental("char")));
-          const string source_base = new_temp();
-          AddInstruction(source_base + " = index i8 [projection=base_subobject] " +
-            source + ", 0");
+          const string source_base = AdjustBaseAddress(source, owner, base);
           if(IsTrivialValueStorage(base)) {
           AddInstruction("copyobj " + integer_text(static_cast<long long>(type_size(base))) +
             "x" + integer_text(static_cast<long long>(type_alignment(base))) + " " +

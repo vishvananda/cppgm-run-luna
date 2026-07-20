@@ -248,9 +248,15 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
           best.virtual_owner = dispatch_object;
         }
       }
-      const bool pure_virtual_dispatch = best.virtual_dispatch && best.virtual_owner &&
-        best.virtual_slot < best.virtual_owner->virtual_methods.size() &&
-        best.virtual_owner->virtual_methods[best.virtual_slot].pure;
+      bool pure_virtual_dispatch = best.binding && best.binding->is_pure;
+      if(best.virtual_dispatch && best.virtual_owner) {
+        size_t semantic_slot = 0;
+        size_t expanded_slot = 0;
+        if(VirtualSlotForCall(best.virtual_owner, best.binding, &expanded_slot,
+                              &semantic_slot) &&
+           semantic_slot < best.virtual_owner->virtual_methods.size())
+          pure_virtual_dispatch = best.virtual_owner->virtual_methods[semantic_slot].pure;
+      }
       if(selected && !pure_virtual_dispatch &&
          !(best.binding && best.binding->is_pure)) {
         selected->needed = true;

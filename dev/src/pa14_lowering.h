@@ -361,12 +361,20 @@ string VTableAddressSymbol(const TypePtr& type) const;
 
 TypePtr SemanticType(const Type* raw_type) const;
 
+vector<const Type*> OrderedTypes(const set<const Type*>& types) const;
+
 bool ShouldUseExternalVtable(const TypePtr& type) const;
 
 void EmitVPointerStore(const TypePtr& owner, const string& address);
 
 bool VirtualSlotForCall(const TypePtr& object, Binding* binding,
-                        size_t* slot) const;
+                        size_t* slot, size_t* semantic_slot = 0) const;
+
+bool VirtualDestructorDeletingSlot(const TypePtr& object,
+                                   size_t* slot) const;
+
+bool ContainsVirtualMemberCall(const CPPGMAstNodePtr& node,
+                               const FunctionRecord& function);
 
 void CollectStringLiterals(const CPPGMAstNodePtr& node, unsigned int braced_depth = 0);
 

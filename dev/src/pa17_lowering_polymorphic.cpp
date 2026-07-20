@@ -40,21 +40,6 @@ bool SameLowFunctionShape(const TypePtr& left, const TypePtr& right)
       (left->child->kind == TYPE_POINTER && right->child->kind == TYPE_POINTER))) ;
 }
 
-bool ContainsMemberCall(const CPPGMAstNodePtr& node,
-                        const set<string>& virtual_names)
-{
-  if (!node) return false;
-  if (node->kind == "call-expression" && !node->children.empty() &&
-      node->children[0] && node->children[0]->kind == "member-expression" &&
-      node->children[0]->children.size() > 1) {
-    const string name = FirstIdentifier(node->children[0]->children[1]);
-    if (virtual_names.find(name) != virtual_names.end()) return true;
-  }
-  for (size_t i = 0; i < node->children.size(); ++i)
-    if (ContainsMemberCall(node->children[i], virtual_names)) return true;
-  return false;
-}
-
 } // namespace
 
 string PA14Lowerer::TypeMangledName(const TypePtr& type) const
@@ -101,6 +86,31 @@ TypePtr PA14Lowerer::SemanticType(const Type* raw_type) const
   return TypePtr();
 }
 
+vector<const Type*> PA14Lowerer::OrderedTypes(const set<const Type*>& types) const
+{
+  vector<const Type*> result(types.begin(), types.end());
+  map<const Type*, TypePtr> semantic_types;
+  for (map<const CPPGMAstNode*, TypePtr>::const_iterator it = analyzer_.class_types_.begin();
+       it != analyzer_.class_types_.end(); ++it)
+    if (it->second) semantic_types[it->second.get()] = it->second;
+  sort(result.begin(), result.end(), [this, &semantic_types](const Type* left, const Type* right) {
+    map<const Type*, TypePtr>::const_iterator left_found = semantic_types.find(left);
+    map<const Type*, TypePtr>::const_iterator right_found = semantic_types.find(right);
+    const TypePtr left_type = left_found == semantic_types.end() ? TypePtr() : left_found->second;
+    const TypePtr right_type = right_found == semantic_types.end() ? TypePtr() : right_found->second;
+    const string left_name = TypeQualifiedName(left_type);
+    const string right_name = TypeQualifiedName(right_type);
+    if (left_name != right_name) return left_name < right_name;
+    const string left_tag = left_type ? left_type->tag : string();
+    const string right_tag = right_type ? right_type->tag : string();
+    if (left_tag != right_tag) return left_tag < right_tag;
+    const size_t left_size = left_type ? left_type->object_size : 0;
+    const size_t right_size = right_type ? right_type->object_size : 0;
+    return left_size < right_size;
+  });
+  return result;
+}
+
 bool PA14Lowerer::IsVirtualFunction(const FunctionRecord& function) const
 {
   const TypePtr owner = type_value(function.member_owner);
@@ -145,15 +155,18 @@ bool PA14Lowerer::ShouldUseExternalVtable(const TypePtr& raw_type) const
 }
 
 bool PA14Lowerer::VirtualSlotForCall(const TypePtr& raw_object, Binding* binding,
-                                     size_t* slot) const
+                                     size_t* slot, size_t* semantic_slot) const
 {
   TypePtr object = type_value(raw_object);
   if (!object || object->kind != TYPE_CLASS || !object->polymorphic || !binding)
     return false;
   const TypePtr function = function_target_type(binding->type);
   if (!function) return false;
+  size_t expanded_slot = 0;
   for (size_t i = 0; i < object->virtual_methods.size(); ++i) {
     const VirtualMethodInfo& candidate = object->virtual_methods[i];
+    const size_t candidate_slot = expanded_slot;
+    expanded_slot += IsDestructorSlot(candidate) ? 2 : 1;
     if (IsDestructorSlot(candidate) || candidate.name != binding->name ||
         !candidate.function || candidate.function->parameters.size() != function->parameters.size() ||
         candidate.function->variadic != function->variadic ||
@@ -170,9 +183,75 @@ bool PA14Lowerer::VirtualSlotForCall(const TypePtr& raw_object, Binding* binding
     // A destructor slot expands to complete and deleting entries in the
     // emitted table.  Calls after that declaration therefore use the
     // expanded entry number rather than the compact semantic-slot number.
-    if (slot) *slot = (i > 0 && IsDestructorSlot(object->virtual_methods[0])) ? i + 1 : i;
+    if (slot) *slot = candidate_slot;
+    if (semantic_slot) *semantic_slot = i;
     return true;
   }
+  return false;
+}
+
+bool PA14Lowerer::VirtualDestructorDeletingSlot(const TypePtr& raw_object,
+                                                size_t* slot) const
+{
+  const TypePtr object = type_value(raw_object);
+  if (!object || object->kind != TYPE_CLASS || !object->polymorphic) return false;
+  size_t expanded_slot = 0;
+  for (size_t i = 0; i < object->virtual_methods.size(); ++i) {
+    const VirtualMethodInfo& candidate = object->virtual_methods[i];
+    if (IsDestructorSlot(candidate)) {
+      if (slot) *slot = expanded_slot + 1;
+      return true;
+    }
+    ++expanded_slot;
+  }
+  return false;
+}
+
+bool PA14Lowerer::ContainsVirtualMemberCall(const CPPGMAstNodePtr& node,
+                                            const FunctionRecord& function)
+{
+  if (!node) return false;
+  if (node->kind == "call-expression" && !node->children.empty() &&
+      node->children[0] && node->children[0]->kind == "member-expression" &&
+      node->children[0]->children.size() > 1) {
+    const CPPGMAstNodePtr member = node->children[0];
+    const CPPGMAstNodePtr object_node = member->children[0];
+    if (!member->children[1]) return false;
+    const string member_name = member->children[1]->value;
+    const bool object_is_this = object_node && object_node->kind == "keyword-literal" &&
+      PA12Operator(object_node->value) == "this";
+    TypePtr object;
+    Scope* scope = function.scope;
+    map<const CPPGMAstNode*, Scope*>::const_iterator scope_found =
+      analyzer_.function_scopes_.find(function.node.get());
+    if (scope_found != analyzer_.function_scopes_.end()) scope = scope_found->second;
+    try {
+      if (object_is_this) {
+        object = type_value(function.member_owner);
+      } else {
+        ExprInfo object_info = Infer(object_node, scope);
+        object = expression_value_type(object_info);
+      }
+      if (member->value.find("->") != string::npos) {
+        if (!object_is_this) {
+          if (!object || object->kind != TYPE_POINTER) object.reset();
+          else object = type_value(object->child);
+        }
+      }
+      if (object && object->kind == TYPE_CLASS) {
+        const vector<Binding*> candidates = MemberBindings(object, member_name);
+        for (size_t i = 0; i < candidates.size(); ++i) {
+          size_t ignored_slot = 0;
+          if (VirtualSlotForCall(object, candidates[i], &ignored_slot)) return true;
+        }
+      }
+    } catch (const logic_error&) {
+      // Demand discovery is conservative.  The normal function lowering
+      // remains responsible for reporting an unsupported expression.
+    }
+  }
+  for (size_t i = 0; i < node->children.size(); ++i)
+    if (ContainsVirtualMemberCall(node->children[i], function)) return true;
   return false;
 }
 
@@ -370,11 +449,11 @@ void PA14Lowerer::PreparePolymorphicModel()
   // value-semantics demand pass would otherwise omit an empty implicit
   // constructor.  External abstract tables still need their base-entry
   // constructor to establish the correct intermediate vptr.
-  set<const Type*> constructor_types = emitted_vtables_;
-  constructor_types.insert(external_vtables_.begin(), external_vtables_.end());
-  for (set<const Type*>::const_iterator it = constructor_types.begin();
-       it != constructor_types.end(); ++it) {
-    const TypePtr type = SemanticType(*it);
+  set<const Type*> constructor_type_set = emitted_vtables_;
+  constructor_type_set.insert(external_vtables_.begin(), external_vtables_.end());
+  const vector<const Type*> constructor_types = OrderedTypes(constructor_type_set);
+  for (size_t type_index = 0; type_index < constructor_types.size(); ++type_index) {
+    const TypePtr type = SemanticType(constructor_types[type_index]);
     if (!type || !type->owned_scope) continue;
     CollectImplicitConstructor(type, type->owned_scope, true);
     const vector<Binding*> constructors = DirectBindings(type->owned_scope,
@@ -390,9 +469,9 @@ void PA14Lowerer::PreparePolymorphicModel()
     }
   }
 
-  for (set<const Type*>::const_iterator it = emitted_vtables_.begin();
-       it != emitted_vtables_.end(); ++it) {
-    const TypePtr type = SemanticType(*it);
+  const vector<const Type*> emitted_types = OrderedTypes(emitted_vtables_);
+  for (size_t type_index = 0; type_index < emitted_types.size(); ++type_index) {
+    const TypePtr type = SemanticType(emitted_types[type_index]);
     for (size_t slot = 0; slot < type->virtual_methods.size(); ++slot) {
       const VirtualMethodInfo& method = type->virtual_methods[slot];
       if (method.pure) EnsurePureVirtual(method);
@@ -427,19 +506,12 @@ void PA14Lowerer::PreparePolymorphicModel()
 
   // A member body containing a call through a class member can be the only
   // observable use of a virtual slot (for example, a callback helper that is
-  // not itself called by main).  Keep that definition in the demand set so
-  // its typed indirect-call lowering remains available to emit-lowir.
-  set<string> virtual_names;
-  for (map<const CPPGMAstNode*, TypePtr>::const_iterator it = analyzer_.class_types_.begin();
-       it != analyzer_.class_types_.end(); ++it) {
-    const TypePtr type = it->second;
-    if (!type || !type->polymorphic) continue;
-    for (size_t slot = 0; slot < type->virtual_methods.size(); ++slot)
-      virtual_names.insert(type->virtual_methods[slot].name);
-  }
+  // not itself called by main).  Discover that dependency through the typed
+  // receiver and virtual-slot map so name collisions cannot manufacture an
+  // unrelated demand edge.
   for (size_t i = 0; i < functions_.size(); ++i)
     if (functions_[i].member && functions_[i].definition && functions_[i].node &&
-        ContainsMemberCall(functions_[i].node, virtual_names))
+        ContainsVirtualMemberCall(functions_[i].node, functions_[i]))
       functions_[i].needed = true;
 }
 
@@ -461,8 +533,10 @@ void PA14Lowerer::EmitPolymorphicGlobals(vector<string>& entries)
   bool has_si = false;
   set<const Type*> rtti_types;
   vector<const Type*> work;
-  work.insert(work.end(), emitted_vtables_.begin(), emitted_vtables_.end());
-  work.insert(work.end(), external_vtables_.begin(), external_vtables_.end());
+  const vector<const Type*> emitted_types = OrderedTypes(emitted_vtables_);
+  const vector<const Type*> external_types = OrderedTypes(external_vtables_);
+  work.insert(work.end(), emitted_types.begin(), emitted_types.end());
+  work.insert(work.end(), external_types.begin(), external_types.end());
   while (!work.empty()) {
     const Type* type = work.back();
     work.pop_back();
@@ -474,15 +548,15 @@ void PA14Lowerer::EmitPolymorphicGlobals(vector<string>& entries)
   }
   if (has_si)
     entries.push_back("declare global @__external_rtti_vtable____si_class_type_info [binding=strong, object=_ZTVN10__cxxabiv120__si_class_type_infoE]");
-  for (set<const Type*>::const_iterator it = external_vtables_.begin();
-       it != external_vtables_.end(); ++it) {
-    const TypePtr type = SemanticType(*it);
+  for (size_t type_index = 0; type_index < external_types.size(); ++type_index) {
+    const TypePtr type = SemanticType(external_types[type_index]);
     entries.push_back("declare global @__external_vtable__" +
       low_symbol_component(TypeQualifiedName(type)) + " [binding=strong, object=_ZTV" +
       TypeMangledName(type) + "]");
   }
-  for (set<const Type*>::const_iterator it = rtti_types.begin(); it != rtti_types.end(); ++it) {
-    const TypePtr type = SemanticType(*it);
+  const vector<const Type*> ordered_rtti_types = OrderedTypes(rtti_types);
+  for (size_t type_index = 0; type_index < ordered_rtti_types.size(); ++type_index) {
+    const TypePtr type = SemanticType(ordered_rtti_types[type_index]);
     const string info_symbol = TypeInfoSymbol(type) + low_symbol_component(TypeQualifiedName(type));
     const string rtti_symbol = RttiSymbol(type) + low_symbol_component(TypeQualifiedName(type));
     const string mangled = TypeMangledName(type);
@@ -508,9 +582,8 @@ void PA14Lowerer::EmitPolymorphicGlobals(vector<string>& entries)
     rtti << "}";
     entries.push_back(rtti.str());
   }
-  for (set<const Type*>::const_iterator it = emitted_vtables_.begin();
-       it != emitted_vtables_.end(); ++it) {
-    const TypePtr type = SemanticType(*it);
+  for (size_t type_index = 0; type_index < emitted_types.size(); ++type_index) {
+    const TypePtr type = SemanticType(emitted_types[type_index]);
     const string mangled = TypeMangledName(type);
     bool strong = false;
     for (size_t i = 0; i < functions_.size(); ++i) {

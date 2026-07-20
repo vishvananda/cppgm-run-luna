@@ -448,18 +448,20 @@ PA14Lowerer::Value PA14Lowerer::EmitDeleteExpression(const CPPGMAstNodePtr& node
       Terminate("branch " + nonnull + ", ^" + nonnull_label + ", ^" + end_label);
       AddBlock(nonnull_label);
       if(object_type->polymorphic) {
-        size_t ordinary_slots = 0;
-        for(size_t slot = 0; slot < object_type->virtual_methods.size(); ++slot)
-          if(!object_type->virtual_methods[slot].destructor) ++ordinary_slots;
-        const string vptr = emit_load(pointer.operand,
-          PointerTo(Fundamental("char")));
-        const size_t deleting_offset = (ordinary_slots + 1) * 8;
-        const string entry_address = new_temp();
-        AddInstruction(entry_address + " = index i8 " + vptr + ", " +
-          integer_text(static_cast<long long>(deleting_offset)));
-        const string entry = emit_load(entry_address,
-          PointerTo(Fundamental("char")));
-        AddInstruction("call void " + entry + "(" + pointer.operand + ") as (%arg0 : ptr) -> void");
+        size_t deleting_slot = 0;
+        if(VirtualDestructorDeletingSlot(object_type, &deleting_slot)) {
+          const string vptr = emit_load(pointer.operand,
+            PointerTo(Fundamental("char")));
+          const string entry_address = new_temp();
+          AddInstruction(entry_address + " = index i8 " + vptr + ", " +
+            integer_text(static_cast<long long>(deleting_slot * 8)));
+          const string entry = emit_load(entry_address,
+            PointerTo(Fundamental("char")));
+          AddInstruction("call void " + entry + "(" + pointer.operand + ") as (%arg0 : ptr) -> void");
+        } else {
+          (void)EmitDestructorAt(object_type, pointer.operand, scope);
+          AddInstruction("call void @" + deallocator_symbol + "(" + pointer.operand + ")");
+        }
       } else {
         (void)EmitDestructorAt(object_type, pointer.operand, scope);
         AddInstruction("call void @" + deallocator_symbol + "(" + pointer.operand + ")");

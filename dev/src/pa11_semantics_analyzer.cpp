@@ -246,15 +246,26 @@ const VirtualMethodInfo* FindInheritedVirtual(const TypePtr& base,
 }
 
 void ApplyPolymorphicLayout(const TypePtr& type, bool empty_base,
-	size_t* offset, size_t* maximum_alignment)
+	size_t base_size, size_t base_alignment, size_t* offset,
+	size_t* maximum_alignment)
 {
 	if (!type || !type->has_vpointer || !offset || !maximum_alignment) return;
 	const size_t pointer_size = 8;
-	if (type->direct_base && !empty_base && !type->direct_base->polymorphic)
-		*offset += pointer_size;
-	else if (!type->direct_base || empty_base)
-		*offset = pointer_size;
 	*maximum_alignment = max(*maximum_alignment, pointer_size);
+	if (type->direct_base && !empty_base && !type->direct_base->polymorphic)
+	{
+		// PA17 puts the first vpointer at complete-object offset zero.  A
+		// non-polymorphic direct base therefore starts after that pointer and
+		// every base/member access must use the same typed adjustment.
+		type->direct_base_offset = Analyzer::AlignUp(pointer_size,
+			max<size_t>(1, base_alignment));
+		*offset = type->direct_base_offset + base_size;
+	}
+	else if (!type->direct_base || empty_base)
+	{
+		type->direct_base_offset = 0;
+		*offset = pointer_size;
+	}
 }
 
 } // namespace
@@ -543,10 +554,14 @@ void Analyzer::ComputeClassLayout(const CPPGMAstNodePtr& node, const TypePtr& ty
 		throw logic_error("incomplete direct base class");
 	const bool empty_base = type->direct_base && EmptyBaseStorage(type->direct_base);
 	const bool owns_vpointer = type->has_vpointer;
+	type->direct_base_offset = 0;
 	size_t offset = type->direct_base && !empty_base ? TypeSize(type->direct_base) : 0;
 	size_t maximum_alignment = type->direct_base && !empty_base ?
 		TypeAlignment(type->direct_base) : 1;
-	if (owns_vpointer) ApplyPolymorphicLayout(type, empty_base, &offset, &maximum_alignment);
+	if (owns_vpointer) ApplyPolymorphicLayout(type, empty_base,
+		type->direct_base && !empty_base ? TypeSize(type->direct_base) : 0,
+		type->direct_base && !empty_base ? TypeAlignment(type->direct_base) : 1,
+		&offset, &maximum_alignment);
 	size_t union_size = offset;
 
 	size_t bit_unit_offset = 0;
