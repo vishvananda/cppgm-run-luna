@@ -88,6 +88,78 @@ size_t Analyzer::AttributeAlignment(const CPPGMAstNodePtr& attribute, Scope* sco
 	return alignment;
 }
 
+void Analyzer::ProcessSpecialMember(const CPPGMAstNodePtr& node, Scope* scope)
+{
+	if (node->kind == "special-member-declaration")
+	{
+		CPPGMAstNodePtr declarator = ChildOfKind(node, "declarator");
+		if (!declarator) throw logic_error("special member has no declarator");
+		Scope* declaration_scope = scope;
+		TypePtr member_owner;
+		const size_t separator = node->value.rfind("::");
+		if (separator != string::npos)
+		{
+			PathTarget owner = ResolvePath(scope, node->value.substr(0, separator));
+			if (owner.binding) member_owner = owner.binding->type;
+			else if (owner.scope) member_owner = owner.scope->owner_type;
+			if (member_owner && member_owner->kind == TYPE_CLASS && member_owner->owned_scope)
+				declaration_scope = member_owner->owned_scope;
+		}
+		else if (scope->kind == SCOPE_CLASS)
+			member_owner = scope->owner_type;
+		if (!member_owner || member_owner->kind != TYPE_CLASS) return;
+		const string name = LastComponent(node->value);
+		TypePtr function = BuildDeclarator(declarator, Fundamental("void"), declaration_scope);
+		for (size_t i = 0; i < declaration_scope->bindings.size(); ++i)
+		{
+			Binding& existing = declaration_scope->bindings[i];
+			if (existing.kind != BIND_FUNCTION || existing.name != name ||
+				TypeText(existing.type, true) != TypeText(function, true)) continue;
+			existing.is_member = true;
+			existing.is_static = false;
+			existing.member_owner = member_owner;
+			existing.declaration = node;
+			return;
+		}
+		Binding binding(BIND_FUNCTION, name, function);
+		binding.is_member = true;
+		binding.is_static = false;
+		binding.member_owner = member_owner;
+		binding.access = member_owner->tag == "class" ? "private" : "public";
+		binding.declaration = node;
+		declaration_scope->add(binding);
+		return;
+	}
+	if (node->kind != "special-member-definition") return;
+	CPPGMAstNodePtr declarator = ChildOfKind(node, "declarator");
+	CPPGMAstNodePtr body = ChildOfKind(node, "compound-statement");
+	if (!declarator || !body) return;
+	Scope* declaration_scope = scope;
+	TypePtr member_owner;
+	const size_t separator = node->value.rfind("::");
+	if (separator != string::npos)
+	{
+		PathTarget owner = ResolvePath(scope, node->value.substr(0, separator));
+		if (owner.binding) member_owner = owner.binding->type;
+		else if (owner.scope) member_owner = owner.scope->owner_type;
+		if (member_owner && member_owner->kind == TYPE_CLASS && member_owner->owned_scope)
+			declaration_scope = member_owner->owned_scope;
+	}
+	else if (scope->kind == SCOPE_CLASS) member_owner = scope->owner_type;
+	const string name = LastComponent(node->value);
+	TypePtr function = BuildDeclarator(declarator, Fundamental("void"), declaration_scope);
+	Binding* binding = declaration_scope->add(Binding(BIND_FUNCTION, name, function));
+	binding->is_member = static_cast<bool>(member_owner);
+	binding->is_static = false;
+	binding->member_owner = member_owner;
+	binding->access = member_owner && member_owner->tag == "class" ? "private" : "public";
+	binding->declaration = node;
+	Scope* function_scope = NewChild(declaration_scope, SCOPE_FUNCTION, name);
+	function_scopes_[node.get()] = function_scope;
+	AddFunctionParameters(function_scope, declarator, declaration_scope);
+	ProcessCompound(body, function_scope);
+}
+
 void Analyzer::ApplyClassAttributes(const CPPGMAstNodePtr& node, const TypePtr& type,
 	Scope* scope)
 {
@@ -342,11 +414,13 @@ void Analyzer::RecordClassMembers(const CPPGMAstNodePtr& node, const TypePtr& ty
 					Binding& binding = class_scope->bindings[k];
 					if (binding.name != name || binding.kind != BIND_FUNCTION ||
 						TypeText(binding.type, true) != TypeText(function_type, true)) continue;
-					binding.access = access;
-					binding.declaration = child;
-					binding.is_member = true;
-					binding.is_static = facts.is_static;
-					binding.member_owner = type;
+						binding.access = access;
+						binding.declaration = child;
+						binding.hidden_friend = facts.is_friend;
+						binding.friend_owner = facts.is_friend ? type : TypePtr();
+						binding.is_member = !facts.is_friend;
+						binding.is_static = facts.is_static;
+						binding.member_owner = type;
 				}
 			}
 			continue;
@@ -358,18 +432,20 @@ void Analyzer::RecordClassMembers(const CPPGMAstNodePtr& node, const TypePtr& ty
 			const CPPGMAstNodePtr declarator = item->children[0];
 			const string name = FirstIdentifier(declarator);
 			TypePtr field_type = BuildDeclarator(declarator, base, class_scope);
-			if (facts.is_friend)
-			{
-				if (!name.empty()) type->friend_names.push_back(name);
+				if (facts.is_friend)
+				{
+					if (!name.empty()) type->friend_names.push_back(name);
 				for (size_t k = 0; k < class_scope->bindings.size(); ++k)
 				{
 					Binding& binding = class_scope->bindings[k];
 					if (binding.name != name || binding.kind != BIND_FUNCTION ||
 						TypeText(binding.type, true) != TypeText(field_type, true)) continue;
-					binding.is_member = false;
-					binding.is_static = false;
-					binding.member_owner.reset();
-					binding.access.clear();
+						binding.is_member = false;
+						binding.is_static = false;
+						binding.member_owner.reset();
+						binding.hidden_friend = true;
+						binding.friend_owner = type;
+						binding.access.clear();
 				}
 				continue;
 			}

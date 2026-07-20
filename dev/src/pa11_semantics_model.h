@@ -123,6 +123,12 @@ struct Binding
 	bool injected_member;
 	string injected_object_name;
 	TypePtr injected_owner;
+	// A friend declaration is introduced into the enclosing class scope for
+	// semantic lookup, but it is not an ordinary member.  Keep its associated
+	// class typed so PA15 ADL can find hidden friends without making them
+	// visible to ordinary unqualified lookup.
+	bool hidden_friend;
+	TypePtr friend_owner;
 	bool is_member;
 	bool is_static;
 	// ClassMemberInfo is the canonical owner of layout and member-kind facts.

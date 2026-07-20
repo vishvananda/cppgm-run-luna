@@ -25,6 +25,9 @@ bool is_floating_type(const TypePtr& type);
 bool is_unsigned_type(const TypePtr& type);
 string integer_text(long long value);
 string strip_literal_suffix(string value);
+bool is_user_defined_string_literal(const string& raw);
+string string_literal_core(const string& raw);
+string string_literal_suffix(const string& raw);
 long long parse_integer_literal(const string& raw, bool* okay = 0);
 vector<unsigned char> decode_string_literal(const string& raw);
 string canonical_literal(const string& raw, TypePtr* type_out = 0,
@@ -63,6 +66,7 @@ class PA14Lowerer
     bool constructor;
     bool implicit_constructor;
     bool aggregate_constructor;
+    bool hidden_friend;
     bool explicit_constructor;
     bool builtin;
     bool defaulted;
@@ -73,8 +77,10 @@ class PA14Lowerer
     bool variadic;
     bool unwind_no;
     bool noreturn;
+    bool base_entry;
     string effects;
     string object_name;
+    string base_entry_for;
     vector<string> parameter_metadata;
     CPPGMAstNodePtr special_initializer;
     vector<CPPGMAstNodePtr> default_arguments;
@@ -83,12 +89,13 @@ class PA14Lowerer
       : node(), scope(), type(), source_type(), member_owner(), qualified_name(),
         symbol(), definition(false), member(false), static_member(false),
         constructor(false), implicit_constructor(false), aggregate_constructor(false),
+        hidden_friend(false),
         explicit_constructor(false),
         builtin(false),
         defaulted(false), deleted(false),
         destructor(false), needed(false),
-        emitted(false), variadic(false), unwind_no(false), noreturn(false), effects(),
-        object_name(), parameter_metadata(),
+        emitted(false), variadic(false), unwind_no(false), noreturn(false), base_entry(false), effects(),
+        object_name(), base_entry_for(), parameter_metadata(),
         special_initializer(), default_arguments() {}
   };
 
@@ -214,6 +221,7 @@ class PA14Lowerer
   bool needs_init_helper_;
   bool needs_fini_helper_;
   FunctionState* state_;
+  map<const CPPGMAstNode*, pair<Scope*, ExprInfo> > infer_cache_;
 
 public:
 explicit PA14Lowerer(const vector<CPPGMAstNodePtr>& trees)
@@ -269,7 +277,7 @@ TypePtr function_type(const TypePtr& raw) const
 
 ;
 
-void CollectTopLevel(const CPPGMAstNodePtr& node, Scope* scope)
+  void CollectTopLevel(const CPPGMAstNodePtr& node, Scope* scope)
 
 ;
 
@@ -285,15 +293,32 @@ void CollectClassMembers(const CPPGMAstNodePtr& node, Scope* scope)
 
 ;
 
-void CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, bool definition)
+  void CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, bool definition)
 
 ;
 
-void CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope, bool definition)
+  void CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope, bool definition)
 
 ;
 
-void CollectImplicitConstructor(const TypePtr& owner, Scope* scope)
+void MarkHiddenFriendDependencies()
+
+;
+
+void MarkHiddenFriendDependencyNodes(const CPPGMAstNodePtr& node, Scope* scope)
+
+;
+
+void CollectInheritedConstructors(const TypePtr& owner, Scope* scope)
+
+;
+
+void EnsureConstructorBaseEntry(FunctionRecord* function)
+
+;
+
+void CollectImplicitConstructor(const TypePtr& owner, Scope* scope,
+                                bool force = false)
 
 ;
 
@@ -351,6 +376,23 @@ vector<Binding*> Lookup(const string& raw, Scope* from) const
 
 ;
 
+vector<Binding*> OperatorCandidates(const string& name,
+                                    const vector<ExprInfo>& arguments,
+                                    Scope* scope) const
+
+;
+
+void AppendAssociatedOperatorBindings(const TypePtr& type, const string& name,
+                                      vector<Binding*>& result,
+                                      set<const Type*>& visited_types,
+                                      set<Scope*>& visited_scopes) const
+
+;
+
+Scope* FindTypeOwnerScope(Scope* scope, const TypePtr& type) const
+
+;
+
 vector<Binding*> MemberBindings(const TypePtr& object, const string& name) const
 
 ;
@@ -376,7 +418,8 @@ TypePtr function_target_type(const TypePtr& type) const
 
 ;
 
-ExprInfo InferLiteral(const CPPGMAstNodePtr& node, const TypePtr& expected) const
+ExprInfo InferLiteral(const CPPGMAstNodePtr& node, const TypePtr& expected,
+                      Scope* scope)
 
 ;
 
@@ -418,6 +461,10 @@ TypePtr CommonType(const TypePtr& left, const TypePtr& right,
 
 ;
 
+string OperatorFunctionName(const string& op) const
+
+;
+
 int ConversionRank(const ExprInfo& source, const TypePtr& target) const
 
 ;
@@ -427,6 +474,10 @@ bool DirectFunctionName(const CPPGMAstNodePtr& callee, Scope* scope) const
 ;
 
 FunctionRecord* RecordForBinding(Binding* binding) const
+
+;
+
+FunctionRecord* BaseEntryFor(FunctionRecord* function) const
 
 ;
 
@@ -442,6 +493,10 @@ bool HasConstructor(const TypePtr& type) const
 
 ;
 
+bool HasDefaultInitializationEffects(const TypePtr& type) const
+
+;
+
 bool HasDestructor(const TypePtr& type) const
 
 ;
@@ -452,6 +507,12 @@ bool IsBitField(Binding* binding, long long* bit_offset = 0,
 ;
 
 CallChoice ChooseCall(const CPPGMAstNodePtr& expression, Scope* scope)
+
+;
+
+CallChoice ChooseOperatorCall(const string& name,
+                              const vector<CPPGMAstNodePtr>& arguments,
+                              Scope* scope)
 
 ;
 
@@ -554,7 +615,8 @@ string StorageForVariable(const VariablePlan& variable) const
 ;
 
 Value ConvertValue(Value value, const TypePtr& target,
-                   bool immediate_return = false)
+                   bool immediate_return = false,
+                   bool adjust_derived_pointer = false)
 
 ;
 
@@ -665,6 +727,10 @@ string EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
 
 ;
 
+string EmitLiteralAddress(const CPPGMAstNodePtr& node)
+
+;
+
 string EmitMemberAddress(const CPPGMAstNodePtr& node, Scope* scope)
 
 ;
@@ -732,7 +798,25 @@ string EmitReferenceArgument(const CPPGMAstNodePtr& node, Scope* scope,
 
 ;
 
+Value EmitObjectValueArgument(const CPPGMAstNodePtr& node, Scope* scope,
+                              const TypePtr& target)
+
+;
+
 Value EmitCall(const CPPGMAstNodePtr& node, Scope* scope)
+
+;
+
+Value EmitChosenCall(const CallChoice& choice,
+                     const CPPGMAstNodePtr& callee,
+                     const vector<CPPGMAstNodePtr>& arguments,
+                     Scope* scope)
+
+;
+
+Value EmitOperatorCall(const string& name,
+                       const vector<CPPGMAstNodePtr>& arguments,
+                       Scope* scope)
 
 ;
 
@@ -784,7 +868,13 @@ bool EmitObjectConstructor(VariablePlan* variable, const TypePtr& object_type,
 
 bool EmitConstructorAt(const TypePtr& object_type, const string& address,
                        const vector<CPPGMAstNodePtr>& arguments, Scope* scope,
-                       bool allow_explicit = true)
+                       bool allow_explicit = true, bool base_entry = false,
+                       bool allow_aggregate = false)
+
+;
+
+string EmitTemporaryObjectAddress(const CPPGMAstNodePtr& node, Scope* scope,
+                                  const string& prefix)
 
 ;
 
@@ -810,26 +900,39 @@ void EmitAggregateConstructorBody(FunctionRecord& function, Scope* scope)
 
 void EmitAggregateAt(const string& base, const TypePtr& type,
                      const CPPGMAstNodePtr& expression, Scope* scope,
-                     const CPPGMAstNodePtr& refresh_node = CPPGMAstNodePtr())
+                     const CPPGMAstNodePtr& refresh_node = CPPGMAstNodePtr(),
+                     long long refresh_offset = -1,
+                     bool direct_first_field = false)
 
 ;
 
 void EmitAggregateArrayAt(const string& base, const TypePtr& type,
-                          const CPPGMAstNodePtr& expression, Scope* scope)
+                          const CPPGMAstNodePtr& expression, Scope* scope,
+                          const CPPGMAstNodePtr& refresh_node = CPPGMAstNodePtr(),
+                          long long refresh_offset = -1)
 
 ;
 
 void EmitAggregateClassFields(const string& base, const TypePtr& type,
                               const CPPGMAstNodePtr& expression, Scope* scope,
                               const CPPGMAstNodePtr& refresh_node,
-                              size_t* child_index)
+                              size_t* child_index,
+                              bool direct_first_field = false)
+
+;
+
+bool EmitAggregateClassArrayField(const string& base, const TypePtr& type,
+                                  const CPPGMAstNodePtr& child, Scope* scope,
+                                  const CPPGMAstNodePtr& refresh_node,
+                                  bool refresh_field_base, long long offset)
 
 ;
 
 void EmitAggregateClassDefaults(const string& base, const TypePtr& type,
                                 const CPPGMAstNodePtr& expression, Scope* scope,
                                 const CPPGMAstNodePtr& refresh_node,
-                                size_t child_index)
+                                size_t child_index,
+                                bool direct_first_field = false)
 
 ;
 
@@ -940,6 +1043,11 @@ ExprInfo InferBinary(const CPPGMAstNodePtr& node, Scope* scope)
 
 ExprInfo Infer(const CPPGMAstNodePtr& node, Scope* scope,
               const TypePtr& expected = TypePtr())
+
+;
+
+ExprInfo InferUncached(const CPPGMAstNodePtr& node, Scope* scope,
+                       const TypePtr& expected)
 
 ;
 };

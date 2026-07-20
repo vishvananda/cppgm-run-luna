@@ -15,7 +15,8 @@ Binding::Binding(BindingKind binding_kind, const string& binding_name,
 	const TypePtr& binding_type)
 	: kind(binding_kind), name(binding_name), type(binding_type), has_value(false), value(0),
 	  type_override(), qualified_name(), injected_member(false), injected_object_name(),
-	  injected_owner(), is_member(false), is_static(false), member_owner(),
+	  injected_owner(), hidden_friend(false), friend_owner(), is_member(false),
+	  is_static(false), member_owner(),
 	  member_index(static_cast<size_t>(-1)),
 	  access(), declaration() {}
 

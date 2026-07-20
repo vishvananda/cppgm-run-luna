@@ -11,27 +11,56 @@ using namespace std;
 namespace cppgm_pa14_lowering {
 
 void PA14Lowerer::EmitAggregateArrayAt(const string& base, const TypePtr& raw_type,
-                                        const CPPGMAstNodePtr& expression, Scope* scope)
+                                        const CPPGMAstNodePtr& expression, Scope* scope,
+                                        const CPPGMAstNodePtr& refresh_node,
+                                        long long refresh_offset)
 {
     TypePtr type = type_value(raw_type);
     if(!type || type->kind != TYPE_ARRAY || !expression ||
        expression->kind != "braced-init-list") return;
-    for(size_t i = 0; i < expression->children.size(); ++i) {
-      string element = base;
-      if(i != 0) {
-        const string index = new_temp();
-        AddInstruction(index + " = index i8 " + base + ", " +
-          integer_text(static_cast<long long>(i * type_size(type->child))));
-        element = index;
+    const size_t element_count = type->bound >= 0 ?
+      static_cast<size_t>(type->bound) : expression->children.size();
+    for(size_t i = 0; i < element_count; ++i) {
+      // `base` is the address of the array object.  Form every element
+      // through the array decay operation so nested aggregate members use
+      // the same typed element address as ordinary subscripting.  Reusing
+      // the previous element address would make the second element relative
+      // to the first one (and would lose the array's element type).
+      const bool refresh_element = refresh_node && i > 0;
+      string array_base = refresh_element ? EmitAddress(refresh_node, scope) : base;
+      if(refresh_element && refresh_offset >= 0) {
+        const string refreshed = new_temp();
+        AddInstruction(refreshed + " = index i8 " + array_base + ", " +
+          integer_text(refresh_offset));
+        array_base = refreshed;
       }
-      const CPPGMAstNodePtr child = expression->children[i];
+      const string decay = new_temp();
+      AddInstruction(decay + " = unary decay ptr " + array_base);
+      const string element = new_temp();
+      AddInstruction(element + " = index " + low_type(type->child) + " " +
+        decay + ", " + integer_text(static_cast<long long>(i)));
+      const CPPGMAstNodePtr child = i < expression->children.size() ?
+        expression->children[i] : CPPGMAstNodePtr();
       TypePtr child_type = type_value(type->child);
+      if(!child) {
+        if(child_type && child_type->kind == TYPE_CLASS) {
+          vector<CPPGMAstNodePtr> no_arguments;
+          if(EmitConstructorAt(child_type, element, no_arguments, scope)) continue;
+          CPPGMAstNodePtr empty(new CPPGMAstNode("braced-init-list"));
+          EmitAggregateAt(element, child_type, empty, scope);
+        } else if(child_type && child_type->kind == TYPE_ARRAY) {
+          CPPGMAstNodePtr empty(new CPPGMAstNode("braced-init-list"));
+          EmitAggregateAt(element, child_type, empty, scope);
+        } else if(child_type) emit_store(child_type, "0", element);
+        continue;
+      }
       if(child_type && child_type->kind == TYPE_CLASS) {
         vector<CPPGMAstNodePtr> arguments = child && child->kind == "braced-init-list" ?
           child->children : vector<CPPGMAstNodePtr>();
         if(arguments.empty() && child && child->kind != "braced-init-list")
           arguments.push_back(child);
-        if(EmitConstructorAt(child_type, element, arguments, scope)) continue;
+        if(EmitConstructorAt(child_type, element, arguments, scope,
+                             true, false, true)) continue;
         if(child && child->kind == "braced-init-list") {
           EmitAggregateAt(element, child_type, child, scope);
           continue;
@@ -57,10 +86,50 @@ void PA14Lowerer::EmitAggregateArrayAt(const string& base, const TypePtr& raw_ty
     }
   }
 
+bool PA14Lowerer::EmitAggregateClassArrayField(const string& base, const TypePtr& child_type,
+                                               const CPPGMAstNodePtr& child, Scope* scope,
+                                               const CPPGMAstNodePtr& refresh_node,
+                                               bool refresh_field_base, long long offset)
+{
+    if(!child_type || child_type->kind != TYPE_ARRAY || !child ||
+       child->kind == "braced-init-list" || child_type->bound < 0) return false;
+    const bool string_child = child->kind == "literal" && !child->value.empty() &&
+      child->value[0] == '"';
+    const vector<unsigned char> bytes = string_child ? decode_string_literal(child->value) :
+      vector<unsigned char>();
+    Value scalar_value;
+    if(!string_child) scalar_value = EmitValue(child, scope, child_type->child);
+    for(size_t element_index = 0;
+        element_index < static_cast<size_t>(child_type->bound); ++element_index) {
+      const string field_base = refresh_field_base ? EmitAddress(refresh_node, scope) : base;
+      const string field = new_temp();
+      AddInstruction(field + " = index i8 [projection=field] " + field_base + ", " +
+        integer_text(offset));
+      const string decay = new_temp();
+      AddInstruction(decay + " = unary decay ptr " + field);
+      const string element = new_temp();
+      AddInstruction(element + " = index " + low_type(child_type->child) + " " +
+        decay + ", " + integer_text(static_cast<long long>(element_index)));
+      if(string_child) {
+        const unsigned char byte = element_index < bytes.size() ? bytes[element_index] : 0;
+        emit_store(child_type->child, integer_text(byte), element);
+      } else if(element_index == 0) {
+        if(scalar_value.known_constant && is_integral_type(scalar_value.type) &&
+           is_integral_type(child_type->child)) {
+          scalar_value.type = child_type->child;
+          scalar_value.operand = integer_text(scalar_value.constant);
+        } else scalar_value = ConvertValue(scalar_value, child_type->child);
+        emit_store(child_type->child, scalar_value.operand, element);
+      } else emit_store(child_type->child, "0", element);
+    }
+    return true;
+  }
+
 void PA14Lowerer::EmitAggregateClassFields(const string& base, const TypePtr& raw_type,
                                            const CPPGMAstNodePtr& expression, Scope* scope,
                                            const CPPGMAstNodePtr& refresh_node,
-                                           size_t* child_index)
+                                           size_t* child_index,
+                                           bool direct_first_field)
 {
     TypePtr type = type_value(raw_type);
     if(!type || type->kind != TYPE_CLASS || !expression ||
@@ -70,8 +139,19 @@ void PA14Lowerer::EmitAggregateClassFields(const string& base, const TypePtr& ra
         *child_index < expression->children.size(); ++i) {
       const ClassMemberInfo& member = type->class_members[i];
       if(member.is_static || member.name.empty() || !member.type) continue;
+      const size_t current_child_index = *child_index;
       const CPPGMAstNodePtr child = expression->children[(*child_index)++];
+      const bool refresh_field_base = refresh_node &&
+        (current_child_index > 0 || base.empty());
       TypePtr child_type = type_value(member.type);
+      Value precomputed_value;
+      const bool precompute_address_of = child &&
+        child->kind == "unary-expression" &&
+        PA12Operator(child->value) == "&" &&
+        child_type && child_type->kind != TYPE_CLASS &&
+        child_type->kind != TYPE_ARRAY;
+      if(precompute_address_of)
+        precomputed_value = EmitValue(child, scope, child_type);
       Binding* member_binding = 0;
       vector<Binding*> member_bindings = DirectBindings(type->owned_scope, member.name);
       for(size_t j = 0; j < member_bindings.size(); ++j)
@@ -86,14 +166,14 @@ void PA14Lowerer::EmitAggregateClassFields(const string& base, const TypePtr& ra
         } else value = ConvertValue(value, child_type);
         string stored;
         if(bitfield_storage_initialized) {
-          const string read_base = refresh_node ? EmitAddress(refresh_node, scope) : base;
+          const string read_base = refresh_field_base ? EmitAddress(refresh_node, scope) : base;
           const string read_address = new_temp();
           AddInstruction(read_address + " = index i8 " + read_base + ", " +
             integer_text(member.offset));
           stored = MergeBitFieldValue(member_binding, read_address, member.type,
             value.operand, true);
         } else stored = PrepareBitFieldValue(member_binding, member.type, value.operand);
-        const string store_base = refresh_node ? EmitAddress(refresh_node, scope) : base;
+        const string store_base = refresh_field_base ? EmitAddress(refresh_node, scope) : base;
         const string store_address = new_temp();
         AddInstruction(store_address + " = index i8 " + store_base + ", " +
           integer_text(member.offset));
@@ -103,51 +183,24 @@ void PA14Lowerer::EmitAggregateClassFields(const string& base, const TypePtr& ra
       }
       if(type_is_reference(member.type)) {
         const string reference = EmitReferenceArgument(child, scope, member.type);
-        const string field_base = refresh_node ? EmitAddress(refresh_node, scope) : base;
+        const string field_base = refresh_field_base ? EmitAddress(refresh_node, scope) : base;
         const string field = new_temp();
         AddInstruction(field + " = index i8 [projection=field] " + field_base + ", " +
           integer_text(member.offset));
         emit_store(PointerTo(Fundamental("char")), reference, field);
         continue;
       }
-      if(child_type && child_type->kind == TYPE_ARRAY &&
-         child && child->kind != "braced-init-list" && child_type->bound >= 0) {
-        const bool string_child = child->kind == "literal" && !child->value.empty() &&
-          child->value[0] == '"';
-        const vector<unsigned char> bytes = string_child ? decode_string_literal(child->value) :
-          vector<unsigned char>();
-        Value scalar_value;
-        if(!string_child) scalar_value = EmitValue(child, scope, child_type->child);
-        for(size_t element_index = 0;
-            element_index < static_cast<size_t>(child_type->bound); ++element_index) {
-          string field;
-          const string field_base = refresh_node ? EmitAddress(refresh_node, scope) : base;
-          field = new_temp();
-          AddInstruction(field + " = index i8 [projection=field] " + field_base + ", " +
-            integer_text(member.offset));
-          const string decay = new_temp();
-          AddInstruction(decay + " = unary decay ptr " + field);
-          const string element = new_temp();
-          AddInstruction(element + " = index " + low_type(child_type->child) + " " +
-            decay + ", " + integer_text(static_cast<long long>(element_index)));
-          if(string_child) {
-            const unsigned char byte = element_index < bytes.size() ? bytes[element_index] : 0;
-            emit_store(child_type->child, integer_text(byte), element);
-          } else if(element_index == 0) {
-            if(scalar_value.known_constant && is_integral_type(scalar_value.type) &&
-               is_integral_type(child_type->child)) {
-              scalar_value.type = child_type->child;
-              scalar_value.operand = integer_text(scalar_value.constant);
-            } else scalar_value = ConvertValue(scalar_value, child_type->child);
-            emit_store(child_type->child, scalar_value.operand, element);
-          } else emit_store(child_type->child, "0", element);
-        }
-        continue;
+      if(EmitAggregateClassArrayField(base, child_type, child, scope, refresh_node,
+                                      refresh_field_base, member.offset)) continue;
+      const string field_base = refresh_field_base ? EmitAddress(refresh_node, scope) : base;
+      string field;
+      if(direct_first_field && current_child_index == 0 && member.offset == 0)
+        field = field_base;
+      else {
+        field = new_temp();
+        AddInstruction(field + " = index i8 [projection=field] " + field_base + ", " +
+          integer_text(member.offset));
       }
-      const string field_base = refresh_node ? EmitAddress(refresh_node, scope) : base;
-      const string field = new_temp();
-      AddInstruction(field + " = index i8 [projection=field] " + field_base + ", " +
-        integer_text(member.offset));
       if(child_type && child_type->kind == TYPE_CLASS) {
         vector<CPPGMAstNodePtr> arguments = child && child->kind == "braced-init-list" ?
           child->children : vector<CPPGMAstNodePtr>();
@@ -158,13 +211,48 @@ void PA14Lowerer::EmitAggregateClassFields(const string& base, const TypePtr& ra
           EmitAggregateAt(field, child_type, child, scope);
           continue;
         }
+        // Aggregate initialization permits brace elision: a scalar can
+        // initialize the first member of a nested aggregate, and the next
+        // enclosing initializer then continues with the nested aggregate's
+        // remaining members.  The failed constructor probe above is also
+        // what distinguishes this from a class with user-declared
+        // constructors.
+        FunctionRecord* nested_aggregate = 0;
+        const vector<Binding*> nested_bindings =
+          MemberBindings(child_type, LastComponent(child_type->name));
+        for(size_t j = 0; j < nested_bindings.size(); ++j) {
+          FunctionRecord* nested_record = RecordForBinding(nested_bindings[j]);
+          if(nested_record && nested_record->aggregate_constructor) {
+            nested_aggregate = nested_record;
+            break;
+          }
+        }
+        if(nested_aggregate) {
+          const size_t nested_start = current_child_index;
+          *child_index = nested_start;
+          CPPGMAstNodePtr nested_refresh;
+          if(refresh_node) {
+            nested_refresh.reset(new CPPGMAstNode("member-expression", "OP_DOT:."));
+            nested_refresh->children.push_back(refresh_node);
+            nested_refresh->children.push_back(CPPGMAstNodePtr(
+              new CPPGMAstNode("identifier", member.name)));
+          }
+          EmitAggregateClassFields(field, child_type, expression, scope,
+            nested_refresh, child_index);
+          const size_t nested_consumed = *child_index - nested_start;
+          EmitAggregateClassDefaults(field, child_type, expression, scope,
+            nested_refresh, nested_consumed);
+          if(nested_consumed != 0) continue;
+          *child_index = current_child_index + 1;
+        }
       }
       if(child_type && child_type->kind == TYPE_ARRAY &&
          child && child->kind == "braced-init-list") {
-        EmitAggregateAt(field, child_type, child, scope);
+        EmitAggregateAt(field, child_type, child, scope, refresh_node, member.offset);
         continue;
       }
-      Value value = EmitValue(child, scope, child_type);
+      Value value = precompute_address_of ? precomputed_value :
+        EmitValue(child, scope, child_type);
       if(value.known_constant && is_integral_type(value.type) &&
          is_integral_type(child_type)) {
         value.type = child_type;
@@ -177,7 +265,8 @@ void PA14Lowerer::EmitAggregateClassFields(const string& base, const TypePtr& ra
 void PA14Lowerer::EmitAggregateClassDefaults(const string& base, const TypePtr& raw_type,
                                              const CPPGMAstNodePtr& expression, Scope* scope,
                                              const CPPGMAstNodePtr& refresh_node,
-                                             size_t child_index)
+                                             size_t child_index,
+                                             bool direct_first_field)
 {
     TypePtr type = type_value(raw_type);
     if(!type || type->kind != TYPE_CLASS || !expression ||
@@ -186,12 +275,21 @@ void PA14Lowerer::EmitAggregateClassDefaults(const string& base, const TypePtr& 
     for(size_t i = 0; i < type->class_members.size(); ++i) {
       const ClassMemberInfo& member = type->class_members[i];
       if(member.is_static || member.name.empty() || !member.type) continue;
-      if(consumed++ < child_index) continue;
-      const string field_base = refresh_node ? EmitAddress(refresh_node, scope) : base;
-      const string field = new_temp();
-      AddInstruction(field + " = index i8 [projection=field] " + field_base + ", " +
-        integer_text(member.offset));
+      const size_t member_position = consumed++;
+      if(member_position < child_index) continue;
       TypePtr member_type = type_value(member.type);
+      if(!member.initializer && member_type && member_type->kind == TYPE_CLASS &&
+         member_type->class_members.empty() && !member_type->direct_base &&
+         MemberBindings(member_type, LastComponent(member_type->name)).empty()) continue;
+      const string field_base = refresh_node ? EmitAddress(refresh_node, scope) : base;
+      string field;
+      if(direct_first_field && member_position == 0 && member.offset == 0)
+        field = field_base;
+      else {
+        field = new_temp();
+        AddInstruction(field + " = index i8 [projection=field] " + field_base + ", " +
+          integer_text(member.offset));
+      }
       CPPGMAstNodePtr member_expression = member.initializer ?
         InitializerExpression(member.initializer) : CPPGMAstNodePtr();
       vector<CPPGMAstNodePtr> arguments;
@@ -226,23 +324,28 @@ void PA14Lowerer::EmitAggregateClassDefaults(const string& base, const TypePtr& 
 
 void PA14Lowerer::EmitAggregateAt(const string& base, const TypePtr& raw_type,
                                   const CPPGMAstNodePtr& expression, Scope* scope,
-                                  const CPPGMAstNodePtr& refresh_node)
+                                  const CPPGMAstNodePtr& refresh_node,
+                                  long long refresh_offset,
+                                  bool direct_first_field)
 {
     if(!expression) return;
     TypePtr type = type_value(raw_type);
     if(!type) return;
     if(expression->kind == "parenthesized-expression" && !expression->children.empty()) {
-      EmitAggregateAt(base, type, expression->children[0], scope, refresh_node);
+      EmitAggregateAt(base, type, expression->children[0], scope,
+        refresh_node, refresh_offset, direct_first_field);
       return;
     }
     if(type->kind == TYPE_ARRAY && expression->kind == "braced-init-list") {
-      EmitAggregateArrayAt(base, type, expression, scope);
+      EmitAggregateArrayAt(base, type, expression, scope, refresh_node, refresh_offset);
       return;
     }
     if(type->kind != TYPE_CLASS || expression->kind != "braced-init-list") return;
     size_t child_index = 0;
-    EmitAggregateClassFields(base, type, expression, scope, refresh_node, &child_index);
-    EmitAggregateClassDefaults(base, type, expression, scope, refresh_node, child_index);
+    EmitAggregateClassFields(base, type, expression, scope, refresh_node, &child_index,
+      direct_first_field);
+    EmitAggregateClassDefaults(base, type, expression, scope, refresh_node, child_index,
+      direct_first_field);
   }
 
 void PA14Lowerer::EmitAggregateConstructorBody(FunctionRecord& function, Scope* scope)
@@ -280,13 +383,30 @@ void PA14Lowerer::EmitDestructorBody(FunctionRecord& function, Scope* scope)
     for(size_t i = owner->class_members.size(); i > 0; --i) {
       const ClassMemberInfo& member = owner->class_members[i - 1];
       TypePtr member_type = type_value(member.type);
-      if(member.is_static || member.name.empty() || !member_type ||
-         member_type->kind != TYPE_CLASS) continue;
+      if(member.is_static || member.name.empty() || !member_type) continue;
       CPPGMAstNodePtr expression(new CPPGMAstNode("member-expression", "OP_ARROW:->"));
       expression->children.push_back(this_node);
       expression->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("identifier", member.name)));
-      const string address = EmitMemberAddress(expression, scope);
-      (void)EmitDestructorAt(member_type, address, scope);
+      if(member_type->kind == TYPE_ARRAY) {
+        TypePtr element_type = type_value(member_type->child);
+        if(!element_type || element_type->kind != TYPE_CLASS || member_type->bound < 0) continue;
+        for(size_t element_index = static_cast<size_t>(member_type->bound);
+            element_index > 0; --element_index) {
+          const string array_address = EmitMemberAddress(expression, scope);
+          const string decay = new_temp();
+          AddInstruction(decay + " = unary decay ptr " + array_address);
+          const string offset = new_temp();
+          AddInstruction(offset + " = binary mul i64 " +
+            integer_text(static_cast<long long>(element_index - 1)) + ", " +
+            integer_text(static_cast<long long>(type_size(element_type))));
+          const string element = new_temp();
+          AddInstruction(element + " = index i8 " + decay + ", " + offset);
+          (void)EmitDestructorAt(element_type, element, scope);
+        }
+      } else if(member_type->kind == TYPE_CLASS) {
+        const string address = EmitMemberAddress(expression, scope);
+        (void)EmitDestructorAt(member_type, address, scope);
+      }
     }
     TypePtr base = type_value(owner->direct_base);
     if(base) {

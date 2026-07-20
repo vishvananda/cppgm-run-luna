@@ -1,5 +1,6 @@
 #include "pa14_lowering.h"
 
+
 using namespace std;
 
 namespace cppgm_pa14_lowering {
@@ -22,9 +23,10 @@ CPPGMAstNodePtr PA14Lowerer::MakeMemberCall(const CPPGMAstNodePtr& object,
 void PA14Lowerer::AppendBindings(Scope* scope, const string& name,
                       vector<Binding*>& result, set<Scope*>& visited) const
 {
-    if(!scope || !visited.insert(scope).second) return;
-    for(size_t i = 0; i < scope->bindings.size(); ++i)
-      if(scope->bindings[i].name == name) result.push_back(&scope->bindings[i]);
+	if(!scope || !visited.insert(scope).second) return;
+	for(size_t i = 0; i < scope->bindings.size(); ++i)
+	  if(scope->bindings[i].name == name && !scope->bindings[i].hidden_friend)
+	    result.push_back(&scope->bindings[i]);
     for(size_t i = 0; i < scope->using_directives.size(); ++i)
       AppendBindings(scope->using_directives[i], name, result, visited);
   }
@@ -40,8 +42,11 @@ vector<Binding*> PA14Lowerer::DirectBindings(Scope* scope, const string& name) c
 
 vector<Binding*> PA14Lowerer::LookupUnqualifiedAll(Scope* from, const string& name) const
 {
-    for(Scope* scope = from; scope != 0; scope = scope->parent) {
-      vector<Binding*> direct = DirectBindings(scope, name);
+	for(Scope* scope = from; scope != 0; scope = scope->parent) {
+	  vector<Binding*> direct;
+	  const vector<Binding*> all_direct = DirectBindings(scope, name);
+	  for(size_t i = 0; i < all_direct.size(); ++i)
+	    if(!all_direct[i]->hidden_friend) direct.push_back(all_direct[i]);
       if(!direct.empty()) return direct;
       vector<Binding*> imported;
       set<Scope*> visited;
@@ -79,7 +84,15 @@ vector<Binding*> PA14Lowerer::Lookup(const string& raw, Scope* from) const
     bool absolute = false;
     const vector<string> parts = analyzer_.SplitPath(raw, &absolute);
     if(parts.empty()) return vector<Binding*>();
-    if(parts.size() == 1 && !absolute) return LookupUnqualifiedAll(from, parts[0]);
+    if(parts.size() == 1 && !absolute) {
+      vector<Binding*> result = LookupUnqualifiedAll(from, parts[0]);
+      if(result.empty()) {
+        Analyzer::PathTarget target = analyzer_.ResolvePath(from, raw);
+        if(target.binding && !target.binding->hidden_friend)
+          result.push_back(target.binding);
+      }
+      return result;
+    }
     Scope* current = absolute ? analyzer_.global_.get() : from;
     for(size_t i = 0; i + 1 < parts.size(); ++i) {
       current = ScopeComponent(current, parts[i], i == 0, absolute);
@@ -98,6 +111,80 @@ vector<Binding*> PA14Lowerer::Lookup(const string& raw, Scope* from) const
     return result;
   }
 
+Scope* PA14Lowerer::FindTypeOwnerScope(Scope* scope, const TypePtr& type) const
+{
+    if(!scope || !type) return 0;
+    for(size_t i = 0; i < scope->bindings.size(); ++i)
+      if((scope->bindings[i].kind == BIND_TYPE ||
+          scope->bindings[i].kind == BIND_TYPE_ALIAS) &&
+         scope->bindings[i].type == type) return scope;
+    for(size_t i = 0; i < scope->children.size(); ++i) {
+      Scope* found = FindTypeOwnerScope(scope->children[i].get(), type);
+      if(found) return found;
+    }
+    return 0;
+  }
+
+void PA14Lowerer::AppendAssociatedOperatorBindings(const TypePtr& raw_type,
+                                                    const string& name,
+                                                    vector<Binding*>& result,
+                                                    set<const Type*>& visited_types,
+                                                    set<Scope*>& visited_scopes) const
+{
+    TypePtr type = raw_type;
+    if(!type) return;
+    if(type->kind == TYPE_LVALUE_REFERENCE || type->kind == TYPE_RVALUE_REFERENCE ||
+       type->kind == TYPE_POINTER || type->kind == TYPE_ARRAY) {
+      AppendAssociatedOperatorBindings(type->child, name, result,
+        visited_types, visited_scopes);
+      return;
+    }
+    if(type->kind != TYPE_CLASS && type->kind != TYPE_ENUM) return;
+    if(!visited_types.insert(type.get()).second) return;
+
+    Scope* owner_scope = type->owned_scope;
+    if(!owner_scope) owner_scope = FindTypeOwnerScope(analyzer_.global_.get(), type);
+    if(type->kind == TYPE_CLASS && owner_scope) {
+      const vector<Binding*> hidden = DirectBindings(owner_scope, last_component(name));
+      for(size_t i = 0; i < hidden.size(); ++i)
+        if(hidden[i]->kind == BIND_FUNCTION && hidden[i]->hidden_friend &&
+           find(result.begin(), result.end(), hidden[i]) == result.end())
+          result.push_back(hidden[i]);
+      AppendAssociatedOperatorBindings(type->direct_base, name, result,
+        visited_types, visited_scopes);
+    }
+    Scope* associated = owner_scope;
+    while(associated && associated->kind != SCOPE_NAMESPACE)
+      associated = associated->parent;
+    if(associated && visited_scopes.insert(associated).second) {
+      const vector<Binding*> namespace_bindings = DirectBindings(associated, last_component(name));
+      for(size_t i = 0; i < namespace_bindings.size(); ++i)
+        if(namespace_bindings[i]->kind == BIND_FUNCTION &&
+           !namespace_bindings[i]->is_member && !namespace_bindings[i]->hidden_friend &&
+           find(result.begin(), result.end(), namespace_bindings[i]) == result.end())
+          result.push_back(namespace_bindings[i]);
+    }
+  }
+
+vector<Binding*> PA14Lowerer::OperatorCandidates(const string& name,
+                                                  const vector<ExprInfo>& arguments,
+                                                  Scope* scope) const
+{
+    vector<Binding*> result;
+    const vector<Binding*> ordinary = Lookup(name, scope);
+    for(size_t i = 0; i < ordinary.size(); ++i)
+      if(ordinary[i]->kind == BIND_FUNCTION && !ordinary[i]->is_member &&
+         !ordinary[i]->hidden_friend &&
+         find(result.begin(), result.end(), ordinary[i]) == result.end())
+        result.push_back(ordinary[i]);
+    set<const Type*> visited_types;
+    set<Scope*> visited_scopes;
+    for(size_t i = 0; i < arguments.size(); ++i)
+      AppendAssociatedOperatorBindings(expression_value_type(arguments[i]), name,
+        result, visited_types, visited_scopes);
+    return result;
+  }
+
 vector<Binding*> PA14Lowerer::MemberBindings(const TypePtr& raw_object,
                                              const string& name) const
 {
@@ -105,7 +192,10 @@ vector<Binding*> PA14Lowerer::MemberBindings(const TypePtr& raw_object,
     if(object && object->kind == TYPE_POINTER) object = type_value(object->child);
     if(!object || object->kind != TYPE_CLASS || !object->owned_scope)
       return vector<Binding*>();
-    vector<Binding*> direct = DirectBindings(object->owned_scope, last_component(name));
+    vector<Binding*> direct;
+    const vector<Binding*> all_direct = DirectBindings(object->owned_scope, last_component(name));
+    for(size_t i = 0; i < all_direct.size(); ++i)
+      if(!all_direct[i]->hidden_friend) direct.push_back(all_direct[i]);
     if(!direct.empty()) return direct;
     if(object->direct_base) return MemberBindings(object->direct_base, name);
     return vector<Binding*>();
@@ -126,13 +216,13 @@ bool PA14Lowerer::IsAccessible(Binding* binding, Scope* scope) const
         return true;
     }
     TypePtr context;
-    for(Scope* current = scope; current; current = current->parent)
+    if(state_ && state_->record && state_->record->member && state_->record->member_owner)
+      context = type_value(state_->record->member_owner);
+    if(!context) for(Scope* current = scope; current; current = current->parent)
       if(current->kind == SCOPE_CLASS && current->owner_type) {
         context = current->owner_type;
         break;
       }
-    if(!context && state_ && state_->record)
-      context = type_value(state_->record->member_owner);
     if(!context) return false;
     const string context_name = context->name;
     for(map<const CPPGMAstNode*, TypePtr>::const_iterator it = analyzer_.class_types_.begin();
@@ -156,8 +246,11 @@ bool PA14Lowerer::IsAccessible(Binding* binding, Scope* scope) const
     for(TypePtr current = context; current; current = type_value(current->enclosing_type))
       if(current == owner) return true;
     if(binding->access == "private") return false;
-    for(TypePtr current = context; current; current = type_value(current->direct_base))
-      if(current == owner) return true;
+    for(TypePtr enclosing = context; enclosing;
+        enclosing = type_value(enclosing->enclosing_type))
+      for(TypePtr current = enclosing; current;
+          current = type_value(current->direct_base))
+        if(current == owner) return true;
     return false;
   }
 
@@ -213,8 +306,33 @@ TypePtr PA14Lowerer::function_target_type(const TypePtr& type) const
     return TypePtr();
   }
 
-PA14Lowerer::ExprInfo PA14Lowerer::InferLiteral(const CPPGMAstNodePtr& node, const TypePtr& expected) const
+PA14Lowerer::ExprInfo PA14Lowerer::InferLiteral(const CPPGMAstNodePtr& node,
+                                                const TypePtr& expected,
+                                                Scope* scope)
 {
+    if(is_user_defined_string_literal(node->value)) {
+      const string operator_name = "operator\"\"" +
+        string_literal_suffix(node->value);
+      CPPGMAstNodePtr callee(new CPPGMAstNode("id-expression", operator_name));
+      CPPGMAstNodePtr arguments(new CPPGMAstNode("argument-list"));
+      arguments->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
+        "literal", string_literal_core(node->value))));
+      arguments->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
+        "literal", integer_text(static_cast<long long>(
+          decode_string_literal(node->value).size() - 1)))));
+      CPPGMAstNodePtr call(new CPPGMAstNode("call-expression"));
+      call->children.push_back(callee);
+      call->children.push_back(arguments);
+      const CallChoice choice = ChooseCall(call, scope);
+      if(!choice.binding || !choice.function)
+        throw logic_error("no viable user-defined string literal operator");
+      ExprInfo result;
+      result.type = choice.function->child;
+      result.category = type_is_reference(result.type) ? "lvalue" : "prvalue";
+      result.binding = choice.binding;
+      result.candidates.push_back(choice.binding);
+      return result;
+    }
     ExprInfo result;
     long long value = 0;
     bool known = false;
@@ -350,6 +468,13 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferMember(const CPPGMAstNodePtr& node,
         throw logic_error("arrow requires a pointer to class");
       object = type_value(object->child);
     }
+    if(node->children[1] && !node->children[1]->value.empty() &&
+       node->children[1]->value[0] == '~' &&
+       (!object || object->kind != TYPE_CLASS)) {
+      result.type = Fundamental("void");
+      result.category = "prvalue";
+      return result;
+    }
     vector<Binding*> candidates = MemberBindings(object, node->children[1]->value);
     if(candidates.empty()) throw logic_error("unknown member");
     result.candidates = candidates;
@@ -433,9 +558,37 @@ TypePtr PA14Lowerer::CommonType(const TypePtr& left, const TypePtr& right,
     (void)op;
     return l;
   }
+
+string PA14Lowerer::OperatorFunctionName(const string& raw) const
+{
+    const string op = PA12Operator(raw);
+    if(op == "bitand") return "operator&";
+    if(op == "bitor") return "operator|";
+    if(op == "xor") return "operator^";
+    if(op == "and") return "operator&&";
+    if(op == "or") return "operator||";
+    if(op == "not_eq") return "operator!=";
+    return "operator" + op;
+  }
+
 PA14Lowerer::ExprInfo PA14Lowerer::InferCall(const CPPGMAstNodePtr& node, Scope* scope)
 {
     ExprInfo result;
+    if(node && !node->children.empty() && node->children[0] &&
+       node->children[0]->kind == "member-expression" &&
+       node->children[0]->children.size() >= 2 &&
+       !node->children[0]->children[1]->value.empty() &&
+       node->children[0]->children[1]->value[0] == '~') {
+      ExprInfo object = Infer(node->children[0]->children[0], scope);
+      TypePtr object_type = expression_value_type(object);
+      if(object_type && object_type->kind == TYPE_POINTER)
+        object_type = type_value(object_type->child);
+      if(!object_type || object_type->kind != TYPE_CLASS) {
+        result.type = Fundamental("void");
+        result.category = "prvalue";
+        return result;
+      }
+    }
     TypePtr constructor_type = ConstructorObjectType(
       node && !node->children.empty() ? node->children[0] : CPPGMAstNodePtr(), scope);
     if(constructor_type) {
@@ -474,6 +627,17 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferUnary(const CPPGMAstNodePtr& node, Scope
     ExprInfo result;
     const string op = PA12Operator(node->value);
     ExprInfo child = Infer(node->children[0], scope);
+    vector<CPPGMAstNodePtr> operator_arguments;
+    operator_arguments.push_back(node->children[0]);
+    CallChoice overloaded = ChooseOperatorCall(OperatorFunctionName(op),
+      operator_arguments, scope);
+    if(overloaded.binding) {
+      result.type = overloaded.function->child;
+      result.category = type_is_reference(result.type) ?
+        (result.type->kind == TYPE_LVALUE_REFERENCE ? "lvalue" : "xvalue") : "prvalue";
+      result.binding = overloaded.binding;
+      return result;
+    }
     TypePtr value = expression_value_type(child);
     if(op == "&") result.type = PointerTo(value);
     else if(op == "*") {
@@ -496,6 +660,18 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferBinary(const CPPGMAstNodePtr& node, Scop
     const string op = PA12Operator(node->value);
     ExprInfo left = Infer(node->children[0], scope);
     ExprInfo right = Infer(node->children[1], scope);
+    vector<CPPGMAstNodePtr> operator_arguments;
+    operator_arguments.push_back(node->children[0]);
+    operator_arguments.push_back(node->children[1]);
+    CallChoice overloaded = ChooseOperatorCall(OperatorFunctionName(op),
+      operator_arguments, scope);
+    if(overloaded.binding) {
+      result.type = overloaded.function->child;
+      result.category = type_is_reference(result.type) ?
+        (result.type->kind == TYPE_LVALUE_REFERENCE ? "lvalue" : "xvalue") : "prvalue";
+      result.binding = overloaded.binding;
+      return result;
+    }
     if(op == ",") {
       result.type = right.type;
       result.category = right.category;
@@ -527,8 +703,23 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferBinary(const CPPGMAstNodePtr& node, Scop
 PA14Lowerer::ExprInfo PA14Lowerer::Infer(const CPPGMAstNodePtr& node, Scope* scope,
                 const TypePtr& expected)
 {
+    if(!expected && state_ && node) {
+      map<const CPPGMAstNode*, pair<Scope*, ExprInfo> >::const_iterator found =
+        infer_cache_.find(node.get());
+      if(found != infer_cache_.end() && found->second.first == scope)
+        return found->second.second;
+    }
+    ExprInfo result = InferUncached(node, scope, expected);
+    if(!expected && state_ && node)
+      infer_cache_[node.get()] = make_pair(scope, result);
+    return result;
+  }
+
+PA14Lowerer::ExprInfo PA14Lowerer::InferUncached(const CPPGMAstNodePtr& node, Scope* scope,
+                const TypePtr& expected)
+{
     if(!node) throw logic_error("missing expression during LowIR lowering");
-    if(node->kind == "literal") return InferLiteral(node, expected);
+    if(node->kind == "literal") return InferLiteral(node, expected, scope);
     if(node->kind == "keyword-literal") return InferKeyword(node);
     if(node->kind == "id-expression") return InferIdentifier(node, scope, expected);
     if(node->kind == "parenthesized-expression")
@@ -536,6 +727,19 @@ PA14Lowerer::ExprInfo PA14Lowerer::Infer(const CPPGMAstNodePtr& node, Scope* sco
     if(node->kind == "call-expression") return InferCall(node, scope);
     if(node->kind == "unary-expression") return InferUnary(node, scope);
     if(node->kind == "postfix-expression") {
+      vector<CPPGMAstNodePtr> arguments;
+      arguments.push_back(node->children[0]);
+      arguments.push_back(CPPGMAstNodePtr(new CPPGMAstNode("literal", "0")));
+      CallChoice overloaded = ChooseOperatorCall(
+        OperatorFunctionName(PA12Operator(node->value)), arguments, scope);
+      if(overloaded.binding) {
+        ExprInfo result;
+        result.type = overloaded.function->child;
+        result.category = type_is_reference(result.type) ?
+          (result.type->kind == TYPE_LVALUE_REFERENCE ? "lvalue" : "xvalue") : "prvalue";
+        result.binding = overloaded.binding;
+        return result;
+      }
       ExprInfo result;
       ExprInfo child = Infer(node->children[0], scope);
       result.type = expression_value_type(child);
@@ -546,6 +750,19 @@ PA14Lowerer::ExprInfo PA14Lowerer::Infer(const CPPGMAstNodePtr& node, Scope* sco
     if(node->kind == "assignment-expression") {
       ExprInfo left = Infer(node->children[0], scope);
       if(left.category != "lvalue") throw logic_error("assignment requires lvalue");
+      const string op = PA12Operator(node->value);
+      vector<CPPGMAstNodePtr> arguments;
+      arguments.push_back(node->children[0]);
+      arguments.push_back(node->children[1]);
+      CallChoice overloaded = ChooseOperatorCall(OperatorFunctionName(op), arguments, scope);
+      if(overloaded.binding) {
+        ExprInfo result;
+        result.type = overloaded.function->child;
+        result.category = type_is_reference(result.type) ?
+          (result.type->kind == TYPE_LVALUE_REFERENCE ? "lvalue" : "xvalue") : "prvalue";
+        result.binding = overloaded.binding;
+        return result;
+      }
       ExprInfo result;
       result.type = expression_value_type(left);
       result.category = "lvalue";

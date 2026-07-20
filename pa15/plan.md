@@ -446,3 +446,118 @@ units remain within their size limits.  Final validation passed: PA15 is
 the PA15 file audit passes with only the three existing header-division
 warnings.  The remaining 67 PA15 failures and the next operator/ADL scope
 above are unchanged; no tests or reference fixtures were modified.
+
+## Turn 35 Failure Map and Checkpoint Scope
+
+The complete reverified report remains **133 / 200** with **67 failures**.
+The failures remain grouped as the initializer/lifetime LowIR group, the
+inheritance/reference/access/member-shape group, the ordinary operator/ADL
+and expression-lowering group, the operator/callable/parser status group,
+and the temporary-functor LowIR shape case listed above.  Within the next
+group, the shared missing behavior is that `binary-expression`,
+`unary-expression`, postfix update, compound assignment, logical, and comma
+nodes still lower directly as built-ins instead of selecting a viable member
+or non-member operator.  Hidden friends and functions in associated class,
+enum, and namespace scopes also need typed candidate collection, while
+reference-returning operator results need to remain addressable for chained
+calls and assignments.
+
+This checkpoint will add typed operator candidate selection over member,
+ordinary-lookup, and associated-scope candidates; lower the selected
+operator with its implicit object/reference arguments; preserve builtin
+fallback when an overloaded candidate is non-viable; and retain lvalue
+addresses for reference-returning operator calls.  It covers the affected
+`general/300` and `spec/300` operator/ADL tests, with constructor/destructor
+pseudo-calls, UDL parsing, and the remaining aggregate/global LowIR shape
+cases queued for later checkpoints.  Validation is the focused operator
+subset, the full PA15 report, through-PA14, and the source audit.
+
+## Turn 36 Remaining Work Map and Checkpoint Scope
+
+The reverified full report is **163 / 200**, leaving 37 failures.  The
+remaining behaviors group as follows:
+
+- **Initializer/lifetime and constructor shape**: `100-default-member-initializer-aggregate-member`, `100-static-member-object-access`, `200-aliased-base-mem-initializer-match`, `200-global-class-array-enum-trivial-dtor`, `200-in-class-member-initializer`, `200-local-struct-array-init`, `200-member-initializer-aggregate-member`, `200-static-thread-local-member`, `200-nested-out-of-class-constructor-enclosing-type`, `300-header-static-class-init`, `300-synthesized-array-member-lifecycle`, `500-inheriting-constructors`, `500-inheriting-external-transitive-constructor`, and spec `200-aggregate-brace-elision`.
+- **Inheritance, reference conversion, and member-shape LowIR**: `200-const-subobject-member-call`, `200-derived-pointer-member-init`, `200-derived-pointer-overload-prefers-base-over-void`, `200-friend-intermediate-derived-protected-base-method`, `200-function-reference-return-expression-type`, `200-inherited-injected-class-name-qualified-type`, `200-member-pointer-const-typedef-return`, `200-mutable-member-const-method`, `200-out-of-class-member-default-argument`, `200-pointer-subscript-class-reference-return`, `200-reference-member-conditional-lvalue`, `200-return-preserves-value`, `300-lazy-nested-class-enclosing-alias-lookup`, and spec `200-conditional-derived-base-lvalue-reference`, `200-const-reference-binds-derived-pointer-prvalue`.
+- **Operator/ADL emission and callable retention**: `300-discarded-comma-reference-result-no-copy`, `300-friend-function-definition-skip`, and `300-reference-member-same-name-as-class` (status/lookup), plus the operator stress paths already fixed in this checkpoint.
+- **Destructor/pseudo-destructor and parser-boundary status**: `300-const-pointer-explicit-destructor-call`, `300-explicit-destructor-call-enclosing-namespace-type`, `300-scalar-pseudo-destructor-call`, `300-user-defined-string-literal-operator`, and spec `200-nested-class-enclosing-access`.
+- **Semantic acceptance and inherited constructors**: `200-private-member-not-aggregate-bad`, `500-inheriting-constructors`, and `500-inheriting-external-transitive-constructor`.
+
+The next checkpoint scopes the explicit destructor and pseudo-destructor
+expression family, bundled with the small parser/type-boundary cases that
+share qualified destructor-name resolution.  It will recognize explicit
+`obj.~Type()`/`ptr->~Type()` calls, distinguish class destructors from scalar
+pseudo-destructors, resolve the enclosing namespace/class type in qualified
+destructor names, and emit the selected destructor action with the correct
+object address.  Validation covers the three destructor cases, related
+qualifier regressions, the full PA15 report, through-PA14, and the source
+audit; initializer/inheritance and constructor-policy gaps remain grouped
+for the following checkpoint.
+
+## Turn 37 Checkpoint Result and Next Scope
+
+The destructor checkpoint completed: explicit class destructor calls now
+select public destructors even for const object expressions, qualified nested
+destructor names lower through the enclosing namespace/class type, scalar
+pseudo-destructor calls evaluate their object and emit no action, and
+class-pointer subscripts scale by the complete element object size.  Nested
+classes also inherit enclosing-class access to protected base members.  An
+out-of-class `noexcept` destructor receives the typed base-entry function
+variant required by the object ABI.  The focused destructor/nested-access
+set passed, and the full report improved from **163 / 200** to **167 / 200**.
+
+The current 33 failures group into:
+
+- **Constructor/default-member/aggregate and lifetime actions**: `100-default-member-initializer-aggregate-member`, `100-static-member-object-access`, `200-aliased-base-mem-initializer-match`, `200-global-class-array-enum-trivial-dtor`, `200-in-class-member-initializer`, `200-local-default-class-array-lifecycle`, `200-local-struct-array-init`, `200-member-initializer-aggregate-member`, `200-static-thread-local-member`, `200-nested-out-of-class-constructor-enclosing-type`, `300-header-static-class-init`, `300-synthesized-array-member-lifecycle`, `500-inheriting-constructors`, `500-inheriting-external-transitive-constructor`, and spec `200-aggregate-brace-elision`.
+- **Inheritance, references, and member-shape lowering**: `200-const-subobject-member-call`, `200-derived-pointer-member-init`, `200-derived-pointer-overload-prefers-base-over-void`, `200-friend-intermediate-derived-protected-base-method`, `200-function-reference-return-expression-type`, `200-inherited-injected-class-name-qualified-type`, `200-member-pointer-const-typedef-return`, `200-mutable-member-const-method`, `200-out-of-class-member-default-argument`, `200-reference-member-conditional-lvalue`, `200-return-preserves-value`, `300-lazy-nested-class-enclosing-alias-lookup`, and spec `200-conditional-derived-base-lvalue-reference`, `200-const-reference-binds-derived-pointer-prvalue`.
+- **Friend/operator demand and semantic acceptance**: `300-friend-function-definition-skip`, `300-reference-member-same-name-as-class`, `300-user-defined-string-literal-operator`, `200-private-member-not-aggregate-bad`.
+
+The next checkpoint targets typed constructor policy and aggregate eligibility:
+reject aggregate initialization when a class has private non-static data,
+keep deleted/defaulted/user-declared constructors distinct, honor default
+member initializers and inherited constructor candidates, and emit the
+corresponding base-entry calls for constructor subobjects.  It will validate
+the `general/100`, `general/200`, and `general/500` constructor/aggregate
+subset plus the full PA15 report, through-PA14, and the source audit.
+
+## Turn 38 Remaining Work Map and Checkpoint Scope
+
+The complete PA15 failure map before this final checkpoint was three small
+groups: aggregate value-initialization of a non-trivial class member, hidden
+friend demand/emission, and user-defined string-literal parsing/lowering.
+The aggregate group needed the typed zero-initialization action before an
+explicit empty member initializer; the friend group needed dependency-aware
+emission so an uncalled friend body could retain a referenced hidden friend
+without emitting the uncalled root; and the literal group needed the lexer
+token form, suffix-aware string storage, overload selection, and the
+`const char*`/length call ABI.
+
+This checkpoint covers the whole remaining PA15 scope.  It adds typed
+aggregate value-initialization, demand-driven hidden-friend dependencies,
+and user-defined string-literal operator parsing and lowering while
+preserving ordinary ADL/operator selection and earlier constructor, lifetime,
+inheritance, reference, and global-storage behavior.  Validation is the full
+PA15 report plus the focused aggregate/friend/UDL cases, through-PA14, and
+the source audit.
+
+## Turn 38 Checkpoint Result and Next Scope
+
+The final checkpoint passes **200 / 200 PA15 tests**, up from the turn-start
+**26 / 200**.  Empty class member initializers now emit the required typed
+zero action before construction; hidden friends are retained only when
+demanded, with operator-body dependencies marked before emission; and
+`operator ""_suffix` declarations and string literal expressions lower to
+the selected function with an interned core string and its length.  No PA15
+work remains.  The next scope is PA16 after the required through-PA14 and
+file-audit checks complete.
+
+## Turn 39 Audit Closure
+
+The final structural cleanup moved function collection and constructor
+initializer lowering into cohesive PA14 implementation units, extracted the
+aggregate-array and literal-address helpers, and moved PA11 special-member
+scope construction out of the analyzer header.  The source set now links both
+new PA14 units.  Validation remains **200 / 200** for PA15, **819 / 819**
+through PA14, and the PA15 file audit passes with only the three existing
+header-division warnings.  No behavior group remains for PA15; the next
+checkpoint group is PA16.

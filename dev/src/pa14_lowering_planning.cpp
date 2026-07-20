@@ -49,6 +49,10 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
         if(!object || object->kind != TYPE_POINTER) throw logic_error("arrow requires a pointer to class");
         object = type_value(object->child);
       }
+      if(lookup_callee->children[0] &&
+         lookup_callee->children[0]->kind == "call-expression" &&
+         object && object->kind == TYPE_CLASS)
+        CollectImplicitConstructor(object, object->owned_scope, true);
       candidates = MemberBindings(object, lookup_callee->children[1]->value);
       direct = true;
       bool has_direct_function = false;
@@ -80,7 +84,21 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
         Binding* binding = candidates[i];
         TypePtr function = function_target_type(binding->type);
         if(!function) continue;
-        if(!IsAccessible(binding, scope)) continue;
+        const bool named_destructor = binding->name.size() > 1 &&
+          binding->name[0] == '~';
+        if(!named_destructor && !IsAccessible(binding, scope)) continue;
+        if(named_destructor && arguments.empty() && function->parameters.empty()) {
+          best.binding = binding;
+          best.function = function;
+          best.object = explicit_member_object ? lookup_callee->children[0] :
+            CPPGMAstNodePtr(new CPPGMAstNode("keyword-literal", "KW_THIS:this"));
+          best.direct = true;
+          best.member = binding->is_member && !binding->is_static;
+          best.static_member = binding->is_static;
+          best.worst = 0;
+          best.total = 0;
+          break;
+        }
         const bool member = binding->is_member && binding->member_owner &&
           binding->kind == BIND_FUNCTION;
         const bool static_member = member && binding->is_static;
@@ -116,13 +134,19 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
             object = expression_value_type(object_info);
           }
           if(object && object->kind == TYPE_POINTER) object = type_value(object->child);
-          if(object && object->is_const && !function->function_const) viable = false;
-          if(object && object->is_volatile && !function->function_volatile) viable = false;
+          FunctionRecord* member_record = RecordForBinding(binding);
+          const bool destructor = (member_record && member_record->destructor) ||
+            (binding->name.size() > 1 && binding->name[0] == '~');
+          if(!destructor && object && object->is_const && !function->function_const)
+            viable = false;
+          if(!destructor && object && object->is_volatile && !function->function_volatile)
+            viable = false;
           const int object_rank =
-            (object && object->is_const && function->function_const ? 0 :
-             (function->function_const ? 1 : 0)) +
-            (object && object->is_volatile && function->function_volatile ? 0 :
-             (function->function_volatile ? 1 : 0));
+            destructor ? 0 :
+            ((object && object->is_const && function->function_const ? 0 :
+              (function->function_const ? 1 : 0)) +
+             (object && object->is_volatile && function->function_volatile ? 0 :
+              (function->function_volatile ? 1 : 0)));
           worst = max(worst, object_rank);
           total += object_rank;
         }
@@ -152,7 +176,11 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
       }
       if(!best.binding) throw logic_error("no viable function");
       FunctionRecord* selected = RecordForBinding(best.binding);
-      if(selected) selected->needed = true;
+      if(selected) {
+        selected->needed = true;
+        FunctionRecord* base_entry = BaseEntryFor(selected);
+        if(base_entry) base_entry->needed = true;
+      }
       return best;
     }
 
@@ -162,9 +190,110 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
       TypePtr callable = expression_value_type(callee);
       if(callable && callable->kind == TYPE_CLASS)
         return ChooseCall(MakeMemberCall(callee_node, "operator()", argument_nodes), scope);
-    }
+      }
     if(!best.function) throw logic_error("expression is not callable");
     best.direct = false;
+    return best;
+  }
+
+PA14Lowerer::CallChoice PA14Lowerer::ChooseOperatorCall(
+    const string& name, const vector<CPPGMAstNodePtr>& argument_nodes, Scope* scope)
+{
+    CallChoice best;
+    vector<ExprInfo> arguments;
+    for(size_t i = 0; i < argument_nodes.size(); ++i)
+      arguments.push_back(Infer(argument_nodes[i], scope));
+    vector<Binding*> candidates = OperatorCandidates(name, arguments, scope);
+    if(!arguments.empty()) {
+      TypePtr object = expression_value_type(arguments[0]);
+      if(object && object->kind == TYPE_CLASS) {
+        const vector<Binding*> members = MemberBindings(object, name);
+        for(size_t i = 0; i < members.size(); ++i)
+          if(find(candidates.begin(), candidates.end(), members[i]) == candidates.end())
+            candidates.push_back(members[i]);
+      }
+    }
+    for(size_t i = 0; i < candidates.size(); ++i) {
+      Binding* binding = candidates[i];
+      if(!binding || binding->kind != BIND_FUNCTION)
+        continue;
+      TypePtr function = function_target_type(binding->type);
+      if(!function || !IsAccessible(binding, scope)) continue;
+      FunctionRecord* record = RecordForBinding(binding);
+      if(record && record->deleted) continue;
+      const bool member = binding->is_member && !binding->is_static &&
+        binding->member_owner;
+      const size_t argument_offset = member ? 1 : 0;
+      if(member && arguments.empty()) continue;
+      if(member) {
+        TypePtr object = expression_value_type(arguments[0]);
+        if(object && object->kind == TYPE_POINTER) object = type_value(object->child);
+        if(!object || object->kind != TYPE_CLASS) continue;
+        if(!PA12SameType(object, binding->member_owner, true) &&
+           BaseDistance(object, binding->member_owner) < 1) continue;
+        if(object->is_const && !function->function_const) continue;
+        if(object->is_volatile && !function->function_volatile) continue;
+      }
+      if(arguments.size() < argument_offset) continue;
+      const size_t explicit_count = arguments.size() - argument_offset;
+      if(explicit_count > function->parameters.size() && !function->variadic) continue;
+      if(explicit_count < function->parameters.size()) {
+        bool defaults = true;
+        for(size_t p = explicit_count; p < function->parameters.size(); ++p)
+          if(!HasDefaultArgument(binding, p)) { defaults = false; break; }
+        if(!defaults) continue;
+      }
+      int worst = 0;
+      int total = 0;
+      if(member) {
+        TypePtr object = expression_value_type(arguments[0]);
+        if(object && object->kind == TYPE_POINTER) object = type_value(object->child);
+        const int distance = BaseDistance(object, binding->member_owner);
+        const int object_rank = distance >= 1 ? distance : 0;
+        worst = max(worst, object_rank);
+        total += object_rank;
+        if(object && object->is_const && function->function_const) {
+          worst = max(worst, 1);
+          total += 1;
+        }
+        if(object && object->is_volatile && function->function_volatile) {
+          worst = max(worst, 1);
+          total += 1;
+        }
+      }
+      bool viable = true;
+      for(size_t a = argument_offset; a < arguments.size(); ++a) {
+        const size_t parameter = a - argument_offset;
+        const int rank = parameter < function->parameters.size() ?
+          ConversionRank(arguments[a], function->parameters[parameter]) : 2;
+        if(rank < 0) { viable = false; break; }
+        worst = max(worst, rank);
+        total += rank;
+      }
+      if(!viable) continue;
+      if(!best.binding || worst < best.worst ||
+         (worst == best.worst && total < best.total)) {
+        best.binding = binding;
+        best.function = function;
+        best.object = member ? argument_nodes[0] : CPPGMAstNodePtr();
+        best.direct = true;
+        best.member = member;
+        best.static_member = binding->is_static;
+        best.worst = worst;
+        best.total = total;
+      } else if(worst == best.worst && total == best.total &&
+                !PA12SameType(best.function, function, false)) {
+        throw logic_error("ambiguous operator overload");
+      }
+    }
+    if(best.binding) {
+      FunctionRecord* record = RecordForBinding(best.binding);
+      if(record) {
+        record->needed = true;
+        FunctionRecord* base_entry = BaseEntryFor(record);
+        if(base_entry) base_entry->needed = true;
+      }
+    }
     return best;
   }
 

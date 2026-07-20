@@ -265,6 +265,12 @@ CPPGMAstNodePtr Parser::ParseSpecialMember(bool definition, bool member_context)
 			}
 			name = "operator\"\"" + suffix;
 		}
+		else if (Peek().kind == AST_LITERAL && Peek().text.size() > 2 &&
+			Peek().text.compare(0, 2, "\"\"") == 0)
+		{
+			name = "operator" + Peek().text;
+			++position_;
+		}
 		else
 		{
 			static const char* const operators[] = {"+", "-", "*", "/", "%", "^", "&", "|",

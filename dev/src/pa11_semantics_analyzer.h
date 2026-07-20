@@ -897,9 +897,34 @@ public:
 		if (target_name.find('<') != string::npos)
 			throw logic_error("using declaration cannot name template-id");
 		Binding* target = ResolveBinding(scope, target_name);
+		if (!target && scope && scope->kind == SCOPE_CLASS)
+		{
+			const size_t separator = target_name.rfind("::");
+			if (separator != string::npos)
+			{
+				PathTarget owner = ResolvePath(scope, target_name.substr(0, separator));
+				TypePtr owner_type = owner.binding ? owner.binding->type :
+					(owner.scope ? owner.scope->owner_type : TypePtr());
+				Scope* owner_scope = ScopeForType(owner_type);
+				if (owner_scope)
+					target = owner_scope->local(LastComponent(target_name));
+			}
+		}
 		if (!target) throw logic_error("using target is not a declaration");
 		Binding imported = *target;
-		imported.name = LastComponent(target_name);
+		const size_t target_separator = target_name.rfind("::");
+		const string target_owner_name = target_separator == string::npos ? string() :
+			LastComponent(target_name.substr(0, target_separator));
+		const bool constructor_target = target->kind == BIND_FUNCTION &&
+			scope && scope->kind == SCOPE_CLASS && scope->owner_type &&
+			!target_owner_name.empty() && LastComponent(target_name) == target_owner_name;
+		imported.name = constructor_target ? LastComponent(scope->owner_type->name) :
+			LastComponent(target_name);
+		// Scope::add preserves an already-qualified binding name.  An imported
+		// constructor is a declaration in the derived class for PA11 lookup,
+		// so let the destination scope form its qualified identity.  Ordinary
+		// using-declarations retain the source identity for overload lowering.
+		if (constructor_target) imported.qualified_name.clear();
 		scope->add(imported);
 	}
 	void ProcessNamespace(const CPPGMAstNodePtr& node, Scope* scope)
@@ -999,10 +1024,12 @@ public:
 		}
 		else if (scope->kind == SCOPE_CLASS)
 			member_owner = scope->owner_type;
-		Binding binding(BIND_FUNCTION, name, function_type);
-		binding.is_member = static_cast<bool>(member_owner);
-		binding.is_static = facts.is_static;
-		binding.member_owner = member_owner;
+			Binding binding(BIND_FUNCTION, name, function_type);
+			binding.hidden_friend = facts.is_friend;
+			binding.friend_owner = facts.is_friend ? member_owner : TypePtr();
+			binding.is_member = static_cast<bool>(member_owner) && !facts.is_friend;
+			binding.is_static = facts.is_static;
+			binding.member_owner = member_owner;
 		declaration_scope->add(binding);
 		Scope* function_scope = NewChild(declaration_scope, SCOPE_FUNCTION, name);
 		function_scopes_[node.get()] = function_scope;
@@ -1031,7 +1058,11 @@ public:
 				AddTypeBinding(scope, name, type, true);
 				continue;
 			}
-			Binding binding(type->kind == TYPE_FUNCTION ? BIND_FUNCTION : BIND_VARIABLE, name, type);
+				Binding binding(type->kind == TYPE_FUNCTION ? BIND_FUNCTION : BIND_VARIABLE, name, type);
+				binding.hidden_friend = facts.is_friend && type->kind == TYPE_FUNCTION;
+				binding.friend_owner = binding.hidden_friend ?
+					(scope && scope->kind == SCOPE_CLASS ? scope->owner_type : TypePtr()) : TypePtr();
+				binding.is_member = binding.is_member && !binding.hidden_friend;
 			if (initializer && (facts.is_const || facts.is_constexpr))
 			{
 				CPPGMAstNodePtr expression = initializer->children.empty() ?
@@ -1057,44 +1088,7 @@ public:
 			scope->add(binding);
 		}
 	}
-	void ProcessSpecialMember(const CPPGMAstNodePtr& node, Scope* scope)
-	{
-		// PA11 does not model constructors/destructors as a separate type
-		// category.  Their bodies still form the same function/block scopes.
-		if (node->kind == "special-member-definition")
-		{
-			CPPGMAstNodePtr declarator = ChildOfKind(node, "declarator");
-			CPPGMAstNodePtr body = ChildOfKind(node, "compound-statement");
-			if (declarator && body)
-			{
-				Scope* declaration_scope = scope;
-				TypePtr member_owner;
-				const size_t separator = node->value.rfind("::");
-				if(separator != string::npos)
-				{
-					PathTarget owner = ResolvePath(scope, node->value.substr(0, separator));
-					if(owner.binding) member_owner = owner.binding->type;
-					else if(owner.scope) member_owner = owner.scope->owner_type;
-					if(member_owner && member_owner->kind == TYPE_CLASS && member_owner->owned_scope)
-						declaration_scope = member_owner->owned_scope;
-				}
-				else if(scope->kind == SCOPE_CLASS) member_owner = scope->owner_type;
-				const string name = LastComponent(node->value);
-				TypePtr function = BuildDeclarator(declarator, Fundamental("void"), declaration_scope);
-				Binding* binding = declaration_scope->add(Binding(BIND_FUNCTION, name, function));
-				binding->is_member = static_cast<bool>(member_owner);
-				binding->is_static = false;
-				binding->member_owner = member_owner;
-				binding->access = member_owner && member_owner->tag == "class" ?
-					"private" : "public";
-				binding->declaration = node;
-				Scope* function_scope = NewChild(declaration_scope, SCOPE_FUNCTION, name);
-				function_scopes_[node.get()] = function_scope;
-				AddFunctionParameters(function_scope, declarator, declaration_scope);
-				ProcessCompound(body, function_scope);
-			}
-		}
-	}
+	void ProcessSpecialMember(const CPPGMAstNodePtr& node, Scope* scope);
 	void ProcessTemplate(const CPPGMAstNodePtr& node, Scope* scope)
 	{
 		if (node->children.size() < 2) throw logic_error("invalid template declaration");

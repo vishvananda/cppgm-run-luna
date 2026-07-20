@@ -19,12 +19,19 @@ using namespace std;
 namespace cppgm_pa14_lowering {
 
 PA14Lowerer::Value PA14Lowerer::ConvertValue(Value value, const TypePtr& target,
-                     bool immediate_return)
+                     bool immediate_return, bool adjust_derived_pointer)
 {
     if(!target) return value;
     TypePtr target_value = type_value(target);
     if(type_is_reference(target)) return value;
     if(!value.type || !target_value) return value;
+    if(target_value->kind == TYPE_FUNDAMENTAL &&
+       target_value->name == "nullptr_t" &&
+       ((value.known_constant && value.constant == 0) ||
+        (value.type->kind == TYPE_FUNDAMENTAL && value.type->name == "nullptr_t"))) {
+      value.type = target_value;
+      return value;
+    }
     if(target_value->kind == TYPE_POINTER &&
        value.type->kind == TYPE_FUNDAMENTAL && value.type->name == "nullptr_t") {
       Value result;
@@ -35,6 +42,15 @@ PA14Lowerer::Value PA14Lowerer::ConvertValue(Value value, const TypePtr& target,
     }
     if(target_value->kind == TYPE_POINTER && value.type->kind == TYPE_ARRAY) {
       return value;
+    }
+    if(target_value->kind == TYPE_POINTER && value.type->kind == TYPE_POINTER &&
+       value.type->child && target_value->child &&
+       adjust_derived_pointer && IsDerivedFrom(value.type->child, target_value->child)) {
+      Value result = value;
+      result.type = target_value;
+      result.operand = AdjustBaseAddress(value.operand,
+        value.type->child, target_value->child);
+      return result;
     }
     if(target_value->kind == TYPE_POINTER && value.type->kind == TYPE_FUNCTION) {
       Value result = value;
@@ -139,15 +155,16 @@ string PA14Lowerer::EmitTruthValue(const Value& value)
 
 string PA14Lowerer::InternString(const string& raw)
 {
-    map<string, string>::const_iterator found = string_symbols_.find(raw);
+    const string core = string_literal_core(raw);
+    map<string, string>::const_iterator found = string_symbols_.find(core);
     if(found != string_symbols_.end()) return found->second;
     const string symbol = "__strlit__" + integer_text(
       static_cast<long long>(string_order_.size() + 1));
-    string_data_[raw] = decode_string_literal(raw);
-    string_order_.push_back(raw);
-    string_symbols_[raw] = symbol;
+    string_data_[core] = decode_string_literal(core);
+    string_order_.push_back(core);
+    string_symbols_[core] = symbol;
     return symbol;
-}
+  }
 
 bool PA14Lowerer::FoldInteger(const CPPGMAstNodePtr& node, Scope* scope,
                   long long* result, TypePtr* type)
@@ -443,6 +460,19 @@ void PA14Lowerer::EmitGlobals(vector<string>& entries)
         entries.push_back(wrapper_declaration.str());
       }
     }
+    // A thread-local definition also has a TLS address wrapper.  Definitions
+    // are rendered below, but the wrapper is a declaration and must precede
+    // the rendered global just like the declaration-only case above.
+    for(size_t i = 0; i < globals_.size(); ++i) {
+      GlobalRecord& global = globals_[i];
+      if(global.declaration || !global.thread_local_storage) continue;
+      const string wrapper = global.symbol + "__tls_wrapper";
+      ostringstream wrapper_declaration;
+      wrapper_declaration << "declare function @" << wrapper <<
+        "() -> ptr [binding=strong, object=" << wrapper <<
+        ", tls_for=@" << global.symbol << "]";
+      entries.push_back(wrapper_declaration.str());
+    }
     vector<string> rendered;
     for(size_t i = 0; i < globals_.size(); ++i)
       if(!globals_[i].declaration) rendered.push_back(RenderGlobal(globals_[i]));
@@ -493,7 +523,18 @@ Scope* PA14Lowerer::FunctionScope() const
 {
     map<const CPPGMAstNode*, Scope*>::const_iterator found =
       analyzer_.function_scopes_.find(state_->record->node.get());
-    return found == analyzer_.function_scopes_.end() ? state_->record->scope : found->second;
+    Scope* function_scope = found == analyzer_.function_scopes_.end() ?
+      state_->record->scope : found->second;
+    if(state_->record->node) {
+      for(size_t i = 0; i < state_->record->node->children.size(); ++i) {
+        CPPGMAstNodePtr child = state_->record->node->children[i];
+        if(!child || child->kind != "compound-statement") continue;
+        map<const CPPGMAstNode*, Scope*>::const_iterator block =
+          analyzer_.compound_scopes_.find(child.get());
+        if(block != analyzer_.compound_scopes_.end()) return block->second;
+      }
+    }
+    return function_scope;
   }
 
 PA14Lowerer::VariablePlan* PA14Lowerer::BindPlan(const CPPGMAstNodePtr& declarator)
@@ -618,6 +659,14 @@ string PA14Lowerer::EmitSubscriptAddress(const CPPGMAstNodePtr& node, Scope* sco
       const string text = new_temp();
       AddInstruction(text + " = index i8 [projection=array_element] " + base + ", " + offset);
       return text;
+    } else if(base_type->kind == TYPE_POINTER && element_value &&
+              (element_value->kind == TYPE_CLASS || element_value->kind == TYPE_ARRAY)) {
+      const string offset = new_temp();
+      AddInstruction(offset + " = binary mul i64 " + index.operand + ", " +
+        integer_text(static_cast<long long>(type_size(element))));
+      const string text = new_temp();
+      AddInstruction(text + " = index i8 " + base + ", " + offset);
+      return text;
     } else {
       const string text = new_temp();
       AddInstruction(text + " = index " + low_type(element) +
@@ -678,6 +727,14 @@ string PA14Lowerer::EmitPointerOffset(const CPPGMAstNodePtr& node, Scope* scope)
     return result;
   }
 
+string PA14Lowerer::EmitLiteralAddress(const CPPGMAstNodePtr& node)
+{
+    const string symbol = InternString(node->value);
+    const string temp = new_temp();
+    AddInstruction(temp + " = addr @" + symbol);
+    return temp;
+}
+
 string PA14Lowerer::EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
 {
     if(!node) throw logic_error("missing lvalue");
@@ -730,11 +787,32 @@ string PA14Lowerer::EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
         return emit_load(address, PointerTo(Fundamental("char")));
       return address;
     }
-    if(node->kind == "literal" && !node->value.empty() && node->value[0] == '"') {
-      const string symbol = InternString(node->value);
-      const string temp = new_temp();
-      AddInstruction(temp + " = addr @" + symbol);
-      return temp;
+    if(node->kind == "literal" && !node->value.empty() && node->value[0] == '"')
+      return EmitLiteralAddress(node);
+    if(node->kind == "unary-expression" || node->kind == "postfix-expression" ||
+       node->kind == "binary-expression" || node->kind == "assignment-expression") {
+      string name;
+      vector<CPPGMAstNodePtr> arguments;
+      if(node->kind == "unary-expression") {
+        name = OperatorFunctionName(PA12Operator(node->value));
+        arguments.push_back(node->children[0]);
+      } else if(node->kind == "postfix-expression") {
+        name = OperatorFunctionName(PA12Operator(node->value));
+        arguments.push_back(node->children[0]);
+        arguments.push_back(CPPGMAstNodePtr(new CPPGMAstNode("literal", "0")));
+      } else if(node->children.size() >= 2) {
+        name = OperatorFunctionName(PA12Operator(node->value));
+        arguments.push_back(node->children[0]);
+        arguments.push_back(node->children[1]);
+      }
+      if(!name.empty()) {
+        CallChoice choice = ChooseOperatorCall(name, arguments, scope);
+        if(choice.binding) {
+          Value result = EmitOperatorCall(name, arguments, scope);
+          if(result.lvalue) return result.operand;
+          throw logic_error("operator result is not addressable");
+        }
+      }
     }
     if(node->kind == "unary-expression") {
       const string op = PA12Operator(node->value);
@@ -829,10 +907,11 @@ string PA14Lowerer::AdjustBaseAddress(const string& base, const TypePtr& raw_der
     if(!derived || !wanted || PA12SameType(derived, wanted, true)) return base;
     if(derived->kind != TYPE_CLASS || wanted->kind != TYPE_CLASS)
       throw logic_error("member owner is not a base class");
-    if(!derived->direct_base) throw logic_error("member owner is not a base class");
+    if(!IsDerivedFrom(derived, wanted))
+      throw logic_error("member owner is not a base class");
     const string adjusted = new_temp();
     AddInstruction(adjusted + " = index i8 [projection=base_subobject] " + base + ", 0");
-    return AdjustBaseAddress(adjusted, derived->direct_base, wanted);
+    return adjusted;
   }
 
 } // namespace cppgm_pa14_lowering

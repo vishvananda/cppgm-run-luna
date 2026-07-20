@@ -88,6 +88,16 @@ bool Parser::ParseOperatorName(string* value, bool allow_template)
 		}
 		result += "\"\"" + suffix;
 	}
+	else if (Peek().kind == AST_LITERAL && Peek().text.size() > 2 &&
+		Peek().text.compare(0, 2, "\"\"") == 0)
+	{
+		// The post-token lexer keeps a user-defined string literal as one
+		// typed token.  In an operator declaration the spelling is still the
+		// empty literal followed by its identifier suffix, so retain the
+		// canonical operator name while consuming that single token.
+		result += Peek().text;
+		++position_;
+	}
 	else if (Peek().kind == AST_IDENTIFIER)
 	{
 		string type;

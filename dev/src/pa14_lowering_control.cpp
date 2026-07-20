@@ -38,7 +38,8 @@ PA14Lowerer::Value PA14Lowerer::ValueWithNullptr() const
 
 bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string& address,
                                     const vector<CPPGMAstNodePtr>& raw_arguments,
-                                    Scope* scope, bool allow_explicit)
+                                    Scope* scope, bool allow_explicit, bool base_entry,
+                                    bool allow_aggregate)
 {
     TypePtr object_type = type_value(raw_object_type);
     if(!object_type || object_type->kind != TYPE_CLASS) return false;
@@ -58,6 +59,7 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
         continue;
       FunctionRecord* record = RecordForBinding(binding);
       if(!record || !record->constructor) continue;
+      if(record->aggregate_constructor && !allow_aggregate) continue;
       if(record->deleted) continue;
       if(!allow_explicit && record->explicit_constructor) continue;
       if(record->implicit_constructor && !raw_arguments.empty()) continue;
@@ -113,6 +115,7 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
            RecordForBinding(candidates[i])->constructor &&
            !(RecordForBinding(candidates[i])->implicit_constructor && !raw_arguments.empty()) &&
            !RecordForBinding(candidates[i])->deleted) {
+          if(RecordForBinding(candidates[i])->defaulted) continue;
           if(!allow_explicit && RecordForBinding(candidates[i])->explicit_constructor) continue;
           if(RecordForBinding(candidates[i])->aggregate_constructor) aggregate_candidate = true;
           else throw logic_error("no viable constructor");
@@ -121,12 +124,13 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
       return false;
     }
     FunctionRecord* record = RecordForBinding(best_binding);
-    // The synthesized aggregate candidate is only a lookup aid.  Aggregate
-    // initialization must be lowered at the object storage so that it does
-    // not manufacture a callable constructor body for a class whose only
-    // user-declared constructor is defaulted or deleted.
-    if(record && record->aggregate_constructor) return false;
-    if(record) record->needed = true;
+    if(record && base_entry) {
+      FunctionRecord* entry = BaseEntryFor(record);
+      if(entry) record = entry;
+    }
+    if(record) {
+      record->needed = true;
+    }
     vector<CPPGMAstNodePtr> arguments = raw_arguments;
     if(record) {
       while(arguments.size() < best_function->parameters.size()) {
@@ -142,8 +146,11 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
       if(target && type_is_reference(target))
         operands.push_back(EmitReferenceArgument(arguments[i], scope, target));
       else {
-        Value value = EmitValue(arguments[i], scope, target);
-        if(target) value = ConvertValue(value, target);
+        Value value = target && type_value(target) &&
+          type_value(target)->kind == TYPE_CLASS ?
+          EmitObjectValueArgument(arguments[i], scope, target) :
+          EmitValue(arguments[i], scope, target);
+        if(target) value = ConvertValue(value, target, false, true);
         operands.push_back(value.operand);
       }
     }
@@ -156,6 +163,45 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
     call << ")";
     AddInstruction(call.str());
     return true;
+  }
+
+string PA14Lowerer::EmitTemporaryObjectAddress(const CPPGMAstNodePtr& node,
+                                               Scope* scope,
+                                               const string& prefix)
+{
+    if(!node || node->kind != "call-expression" || node->children.empty())
+      throw logic_error("invalid temporary object expression");
+    TypePtr object_type = ConstructorObjectType(node->children[0], scope);
+    if(!object_type) throw logic_error("temporary expression is not a class construction");
+    CollectImplicitConstructor(object_type, object_type->owned_scope, true);
+    const string slot = new_special_slot(prefix, low_type(object_type));
+    const string address = new_temp();
+    AddInstruction(address + " = addr $" + slot);
+    const CPPGMAstNodePtr argument_list = node->children.size() > 1 ?
+      node->children[1] : CPPGMAstNodePtr();
+    const vector<CPPGMAstNodePtr> arguments = argument_list ?
+      argument_list->children : vector<CPPGMAstNodePtr>();
+    if(!EmitConstructorAt(object_type, address, arguments, scope))
+      throw logic_error("no viable temporary object construction");
+    return address;
+  }
+
+PA14Lowerer::Value PA14Lowerer::EmitObjectValueArgument(
+    const CPPGMAstNodePtr& node, Scope* scope, const TypePtr& target)
+{
+    TypePtr object_type = type_value(target);
+    if(!object_type || object_type->kind != TYPE_CLASS)
+      return EmitValue(node, scope, target);
+    ExprInfo source = Infer(node, scope);
+    if(source.category != "lvalue") return EmitValue(node, scope, target);
+    const string slot = new_special_slot("argobj", low_type(object_type));
+    const string address = new_temp();
+    AddInstruction(address + " = addr $" + slot);
+    (void)EmitAddress(node, scope);
+    Value result;
+    result.type = object_type;
+    result.operand = "$" + slot;
+    return result;
   }
 
 bool PA14Lowerer::EmitDestructorAt(const TypePtr& raw_object_type, const string& address,
@@ -171,6 +217,8 @@ bool PA14Lowerer::EmitDestructorAt(const TypePtr& raw_object_type, const string&
       FunctionRecord* record = RecordForBinding(binding);
       if(!record || !record->destructor) continue;
       record->needed = true;
+      FunctionRecord* base_entry = BaseEntryFor(record);
+      if(base_entry) base_entry->needed = true;
       AddInstruction("call void @" + record->symbol + "(" + address + ")");
       return true;
     }
@@ -207,267 +255,6 @@ bool PA14Lowerer::EmitObjectConstructor(VariablePlan* variable,
     }
     return EmitConstructorAt(raw_object_type, address, raw_arguments, scope,
       allow_explicit);
-  }
-
-void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* scope)
-{
-    TypePtr owner = type_value(function.member_owner);
-    if(!owner) return;
-    CPPGMAstNodePtr this_node(new CPPGMAstNode("keyword-literal", "KW_THIS:this"));
-    set<string> initialized_members;
-    TypePtr base = type_value(owner->direct_base);
-    bool explicitly_initialized_base = false;
-    if(base && function.special_initializer) {
-      for(size_t i = 0; i < function.special_initializer->children.size(); ++i) {
-        CPPGMAstNodePtr initializer = function.special_initializer->children[i];
-        if(!initializer || initializer->kind != "mem-initializer") continue;
-        CPPGMAstNodePtr name_node = ChildOfKind(initializer, "mem-initializer-id");
-        bool matches_base = name_node &&
-          (LastComponent(name_node->value) == LastComponent(base->name) ||
-           name_node->value == base->name);
-        if(name_node && !matches_base) {
-          Analyzer::PathTarget alias = analyzer_.ResolvePath(scope, LastComponent(name_node->value));
-          TypePtr alias_type = alias.binding ? type_value(alias.binding->type) : TypePtr();
-          matches_base = alias_type && alias_type == base;
-        }
-        if(matches_base) {
-          explicitly_initialized_base = true;
-          break;
-        }
-      }
-    }
-    if(base && !explicitly_initialized_base) {
-      const string this_address = EmitValue(this_node, scope).operand;
-      const string base_address = AdjustBaseAddress(this_address, owner, base);
-      (void)EmitConstructorAt(base, base_address, vector<CPPGMAstNodePtr>(), scope);
-    }
-    if(function.special_initializer) for(size_t i = 0; i < function.special_initializer->children.size(); ++i) {
-      CPPGMAstNodePtr initializer = function.special_initializer->children[i];
-      if(!initializer || initializer->kind != "mem-initializer") continue;
-      CPPGMAstNodePtr name_node = ChildOfKind(initializer, "mem-initializer-id");
-      if(!name_node) continue;
-      const string name = LastComponent(name_node->value);
-      CPPGMAstNodePtr argument_node = ChildOfKind(initializer, "paren-argument-list");
-      if(!argument_node) argument_node = ChildOfKind(initializer, "braced-init-list");
-      vector<CPPGMAstNodePtr> arguments = argument_node ? argument_node->children :
-        vector<CPPGMAstNodePtr>();
-      TypePtr named_base;
-      if(base && (name == LastComponent(base->name) || name == base->name)) named_base = base;
-      if(base && !named_base) {
-        Analyzer::PathTarget alias = analyzer_.ResolvePath(scope, name);
-        TypePtr alias_type = alias.binding ? type_value(alias.binding->type) : TypePtr();
-        if(alias_type && alias_type == base) named_base = base;
-      }
-      if(named_base) {
-        const string this_address = EmitValue(this_node, scope).operand;
-        const string base_address = AdjustBaseAddress(this_address, owner, named_base);
-        if(!EmitConstructorAt(named_base, base_address, arguments, scope))
-          throw logic_error("base mem-initializer has no constructor");
-        continue;
-      }
-      vector<Binding*> fields = DirectBindings(owner->owned_scope, name);
-      Binding* field = 0;
-      for(size_t j = 0; j < fields.size(); ++j)
-        if(fields[j]->kind == BIND_VARIABLE && fields[j]->is_member && !fields[j]->is_static) {
-          field = fields[j];
-          break;
-        }
-      if(!field) throw logic_error("unknown mem-initializer");
-      initialized_members.insert(name);
-      TypePtr field_type = type_value(field->type);
-      Value value;
-      string reference_source;
-      if(!arguments.empty() && type_is_reference(field->type)) {
-        reference_source = EmitReferenceArgument(arguments[0], scope, field->type);
-      } else if(!(field_type && field_type->kind == TYPE_CLASS && !arguments.empty()) &&
-                !arguments.empty()) {
-        if(arguments.size() != 1) throw logic_error("member mem-initializer has too many arguments");
-        if(type_is_reference(field->type))
-          reference_source = EmitReferenceArgument(arguments[0], scope, field->type);
-        else {
-          value = EmitValue(arguments[0], scope, field->type);
-          value = ConvertValue(value, field->type);
-        }
-      }
-      CPPGMAstNodePtr member(new CPPGMAstNode("member-expression", "OP_ARROW:->"));
-      member->children.push_back(this_node);
-      member->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("identifier", name)));
-      if(IsBitField(field) && !arguments.empty()) {
-        bool preserve = false;
-        if(field->member_owner && field->member_index != static_cast<size_t>(-1) &&
-           field->member_index < field->member_owner->class_members.size()) {
-          const long long offset = field->member_owner->class_members[field->member_index].offset;
-          for(set<string>::const_iterator it = initialized_members.begin();
-              it != initialized_members.end() && !preserve; ++it) {
-            if(*it == name) continue;
-            vector<Binding*> prior = DirectBindings(owner->owned_scope, *it);
-            for(size_t j = 0; j < prior.size(); ++j)
-              if(IsBitField(prior[j]) && prior[j]->member_owner &&
-                 prior[j]->member_index != static_cast<size_t>(-1) &&
-                 prior[j]->member_index < prior[j]->member_owner->class_members.size() &&
-                 prior[j]->member_owner->class_members[prior[j]->member_index].offset == offset) {
-                preserve = true;
-                break;
-              }
-          }
-        }
-        string stored;
-        if(preserve) {
-          const string read_address = EmitMemberAddress(member, scope);
-          stored = MergeBitFieldValue(field, read_address, field->type, value.operand, true);
-        } else stored = PrepareBitFieldValue(field, field->type, value.operand);
-        const string store_address = EmitMemberAddress(member, scope);
-        emit_store(field->type, stored, store_address);
-        continue;
-      }
-      const string address = EmitMemberAddress(member, scope);
-      if(field_type && field_type->kind == TYPE_ARRAY && arguments.empty() &&
-         field_type->bound >= 0 && field_type->child &&
-         type_value(field_type->child) && type_value(field_type->child)->kind != TYPE_CLASS) {
-        for(size_t element_index = 0;
-            element_index < static_cast<size_t>(field_type->bound); ++element_index) {
-          const string member_address = element_index == 0 ? address :
-            EmitMemberAddress(member, scope);
-          const string decay = new_temp();
-          AddInstruction(decay + " = unary decay ptr " + member_address);
-          const string element = new_temp();
-          AddInstruction(element + " = index " + low_type(field_type->child) + " " +
-            decay + ", " + integer_text(static_cast<long long>(element_index)));
-          emit_store(field_type->child, "0", element);
-        }
-        continue;
-      }
-      if(field_type && field_type->kind == TYPE_CLASS && arguments.empty())
-        emit_store(Fundamental("long int"), "0", address);
-      if(field_type && field_type->kind == TYPE_CLASS && !arguments.empty()) {
-        if(EmitConstructorAt(field_type, address, arguments, scope)) continue;
-        if(argument_node && argument_node->kind == "braced-init-list") {
-          CPPGMAstNodePtr aggregate(new CPPGMAstNode("braced-init-list"));
-          aggregate->children = arguments;
-          EmitAggregateAt(address, field_type, aggregate, scope);
-          continue;
-        }
-      }
-      if(field_type && field_type->kind == TYPE_CLASS && arguments.empty())
-        if(EmitConstructorAt(field_type, address, arguments, scope)) continue;
-      if(arguments.empty()) {
-        if(!field_type || field_type->kind != TYPE_CLASS)
-          emit_store(field->type, "0", address);
-        continue;
-      }
-      if(type_is_reference(field->type)) {
-        emit_store(PointerTo(Fundamental("char")), reference_source, address);
-      } else if(IsBitField(field)) {
-        StoreBitField(field, address, field->type, value.operand, true);
-      } else {
-        emit_store(field->type, value.operand, address);
-      }
-    }
-    for(size_t i = 0; i < owner->class_members.size(); ++i) {
-      const ClassMemberInfo& member_fact = owner->class_members[i];
-      if(member_fact.is_static || member_fact.name.empty() || !member_fact.type ||
-         initialized_members.find(member_fact.name) != initialized_members.end()) continue;
-      vector<Binding*> fields = DirectBindings(owner->owned_scope, member_fact.name);
-      Binding* field = 0;
-      for(size_t j = 0; j < fields.size(); ++j)
-        if(fields[j]->kind == BIND_VARIABLE && fields[j]->is_member && !fields[j]->is_static) {
-          field = fields[j];
-          break;
-        }
-      if(!field) continue;
-      TypePtr field_type = type_value(field->type);
-      CPPGMAstNodePtr member(new CPPGMAstNode("member-expression", "OP_ARROW:->"));
-      member->children.push_back(this_node);
-      member->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
-        "identifier", member_fact.name)));
-      vector<CPPGMAstNodePtr> arguments;
-      CPPGMAstNodePtr expression;
-      if(member_fact.initializer) {
-        if(!member_fact.initializer->children.empty() && member_fact.initializer->children[0] &&
-           member_fact.initializer->children[0]->kind == "paren-initializer") {
-          arguments = member_fact.initializer->children[0]->children;
-          if(arguments.size() == 1) expression = arguments[0];
-        } else {
-          expression = InitializerExpression(member_fact.initializer);
-          if(expression && expression->kind == "braced-init-list")
-            arguments = expression->children;
-          else if(expression) arguments.push_back(expression);
-        }
-        if(expression && expression->kind == "call-expression" &&
-           !expression->children.empty() && expression->children[0] &&
-           expression->children[0]->kind == "id-expression" && field_type &&
-           field_type->kind == TYPE_CLASS &&
-           LastComponent(field_type->name) == expression->children[0]->value) {
-          CPPGMAstNodePtr argument_list = expression->children.size() > 1 ?
-            expression->children[1] : CPPGMAstNodePtr();
-          arguments = argument_list ? argument_list->children : vector<CPPGMAstNodePtr>();
-          expression.reset();
-        }
-      }
-      const bool empty_value_initializer = expression &&
-        ((expression->kind == "braced-init-list" && expression->children.empty()) ||
-         (expression->kind == "paren-initializer" && expression->children.empty()));
-      if(arguments.empty() && (!field_type || field_type->kind != TYPE_CLASS) &&
-         !empty_value_initializer) continue;
-      if(IsBitField(field)) {
-        if(arguments.size() != 1) throw logic_error("default member initializer has too many arguments");
-        Value value = EmitValue(arguments[0], scope, field->type);
-        value = ConvertValue(value, field->type);
-        bool preserve = false;
-        if(field->member_owner && field->member_index != static_cast<size_t>(-1) &&
-           field->member_index < field->member_owner->class_members.size()) {
-          const long long offset = field->member_owner->class_members[field->member_index].offset;
-          for(set<string>::const_iterator it = initialized_members.begin();
-              it != initialized_members.end() && !preserve; ++it) {
-            if(*it == member_fact.name) continue;
-            vector<Binding*> prior = DirectBindings(owner->owned_scope, *it);
-            for(size_t j = 0; j < prior.size(); ++j)
-              if(IsBitField(prior[j]) && prior[j]->member_owner &&
-                 prior[j]->member_index != static_cast<size_t>(-1) &&
-                 prior[j]->member_index < prior[j]->member_owner->class_members.size() &&
-                 prior[j]->member_owner->class_members[prior[j]->member_index].offset == offset) {
-                preserve = true;
-                break;
-              }
-          }
-        }
-        string stored;
-        if(preserve) {
-          const string read_address = EmitMemberAddress(member, scope);
-          stored = MergeBitFieldValue(field, read_address, field->type, value.operand, true);
-        } else stored = PrepareBitFieldValue(field, field->type, value.operand);
-        const string store_address = EmitMemberAddress(member, scope);
-        emit_store(field->type, stored, store_address);
-        initialized_members.insert(member_fact.name);
-        continue;
-      }
-      const string address = EmitMemberAddress(member, scope);
-      if(field_type && field_type->kind == TYPE_CLASS &&
-         EmitConstructorAt(field_type, address, arguments, scope)) continue;
-      if(expression && expression->kind == "braced-init-list" &&
-         field_type && (field_type->kind == TYPE_CLASS || field_type->kind == TYPE_ARRAY)) {
-        EmitAggregateAt(address, field_type, expression, scope);
-        continue;
-      }
-      if(arguments.empty()) {
-        if(empty_value_initializer && (!field_type || field_type->kind != TYPE_CLASS))
-          emit_store(field->type,
-            field_type && field_type->kind == TYPE_POINTER ? "nullptr" : "0", address);
-        continue;
-      }
-      if(arguments.size() != 1) throw logic_error("default member initializer has too many arguments");
-      Value value = type_is_reference(field->type) ? Value() :
-        EmitValue(arguments[0], scope, field->type);
-      if(type_is_reference(field->type)) {
-        emit_store(PointerTo(Fundamental("char")),
-          EmitReferenceArgument(arguments[0], scope, field->type), address);
-      } else if(IsBitField(field)) {
-        StoreBitField(field, address, field->type, value.operand, true);
-      } else {
-        value = ConvertValue(value, field->type);
-        emit_store(field->type, value.operand, address);
-      }
-    }
   }
 
 void PA14Lowerer::EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr& initializer,
@@ -520,7 +307,8 @@ void PA14Lowerer::EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr&
             arguments = child->children[1] ? child->children[1]->children :
               vector<CPPGMAstNodePtr>();
           } else if(child) arguments.push_back(child);
-          if(EmitConstructorAt(element_type, storage, arguments, scope)) continue;
+          if(EmitConstructorAt(element_type, storage, arguments, scope,
+                               true, false, true)) continue;
           if(child && child->kind == "braced-init-list") {
             EmitAggregateAt(storage, element_type, child, scope);
             continue;
@@ -557,6 +345,19 @@ void PA14Lowerer::EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr&
                                 vector<CPPGMAstNodePtr>(), scope) &&
              !HasConstructor(element_type)) break;
         }
+      } else if(element_type && element_type->kind != TYPE_ARRAY &&
+                variable->type->bound >= 0) {
+        for(size_t i = expression->children.size();
+            i < static_cast<size_t>(variable->type->bound); ++i) {
+          string storage = base;
+          if(i != 0) {
+            const string index = new_temp();
+            AddInstruction(index + " = index i8 " + base + ", " +
+              integer_text(static_cast<long long>(i * type_size(variable->type->child))));
+            storage = index;
+          }
+          emit_store(element_type, "0", storage);
+        }
       }
       return;
     }
@@ -579,10 +380,16 @@ void PA14Lowerer::EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr&
       } else if(expression) constructor_arguments.push_back(expression);
       const bool allow_explicit = !initializer ||
         initializer->initializer_form != AST_INITIALIZER_COPY;
-      if(EmitObjectConstructor(variable, aggregate_type, constructor_arguments, scope,
+      const bool empty_aggregate = expression &&
+        expression->kind == "braced-init-list" && expression->children.empty();
+      if((!aggregate_candidate || !empty_aggregate) &&
+         EmitObjectConstructor(variable, aggregate_type, constructor_arguments, scope,
                                allow_explicit)) return;
       if(aggregate_candidate && expression && expression->kind == "braced-init-list") {
-        if(expression->children.empty()) return;
+        // The address reserved for a possible constructor call has already
+        // represented the object's lifetime.  Aggregate stores deliberately
+        // recompute their field base, matching ordinary aggregate lowering.
+        variable->initialization_address.clear();
         CPPGMAstNodePtr object_node(new CPPGMAstNode("id-expression", variable->source_name));
         EmitAggregateAt(string(), aggregate_type, expression, scope, object_node);
         return;
@@ -694,7 +501,14 @@ void PA14Lowerer::EmitReturn(const CPPGMAstNodePtr& node, Scope* scope)
     }
     CPPGMAstNodePtr expression = node->children[0];
     if(type_is_reference(return_type)) {
-      const string address = EmitAddress(expression, scope);
+      const ExprInfo expression_info = Infer(expression, scope);
+      const TypePtr source_type = expression_value_type(expression_info);
+      string address = EmitAddress(expression, scope);
+      const TypePtr target_type = type_value(return_type);
+      if(source_type && target_type && source_type->kind == TYPE_CLASS &&
+         target_type->kind == TYPE_CLASS &&
+         IsDerivedFrom(source_type, target_type))
+        address = AdjustBaseAddress(address, source_type, target_type);
       EmitLiveDestructors(scope);
       Terminate("return ptr " + address);
       return;
@@ -709,7 +523,7 @@ void PA14Lowerer::EmitReturn(const CPPGMAstNodePtr& node, Scope* scope)
       Terminate("return " + low_type(return_type) + " " + integer_text(value.constant));
       return;
     }
-    value = ConvertValue(value, return_type);
+    value = ConvertValue(value, return_type, false, true);
     EmitLiveDestructors(scope);
     Terminate("return " + low_type(return_type) + " " + value.operand);
   }
@@ -1002,6 +816,13 @@ void PA14Lowerer::EmitDiscard(const CPPGMAstNodePtr& node, Scope* scope)
         return;
       }
     }
+    ExprInfo info = Infer(node, scope);
+    TypePtr value_type = expression_value_type(info);
+    if(info.category == "lvalue" && value_type &&
+       (value_type->kind == TYPE_CLASS || value_type->kind == TYPE_ARRAY)) {
+      (void)EmitAddress(node, scope);
+      return;
+    }
     EmitValue(node, scope);
   }
 
@@ -1063,22 +884,29 @@ void PA14Lowerer::EmitStatement(const CPPGMAstNodePtr& node, Scope* scope)
           map<const CPPGMAstNode*, VariablePlan*>::iterator found =
             state_->plans.find(item->children[0].get());
           if(found != state_->plans.end() &&
+             !type_is_reference(found->second->type) &&
              type_value(found->second->type) &&
              (type_value(found->second->type)->kind == TYPE_CLASS ||
               (type_value(found->second->type)->kind == TYPE_ARRAY &&
                type_value(found->second->type)->child &&
                type_value(found->second->type)->child->kind == TYPE_CLASS))) {
             bool initialized = item->children.size() > 1;
+            bool empty_initializer = false;
             if(initialized) {
               CPPGMAstNodePtr declaration_initializer = InitializerExpression(item->children[1]);
               if(declaration_initializer && declaration_initializer->kind == "braced-init-list" &&
-                 declaration_initializer->children.empty()) initialized = false;
+                 declaration_initializer->children.empty()) {
+                initialized = false;
+                empty_initializer = true;
+              }
             }
             const bool referenced = state_->record && state_->record->node &&
               state_->record->node->children.size() > 2 &&
               HasNonSizeofReference(state_->record->node->children[2],
                 found->second->source_name);
-            if(initialized || referenced)
+            if(initialized || (referenced &&
+                               (!empty_initializer ||
+                                HasDefaultInitializationEffects(found->second->type))))
               found->second->initialization_address = local_address(found->second);
           }
           if(found != state_->plans.end() && item->children.size() > 1)
@@ -1088,6 +916,10 @@ void PA14Lowerer::EmitStatement(const CPPGMAstNodePtr& node, Scope* scope)
             (void)EmitObjectConstructor(found->second, type_value(found->second->type),
               vector<CPPGMAstNodePtr>(), scope);
             if(!found->second->initialization_address.empty())
+              (void)EmitAddress(CPPGMAstNodePtr(new CPPGMAstNode(
+                "id-expression", found->second->source_name)), scope);
+            else if(!HasConstructor(found->second->type) &&
+                    HasDestructor(found->second->type))
               (void)EmitAddress(CPPGMAstNodePtr(new CPPGMAstNode(
                 "id-expression", found->second->source_name)), scope);
           }
@@ -1179,6 +1011,7 @@ string PA14Lowerer::EmitFunction(FunctionRecord& function)
 {
     FunctionState state(this, &function);
     state_ = &state;
+    infer_cache_.clear();
     PlanFunction(state);
     state.environments.clear();
     state.environments.push_back(map<string, VariablePlan*>());
@@ -1224,6 +1057,9 @@ string PA14Lowerer::EmitFunction(FunctionRecord& function)
     AddBlock("entry");
     for(size_t i = 0; i < function.type->parameters.size(); ++i) {
       if(i >= state.variables.size()) break;
+      TypePtr parameter = function.type->parameters[i];
+      if(!type_is_reference(parameter) && type_value(parameter) &&
+         type_value(parameter)->kind == TYPE_CLASS) continue;
       emit_store(function.type->parameters[i], "%" + names[i],
         StorageForVariable(state.variables[i]));
     }
@@ -1308,7 +1144,8 @@ void PA14Lowerer::EmitGlobalInitializer(GlobalRecord& global, Scope* scope)
                   LastComponent(element_type->name) == child->children[0]->value)
             arguments = child->children[1] ? child->children[1]->children :
               vector<CPPGMAstNodePtr>();
-          if(EmitConstructorAt(element_type, element, arguments, scope)) continue;
+          if(EmitConstructorAt(element_type, element, arguments, scope,
+                               true, false, true)) continue;
           if(child && child->kind == "braced-init-list") {
             EmitAggregateAt(element, element_type, child, scope);
             continue;
