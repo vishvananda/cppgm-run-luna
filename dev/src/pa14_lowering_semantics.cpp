@@ -199,6 +199,15 @@ vector<Binding*> PA14Lowerer::MemberBindings(const TypePtr& raw_object,
     const vector<Binding*> all_direct = DirectBindings(object->owned_scope, last_component(name));
     for(size_t i = 0; i < all_direct.size(); ++i)
       if(!all_direct[i]->hidden_friend) direct.push_back(all_direct[i]);
+    if(direct.empty() && name.size() > 1 && name[0] == '~') {
+      const string actual = "~" + LastComponent(object->name);
+      if(actual != last_component(name)) {
+        const vector<Binding*> destructor_bindings =
+          DirectBindings(object->owned_scope, actual);
+        for(size_t i = 0; i < destructor_bindings.size(); ++i)
+          if(!destructor_bindings[i]->hidden_friend) direct.push_back(destructor_bindings[i]);
+      }
+    }
     if(!direct.empty()) return direct;
     if(object->direct_base) return MemberBindings(object->direct_base, name);
     return vector<Binding*>();
@@ -727,6 +736,8 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferUncached(const CPPGMAstNodePtr& node, Sc
     if(node->kind == "id-expression") return InferIdentifier(node, scope, expected);
     if(node->kind == "parenthesized-expression")
       return node->children.empty() ? ExprInfo() : Infer(node->children[0], scope, expected);
+    if(node->kind == "new-expression" || node->kind == "delete-expression")
+      return InferAllocation(node, scope);
     if(node->kind == "call-expression") return InferCall(node, scope);
     if(node->kind == "unary-expression") return InferUnary(node, scope);
     if(node->kind == "postfix-expression") {
@@ -831,6 +842,24 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferUncached(const CPPGMAstNodePtr& node, Sc
       return result;
     }
     throw logic_error("unsupported expression in LowIR lowering: " + node->kind);
+  }
+
+PA14Lowerer::ExprInfo PA14Lowerer::InferAllocation(const CPPGMAstNodePtr& node,
+                                                    Scope* scope)
+{
+    ExprInfo result;
+    if(node->kind == "delete-expression") result.type = Fundamental("void");
+    else {
+      CPPGMAstNodePtr type_id;
+      for(size_t i = 0; i < node->children.size(); ++i)
+        if(node->children[i] && node->children[i]->kind == "type-id") type_id = node->children[i];
+      if(!type_id) throw logic_error("new-expression has no allocated type");
+      TypePtr allocated = type_value(analyzer_.TypeFromTypeId(type_id, scope));
+      if(allocated && allocated->kind == TYPE_ARRAY) allocated = type_value(allocated->child);
+      result.type = PointerTo(allocated);
+    }
+    result.category = "prvalue";
+    return result;
   }
 
 } // namespace cppgm_pa14_lowering

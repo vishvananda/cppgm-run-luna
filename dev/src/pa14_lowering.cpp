@@ -621,6 +621,51 @@ void PA14Lowerer::InstallBuiltins()
       if(spec.first_parameter && spec.type->parameters.size() > 2)
         record->parameter_metadata.push_back(string());
     }
+
+    // Allocation expressions are lowered through the ordinary overload and
+    // call machinery.  Keep the language-level spellings used by the AST
+    // (`operatornew`/`operatordelete`) as bindings, while giving the LowIR
+    // declarations their stable runtime symbols and object identities.
+    vector<TypePtr> new_parameters(1, size_type);
+    vector<TypePtr> new_array_parameters(1, size_type);
+    vector<TypePtr> delete_parameters(1, PointerTo(Fundamental("void")));
+    vector<TypePtr> delete_array_parameters(1, PointerTo(Fundamental("void")));
+    struct OperatorBuiltinSpec
+    {
+      const char* name;
+      TypePtr type;
+      const char* symbol;
+      const char* object_name;
+    };
+    const OperatorBuiltinSpec operator_specs[] = {
+      {"operatornew", FunctionOf(new_parameters, false, PointerTo(Fundamental("void")), false),
+       "operator_new", "cppgm_builtin_operator_new"},
+      {"operatornew[]", FunctionOf(new_array_parameters, false, PointerTo(Fundamental("void")), false),
+       "operator_new__", "cppgm_builtin_operator_new_array"},
+      {"operatordelete", FunctionOf(delete_parameters, false, Fundamental("void"), false),
+       "operator_delete", "cppgm_builtin_operator_delete"},
+      {"operatordelete[]", FunctionOf(delete_array_parameters, false, Fundamental("void"), false),
+       "operator_delete__", "cppgm_builtin_operator_delete_array"}
+    };
+    for(size_t i = 0; i < sizeof(operator_specs) / sizeof(*operator_specs); ++i) {
+      const OperatorBuiltinSpec& spec = operator_specs[i];
+      Binding binding(BIND_FUNCTION, spec.name, spec.type);
+      binding.qualified_name = spec.name;
+      binding.declaration = CPPGMAstNodePtr();
+      analyzer_.global_->add(binding);
+
+      functions_.push_back(FunctionRecord());
+      FunctionRecord* record = &functions_.back();
+      function_by_key_[function_key(spec.name, spec.type)] = record;
+      record->scope = analyzer_.global_.get();
+      record->source_type = spec.type;
+      record->type = spec.type;
+      record->qualified_name = spec.name;
+      record->symbol = spec.symbol;
+      record->builtin = true;
+      record->unwind_no = true;
+      record->object_name = spec.object_name;
+    }
   }
 
 bool PA14Lowerer::HasNoexcept(const CPPGMAstNodePtr& node) const
@@ -1093,7 +1138,27 @@ void PA14Lowerer::FinalizeSymbols()
       string base = low_symbol_component(function.qualified_name);
       unsigned int& count = overloads[base];
       ++count;
-      function.symbol = count == 1 ? base : base + "__ov" + integer_text(count);
+      if(!function.builtin || function.symbol.empty())
+        function.symbol = count == 1 ? base : base + "__ov" + integer_text(count);
+      // The ordinary source spelling has no separator (`operatornew`) in
+      // the AST.  Preserve the ABI names for user-provided placement
+      // allocation functions so calls remain ordinary typed calls while the
+      // emitted object metadata still describes the C++ runtime entry point.
+      const TypePtr function_type_value = function_target_type(function.source_type);
+      const bool operator_new = LastComponent(function.qualified_name) == "operatornew";
+      const bool operator_delete = LastComponent(function.qualified_name) == "operatordelete";
+      if(!function.builtin && function_type_value &&
+         (operator_new || operator_delete) && function_type_value->parameters.size() == 2) {
+        const TypePtr second = type_value(function_type_value->parameters[1]);
+        if(operator_new && second && second->kind == TYPE_POINTER &&
+           type_value(second->child) && type_value(second->child)->kind == TYPE_FUNDAMENTAL &&
+           type_value(second->child)->name == "void")
+          function.object_name = "_ZnwmPv";
+        else if(operator_delete && second && second->kind == TYPE_POINTER &&
+                type_value(second->child) && type_value(second->child)->kind == TYPE_FUNDAMENTAL &&
+                type_value(second->child)->name == "void")
+          function.object_name = "_ZdlPvS_";
+      }
     }
     for(size_t i = 0; i < globals_.size(); ++i) {
       globals_[i].symbol = low_symbol_component(globals_[i].qualified_name);

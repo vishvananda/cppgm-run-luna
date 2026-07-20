@@ -973,6 +973,9 @@ Value EmitValue(const CPPGMAstNodePtr& node, Scope* scope,
 
 ;
 
+Value EmitNewExpression(const CPPGMAstNodePtr& node, Scope* scope, const TypePtr& expected = TypePtr());
+Value EmitDeleteExpression(const CPPGMAstNodePtr& node, Scope* scope);
+
 Value ValueFromInfo(const ExprInfo& info) const
 
 ;
@@ -1182,6 +1185,10 @@ ExprInfo Infer(const CPPGMAstNodePtr& node, Scope* scope,
 
 ExprInfo InferUncached(const CPPGMAstNodePtr& node, Scope* scope,
                        const TypePtr& expected)
+
+;
+
+ExprInfo InferAllocation(const CPPGMAstNodePtr& node, Scope* scope)
 
 ;
 };

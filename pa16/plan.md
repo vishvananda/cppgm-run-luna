@@ -454,3 +454,114 @@ pass, the full PA16 report is 89/164, the through-PA15 gate is 1019/1019,
 and the PA16 source audit passes.  The object-transfer implementation was
 kept in the dedicated object-lowering unit so the control unit remains within
 the stage file-size limit.
+
+## Checkpoint Scope 6
+
+Implement typed scalar allocation/deallocation and delegating-constructor
+lifetime over the existing constructor, call, and object state.  This scope
+covers:
+
+- builtin and user-provided `operator new`/`delete` bindings, stable runtime
+  symbols, placement arguments, class-specific allocation lookup, scalar
+  initialization conversion, and nothrow null-result guarding;
+- scalar `delete` overload selection, class destructor-before-deallocation
+  ordering, null-pointer guards, and destructor-name alias lookup; and
+- delegating mem-initializers, including external constructor overloads,
+  without separately initializing the delegated object's bases or members.
+
+The focused allocation/delegation set passed 11/12 after the PA15-safe
+comparison repair; the one remaining fixture is a LowIR-only shape mismatch
+inside the class-specific placement-new body.  The ordinary scalar/class
+allocation, delete, nothrow, placement, destructor-alias, and all three
+delegation fixtures pass.  The full PA16 report is now 100/164, up from
+89/164 at the start of this checkpoint.
+
+## Remaining Work Map after checkpoint 6
+
+The latest complete PA16 report has 64 failures.  They are grouped below;
+the class-specific placement fixture remains in the allocation group because
+its runtime behavior is implemented but its canonical LowIR shape is not.
+
+### ADL, lookup, and nonmember operators
+
+`general/200-associated-namespace-adl-function-call`,
+`general/200-hidden-friend-adl-function-call`,
+`general/200-hidden-friend-adl`,
+`general/200-reverse-friend-plus-operator`, and
+`general/300-using-directive-imported-value-ambiguous`.
+
+### Class ABI, transfers, and special-member/lifetime shapes
+
+`general/200-derived-to-base-by-value-overload`,
+`general/200-enum-class-pass-by-value`,
+`general/200-out-of-class-special-members`,
+`general/200-prvalue-field-access-temporary`,
+`general/200-return-nullptr-class-braced-default`,
+`general/300-base-rvalue-reference-assignment`,
+`general/300-bit-field-copy-semantics`,
+`general/300-class-array-missing-value-init`,
+`general/300-conditional-local-prvalue-init-elides-copy`,
+`general/300-direct-object-parameter-passthrough-base-copy`,
+`general/300-discarded-class-call`,
+`general/300-discarded-large-class-call-void-cast`,
+`general/300-empty-base-defaulted-assignment-user-copy-ctor`,
+`general/300-empty-base-subobject-assignment-no-storage`,
+`general/300-explicit-default-copy-assignment-with-move-ctor`,
+`general/300-indirect-call-result-rvalue-reference-materialization`,
+`general/300-leading-trivial-prefix-storage-copy-enum`,
+`general/300-leading-trivial-prefix-storage-copy`,
+`general/300-move-only-aggregate-brace-member`,
+`general/300-qualified-base-implicit-copy-assignment`,
+`general/300-return-const-ref-parameter-copy-not-move`, and
+`general/300-trivial-copy-value-transfer-storage-copy`.
+
+### Allocation, construction, destruction, and arrays
+
+`general/300-class-specific-placement-new`,
+`general/400-array-new-default-ctor-default-arg`,
+`general/400-array-new-empty-paren-value-init`,
+`general/400-delete-array-expression`,
+`general/400-for-init-class-lifetime-extends-through-loop`,
+`general/400-global-array-delete`,
+`general/400-global-class-array-named-implicit-copy`,
+`general/400-global-operator-new-array-delete-array-call`,
+`general/400-nontrivial-class-array-new-delete`,
+`general/400-shadowed-local-cleanup-rebind-on-return`, and
+`general/400-trivial-class-array-new`.
+
+### Unions, anonymous storage, and aggregate members
+
+`general/300-anonymous-union-member-id-expression`,
+`general/300-local-anonymous-union-sizeof`,
+`general/300-union-special-member-storage-copy`,
+`general/300-union-trivial-subobject-dtor-omission`, and
+`general/300-union-user-default-ctor-inactive-class-member`.
+
+### Conversion operators and built-in/operator ranking
+
+`general/300-pointer-bool-local-storage-lowering`,
+`general/300-proxy-subscript-assignment`,
+`general/400-built-in-unary-class-conversion`,
+`general/400-builtin-comparison-after-rejected-operator-overload`,
+`general/400-builtin-comparison-prefers-fewer-user-conversions`,
+`general/400-by-value-param-converting-ctor-overload`,
+`general/400-c-style-cast-explicit-bool-conversion`,
+`general/400-class-pointer-conversion-builtin-eq`,
+`general/400-class-pointer-conversion-builtin-subscript`,
+`general/400-compound-assignment-rhs-conversion`,
+`general/400-condition-declaration-user-bool-conversion`,
+`general/400-cv-conversion-operator-builtin-comparison`,
+`general/400-direct-init-explicit-bool-conversion`,
+`general/400-explicit-conversion-operator-alias-target-call`,
+`general/400-logical-not-after-rejected-operator-overload`,
+`general/400-out-of-class-qualified-conversion-operator-result`,
+`general/400-pointer-arithmetic-class-conversion`,
+`general/400-switch-condition-declaration-conversion-operator`,
+`general/400-user-defined-conversion-path-tiebreak`,
+`general/400-user-defined-conversion-second-rank`, and
+`spec/400-inherited-conversion-operator-parameter-binding`.
+
+The next checkpoint should implement array-new/delete cookies and element
+construction/destruction, including trivial and nontrivial class arrays; the
+remaining class-transfer shapes, ADL/lookup, union storage, and conversion
+ranking stay separate follow-on groups.

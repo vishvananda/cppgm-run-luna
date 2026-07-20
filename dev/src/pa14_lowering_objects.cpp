@@ -10,6 +10,188 @@ using namespace std;
 
 namespace cppgm_pa14_lowering {
 
+PA14Lowerer::Value PA14Lowerer::EmitNewExpression(const CPPGMAstNodePtr& node,
+                                                  Scope* scope,
+                                                  const TypePtr& expected)
+{
+    (void)expected;
+    if(!node) throw logic_error("missing new-expression during LowIR lowering");
+    CPPGMAstNodePtr type_id;
+    CPPGMAstNodePtr placement;
+    CPPGMAstNodePtr initializer;
+    for(size_t i = 0; i < node->children.size(); ++i) {
+      const CPPGMAstNodePtr child = node->children[i];
+      if(!child) continue;
+      if(child->kind == "type-id") type_id = child;
+      else if(child->kind == "placement") placement = child;
+      else if(child->kind == "initializer" || child->kind == "braced-init-list")
+        initializer = child;
+    }
+    if(!type_id) throw logic_error("new-expression has no allocated type");
+    TypePtr allocated_type = type_value(analyzer_.TypeFromTypeId(type_id, scope));
+    if(!allocated_type) throw logic_error("new-expression has no allocated type");
+    if(allocated_type->kind == TYPE_ARRAY)
+      throw logic_error("array new-expression is not lowered yet");
+
+    vector<CPPGMAstNodePtr> allocation_arguments;
+    CPPGMAstNodePtr size(new CPPGMAstNode("literal", "1"));
+    size->value = integer_text(static_cast<long long>(type_size(allocated_type)));
+    allocation_arguments.push_back(size);
+    if(placement) {
+      for(size_t i = 0; i < placement->children.size(); ++i) {
+        const CPPGMAstNodePtr child = placement->children[i];
+        if(!child) continue;
+        if(child->kind == "paren-argument-list" || child->kind == "argument-list" ||
+           child->kind == "braced-init-list") {
+          for(size_t j = 0; j < child->children.size(); ++j)
+            allocation_arguments.push_back(child->children[j]);
+        } else allocation_arguments.push_back(child);
+      }
+    }
+
+    string allocator_name = "operatornew";
+    if(allocated_type->kind == TYPE_CLASS) {
+      const vector<Binding*> members = MemberBindings(allocated_type, "operatornew");
+      bool class_allocator = false;
+      for(size_t i = 0; i < members.size(); ++i)
+        if(members[i] && members[i]->kind == BIND_FUNCTION && members[i]->is_static) {
+          class_allocator = true;
+          break;
+        }
+      if(class_allocator)
+        allocator_name = TypeQualifiedName(allocated_type) + "::operatornew";
+    }
+    CPPGMAstNodePtr callee(new CPPGMAstNode("id-expression", allocator_name));
+    CPPGMAstNodePtr arguments(new CPPGMAstNode("paren-argument-list"));
+    arguments->children = allocation_arguments;
+    CPPGMAstNodePtr call(new CPPGMAstNode("call-expression"));
+    call->children.push_back(callee);
+    call->children.push_back(arguments);
+    CallChoice allocation_choice = ChooseCall(call, scope);
+    if(!allocation_choice.binding)
+      throw logic_error("new-expression has no viable allocation function");
+    Value allocated = EmitChosenCall(allocation_choice, callee, allocation_arguments, scope);
+
+    vector<CPPGMAstNodePtr> initializer_arguments;
+    bool has_initializer = initializer.get() != 0;
+    if(initializer) {
+      if(initializer->kind == "initializer" && !initializer->children.empty()) {
+        const CPPGMAstNodePtr init = initializer->children[0];
+        if(init && (init->kind == "paren-initializer" ||
+                    init->kind == "braced-init-list"))
+          initializer_arguments = init->children;
+        else if(init) initializer_arguments.push_back(init);
+      } else if(initializer->kind == "braced-init-list") {
+        initializer_arguments = initializer->children;
+      }
+    }
+
+    bool nothrow = false;
+    if(allocation_choice.function && allocation_choice.function->parameters.size() >= 2) {
+      const TypePtr parameter = allocation_choice.function->parameters[1];
+      const TypePtr parameter_value = type_value(parameter);
+      nothrow = type_is_reference(parameter) && parameter_value &&
+        parameter_value->kind == TYPE_CLASS &&
+        LastComponent(parameter_value->name) == "nothrow_t";
+    }
+    const string init_label = nothrow ? new_label("new_init") : string();
+    const string end_label = nothrow ? new_label("new_end") : string();
+    if(nothrow) {
+      const string nonnull = new_temp();
+      AddInstruction(nonnull + " = cmp ne ptr " + allocated.operand + ", 0");
+      Terminate("branch " + nonnull + ", ^" + init_label + ", ^" + end_label);
+      AddBlock(init_label);
+    }
+    if(allocated_type->kind == TYPE_CLASS) {
+      if(!EmitConstructorAt(allocated_type, allocated.operand,
+                            initializer_arguments, scope))
+        throw logic_error("new-expression has no viable constructor");
+    } else if(!initializer_arguments.empty()) {
+      if(initializer_arguments.size() != 1)
+        throw logic_error("scalar new-expression has too many initializers");
+      Value source = EmitValue(initializer_arguments[0], scope, allocated_type);
+      source = ConvertValue(source, allocated_type, false, true);
+      emit_store(allocated_type, source.operand, allocated.operand);
+    } else if(has_initializer) {
+      Value zero;
+      zero.type = Fundamental("int");
+      zero.operand = "0";
+      zero.known_constant = true;
+      zero.constant = 0;
+      zero = ConvertValue(zero, allocated_type, false, true);
+      emit_store(allocated_type, zero.operand, allocated.operand);
+    }
+    if(nothrow) {
+      if(!state_->current->terminated) Terminate("jump ^" + end_label);
+      AddBlock(end_label);
+    }
+    Value result;
+    result.type = PointerTo(allocated_type);
+    result.operand = allocated.operand;
+    return result;
+  }
+
+PA14Lowerer::Value PA14Lowerer::EmitDeleteExpression(const CPPGMAstNodePtr& node,
+                                                     Scope* scope)
+{
+    if(!node) throw logic_error("missing delete-expression during LowIR lowering");
+    CPPGMAstNodePtr pointer_node;
+    bool array_delete = false;
+    for(size_t i = 0; i < node->children.size(); ++i) {
+      const CPPGMAstNodePtr child = node->children[i];
+      if(!child) continue;
+      if(child->kind == "array-delete") array_delete = true;
+      else if(child->kind != "global-scope") pointer_node = child;
+    }
+    if(!pointer_node) throw logic_error("delete-expression has no operand");
+    ExprInfo pointer_info = Infer(pointer_node, scope);
+    TypePtr pointer_type = expression_value_type(pointer_info);
+    Value pointer = EmitValue(pointer_node, scope);
+    TypePtr object_type;
+    if(pointer_type && pointer_type->kind == TYPE_POINTER)
+      object_type = type_value(pointer_type->child);
+    else if(pointer_type && pointer_type->kind != TYPE_FUNDAMENTAL)
+      throw logic_error("delete-expression operand is not a pointer");
+
+    const string deallocator_name = array_delete ? "operatordelete[]" : "operatordelete";
+    const string deallocator_symbol = [&]() -> string {
+      CPPGMAstNodePtr callee(new CPPGMAstNode("id-expression", deallocator_name));
+      CPPGMAstNodePtr arguments(new CPPGMAstNode("paren-argument-list"));
+      arguments->children.push_back(pointer_node);
+      CPPGMAstNodePtr call(new CPPGMAstNode("call-expression"));
+      call->children.push_back(callee);
+      call->children.push_back(arguments);
+      CallChoice choice = ChooseCall(call, scope);
+      if(!choice.binding || !choice.function)
+        throw logic_error("delete-expression has no viable deallocation function");
+      FunctionRecord* record = RecordForBinding(choice.binding);
+      if(!record) throw logic_error("delete-expression has no deallocation symbol");
+      record->needed = true;
+      FunctionRecord* base_entry = BaseEntryFor(record);
+      if(base_entry) base_entry->needed = true;
+      return record->symbol;
+    }();
+
+    const bool class_delete = object_type && object_type->kind == TYPE_CLASS && !array_delete;
+    if(class_delete) {
+      const string nonnull_label = new_label("delete_nonnull");
+      const string end_label = new_label("delete_end");
+      const string nonnull = new_temp();
+      AddInstruction(nonnull + " = cmp ne ptr " + pointer.operand + ", 0");
+      Terminate("branch " + nonnull + ", ^" + nonnull_label + ", ^" + end_label);
+      AddBlock(nonnull_label);
+      (void)EmitDestructorAt(object_type, pointer.operand, scope);
+      AddInstruction("call void @" + deallocator_symbol + "(" + pointer.operand + ")");
+      Terminate("jump ^" + end_label);
+      AddBlock(end_label);
+    } else {
+      AddInstruction("call void @" + deallocator_symbol + "(" + pointer.operand + ")");
+    }
+    Value result;
+    result.type = Fundamental("void");
+    return result;
+  }
+
 bool PA14Lowerer::EmitObjectTransferAt(const TypePtr& raw_target,
                                        const string& destination,
                                        const CPPGMAstNodePtr& source,

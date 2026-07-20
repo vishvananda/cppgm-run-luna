@@ -1325,6 +1325,7 @@ void PA14Lowerer::EmitGlobalInitializer(GlobalRecord& global, Scope* scope)
       else if(expression && expression->kind == "braced-init-list")
         arguments = expression->children;
       if(!expression && !HasConstructor(value_type)) return;
+      if(!HasDefaultInitializationEffects(value_type) && !HasDestructor(value_type)) return;
       plan.initialization_address = global_address(&global);
       if(EmitObjectConstructor(&plan, value_type, arguments, scope)) return;
       if(expression && expression->kind == "braced-init-list" &&

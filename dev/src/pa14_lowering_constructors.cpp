@@ -118,6 +118,17 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
     CPPGMAstNodePtr this_node(new CPPGMAstNode("keyword-literal", "KW_THIS:this"));
     set<string> initialized_members;
     TypePtr base = type_value(owner->direct_base);
+    bool delegating = false;
+    if(function.special_initializer) {
+      for(size_t i = 0; i < function.special_initializer->children.size(); ++i) {
+        CPPGMAstNodePtr initializer = function.special_initializer->children[i];
+        CPPGMAstNodePtr name_node = ChildOfKind(initializer, "mem-initializer-id");
+        if(name_node && LastComponent(name_node->value) == LastComponent(owner->name)) {
+          delegating = true;
+          break;
+        }
+      }
+    }
     bool explicitly_initialized_base = false;
     if(base && function.special_initializer) {
       for(size_t i = 0; i < function.special_initializer->children.size(); ++i) {
@@ -138,7 +149,7 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
         }
       }
     }
-    if(base && !explicitly_initialized_base && HasConstructor(base)) {
+    if(base && !delegating && !explicitly_initialized_base && HasConstructor(base)) {
       const string this_address = EmitValue(this_node, scope).operand;
       const string base_address = AdjustBaseAddress(this_address, owner, base);
       (void)EmitConstructorAt(base, base_address, vector<CPPGMAstNodePtr>(), scope,
@@ -212,6 +223,12 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
       if(!argument_node) argument_node = ChildOfKind(initializer, "braced-init-list");
       vector<CPPGMAstNodePtr> arguments = argument_node ? argument_node->children :
         vector<CPPGMAstNodePtr>();
+      if(name == LastComponent(owner->name)) {
+        const string this_address = EmitValue(this_node, scope).operand;
+        if(!EmitConstructorAt(owner, this_address, arguments, scope, true))
+          throw logic_error("delegating constructor has no viable target");
+        continue;
+      }
       TypePtr named_base;
       if(base && (name == LastComponent(base->name) || name == base->name)) named_base = base;
       if(base && !named_base) {

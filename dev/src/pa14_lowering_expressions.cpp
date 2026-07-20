@@ -717,6 +717,20 @@ PA14Lowerer::Value PA14Lowerer::EmitBinary(const CPPGMAstNodePtr& node, Scope* s
       right.type = common;
       right.operand = integer_text(right_raw.constant);
     } else right = ConvertValue(right_raw, common);
+    if(op == "*" && right.known_constant && right.constant == 1) {
+      Value result;
+      result.type = result_type;
+      result.operand = new_temp();
+      AddInstruction(result.operand + " = copy " + low_type(common) + " " + left.operand);
+      return result;
+    }
+    if(op == "*" && left.known_constant && left.constant == 1) {
+      Value result;
+      result.type = result_type;
+      result.operand = new_temp();
+      AddInstruction(result.operand + " = copy " + low_type(common) + " " + right.operand);
+      return result;
+    }
     string binary;
     if(op == "+") binary = "add";
     else if(op == "-") binary = "sub";
@@ -1287,59 +1301,8 @@ PA14Lowerer::Value PA14Lowerer::EmitValue(const CPPGMAstNodePtr& node, Scope* sc
     if(node->kind == "id-expression") return EmitIdentifier(node, scope, expected);
     if(node->kind == "parenthesized-expression")
       return node->children.empty() ? Value() : EmitValue(node->children[0], scope, expected);
-    if(node->kind == "new-expression") {
-      CPPGMAstNodePtr type_id;
-      CPPGMAstNodePtr placement;
-      CPPGMAstNodePtr initializer;
-      for(size_t i = 0; i < node->children.size(); ++i) {
-        const CPPGMAstNodePtr child = node->children[i];
-        if(!child) continue;
-        if(child->kind == "type-id") type_id = child;
-        else if(child->kind == "placement") placement = child;
-        else if(child->kind == "initializer" || child->kind == "braced-init-list")
-          initializer = child;
-      }
-      if(!type_id) throw logic_error("new-expression has no allocated type");
-      TypePtr object_type = analyzer_.TypeFromTypeId(type_id, scope);
-      if(!object_type || type_value(object_type)->kind != TYPE_CLASS)
-        throw logic_error("unsupported non-class new-expression");
-      object_type = type_value(object_type);
-
-      vector<CPPGMAstNodePtr> allocation_arguments;
-      CPPGMAstNodePtr size(new CPPGMAstNode("literal", "1"));
-      size->value = integer_text(static_cast<long long>(type_size(object_type)));
-      allocation_arguments.push_back(size);
-      if(placement && !placement->children.empty() && placement->children[0]) {
-        const CPPGMAstNodePtr list = placement->children[0];
-        for(size_t i = 0; i < list->children.size(); ++i)
-          allocation_arguments.push_back(list->children[i]);
-      }
-      CPPGMAstNodePtr call(new CPPGMAstNode("call-expression"));
-      call->children.push_back(CPPGMAstNodePtr(
-        new CPPGMAstNode("id-expression", "operatornew")));
-      CPPGMAstNodePtr arguments(new CPPGMAstNode("paren-argument-list"));
-      for(size_t i = 0; i < allocation_arguments.size(); ++i)
-        arguments->children.push_back(allocation_arguments[i]);
-      call->children.push_back(arguments);
-      Value allocated = EmitCall(call, scope);
-      vector<CPPGMAstNodePtr> constructor_arguments;
-      if(initializer) {
-        if(initializer->kind == "initializer" && !initializer->children.empty()) {
-          const CPPGMAstNodePtr init = initializer->children[0];
-          if(init && (init->kind == "paren-initializer" ||
-                      init->kind == "braced-init-list"))
-            constructor_arguments = init->children;
-        } else if(initializer->kind == "braced-init-list") {
-          constructor_arguments = initializer->children;
-        }
-      }
-      if(!EmitConstructorAt(object_type, allocated.operand, constructor_arguments, scope))
-        throw logic_error("new-expression has no viable constructor");
-      Value result;
-      result.type = PointerTo(object_type);
-      result.operand = allocated.operand;
-      return result;
-    }
+    if(node->kind == "new-expression") return EmitNewExpression(node, scope, expected);
+    if(node->kind == "delete-expression") return EmitDeleteExpression(node, scope);
     if(node->kind == "call-expression") {
       TypePtr constructor_type = node->children.empty() ? TypePtr() :
         ConstructorObjectType(node->children[0], scope);

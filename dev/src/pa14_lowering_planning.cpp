@@ -383,11 +383,18 @@ vector<string> PA14Lowerer::ParameterNames(const FunctionRecord& function) const
         CPPGMAstNodePtr parameter = clause->children[i];
         if(!parameter || parameter->kind != "parameter-declaration") continue;
         CPPGMAstNodePtr declarator = parameter->children.size() > 1 ? parameter->children[1] : CPPGMAstNodePtr();
-        result.push_back(parameter_name(declarator, index++));
+        const size_t parameter_index = index++;
+        string name = parameter_name(declarator, parameter_index);
+        if(function.builtin && name.find("__param") == 0)
+          name = "arg" + integer_text(static_cast<long long>(parameter_index));
+        result.push_back(name);
       }
     }
-    while(result.size() < function.type->parameters.size())
-      result.push_back("__param" + integer_text(static_cast<long long>(index++)));
+    while(result.size() < function.type->parameters.size()) {
+      const size_t parameter_index = index++;
+      result.push_back((function.builtin ? "arg" : "__param") +
+        integer_text(static_cast<long long>(parameter_index)));
+    }
     return result;
   }
 

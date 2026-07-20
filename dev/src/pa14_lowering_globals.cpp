@@ -699,9 +699,13 @@ string PA14Lowerer::EmitPointerOffset(const CPPGMAstNodePtr& node, Scope* scope)
       // The array operand is converted to a pointer before the offset is scaled.
       string base = EmitArrayDecay(pointer_node, scope);
       Value offset = EmitValue(offset_node, scope);
+      const size_t element_size = type_size(pointer_type->child);
       const string scale = new_temp();
-      AddInstruction(scale + " = binary mul i64 " + offset.operand + ", " +
-        integer_text(static_cast<long long>(type_size(pointer_type->child))));
+      if(element_size == 1)
+        AddInstruction(scale + " = copy i64 " + offset.operand);
+      else
+        AddInstruction(scale + " = binary mul i64 " + offset.operand + ", " +
+          integer_text(static_cast<long long>(element_size)));
       string scaled = scale;
       if(subtract) {
         const string neg = new_temp();
@@ -720,7 +724,10 @@ string PA14Lowerer::EmitPointerOffset(const CPPGMAstNodePtr& node, Scope* scope)
     if(size == 1 && !subtract) scaled = offset.operand;
     else {
       const string scale = new_temp();
-      AddInstruction(scale + " = binary mul i64 " + offset.operand + ", " + integer_text(size));
+      if(size == 1)
+        AddInstruction(scale + " = copy i64 " + offset.operand);
+      else
+        AddInstruction(scale + " = binary mul i64 " + offset.operand + ", " + integer_text(size));
       scaled = scale;
       if(subtract) {
         const string neg = new_temp();
