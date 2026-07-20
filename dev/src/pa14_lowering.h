@@ -652,6 +652,8 @@ string EmitPointerOffset(const CPPGMAstNodePtr& node, Scope* scope);
 
 string EmitAddress(const CPPGMAstNodePtr& node, Scope* scope);
 
+string EmitOperatorAddress(const CPPGMAstNodePtr& node, Scope* scope);
+
 string EmitCallAddress(const CPPGMAstNodePtr& node, Scope* scope);
 
 string EmitLiteralAddress(const CPPGMAstNodePtr& node);

@@ -881,17 +881,12 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferSubscript(const CPPGMAstNodePtr& node, S
 PA14Lowerer::ExprInfo PA14Lowerer::Infer(const CPPGMAstNodePtr& node, Scope* scope,
                 const TypePtr& expected)
 {
-    if(!expected && state_ && node) {
-      map<const CPPGMAstNode*, pair<Scope*, ExprInfo> >::const_iterator found =
-        infer_cache_.find(node.get());
-      if(found != infer_cache_.end() && found->second.first == scope)
-        return found->second.second;
-    }
-    ExprInfo result = InferUncached(node, scope, expected);
-    if(!expected && state_ && node)
-      infer_cache_[node.get()] = make_pair(scope, result);
-    return result;
-  }
+    // Synthetic AST nodes are created during address/call lowering and are
+    // short-lived.  A raw-pointer cache can reuse their addresses within one
+    // function and return a type inferred for an unrelated temporary.  The
+    // uncached path keeps expression facts tied to the actual node/state.
+    return InferUncached(node, scope, expected);
+}
 
 PA14Lowerer::ExprInfo PA14Lowerer::InferUncached(const CPPGMAstNodePtr& node, Scope* scope,
                 const TypePtr& expected)

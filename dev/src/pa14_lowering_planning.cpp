@@ -451,7 +451,7 @@ vector<string> PA14Lowerer::ParameterNames(const FunctionRecord& function) const
       function.value_special_member ?
       ChildOfKind(function.node, "declarator") :
       (function.node->children.size() > 1 ? function.node->children[1] : CPPGMAstNodePtr());
-    CPPGMAstNodePtr clause = declarator ? ChildOfKind(declarator, "parameter-clause") :
+    CPPGMAstNodePtr clause = declarator ? DescendantOfKind(declarator, "parameter-clause") :
       CPPGMAstNodePtr();
     size_t index = function.member && !function.static_member ? 1 : 0;
     if(clause) {

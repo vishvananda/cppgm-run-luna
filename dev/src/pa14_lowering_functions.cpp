@@ -13,6 +13,10 @@ string PA14Lowerer::EmitFunction(FunctionRecord& function)
     state_ = &state;
     infer_cache_.clear();
     PlanFunction(state);
+    // Planning uses short-lived synthetic `this` nodes for implicit member
+    // accesses.  Do not let their pointer-keyed inference entries leak into
+    // the emission pass when the allocator reuses those addresses.
+    infer_cache_.clear();
     state.environments.clear();
     state.environments.push_back(map<string, VariablePlan*>());
     const vector<string> names = ParameterNames(function);

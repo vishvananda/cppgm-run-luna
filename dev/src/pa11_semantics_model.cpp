@@ -270,6 +270,18 @@ CPPGMAstNodePtr ChildOfKind(const CPPGMAstNodePtr& node, const string& kind)
 	return CPPGMAstNodePtr();
 }
 
+CPPGMAstNodePtr DescendantOfKind(const CPPGMAstNodePtr& node, const string& kind)
+{
+	if (!node) return CPPGMAstNodePtr();
+	if (node->kind == kind) return node;
+	for (size_t i = 0; i < node->children.size(); ++i)
+	{
+		CPPGMAstNodePtr found = DescendantOfKind(node->children[i], kind);
+		if (found) return found;
+	}
+	return CPPGMAstNodePtr();
+}
+
 string FirstIdentifier(const CPPGMAstNodePtr& node)
 {
 	if (!node) return string();

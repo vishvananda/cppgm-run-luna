@@ -1,4 +1,5 @@
 #include "pa14_lowering.h"
+#include "pa18_templates.h"
 
 #include <algorithm>
 #include <cctype>
@@ -902,7 +903,7 @@ void PA14Lowerer::CollectImplicitDestructor(const TypePtr& owner, Scope* scope)
 
 void PA14Lowerer::RememberDefaults(FunctionRecord* record, const CPPGMAstNodePtr& declarator)
 {
-    CPPGMAstNodePtr clause = ChildOfKind(declarator, "parameter-clause");
+    CPPGMAstNodePtr clause = DescendantOfKind(declarator, "parameter-clause");
     if(!clause) return;
     if(record->default_arguments.size() < clause->children.size())
       record->default_arguments.resize(clause->children.size());
@@ -1424,6 +1425,7 @@ bool PA14Lowerer::IsBitField(Binding* binding, long long* bit_offset,
 void EmitPA14LowIR(const vector<CPPGMAstNodePtr>& translation_units,
                    ostream& out)
 {
-  cppgm_pa14_lowering::PA14Lowerer lowerer(translation_units);
+  const vector<CPPGMAstNodePtr> expanded = ExpandPA18Templates(translation_units);
+  cppgm_pa14_lowering::PA14Lowerer lowerer(expanded);
   lowerer.Lower(out);
 }

@@ -1193,6 +1193,19 @@ PA14Lowerer::Value PA14Lowerer::EmitValue(const CPPGMAstNodePtr& node, Scope* sc
       TypePtr builtin_type = node->children.empty() ? TypePtr() :
         BuiltinCastType(node->children[0], scope);
       if(builtin_type) {
+        if(node->children.size() >= 2 && node->children[1] &&
+           node->children[1]->children.empty()) {
+          // Functional notation with no initializer value is value
+          // initialization for a scalar (`T()`).  Template substitution
+          // exposes this form frequently when a return type becomes a
+          // fundamental type; it is not a one-argument cast.
+          Value result;
+          result.type = builtin_type;
+          result.operand = "0";
+          result.known_constant = true;
+          result.constant = 0;
+          return result;
+        }
         if(node->children.size() < 2 || !node->children[1] ||
            node->children[1]->children.size() != 1)
           throw logic_error("built-in cast requires one argument");

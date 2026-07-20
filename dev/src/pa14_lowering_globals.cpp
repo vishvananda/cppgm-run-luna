@@ -878,28 +878,8 @@ string PA14Lowerer::EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
       return EmitLiteralAddress(node);
     if(node->kind == "unary-expression" || node->kind == "postfix-expression" ||
        node->kind == "binary-expression" || node->kind == "assignment-expression") {
-      string name;
-      vector<CPPGMAstNodePtr> arguments;
-      if(node->kind == "unary-expression") {
-        name = OperatorFunctionName(PA12Operator(node->value));
-        arguments.push_back(node->children[0]);
-      } else if(node->kind == "postfix-expression") {
-        name = OperatorFunctionName(PA12Operator(node->value));
-        arguments.push_back(node->children[0]);
-        arguments.push_back(CPPGMAstNodePtr(new CPPGMAstNode("literal", "0")));
-      } else if(node->children.size() >= 2) {
-        name = OperatorFunctionName(PA12Operator(node->value));
-        arguments.push_back(node->children[0]);
-        arguments.push_back(node->children[1]);
-      }
-      if(!name.empty()) {
-        CallChoice choice = ChooseOperatorCall(name, arguments, scope);
-        if(choice.binding) {
-          Value result = EmitOperatorCall(name, arguments, scope);
-          if(result.lvalue) return result.operand;
-          throw logic_error("operator result is not addressable");
-        }
-      }
+      const string operator_address = EmitOperatorAddress(node, scope);
+      if(!operator_address.empty()) return operator_address;
     }
     if(node->kind == "unary-expression") {
       const string op = PA12Operator(node->value);
@@ -944,6 +924,48 @@ string PA14Lowerer::EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
     throw logic_error("expression is not addressable");
   }
 
+string PA14Lowerer::EmitOperatorAddress(const CPPGMAstNodePtr& node, Scope* scope)
+{
+    string name;
+    vector<CPPGMAstNodePtr> arguments;
+    if(node->kind == "unary-expression") {
+      name = OperatorFunctionName(PA12Operator(node->value));
+      if(!node->children.empty()) arguments.push_back(node->children[0]);
+    } else if(node->kind == "postfix-expression") {
+      name = OperatorFunctionName(PA12Operator(node->value));
+      if(!node->children.empty()) arguments.push_back(node->children[0]);
+      arguments.push_back(CPPGMAstNodePtr(new CPPGMAstNode("literal", "0")));
+    } else if(node->children.size() >= 2) {
+      name = OperatorFunctionName(PA12Operator(node->value));
+      arguments.push_back(node->children[0]);
+      arguments.push_back(node->children[1]);
+    }
+    if(name.empty()) return string();
+    CallChoice choice = ChooseOperatorCall(name, arguments, scope);
+    if(!choice.binding) return string();
+    ExprInfo expression_info = Infer(node, scope);
+    Value result = EmitOperatorCall(name, arguments, scope);
+    if(result.lvalue) return result.operand;
+    TypePtr value_type = expression_value_type(expression_info);
+    if(value_type && value_type->kind == TYPE_CLASS) {
+      FunctionRecord* function = expression_info.binding ?
+        RecordForBinding(expression_info.binding) : 0;
+      const string slot = new_special_slot("tmpobj", low_type(value_type));
+      const string address = new_temp();
+      AddInstruction(address + " = addr $" + slot);
+      if(function && function->indirect_result) {
+        RegisterTemporaryObject(value_type, result.operand);
+        return result.operand;
+      }
+      AddInstruction("copyobj " + integer_text(static_cast<long long>(type_size(value_type))) +
+        "x" + integer_text(static_cast<long long>(type_alignment(value_type))) + " " +
+        result.operand + ", " + address);
+      RegisterTemporaryObject(value_type, address);
+      return address;
+    }
+    throw logic_error("operator result is not addressable");
+}
+
 string PA14Lowerer::EmitCallAddress(const CPPGMAstNodePtr& node, Scope* scope)
 {
     TypePtr constructor_type = node->children.empty() ? TypePtr() :
@@ -976,8 +998,13 @@ string PA14Lowerer::EmitMemberAddress(const CPPGMAstNodePtr& node, Scope* scope)
     ExprInfo object_info;
     Binding* member = MemberBinding(node, scope, &object_info);
     if(!member) throw logic_error("unknown member");
-    if(member->kind == BIND_FUNCTION)
+    if(member->kind == BIND_FUNCTION) {
+      if(member->is_static) {
+        FunctionRecord* function = RecordForBinding(member);
+        if(function) return function_address(function);
+      }
       throw logic_error("member function is not an lvalue");
+    }
     if(member->is_static) {
       GlobalRecord* global = FindGlobal(member->qualified_name);
       if(!global) throw logic_error("static member has no storage");

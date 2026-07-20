@@ -232,6 +232,7 @@ string BindingKindText(BindingKind kind);
 string OperatorFromNode(const string& value);
 bool HasKind(const CPPGMAstNodePtr& node, const string& kind);
 CPPGMAstNodePtr ChildOfKind(const CPPGMAstNodePtr& node, const string& kind);
+CPPGMAstNodePtr DescendantOfKind(const CPPGMAstNodePtr& node, const string& kind);
 string FirstIdentifier(const CPPGMAstNodePtr& node);
 string ClassKey(const CPPGMAstNodePtr& node);
 bool IsScopedEnum(const CPPGMAstNodePtr& node);

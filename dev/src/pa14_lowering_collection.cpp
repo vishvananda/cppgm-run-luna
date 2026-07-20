@@ -48,6 +48,28 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
       adjusted->child = trailing_type;
       function = adjusted;
     }
+    // Analyzer bindings are created from the `auto` spelling before PA14
+    // resolves a trailing return type.  Keep the binding's typed function in
+    // sync with the record key so direct calls can find the collected body.
+    if(trailing && !trailing->children.empty()) {
+      const string binding_name = LastComponent(raw_name);
+      const vector<Binding*> bindings = DirectBindings(scope, binding_name);
+      for(size_t i = 0; i < bindings.size(); ++i) {
+        TypePtr existing = function_target_type(bindings[i]->type);
+        if(bindings[i]->kind != BIND_FUNCTION || !existing ||
+           existing->parameters.size() != function->parameters.size() ||
+           existing->variadic != function->variadic ||
+           existing->function_const != function->function_const ||
+           existing->function_volatile != function->function_volatile) continue;
+        bool same_parameters = true;
+        for(size_t p = 0; p < function->parameters.size(); ++p)
+          if(!PA12SameType(existing->parameters[p], function->parameters[p], false)) {
+            same_parameters = false;
+            break;
+          }
+        if(same_parameters) bindings[i]->type = function;
+      }
+    }
     // Some nested out-of-class declarators arrive from the parser with only
     // the enclosing namespace in their qualified spelling (for example,
     // object::table::allocate is represented as json::allocate).  The

@@ -345,6 +345,57 @@ public:
 		}
 		return result;
 	}
+	TypePtr ResolveSpelledType(string spelling, Scope* scope, SpecFacts& info)
+	{
+		while (!spelling.empty() && isspace(static_cast<unsigned char>(spelling[0]))) spelling.erase(0, 1);
+		while (!spelling.empty() && isspace(static_cast<unsigned char>(spelling[spelling.size() - 1])))
+			spelling.erase(spelling.size() - 1, 1);
+		if (spelling.compare(0, 8, "typename ") == 0) spelling = spelling.substr(8);
+		vector<char> suffixes;
+		for (;;) {
+			while (!spelling.empty() && isspace(static_cast<unsigned char>(spelling[spelling.size() - 1])))
+				spelling.erase(spelling.size() - 1, 1);
+			if (spelling.size() >= 5 && spelling.compare(spelling.size() - 5, 5, "const") == 0 &&
+				(spelling.size() == 5 || spelling[spelling.size() - 6] == ' ' ||
+					(spelling[spelling.size() - 6] != '_' &&
+					 IsFundamentalWord(spelling.substr(0, spelling.size() - 5))))) {
+				info.is_const = true;
+				spelling.erase(spelling.size() - 5);
+				continue;
+			}
+			if (spelling.size() >= 8 && spelling.compare(spelling.size() - 8, 8, "volatile") == 0) {
+				info.is_volatile = true;
+				spelling.erase(spelling.size() - 8);
+				continue;
+			}
+			if (!spelling.empty() && (spelling[spelling.size() - 1] == '*' ||
+				spelling[spelling.size() - 1] == '&')) {
+				suffixes.push_back(spelling[spelling.size() - 1]);
+				spelling.erase(spelling.size() - 1);
+				continue;
+			}
+			break;
+		}
+		while (!spelling.empty() && isspace(static_cast<unsigned char>(spelling[0]))) spelling.erase(0, 1);
+		vector<string> words;
+		string word;
+		for (size_t i = 0; i <= spelling.size(); ++i) {
+			if (i == spelling.size() || isspace(static_cast<unsigned char>(spelling[i]))) {
+				if (!word.empty()) { words.push_back(word); word.clear(); }
+			} else word += spelling[i];
+		}
+		TypePtr base;
+		bool all_fundamental = !words.empty();
+		for (size_t i = 0; i < words.size(); ++i)
+			if (!IsFundamentalWord(words[i])) all_fundamental = false;
+		if (all_fundamental) base = Fundamental(FundamentalName(words));
+		else base = ResolveType(scope, spelling);
+		for (size_t i = suffixes.size(); i > 0; --i) {
+			if (suffixes[i - 1] == '*') base = PointerTo(base);
+			else base = ReferenceTo(TYPE_LVALUE_REFERENCE, base);
+		}
+		return base;
+	}
 	TypePtr TypeFromSpecSeq(const CPPGMAstNodePtr& sequence, Scope* scope,
 		SpecFacts* facts = 0)
 	{
@@ -378,7 +429,7 @@ public:
 			}
 			if (child->kind == "type-name")
 			{
-				info.named_type = ResolveType(scope, child->value);
+				info.named_type = ResolveSpelledType(child->value, scope, info);
 				continue;
 			}
 			if (child->kind == "type-specifier")
@@ -407,12 +458,38 @@ public:
 			else
 			{
 				const size_t colon = value.find(':');
-				const string word = colon == string::npos ? value : value.substr(colon + 1);
+				string word = colon == string::npos ? value : value.substr(colon + 1);
+				while (!word.empty() && isspace(static_cast<unsigned char>(word[0])))
+					word.erase(0, 1);
+				while (!word.empty() && isspace(static_cast<unsigned char>(word[word.size() - 1])))
+					word.erase(word.size() - 1, 1);
+				if (word.compare(0, 6, "const ") == 0) {
+					info.is_const = true;
+					word = word.substr(6);
+					while (!word.empty() && isspace(static_cast<unsigned char>(word[0]))) word.erase(0, 1);
+				}
+				if (word.compare(0, 9, "volatile ") == 0) {
+					info.is_volatile = true;
+					word = word.substr(9);
+					while (!word.empty() && isspace(static_cast<unsigned char>(word[0]))) word.erase(0, 1);
+				}
 				if (IsFundamentalWord(word)) fundamentals.push_back(word);
 				else if (value.find("decltype(") == 0)
 					info.named_type = TypeFromDecltype(child, scope);
-				else if (value.find("TT_IDENTIFIER:") == 0 || value.find("::") != string::npos)
-					info.named_type = ResolveType(scope, StripTypeMarker(value));
+				else if (value.find("TT_IDENTIFIER:") == 0)
+					info.named_type = ResolveSpelledType(word, scope, info);
+				else if (value.find("::") != string::npos) {
+					string qualified = value;
+					if (qualified.compare(0, 6, "const ") == 0) {
+						info.is_const = true;
+						qualified = qualified.substr(6);
+					}
+					if (qualified.compare(0, 9, "volatile ") == 0) {
+						info.is_volatile = true;
+						qualified = qualified.substr(9);
+					}
+					info.named_type = ResolveSpelledType(StripTypeMarker(qualified), scope, info);
+				}
 			}
 		}
 		TypePtr result = info.named_type;
