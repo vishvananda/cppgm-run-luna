@@ -829,13 +829,15 @@ PA14Lowerer::Value PA14Lowerer::EmitBinary(const CPPGMAstNodePtr& node, Scope* s
     Value left = left_raw;
     Value right = right_raw;
     if(left_raw.known_constant && is_integral_type(left_raw.type) &&
-       is_integral_type(common) && type_size(common) > type_size(left_raw.type)) {
+       is_integral_type(common) && type_size(common) > type_size(left_raw.type) &&
+       !is_unsigned_type(common)) {
       left.type = common;
       left.operand = integer_text(left_raw.constant);
     } else left = ConvertValue(left_raw, common);
     if(right_raw.known_constant && is_integral_type(right_raw.type) &&
        !(node->children[0] && node->children[0]->kind == "sizeof-expression") &&
-       is_integral_type(common) && type_size(common) > type_size(right_raw.type)) {
+       is_integral_type(common) && type_size(common) > type_size(right_raw.type) &&
+       !is_unsigned_type(common)) {
       right.type = common;
       right.operand = integer_text(right_raw.constant);
     } else right = ConvertValue(right_raw, common);

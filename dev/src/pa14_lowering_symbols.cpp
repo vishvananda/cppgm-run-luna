@@ -1,0 +1,376 @@
+#include "pa14_lowering.h"
+
+#include <cctype>
+#include <cstring>
+#include <map>
+#include <string>
+#include <vector>
+
+using namespace std;
+
+namespace cppgm_pa14_lowering {
+
+namespace {
+
+string abi_trim(string value)
+{
+  size_t begin = 0;
+  while(begin < value.size() && isspace(static_cast<unsigned char>(value[begin]))) ++begin;
+  size_t end = value.size();
+  while(end > begin && isspace(static_cast<unsigned char>(value[end - 1]))) --end;
+  return value.substr(begin, end - begin);
+}
+
+string abi_remove_tag(string value)
+{
+  value = abi_trim(value);
+  const char* tags[] = {"struct ", "class ", "union ", "enum "};
+  for(size_t i = 0; i < sizeof(tags) / sizeof(tags[0]); ++i)
+    if(value.compare(0, strlen(tags[i]), tags[i]) == 0)
+      return abi_trim(value.substr(strlen(tags[i])));
+  return value;
+}
+
+string abi_last_component(const string& value)
+{
+  const size_t separator = value.rfind("::");
+  return separator == string::npos ? value : value.substr(separator + 2);
+}
+
+size_t abi_matching_angle(const string& value, size_t open)
+{
+  int depth = 0;
+  for(size_t i = open; i < value.size(); ++i) {
+    if(value[i] == '<') ++depth;
+    else if(value[i] == '>' && --depth == 0) return i;
+  }
+  return string::npos;
+}
+
+vector<string> abi_split_arguments(const string& value)
+{
+  vector<string> result;
+  string current;
+  int angle = 0;
+  int parentheses = 0;
+  int brackets = 0;
+  for(size_t i = 0; i < value.size(); ++i) {
+    const char ch = value[i];
+    if(ch == '<') ++angle;
+    else if(ch == '>' && angle > 0) --angle;
+    else if(ch == '(') ++parentheses;
+    else if(ch == ')' && parentheses > 0) --parentheses;
+    else if(ch == '[') ++brackets;
+    else if(ch == ']' && brackets > 0) --brackets;
+    if(ch == ',' && angle == 0 && parentheses == 0 && brackets == 0) {
+      result.push_back(abi_trim(current));
+      current.clear();
+    } else current += ch;
+  }
+  if(!current.empty() || !result.empty()) result.push_back(abi_trim(current));
+  return result;
+}
+
+vector<string> abi_split_qualified(const string& value)
+{
+  vector<string> result;
+  string current;
+  int angle = 0;
+  for(size_t i = 0; i < value.size(); ++i) {
+    const char ch = value[i];
+    if(ch == '<') ++angle;
+    else if(ch == '>' && angle > 0) --angle;
+    if(ch == ':' && i + 1 < value.size() && value[i + 1] == ':' && angle == 0) {
+      if(!current.empty()) result.push_back(abi_trim(current));
+      current.clear();
+      ++i;
+    } else current += ch;
+  }
+  if(!current.empty()) result.push_back(abi_trim(current));
+  return result;
+}
+
+string abi_fundamental(const string& raw)
+{
+  const string name = trim_type_name(abi_remove_tag(raw));
+  if(name == "void") return "v";
+  if(name == "bool") return "b";
+  if(name == "char") return "c";
+  if(name == "signed char") return "a";
+  if(name == "unsigned char") return "h";
+  if(name == "short" || name == "short int" || name == "signed short" ||
+     name == "signed short int") return "s";
+  if(name == "unsigned short" || name == "unsigned short int") return "t";
+  if(name == "int" || name == "signed" || name == "signed int") return "i";
+  if(name == "unsigned" || name == "unsigned int") return "j";
+  if(name == "long" || name == "long int" || name == "signed long" ||
+     name == "signed long int") return "l";
+  if(name == "unsigned long" || name == "unsigned long int") return "m";
+  if(name == "long long" || name == "long long int" || name == "signed long long" ||
+     name == "signed long long int") return "x";
+  if(name == "unsigned long long" || name == "unsigned long long int") return "y";
+  if(name == "float") return "f";
+  if(name == "double") return "d";
+  if(name == "long double") return "e";
+  if(name == "wchar_t") return "w";
+  if(name == "char16_t") return "Ds";
+  if(name == "char32_t") return "Di";
+  if(name == "nullptr_t") return "Dn";
+  return string();
+}
+
+string abi_type_text(const string& raw);
+
+string abi_component(const string& raw)
+{
+  string value = abi_remove_tag(raw);
+  const size_t open = value.find('<');
+  if(open == string::npos) return integer_text(static_cast<long long>(value.size())) + value;
+  const size_t close = abi_matching_angle(value, open);
+  if(close == string::npos) return integer_text(static_cast<long long>(value.size())) + value;
+  const string base = abi_trim(value.substr(0, open));
+  string result = integer_text(static_cast<long long>(base.size())) + base + "I";
+  const vector<string> arguments = abi_split_arguments(value.substr(open + 1, close - open - 1));
+  for(size_t i = 0; i < arguments.size(); ++i) result += abi_type_text(arguments[i]);
+  return result + "E";
+}
+
+string abi_qualified(const string& raw)
+{
+  string value = abi_remove_tag(raw);
+  while(!value.empty() && value[0] == ':') value.erase(value.begin());
+  const vector<string> components = abi_split_qualified(value);
+  if(components.empty()) return "1X";
+  if(components.size() == 1) return abi_component(components[0]);
+  string result = "N";
+  for(size_t i = 0; i < components.size(); ++i) result += abi_component(components[i]);
+  return result + "E";
+}
+
+string abi_type_text(const string& raw)
+{
+  string value = abi_trim(raw);
+  if(value.empty()) return "v";
+  if(value[value.size() - 1] == '&') {
+    const bool rvalue = value.size() > 1 && value[value.size() - 2] == '&';
+    value.erase(value.size() - (rvalue ? 2 : 1));
+    return string(rvalue ? "O" : "R") + abi_type_text(value);
+  }
+  if(value[value.size() - 1] == '*') {
+    value.erase(value.size() - 1);
+    return "P" + abi_type_text(value);
+  }
+  if(value.size() > 3 && value.substr(value.size() - 3) == " []")
+    return "A_" + abi_type_text(value.substr(0, value.size() - 3));
+  if(value.compare(0, 6, "const ") == 0)
+    return "K" + abi_type_text(value.substr(6));
+  if(value.compare(0, 9, "volatile ") == 0)
+    return "V" + abi_type_text(value.substr(9));
+  const string fundamental = abi_fundamental(value);
+  if(!fundamental.empty()) return fundamental;
+  return abi_qualified(value);
+}
+
+string abi_type_components(const TypePtr& type)
+{
+  vector<string> components;
+  if(!type) return "1X";
+  string qualified = type->owned_scope && !type->owned_scope->qualified_prefix.empty() ?
+    type->owned_scope->qualified_prefix : type->name;
+  if(type->enclosing_type) {
+    const string enclosing = abi_type_components(type->enclosing_type);
+    if(enclosing.size() >= 2 && enclosing[0] == 'N' && enclosing[enclosing.size() - 1] == 'E')
+      qualified = enclosing.substr(1, enclosing.size() - 2) + abi_component(abi_last_component(qualified));
+    else qualified = enclosing + abi_component(abi_last_component(qualified));
+    return "N" + qualified + "E";
+  }
+  if(type->template_specialization && !type->template_primary.empty()) {
+    const vector<string> primary = abi_split_qualified(type->template_primary);
+    for(size_t i = 0; i + 1 < primary.size(); ++i) components.push_back(abi_component(primary[i]));
+    const string base = primary.empty() ? abi_last_component(qualified) : primary.back();
+    string final = integer_text(static_cast<long long>(base.size())) + base + "I";
+    for(size_t i = 0; i < type->template_arguments.size(); ++i)
+      final += abi_type_text(type->template_arguments[i]);
+    components.push_back(final + "E");
+  } else {
+    const vector<string> names = abi_split_qualified(qualified);
+    for(size_t i = 0; i < names.size(); ++i) components.push_back(abi_component(names[i]));
+  }
+  string result;
+  for(size_t i = 0; i < components.size(); ++i) result += components[i];
+  return result;
+}
+
+string abi_nested_body(const TypePtr& type)
+{
+  string encoded = abi_type_components(type);
+  if(encoded.size() >= 2 && encoded[0] == 'N' && encoded[encoded.size() - 1] == 'E')
+    encoded = encoded.substr(1, encoded.size() - 2);
+  return encoded;
+}
+
+string abi_type(const TypePtr& raw)
+{
+  if(!raw) return "v";
+  string cv;
+  if(raw->is_const) cv += "K";
+  if(raw->is_volatile) cv += "V";
+  switch(raw->kind) {
+  case TYPE_FUNDAMENTAL: return cv + abi_fundamental(raw->name);
+  case TYPE_ENUM: return cv + abi_qualified(raw->name);
+  case TYPE_POINTER: return cv + "P" + abi_type(raw->child);
+  case TYPE_LVALUE_REFERENCE: return cv + "R" + abi_type(raw->child);
+  case TYPE_RVALUE_REFERENCE: return cv + "O" + abi_type(raw->child);
+  case TYPE_ARRAY:
+    return cv + "A" + (raw->bound < 0 ? string() : integer_text(raw->bound)) + "_" +
+      abi_type(raw->child);
+  case TYPE_FUNCTION: {
+    string result = cv + "F";
+    for(size_t i = 0; i < raw->parameters.size(); ++i) result += abi_type(raw->parameters[i]);
+    if(raw->variadic) result += "z";
+    return result + "E" + abi_type(raw->child);
+  }
+  case TYPE_MEMBER_POINTER:
+    return cv + "M" + abi_type(raw->member_owner) + abi_type(raw->child);
+  case TYPE_CLASS:
+    return cv + abi_type_components(raw);
+  default: return cv + abi_qualified(raw->name);
+  }
+}
+
+string abi_terminal(const string& name, const TypePtr& result)
+{
+  static const char* const names[][2] = {
+    {"operator=", "aS"}, {"operator+", "pl"}, {"operator-", "mi"},
+    {"operator*", "ml"}, {"operator/", "dv"}, {"operator%", "rm"},
+    {"operator<<", "ls"}, {"operator>>", "rs"}, {"operator<", "lt"},
+    {"operator>", "gt"}, {"operator<=", "le"}, {"operator>=", "ge"},
+    {"operator==", "eq"}, {"operator!=", "ne"}, {"operator&", "an"},
+    {"operator|", "or"}, {"operator^", "eo"}, {"operator&&", "aa"},
+    {"operator||", "oo"}, {"operator!", "nt"}, {"operator~", "co"},
+    {"operator++", "pp"}, {"operator--", "mm"}, {"operator->", "pt"},
+    {"operator->*", "pm"}, {"operator,", "cm"}, {"operator[]", "ix"},
+    {"operator()", "cl"}, {"operator new", "nw"}, {"operatornew", "nw"},
+    {"operator new[]", "na"}, {"operatornew[]", "na"},
+    {"operator delete", "dl"}, {"operatordelete", "dl"},
+    {"operator delete[]", "da"}, {"operatordelete[]", "da"}
+  };
+  for(size_t i = 0; i < sizeof(names) / sizeof(names[0]); ++i)
+    if(name == names[i][0]) return names[i][1];
+  if(name.compare(0, 8, "operator") == 0 && name.size() > 8)
+    return "cv" + abi_type(result);
+  return integer_text(static_cast<long long>(name.size())) + name;
+}
+
+string abi_function_parameters(const TypePtr& source)
+{
+  if(!source || source->parameters.empty()) return "v";
+  string result;
+  for(size_t i = 0; i < source->parameters.size(); ++i) result += abi_type(source->parameters[i]);
+  return result;
+}
+
+} // namespace
+
+string PA14Lowerer::TemplateGlobalObjectName(const GlobalRecord& global) const
+{
+  if(!global.template_instantiation) return string();
+  const size_t separator = global.qualified_name.rfind("::");
+  const string member = separator == string::npos ? global.qualified_name :
+    global.qualified_name.substr(separator + 2);
+  string owner;
+  if(global.template_owner) owner = abi_nested_body(global.template_owner);
+  else if(separator != string::npos) {
+    const vector<string> components = abi_split_qualified(
+      global.qualified_name.substr(0, separator));
+    for(size_t i = 0; i < components.size(); ++i) owner += abi_component(components[i]);
+  }
+  if(owner.empty()) return string();
+  return "_ZN" + owner + integer_text(static_cast<long long>(member.size())) + member + "E";
+}
+
+string PA14Lowerer::TemplateFunctionObjectName(const FunctionRecord& function) const
+{
+  if(!function.template_instantiation || !function.source_type) return string();
+  const TypePtr source = function_target_type(function.source_type);
+  if(!source || source->kind != TYPE_FUNCTION) return string();
+  const bool nested = function.member || (function.hidden_friend && function.member_owner);
+  string result = "_Z";
+  string terminal;
+  if(function.constructor)
+    terminal = function.base_entry ? "C2" : "C1";
+  else if(function.destructor)
+    terminal = function.deleting_entry ? "D0" : (function.base_entry ? "D2" : "D1");
+  else terminal = abi_terminal(abi_last_component(function.qualified_name), source->child);
+
+  if(nested) {
+    result += "N";
+    if(source->function_const) result += "K";
+    if(source->function_volatile) result += "V";
+    result += abi_nested_body(function.member_owner);
+    result += terminal;
+    result += abi_function_parameters(source);
+    return result + "E";
+  }
+
+  const vector<string> components = abi_split_qualified(function.qualified_name);
+  if(components.empty()) return string();
+  if(components.size() > 1) result += "N";
+  for(size_t i = 0; i + 1 < components.size(); ++i) result += abi_component(components[i]);
+  result += abi_terminal(components.back(), source->child);
+  if(function.template_instantiation && !function.template_arguments.empty()) {
+    result += "I";
+    for(size_t i = 0; i < function.template_arguments.size(); ++i)
+      result += abi_type_text(function.template_arguments[i]);
+    result += "E";
+    if(!function.constructor && !function.destructor) result += abi_type(source->child);
+  }
+  if(components.size() > 1) result += "E";
+  return result + abi_function_parameters(source);
+}
+
+void PA14Lowerer::FinalizeSymbols()
+{
+  map<string, unsigned int> overloads;
+  for(size_t i = 0; i < functions_.size(); ++i) {
+    FunctionRecord& function = functions_[i];
+    BuildFunctionABI(function);
+    string base = low_symbol_component(function.qualified_name);
+    unsigned int& count = overloads[base];
+    ++count;
+    if(!function.builtin || function.symbol.empty())
+      function.symbol = count == 1 ? base : base + "__ov" + integer_text(count);
+    // The ordinary source spelling has no separator (`operatornew`) in
+    // the AST.  Preserve the ABI names for user-provided placement
+    // allocation functions so calls remain ordinary typed calls while the
+    // emitted object metadata still describes the C++ runtime entry point.
+    const TypePtr function_type_value = function_target_type(function.source_type);
+    const bool operator_new = LastComponent(function.qualified_name) == "operatornew";
+    const bool operator_delete = LastComponent(function.qualified_name) == "operatordelete";
+    if(!function.builtin && function_type_value &&
+       (operator_new || operator_delete) && function_type_value->parameters.size() == 2) {
+      const TypePtr second = type_value(function_type_value->parameters[1]);
+      if(operator_new && second && second->kind == TYPE_POINTER &&
+         type_value(second->child) && type_value(second->child)->kind == TYPE_FUNDAMENTAL &&
+         type_value(second->child)->name == "void")
+        function.object_name = "_ZnwmPv";
+      else if(operator_delete && second && second->kind == TYPE_POINTER &&
+              type_value(second->child) && type_value(second->child)->kind == TYPE_FUNDAMENTAL &&
+              type_value(second->child)->name == "void")
+        function.object_name = "_ZdlPvS_";
+    }
+    if(function.template_instantiation) {
+      function.weak_binding = true;
+      if(function.object_name.empty()) function.object_name = TemplateFunctionObjectName(function);
+    }
+  }
+  for(size_t i = 0; i < globals_.size(); ++i) {
+    globals_[i].symbol = low_symbol_component(globals_[i].qualified_name);
+    if(globals_[i].template_instantiation) {
+      globals_[i].weak_binding = true;
+      if(globals_[i].object_name.empty()) globals_[i].object_name = TemplateGlobalObjectName(globals_[i]);
+    }
+  }
+}
+
+} // namespace cppgm_pa14_lowering

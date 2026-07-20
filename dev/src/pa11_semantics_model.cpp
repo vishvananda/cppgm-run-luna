@@ -11,7 +11,8 @@ Type::Type(TypeKind type_kind, const string& type_name)
 	  underlying(), class_members(), direct_base(), direct_base_offset(0), object_size(0), object_alignment(1),
 	  explicit_alignment(0), layout_complete(false), layout_in_progress(false),
 	  is_union(false), enclosing_type(), friend_names(), virtual_methods(),
-	  polymorphic(false), has_vpointer(false) {}
+	  polymorphic(false), has_vpointer(false), template_specialization(false),
+	  template_primary(), template_arguments() {}
 
 Binding::Binding(BindingKind binding_kind, const string& binding_name,
 	const TypePtr& binding_type)

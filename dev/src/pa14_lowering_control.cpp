@@ -183,8 +183,9 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
           EmitObjectValueArgument(arguments[i], scope, target) :
           EmitValue(arguments[i], scope, target);
         if(target && value.known_constant && is_integral_type(value.type) &&
-           is_integral_type(target) && type_size(target) > type_size(value.type) &&
-           !is_unsigned_type(target)) {
+           is_integral_type(target) &&
+           (type_size(target) < type_size(value.type) ||
+            (!is_unsigned_type(target) && type_size(target) > type_size(value.type)))) {
           value.type = target;
           value.operand = integer_text(value.constant);
         } else if(target) value = ConvertValue(value, target, false, true);
@@ -1478,7 +1479,6 @@ void PA14Lowerer::EmitDynamicInitializers(vector<string>& entries)
       entries.push_back(render(state, "__cppgm_init", "init"));
       state_ = 0;
     }
-
     if(!finalizers.empty()) {
       FunctionRecord helper;
       helper.scope = analyzer_.global_.get();

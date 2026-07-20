@@ -75,6 +75,8 @@ class PA14Lowerer
     bool hidden_friend;
     bool explicit_constructor;
     bool builtin;
+	bool template_instantiation;
+	bool weak_binding;
 	bool defaulted;
 	bool deleted;
 	bool destructor;
@@ -88,6 +90,8 @@ class PA14Lowerer
     bool indirect_result;
     string effects;
     string object_name;
+	string template_primary;
+	vector<string> template_arguments;
     string base_entry_for;
     vector<string> parameter_metadata;
     vector<bool> indirect_parameters;
@@ -104,10 +108,12 @@ class PA14Lowerer
         hidden_friend(false),
         explicit_constructor(false),
         builtin(false),
+		template_instantiation(false), weak_binding(false),
         defaulted(false), deleted(false),
 		destructor(false), deleting_entry(false), needed(false),
         emitted(false), variadic(false), unwind_no(false), noreturn(false), base_entry(false),
-        indirect_result(false), effects(), object_name(), base_entry_for(), parameter_metadata(),
+        indirect_result(false), effects(), object_name(), template_primary(), template_arguments(),
+        base_entry_for(), parameter_metadata(),
         indirect_parameters(), special_initializer(), default_arguments() {}
   };
 
@@ -118,6 +124,10 @@ class PA14Lowerer
     TypePtr type;
     string qualified_name;
     string symbol;
+	string object_name;
+	TypePtr template_owner;
+	bool template_instantiation;
+	bool weak_binding;
     CPPGMAstNodePtr initializer;
     bool declaration;
     bool internal;
@@ -126,7 +136,8 @@ class PA14Lowerer
     bool dynamic_finalizer;
 
     GlobalRecord()
-      : node(), scope(), type(), qualified_name(), symbol(), initializer(),
+      : node(), scope(), type(), qualified_name(), symbol(), object_name(), template_owner(),
+        template_instantiation(false), weak_binding(false), initializer(),
         declaration(false), internal(false), thread_local_storage(false),
         dynamic_initializer(false), dynamic_finalizer(false) {}
   };
@@ -337,6 +348,10 @@ void CollectSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* scope);
 bool HasStorageSpecifier(const CPPGMAstNodePtr& node, const string& word) const;
 
 void FinalizeSymbols();
+
+string TemplateFunctionObjectName(const FunctionRecord& function) const;
+
+string TemplateGlobalObjectName(const GlobalRecord& global) const;
 
 void PreparePolymorphicModel();
 

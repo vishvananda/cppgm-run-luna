@@ -50,7 +50,7 @@ string PA14Lowerer::EmitFunction(FunctionRecord& function)
       if(function.effects.empty() == false) metadata.push_back("effects=" + function.effects);
       if(function.unwind_no) metadata.push_back("unwind=no");
       if(function.noreturn) metadata.push_back("return=noreturn");
-      metadata.push_back("binding=strong");
+      metadata.push_back(function.weak_binding ? "binding=weak" : "binding=strong");
       const string object = function.object_name.empty() ? function.symbol : function.object_name;
       if(!object.empty()) metadata.push_back("object=" + object);
     }

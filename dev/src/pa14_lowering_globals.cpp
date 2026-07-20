@@ -341,10 +341,13 @@ string PA14Lowerer::GlobalMetadata(bool internal) const
 
 string PA14Lowerer::GlobalMetadata(const GlobalRecord& global) const
 {
+    const string binding = global.weak_binding ? "weak" :
+      (global.internal ? "internal" : "strong");
+    const string object = global.object_name.empty() ? global.symbol : global.object_name;
     if(global.thread_local_storage)
       return " [storage=thread_local, binding=" +
-        string(global.internal ? "internal" : "strong") + "]";
-    return GlobalMetadata(global.internal);
+        binding + ", object=" + object + "]";
+    return " [binding=" + binding + ", object=" + object + "]";
   }
 
 string PA14Lowerer::RenderStringGlobal(const string& symbol, const vector<unsigned char>& bytes) const
@@ -459,8 +462,9 @@ void PA14Lowerer::EmitGlobals(vector<string>& entries)
         declaration << " : " << low_type(global.type);
       declaration << " [";
       if(global.thread_local_storage) declaration << "storage=thread_local, ";
-      declaration << "binding=" << (global.internal ? "internal" : "strong") <<
-        ", object=" << global.symbol << "]";
+      declaration << "binding=" << (global.weak_binding ? "weak" :
+        (global.internal ? "internal" : "strong")) <<
+        ", object=" << (global.object_name.empty() ? global.symbol : global.object_name) << "]";
       entries.push_back(declaration.str());
       if(global.thread_local_storage) {
         const string wrapper = global.symbol + "__tls_wrapper";
@@ -538,7 +542,7 @@ void PA14Lowerer::EmitDeclarations(vector<string>& entries)
       if(!function.effects.empty()) metadata.push_back("effects=" + function.effects);
       if(function.unwind_no) metadata.push_back("unwind=no");
       if(function.noreturn) metadata.push_back("return=noreturn");
-      metadata.push_back("binding=strong");
+      metadata.push_back(function.weak_binding ? "binding=weak" : "binding=strong");
       const string object = function.qualified_name == "__cxa_pure_virtual" ?
         string() : (function.object_name.empty() ? function.symbol : function.object_name);
       if(!object.empty()) metadata.push_back("object=" + object);

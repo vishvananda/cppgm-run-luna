@@ -25,6 +25,9 @@ struct CPPGMAstNode
 	std::string kind;
 	std::string value;
 	CPPGMAstInitializerForm initializer_form;
+	bool template_instantiation;
+	std::string template_primary;
+	std::vector<std::string> template_arguments;
 	std::vector<CPPGMAstNodePtr> children;
 
 	CPPGMAstNode(const std::string& kind = std::string(),

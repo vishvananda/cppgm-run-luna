@@ -1074,6 +1074,11 @@ TypePtr Analyzer::ProcessClass(const CPPGMAstNodePtr& node, Scope* scope)
 		AddTypeBinding(owner, name, type);
 	}
 	type->tag = tag;
+	if(node->template_instantiation) {
+		type->template_specialization = true;
+		type->template_primary = node->template_primary;
+		type->template_arguments = node->template_arguments;
+	}
 	type->complete = true;
 	type->layout_complete = false;
 	type->direct_base.reset();

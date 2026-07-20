@@ -117,6 +117,9 @@ struct Type
 	vector<VirtualMethodInfo> virtual_methods;
 	bool polymorphic;
 	bool has_vpointer;
+	bool template_specialization;
+	string template_primary;
+	vector<string> template_arguments;
 
 	Type(TypeKind type_kind = TYPE_FUNDAMENTAL,
 		const string& type_name = string());

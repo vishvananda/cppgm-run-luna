@@ -336,8 +336,9 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
         EmitObjectValueArgument(all_arguments[i], scope, target) :
         EmitValue(all_arguments[i], scope, target);
       if(target && value.known_constant && is_integral_type(value.type) &&
-         is_integral_type(target) && type_size(target) > type_size(value.type) &&
-         !is_unsigned_type(target)) {
+         is_integral_type(target) &&
+         (type_size(target) < type_size(value.type) ||
+          (!is_unsigned_type(target) && type_size(target) > type_size(value.type)))) {
         value.type = target;
         value.operand = integer_text(value.constant);
       } else if(target) value = ConvertValue(value, target, false, true);

@@ -238,7 +238,7 @@ bool MatchTypePattern(string pattern, string actual,
 			const string value = expression->value;
 			if(value.find('"') != string::npos) *result = "const char*";
 			else if(value.find('\'') != string::npos) *result = "char";
-			else *result = "int";
+			else *result = InferLiteralArgumentType(value);
 			return true;
 		}
 		if(expression->kind == "keyword-literal") {
@@ -657,10 +657,10 @@ bool MatchTypePattern(string pattern, string actual,
 	CPPGMAstNodePtr TransformCallExpression(const CPPGMAstNodePtr& input,
 		const string& context, const map<string, string>& substitutions)
 	{
-		CPPGMAstNodePtr result(new CPPGMAstNode(input->kind, input->value));
-		result->initializer_form = input->initializer_form;
-		CPPGMAstNodePtr input_callee = input->children.empty() ? CPPGMAstNodePtr() :
-			input->children[0];
+		CPPGMAstNodePtr result(new CPPGMAstNode(input->kind, input->value)); result->initializer_form = input->initializer_form;
+		result->template_instantiation = input->template_instantiation;
+		result->template_primary = input->template_primary; result->template_arguments = input->template_arguments;
+		CPPGMAstNodePtr input_callee = input->children.empty() ? CPPGMAstNodePtr() : input->children[0];
 		if(input_callee && input_callee->kind == "parenthesized-expression" &&
 			input_callee->children.size() == 1 && input_callee->children[0] &&
 			input_callee->children[0]->kind == "id-expression")
@@ -724,8 +724,7 @@ bool MatchTypePattern(string pattern, string actual,
 			CPPGMAstNodePtr child = TransformNode(input->children[i], context, substitutions);
 			if(child) result->children.push_back(child);
 		}
-		CPPGMAstNodePtr result_callee = result->children.empty() ? CPPGMAstNodePtr() :
-			result->children[0];
+		CPPGMAstNodePtr result_callee = result->children.empty() ? CPPGMAstNodePtr() : result->children[0];
 		if(result_callee && result_callee->kind == "parenthesized-expression" &&
 			result_callee->children.size() == 1 && result_callee->children[0] &&
 			result_callee->children[0]->kind == "id-expression") {
@@ -737,17 +736,18 @@ bool MatchTypePattern(string pattern, string actual,
 			const string callee_name = result_callee->value;
 			const vector<const TemplateDefinition*> definitions =
 				FindFunctionDefinitions(callee_name, context);
-			for(size_t candidate = 0; candidate < definitions.size(); ++candidate) {
-				const TemplateDefinition* definition = definitions[candidate];
-				vector<string> inferred;
-				if(InferFunctionArguments(*definition, result, &inferred,
-					substitutions, context)) {
-					const string local_name = Instantiate(*definition, inferred, context);
-					const string qualifier = PrefixComponent(callee_name);
-					result_callee->value = qualifier.empty() ? local_name : qualifier + "::" + local_name;
-					break;
+			if(!HasExactOrdinaryMatch(result, callee_name, substitutions, context))
+				for(size_t candidate = 0; candidate < definitions.size(); ++candidate) {
+					const TemplateDefinition* definition = definitions[candidate];
+					vector<string> inferred;
+					if(InferFunctionArguments(*definition, result, &inferred,
+						substitutions, context)) {
+						const string local_name = Instantiate(*definition, inferred, context);
+						const string qualifier = PrefixComponent(callee_name);
+						result_callee->value = qualifier.empty() ? local_name : qualifier + "::" + local_name;
+						break;
+					}
 				}
-			}
 			if(definitions.empty()) {
 				const FunctionSignature* signature = FindFunctionSignature(callee_name, context);
 					if(signature && callee_name.find("::") == string::npos &&
@@ -1126,10 +1126,12 @@ bool MatchTypePattern(string pattern, string actual,
 			const string function_name = DeclarationName(input);
 			string function_owner;
 			if(input->children.size() > 1 && input->children[1]) {
-				const string qualified_name = FirstIdentifierLocal(input->children[1]);
+				const string qualified_name = RewriteText(
+					FirstIdentifierLocal(input->children[1]), context, substitutions, 0,
+					false, false);
 				function_owner = PrefixComponent(qualified_name);
-				if(class_contexts_.find(function_owner) != class_contexts_.end())
-					child_context = function_owner;
+				if(!function_owner.empty()) function_owner = ResolveGeneratedFunctionOwner(
+					function_owner, context, &child_context);
 			}
 			function_context = JoinPath(function_owner.empty() ? context : function_owner,
 				function_name);

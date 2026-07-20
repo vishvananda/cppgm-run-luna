@@ -1,4 +1,55 @@
 #pragma once
+	string ResolveGeneratedFunctionOwner(const string& owner, const string& context,
+		string* child_context) const
+	{
+		if(class_contexts_.find(owner) != class_contexts_.end()) {
+			if(child_context) *child_context = owner;
+			return owner;
+		}
+		for(string current = context; ; ) {
+			const string candidate = JoinPath(current, owner);
+			if(class_contexts_.find(candidate) != class_contexts_.end()) {
+				if(child_context) *child_context = candidate;
+				return candidate;
+			}
+			if(current.empty()) break;
+			const size_t separator = current.rfind("::");
+			if(separator == string::npos) current.clear();
+			else current.erase(separator);
+		}
+		return owner;
+	}
+
+	void MarkGeneratedNode(const CPPGMAstNodePtr& node, const string& primary,
+		const vector<string>& arguments)
+	{
+		if(!node) return;
+		node->template_instantiation = true;
+		node->template_primary = primary;
+		node->template_arguments = arguments;
+		for(size_t i = 0; i < node->children.size(); ++i)
+			MarkGeneratedNode(node->children[i], primary, arguments);
+	}
+	void RenameGeneratedFunction(const CPPGMAstNodePtr& declaration,
+		const string& name)
+	{
+		if(!declaration || name.empty()) return;
+		const CPPGMAstNodePtr declarator = FunctionDeclarator(declaration);
+		if(!declarator) return;
+		RenameGeneratedIdentifier(declarator, name);
+	}
+	bool RenameGeneratedIdentifier(const CPPGMAstNodePtr& node,
+		const string& name)
+	{
+		if(!node) return false;
+		if(node->kind == "identifier") {
+			node->value = name;
+			return true;
+		}
+		for(size_t i = 0; i < node->children.size(); ++i)
+			if(RenameGeneratedIdentifier(node->children[i], name)) return true;
+		return false;
+	}
 	const TemplateDefinition* FindNestedDefinition(const TemplateDefinition& parent,
 		const string& nested_name) const
 	{
@@ -35,14 +86,14 @@
 		for(map<string, TemplateDefinition>::const_iterator it = definitions_.begin();
 			it != definitions_.end(); ++it) {
 			const TemplateDefinition& candidate = it->second;
-			if(candidate.class_template || candidate.declaration->kind !=
-				"simple-declaration") continue;
+			if(candidate.class_template ||
+				(candidate.declaration->kind != "simple-declaration" &&
+				 candidate.declaration->kind != "function-definition")) continue;
 			const size_t angle = candidate.owner.find('<');
 			const size_t close = angle == string::npos ? string::npos :
 				candidate.owner.find('>', angle);
 			if(angle != string::npos && close != string::npos &&
-				candidate.owner.substr(0, angle) == parent.qualified_name &&
-				candidate.owner.find("::", close) == string::npos)
+				candidate.owner.substr(0, angle) == parent.qualified_name)
 				result.push_back(&candidate);
 		}
 		return result;
@@ -61,9 +112,13 @@
 				if(member.parameters[parameter].type)
 					substitutions[member.parameters[parameter].name] = parent_args[parameter];
 			substitutions[parent.name] = parent_local_name;
+			const string generated_context = JoinPath(
+				parent.lexical_owner.empty() ? parent.owner : parent.lexical_owner,
+				parent_local_name);
 			CPPGMAstNodePtr generated = TransformNode(member.declaration,
-				parent_local_name, substitutions);
+				generated_context, substitutions);
 			if(!generated) continue;
+			MarkGeneratedNode(generated, parent.qualified_name, parent_args);
 			generated_by_owner_[parent.lexical_owner.empty() ? parent.owner :
 				parent.lexical_owner].push_back(generated);
 		}
@@ -90,9 +145,13 @@
 			InstantiateNestedClass(parent, parent_args, parent_local_name,
 				candidates[i]->name, context);
 		}
+		const string generated_context = JoinPath(
+			parent.lexical_owner.empty() ? parent.owner : parent.lexical_owner,
+			parent_local_name);
 		CPPGMAstNodePtr generated = TransformNode(nested->declaration,
-			parent_local_name, substitutions);
+			generated_context, substitutions);
 		if(!generated) return;
+		MarkGeneratedNode(generated, parent.qualified_name, parent_args);
 		generated->value = nested_name;
 		class_declarations_[parent_local_name + "::" + nested_name] = generated;
 		EnsureDeclarationDependencies(generated, parent_local_name, parent_local_name);
@@ -163,6 +222,17 @@
 			for(size_t i = 0; i < args.size(); ++i) {
 				local_name += i == 0 ? "_" : "__";
 				local_name += TypeSuffix(args[i]);
+				if(i + 1 == args.size()) local_name += i == 0 ? "_" : "__";
+			}
+		} else {
+			// Function specializations share the source spelling of the primary
+			// template, but each concrete argument list is a distinct binding.
+			// Keep that identity in the generated AST so a later specialization
+			// cannot silently call the first one through the ordinary overload
+			// name.
+			for(size_t i = 0; i < args.size(); ++i) {
+				local_name += i == 0 ? "__inst_" : "__";
+				local_name += TypeSuffix(args[i]);
 			}
 		}
 	const string generated_owner = definition.lexical_owner.empty() ?
@@ -191,6 +261,9 @@
 		}
 		CPPGMAstNodePtr generated = TransformNode(definition.declaration, definition.owner, substitutions);
 		if(!generated) throw logic_error("unable to instantiate template");
+		MarkGeneratedNode(generated, definition.qualified_name, args);
+		if(!definition.class_template && !definition.alias_template)
+			RenameGeneratedFunction(generated, local_name);
 		if(definition.class_template || definition.alias_template) generated->value = local_name;
 		if(definition.class_template) {
 			const string generated_path = JoinPath(definition.owner, local_name);

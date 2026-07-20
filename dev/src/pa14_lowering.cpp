@@ -5,6 +5,7 @@
 #include <cctype>
 #include <cerrno>
 #include <cstdlib>
+#include <cstring>
 #include <iomanip>
 #include <limits>
 #include <map>
@@ -47,6 +48,7 @@ string special_member_owner(const string& raw_name)
 }
 
 } // namespace
+
 
 bool type_is_reference(const TypePtr& type)
 {
@@ -426,7 +428,14 @@ string PA14Lowerer::storage_type(const TypePtr& type) const
 
 string PA14Lowerer::qualified_name(Scope* scope, const string& raw) const
 {
-    if(raw.find("::") != string::npos) return raw;
+    if(raw.find("::") != string::npos) {
+      if(scope && !scope->qualified_prefix.empty() && raw[0] != ':' &&
+         (raw.size() <= scope->qualified_prefix.size() ||
+          raw.compare(0, scope->qualified_prefix.size() + 2,
+            scope->qualified_prefix + "::") != 0))
+        return scope->qualified_prefix + "::" + raw;
+      return raw;
+    }
     if(scope && !scope->qualified_prefix.empty()) return scope->qualified_prefix + "::" + raw;
     return raw;
   }
@@ -706,6 +715,10 @@ void PA14Lowerer::CollectClassMembers(const CPPGMAstNodePtr& node, Scope* scope)
           record.scope = class_scope;
           record.type = member_type;
           record.qualified_name = TypeQualifiedName(type_found->second) + "::" + name;
+          record.template_owner = type_found->second;
+          record.template_instantiation = type_found->second->template_specialization ||
+			child->template_instantiation;
+          record.weak_binding = record.template_instantiation;
           record.initializer = item->children.size() > 1 ? item->children[1] :
             CPPGMAstNodePtr();
           record.declaration = true;
@@ -726,6 +739,10 @@ void PA14Lowerer::CollectClassMembers(const CPPGMAstNodePtr& node, Scope* scope)
           } else {
             GlobalRecord* prior = global_found->second;
             prior->type = record.type;
+			if(record.template_owner) prior->template_owner = record.template_owner;
+			prior->template_instantiation = prior->template_instantiation ||
+				record.template_instantiation;
+			prior->weak_binding = prior->weak_binding || record.weak_binding;
             prior->thread_local_storage = prior->thread_local_storage ||
               record.thread_local_storage;
             if(record.initializer) prior->initializer = record.initializer;
@@ -830,6 +847,12 @@ void PA14Lowerer::CollectImplicitConstructor(const TypePtr& owner, Scope* scope,
     record->constructor = true;
     record->implicit_constructor = true;
     record->definition = true;
+	record->template_instantiation = owner->template_specialization;
+	record->weak_binding = record->template_instantiation;
+	if(owner->template_specialization) {
+		record->template_primary = owner->template_primary;
+		record->template_arguments = owner->template_arguments;
+	}
     const string base = low_symbol_component(qname);
     record->symbol = base;
     unsigned int suffix = 2;
@@ -899,6 +922,12 @@ void PA14Lowerer::CollectImplicitDestructor(const TypePtr& owner, Scope* scope)
     record->member = true;
     record->destructor = true;
     record->definition = true;
+	record->template_instantiation = owner->template_specialization;
+	record->weak_binding = record->template_instantiation;
+	if(owner->template_specialization) {
+		record->template_primary = owner->template_primary;
+		record->template_arguments = owner->template_arguments;
+	}
   }
 
 void PA14Lowerer::RememberDefaults(FunctionRecord* record, const CPPGMAstNodePtr& declarator)
@@ -964,7 +993,39 @@ void PA14Lowerer::CollectSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* s
       record.scope = scope;
       record.type = type;
       record.qualified_name = qualified_name(scope, name);
+      record.template_instantiation = node->template_instantiation;
+      record.weak_binding = record.template_instantiation;
+      if(name.find("::") != string::npos) {
+        const size_t separator = name.rfind("::");
+        Analyzer::PathTarget owner = analyzer_.ResolvePath(scope, name.substr(0, separator));
+        record.template_owner = owner.binding ? type_value(owner.binding->type) :
+          (owner.scope ? owner.scope->owner_type : TypePtr());
+        if(record.template_owner && record.template_owner->template_specialization)
+          record.template_instantiation = record.weak_binding = true;
+      }
       record.initializer = initializer;
+      if(!record.initializer && record.template_owner && record.template_owner->owned_scope) {
+        const string member_name = name.substr(name.rfind("::") + 2);
+        for(size_t member = 0; member < record.template_owner->class_members.size(); ++member)
+          if(record.template_owner->class_members[member].name == member_name &&
+             record.template_owner->class_members[member].initializer) {
+            record.initializer = record.template_owner->class_members[member].initializer;
+            break;
+          }
+      }
+      if(record.template_owner && record.initializer && record.template_owner->owned_scope) {
+        const string member_name = name.substr(name.rfind("::") + 2);
+        vector<Binding*> members = DirectBindings(record.template_owner->owned_scope, member_name);
+        long long constant = 0;
+        if(FoldInteger(InitializerExpression(record.initializer), scope, &constant, 0))
+          for(size_t member = 0; member < members.size(); ++member)
+            if(members[member] && members[member]->kind == BIND_VARIABLE &&
+               type_value(members[member]->type) &&
+               type_value(members[member]->type)->is_const) {
+              members[member]->has_value = true;
+              members[member]->value = constant;
+            }
+      }
       record.declaration = false;
       record.internal = facts.is_const || facts.is_constexpr || HasStorageSpecifier(node, "static");
       record.thread_local_storage = HasStorageSpecifier(node, "thread_local");
@@ -980,8 +1041,11 @@ void PA14Lowerer::CollectSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* s
         // when its implicit constructor has no executable body.  Keeping the
         // phase explicit also gives later lifetime lowering a stable place to
         // attach member initialization actions.
-        record.dynamic_initializer = true;
-        record.dynamic_finalizer = HasDestructor(value_type);
+        const bool static_member_object = static_cast<bool>(record.template_owner);
+        record.dynamic_initializer = !static_member_object ||
+          HasDefaultConstructionEffects(value_type);
+        record.dynamic_finalizer = HasDestructor(value_type) &&
+          (!static_member_object || DestructorHasEffects(value_type));
         if(record.dynamic_initializer) needs_init_helper_ = true;
         if(record.dynamic_finalizer) needs_fini_helper_ = true;
       }
@@ -994,6 +1058,11 @@ void PA14Lowerer::CollectSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* s
         GlobalRecord* prior = found->second;
         if(record.initializer) prior->initializer = record.initializer;
         prior->type = record.type;
+		if(record.object_name.size()) prior->object_name = record.object_name;
+		if(record.template_owner) prior->template_owner = record.template_owner;
+		prior->template_instantiation = prior->template_instantiation ||
+			record.template_instantiation;
+		prior->weak_binding = prior->weak_binding || record.weak_binding;
         prior->declaration = false;
         prior->internal = prior->internal || record.internal;
         prior->thread_local_storage = prior->thread_local_storage || record.thread_local_storage;
@@ -1012,42 +1081,6 @@ bool PA14Lowerer::HasStorageSpecifier(const CPPGMAstNodePtr& node, const string&
       if(seq->children[i] && seq->children[i]->value.find(":" + word) != string::npos)
         return true;
     return false;
-  }
-
-void PA14Lowerer::FinalizeSymbols()
-{
-    map<string, unsigned int> overloads;
-    for(size_t i = 0; i < functions_.size(); ++i) {
-      FunctionRecord& function = functions_[i];
-      BuildFunctionABI(function);
-      string base = low_symbol_component(function.qualified_name);
-      unsigned int& count = overloads[base];
-      ++count;
-      if(!function.builtin || function.symbol.empty())
-        function.symbol = count == 1 ? base : base + "__ov" + integer_text(count);
-      // The ordinary source spelling has no separator (`operatornew`) in
-      // the AST.  Preserve the ABI names for user-provided placement
-      // allocation functions so calls remain ordinary typed calls while the
-      // emitted object metadata still describes the C++ runtime entry point.
-      const TypePtr function_type_value = function_target_type(function.source_type);
-      const bool operator_new = LastComponent(function.qualified_name) == "operatornew";
-      const bool operator_delete = LastComponent(function.qualified_name) == "operatordelete";
-      if(!function.builtin && function_type_value &&
-         (operator_new || operator_delete) && function_type_value->parameters.size() == 2) {
-        const TypePtr second = type_value(function_type_value->parameters[1]);
-        if(operator_new && second && second->kind == TYPE_POINTER &&
-           type_value(second->child) && type_value(second->child)->kind == TYPE_FUNDAMENTAL &&
-           type_value(second->child)->name == "void")
-          function.object_name = "_ZnwmPv";
-        else if(operator_delete && second && second->kind == TYPE_POINTER &&
-                type_value(second->child) && type_value(second->child)->kind == TYPE_FUNDAMENTAL &&
-                type_value(second->child)->name == "void")
-          function.object_name = "_ZdlPvS_";
-      }
-    }
-    for(size_t i = 0; i < globals_.size(); ++i) {
-      globals_[i].symbol = low_symbol_component(globals_[i].qualified_name);
-    }
   }
 
 PA14Lowerer::FunctionRecord* PA14Lowerer::FindFunction(const string& qname, const TypePtr& type) const
@@ -1148,6 +1181,10 @@ void PA14Lowerer::EnsureConstructorBaseEntry(FunctionRecord* function)
       existing->synthesized_value_member = function->synthesized_value_member;
       existing->defaulted = function->defaulted;
       existing->deleted = function->deleted;
+      existing->template_instantiation = function->template_instantiation;
+      existing->weak_binding = function->weak_binding;
+      existing->template_primary = function->template_primary;
+      existing->template_arguments = function->template_arguments;
       return;
     }
     if(function->defaulted &&
@@ -1178,6 +1215,10 @@ void PA14Lowerer::EnsureConstructorBaseEntry(FunctionRecord* function)
     base_entry.base_entry_for = function->qualified_name;
     base_entry.special_initializer = function->special_initializer;
     base_entry.default_arguments = function->default_arguments;
+    base_entry.template_instantiation = function->template_instantiation;
+    base_entry.weak_binding = function->weak_binding;
+    base_entry.template_primary = function->template_primary;
+    base_entry.template_arguments = function->template_arguments;
     BuildFunctionABI(base_entry);
     const string base_symbol = low_symbol_component(base_entry.qualified_name);
     base_entry.symbol = base_symbol;
@@ -1268,6 +1309,12 @@ PA14Lowerer::FunctionRecord* PA14Lowerer::EnsureAggregateConstructor(const TypeP
     record->constructor = true;
     record->aggregate_constructor = true;
     record->definition = true;
+    record->template_instantiation = owner->template_specialization;
+    record->weak_binding = record->template_instantiation;
+    if(owner->template_specialization) {
+      record->template_primary = owner->template_primary;
+      record->template_arguments = owner->template_arguments;
+    }
     BuildFunctionABI(*record);
     const string base = low_symbol_component(qname);
     record->symbol = base + "__ov2";
@@ -1349,6 +1396,8 @@ bool PA14Lowerer::HasDefaultConstructionEffects(const TypePtr& raw_type) const
         CPPGMAstNodePtr body = record->node ?
           ChildOfKind(record->node, "compound-statement") : CPPGMAstNodePtr();
         if(body && !body->children.empty()) return true;
+        if(record->special_initializer && !record->special_initializer->children.empty())
+          return true;
       }
     }
     if(type->direct_base && HasDefaultConstructionEffects(type->direct_base)) return true;

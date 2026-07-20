@@ -1,5 +1,49 @@
 #pragma once
 
+	string InferLiteralArgumentType(const string& value) const
+	{
+		const bool floating = value.find('.') != string::npos || value.find('e') != string::npos ||
+			value.find('E') != string::npos || value.find('p') != string::npos ||
+			value.find('P') != string::npos;
+		if(floating) {
+			const char suffix = value.empty() ? 0 : value[value.size() - 1];
+			return suffix == 'f' || suffix == 'F' ? "float" :
+				suffix == 'l' || suffix == 'L' ? "long double" : "double";
+		}
+		size_t begin = value.size();
+		while(begin && string("uUlL").find(value[begin - 1]) != string::npos) --begin;
+		const string suffix = value.substr(begin);
+		const bool uns = suffix.find('u') != string::npos || suffix.find('U') != string::npos;
+		const size_t longs = suffix.find('l') != string::npos || suffix.find('L') != string::npos ?
+			(suffix.size() > 1 ? 2U : 1U) : 0U;
+		return longs >= 2 ? (uns ? "unsigned long long" : "long long") :
+			longs == 1 ? (uns ? "unsigned long" : "long") : uns ? "unsigned int" : "int";
+	}
+
+	bool HasExactOrdinaryMatch(const CPPGMAstNodePtr& call, const string& callee,
+		const map<string, string>& substitutions, const string& context)
+	{
+		const FunctionSignature* signature = FindFunctionSignature(callee, context);
+		if(!signature || !signature->parameters || call->children.size() < 2) return false;
+		const CPPGMAstNodePtr arguments = call->children[1] &&
+			call->children[1]->kind == "argument-list" ? call->children[1] :
+			ChildOfKindLocal(call->children[1], "argument-list");
+		if(!arguments) return false;
+		size_t argument = 0;
+		for(size_t parameter = 0; parameter < signature->parameters->children.size(); ++parameter) {
+			const CPPGMAstNodePtr parameter_node = signature->parameters->children[parameter];
+			if(!parameter_node || parameter_node->kind != "parameter-declaration") continue;
+			if(argument >= arguments->children.size()) break;
+			string actual;
+			if(!InferArgument(arguments->children[argument], &actual, substitutions, context)) return false;
+			const string expected = NormalizeTypeArgument(RewriteText(
+				ParameterTypeSpelling(parameter_node), context, substitutions, 0));
+			if(CanonicalSpelling(actual) != expected) return false;
+			++argument;
+		}
+		return argument == arguments->children.size();
+	}
+
 	bool SplitTopLevelComma(const string& raw, string* tail) const
 	{
 		int angle = 0, parentheses = 0, brackets = 0;

@@ -193,6 +193,16 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
     record->member = is_member;
     record->hidden_friend = hidden_friend;
     record->static_member = is_static;
+	record->template_instantiation = node->template_instantiation ||
+		(member_owner && member_owner->template_specialization);
+	record->weak_binding = record->template_instantiation;
+	if(node->template_instantiation) {
+		record->template_primary = node->template_primary;
+		record->template_arguments = node->template_arguments;
+	} else if(member_owner && member_owner->template_specialization) {
+		record->template_primary = member_owner->template_primary;
+		record->template_arguments = member_owner->template_arguments;
+	}
     if(is_member && !is_static) {
       TypePtr this_type = CloneWithCv(member_owner, function->function_const,
         function->function_volatile);
@@ -312,6 +322,15 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
     record->qualified_name = qname;
     record->member = true;
     record->static_member = false;
+	record->template_instantiation = node->template_instantiation || owner->template_specialization;
+	record->weak_binding = record->template_instantiation;
+	if(node->template_instantiation) {
+		record->template_primary = node->template_primary;
+		record->template_arguments = node->template_arguments;
+	} else if(owner->template_specialization) {
+		record->template_primary = owner->template_primary;
+		record->template_arguments = owner->template_arguments;
+	}
     record->constructor = name == LastComponent(owner->name);
     record->destructor = name.size() > 1 && name[0] == '~';
     CPPGMAstNodePtr member_specs = ChildOfKind(node, "member-specifiers");
@@ -366,6 +385,10 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
       base_entry.base_entry_for = record->qualified_name;
       base_entry.special_initializer = record->special_initializer;
       base_entry.default_arguments = record->default_arguments;
+      base_entry.template_instantiation = record->template_instantiation;
+      base_entry.weak_binding = record->weak_binding;
+      base_entry.template_primary = record->template_primary;
+      base_entry.template_arguments = record->template_arguments;
       functions_.push_back(base_entry);
     }
     (void)facts;
