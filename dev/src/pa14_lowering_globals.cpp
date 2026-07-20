@@ -721,7 +721,8 @@ string PA14Lowerer::EmitPointerOffset(const CPPGMAstNodePtr& node, Scope* scope)
     const long long size = pointer_type && pointer_type->kind == TYPE_POINTER ?
       static_cast<long long>(type_size(pointer_type->child)) : 1;
     string scaled;
-    if(size == 1 && !subtract) scaled = offset.operand;
+    if(size == 1 && !subtract &&
+       (!pointer_node || pointer_node->kind != "binary-expression")) scaled = offset.operand;
     else {
       const string scale = new_temp();
       if(size == 1)

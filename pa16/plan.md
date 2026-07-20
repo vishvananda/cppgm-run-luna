@@ -565,3 +565,127 @@ The next checkpoint should implement array-new/delete cookies and element
 construction/destruction, including trivial and nontrivial class arrays; the
 remaining class-transfer shapes, ADL/lookup, union storage, and conversion
 ranking stay separate follow-on groups.
+
+## Checkpoint Scope 7
+
+Implement the array-new/delete lifetime path over typed element and allocation
+facts.  The scope is the current array cluster:
+
+`general/400-array-new-default-ctor-default-arg`,
+`general/400-array-new-empty-paren-value-init`,
+`general/400-delete-array-expression`,
+`general/400-global-array-delete`,
+`general/400-global-class-array-named-implicit-copy`,
+`general/400-global-operator-new-array-delete-array-call`,
+`general/400-nontrivial-class-array-new-delete`, and
+`general/400-trivial-class-array-new`, with the class-specific placement
+fixture’s shared LowIR allocation shape kept in the same validation group.
+
+The implementation must derive dynamic bounds from the new-type-id AST,
+allocate the typed byte count through `operator new[]`, reserve and maintain
+the count cookie for class arrays, construct forward, destroy backward, and
+pass the cookie address to `operator delete[]`; scalar arrays remain
+cookie-free and use value-initialization loops when an empty initializer is
+present.
+
+## Checkpoint 7 result
+
+The array allocation/lifetime checkpoint is implemented.  The focused array
+new/delete fixtures now pass, including default-argument constructors,
+dynamic-bound value-initialization, scalar arrays, trivial class arrays,
+nontrivial class cookies and reverse destruction, direct `operator new[]` /
+`operator delete[]` calls, and the global class-array copy initializer.  The
+class-specific placement-new LowIR shape also passes.  The full PA16 report is
+109/164, up from 100/164 at the start of this checkpoint.  The PA1--PA15 gate
+is 1019/1019 and the PA16 source audit passes.
+
+The implementation keeps the bound expression in typed lowering state, saves
+dynamic byte sizes in special slots, emits an eight-byte count cookie only for
+class arrays, and uses the existing constructor/destructor and aggregate
+transfer machinery for element lifetime.  It also preserves direct scalar
+constant stores and the canonical nested pointer-offset forms used by the
+allocation fixtures.
+
+## Remaining Work Map after checkpoint 7
+
+The current report has 55 failures, grouped by shared behavior:
+
+### ADL, lookup, and nonmember operators
+
+`general/200-associated-namespace-adl-function-call`,
+`general/200-hidden-friend-adl-function-call`,
+`general/200-hidden-friend-adl`,
+`general/200-reverse-friend-plus-operator`, and
+`general/300-using-directive-imported-value-ambiguous`.
+
+### Class ABI, value transfers, and special-member storage
+
+`general/200-derived-to-base-by-value-overload`,
+`general/200-enum-class-pass-by-value`,
+`general/200-out-of-class-special-members`,
+`general/200-prvalue-field-access-temporary`,
+`general/200-return-nullptr-class-braced-default`,
+`general/300-base-rvalue-reference-assignment`,
+`general/300-bit-field-copy-semantics`,
+`general/300-class-array-missing-value-init`,
+`general/300-conditional-local-prvalue-init-elides-copy`,
+`general/300-direct-object-parameter-passthrough-base-copy`,
+`general/300-discarded-class-call`,
+`general/300-discarded-large-class-call-void-cast`,
+`general/300-empty-base-defaulted-assignment-user-copy-ctor`,
+`general/300-empty-base-subobject-assignment-no-storage`,
+`general/300-explicit-default-copy-assignment-with-move-ctor`,
+`general/300-indirect-call-result-rvalue-reference-materialization`,
+`general/300-leading-trivial-prefix-storage-copy-enum`,
+`general/300-leading-trivial-prefix-storage-copy`,
+`general/300-move-only-aggregate-brace-member`,
+`general/300-qualified-base-implicit-copy-assignment`,
+`general/300-return-const-ref-parameter-copy-not-move`, and
+`general/300-trivial-copy-value-transfer-storage-copy`.
+
+### Union and anonymous storage
+
+`general/300-anonymous-union-member-id-expression`,
+`general/300-local-anonymous-union-sizeof`,
+`general/300-union-special-member-storage-copy`,
+`general/300-union-trivial-subobject-dtor-omission`, and
+`general/300-union-user-default-ctor-inactive-class-member`.
+
+### Conversion operators and built-in/operator ranking
+
+`general/300-pointer-bool-local-storage-lowering`,
+`general/300-proxy-subscript-assignment`,
+`general/400-built-in-unary-class-conversion`,
+`general/400-builtin-comparison-after-rejected-operator-overload`,
+`general/400-builtin-comparison-prefers-fewer-user-conversions`,
+`general/400-by-value-param-converting-ctor-overload`,
+`general/400-c-style-cast-explicit-bool-conversion`,
+`general/400-class-pointer-conversion-builtin-eq`,
+`general/400-class-pointer-conversion-builtin-subscript`,
+`general/400-compound-assignment-rhs-conversion`,
+`general/400-condition-declaration-user-bool-conversion`,
+`general/400-cv-conversion-operator-builtin-comparison`,
+`general/400-direct-init-explicit-bool-conversion`,
+`general/400-explicit-conversion-operator-alias-target-call`,
+`general/400-logical-not-after-rejected-operator-overload`,
+`general/400-out-of-class-qualified-conversion-operator-result`,
+`general/400-pointer-arithmetic-class-conversion`,
+`general/400-switch-condition-declaration-conversion-operator`,
+`general/400-user-defined-conversion-path-tiebreak`,
+`general/400-user-defined-conversion-second-rank`, and
+`spec/400-inherited-conversion-operator-parameter-binding`.
+
+### Remaining lifetime cleanup
+
+`general/400-for-init-class-lifetime-extends-through-loop` and
+`general/400-shadowed-local-cleanup-rebind-on-return` remain as cleanup-state
+issues adjacent to, but separate from, the completed dynamic array lifetime
+path.
+
+## Next Checkpoint Scope
+
+Target the remaining class ABI/storage group first: unify class result and
+parameter materialization with the typed copy/move state, repair empty-base and
+leading-trivial-prefix storage copies, and preserve bit-field and enum
+representation facts.  Validate that group with the listed class ABI fixtures
+while keeping the ADL, union, conversion-ranking, and cleanup groups isolated.

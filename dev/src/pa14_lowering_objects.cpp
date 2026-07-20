@@ -28,15 +28,59 @@ PA14Lowerer::Value PA14Lowerer::EmitNewExpression(const CPPGMAstNodePtr& node,
         initializer = child;
     }
     if(!type_id) throw logic_error("new-expression has no allocated type");
-    TypePtr allocated_type = type_value(analyzer_.TypeFromTypeId(type_id, scope));
-    if(!allocated_type) throw logic_error("new-expression has no allocated type");
-    if(allocated_type->kind == TYPE_ARRAY)
-      throw logic_error("array new-expression is not lowered yet");
 
-    vector<CPPGMAstNodePtr> allocation_arguments;
-    CPPGMAstNodePtr size(new CPPGMAstNode("literal", "1"));
-    size->value = integer_text(static_cast<long long>(type_size(allocated_type)));
-    allocation_arguments.push_back(size);
+    CPPGMAstNodePtr declarator;
+    CPPGMAstNodePtr array_suffix;
+    bool value_initialize = false;
+    for(size_t i = 0; i < type_id->children.size(); ++i) {
+      const CPPGMAstNodePtr child = type_id->children[i];
+      if(!child || child->kind != "abstract-declarator") continue;
+      declarator = child;
+      for(size_t j = 0; j < child->children.size(); ++j) {
+        if(!child->children[j]) continue;
+        if(child->children[j]->kind == "array-suffix") array_suffix = child->children[j];
+        else if(child->children[j]->kind == "parameter-clause") value_initialize = true;
+      }
+    }
+    const bool array_new = static_cast<bool>(array_suffix);
+    TypePtr allocated_type;
+    try {
+      allocated_type = type_value(analyzer_.TypeFromTypeId(type_id, scope));
+    } catch(const logic_error&) {
+      if(!array_new || type_id->children.empty()) throw;
+      allocated_type = type_value(analyzer_.TypeFromSpecSeq(type_id->children[0], scope));
+    }
+    if(!allocated_type) throw logic_error("new-expression has no allocated type");
+
+    TypePtr element_type;
+    if(array_new) {
+      // A dynamic bound is not part of the analyzer's declarator type.  The
+      // new-type-id still has a typed specifier sequence, which is the
+      // element type needed by allocation, construction, and delete[].
+      element_type = type_value(analyzer_.TypeFromSpecSeq(type_id->children[0], scope));
+      if(allocated_type->kind == TYPE_ARRAY && allocated_type->child &&
+         allocated_type->child->kind != TYPE_FUNCTION)
+        element_type = type_value(allocated_type->child);
+      if(!element_type) throw logic_error("array new-expression has no element type");
+    }
+
+    CPPGMAstNodePtr bound_node;
+    bool fixed_count = false;
+    long long fixed_elements = 0;
+    Value dynamic_count;
+    if(array_new) {
+      if(array_suffix && !array_suffix->children.empty()) {
+        bound_node = array_suffix->children[0];
+        ExprInfo bound_info = Infer(bound_node, scope);
+        fixed_count = bound_info.known_constant;
+        if(fixed_count) fixed_elements = bound_info.constant;
+      } else fixed_count = true;
+      if(fixed_count && fixed_elements < 0)
+        throw logic_error("negative array bound in new-expression");
+      if(!fixed_count) dynamic_count = EmitValue(bound_node, scope);
+    }
+
+    vector<CPPGMAstNodePtr> placement_arguments;
     if(placement) {
       for(size_t i = 0; i < placement->children.size(); ++i) {
         const CPPGMAstNodePtr child = placement->children[i];
@@ -44,22 +88,61 @@ PA14Lowerer::Value PA14Lowerer::EmitNewExpression(const CPPGMAstNodePtr& node,
         if(child->kind == "paren-argument-list" || child->kind == "argument-list" ||
            child->kind == "braced-init-list") {
           for(size_t j = 0; j < child->children.size(); ++j)
-            allocation_arguments.push_back(child->children[j]);
-        } else allocation_arguments.push_back(child);
+            placement_arguments.push_back(child->children[j]);
+        } else placement_arguments.push_back(child);
       }
     }
 
-    string allocator_name = "operatornew";
-    if(allocated_type->kind == TYPE_CLASS) {
-      const vector<Binding*> members = MemberBindings(allocated_type, "operatornew");
+    vector<CPPGMAstNodePtr> allocation_arguments;
+    CPPGMAstNodePtr size(new CPPGMAstNode("literal", "1"));
+    Value allocation_size;
+    string size_slot;
+    if(array_new && fixed_count) {
+      const size_t element_size = type_size(element_type);
+      const long long bytes = static_cast<long long>(fixed_elements) *
+        static_cast<long long>(element_size) +
+        (type_value(element_type)->kind == TYPE_CLASS ? 8 : 0);
+      size->value = integer_text(bytes);
+    } else if(!array_new) {
+      size->value = integer_text(static_cast<long long>(type_size(allocated_type)));
+    } else {
+      const TypePtr count_type = type_value(dynamic_count.type);
+      if(!count_type || !is_integral_type(count_type))
+        throw logic_error("array bound is not integral");
+      Value total = dynamic_count;
+      const size_t element_size = type_size(element_type);
+      if(element_size != 1) {
+        const string scaled = new_temp();
+        AddInstruction(scaled + " = binary mul " + low_type(count_type) + " " +
+          dynamic_count.operand + ", " + integer_text(static_cast<long long>(element_size)));
+        total.operand = scaled;
+      }
+      if(type_value(element_type)->kind == TYPE_CLASS) {
+        const string with_cookie = new_temp();
+        AddInstruction(with_cookie + " = binary add " + low_type(count_type) + " " +
+          total.operand + ", 8");
+        total.operand = with_cookie;
+      }
+      allocation_size = ConvertValue(total, Fundamental("long int"), false, true);
+      size_slot = new_special_slot("array_new_size", "i64");
+      emit_store(Fundamental("long int"), allocation_size.operand, "$" + size_slot);
+    }
+    allocation_arguments.push_back(size);
+    allocation_arguments.insert(allocation_arguments.end(), placement_arguments.begin(),
+      placement_arguments.end());
+
+    string allocator_name = array_new ? "operatornew[]" : "operatornew";
+    TypePtr allocation_class = array_new ? type_value(element_type) : allocated_type;
+    if(allocation_class && allocation_class->kind == TYPE_CLASS) {
+      const vector<Binding*> members = MemberBindings(allocation_class, allocator_name);
       bool class_allocator = false;
       for(size_t i = 0; i < members.size(); ++i)
         if(members[i] && members[i]->kind == BIND_FUNCTION && members[i]->is_static) {
           class_allocator = true;
           break;
-        }
+      }
       if(class_allocator)
-        allocator_name = TypeQualifiedName(allocated_type) + "::operatornew";
+        allocator_name = TypeQualifiedName(allocation_class) + "::" + allocator_name;
     }
     CPPGMAstNodePtr callee(new CPPGMAstNode("id-expression", allocator_name));
     CPPGMAstNodePtr arguments(new CPPGMAstNode("paren-argument-list"));
@@ -70,7 +153,54 @@ PA14Lowerer::Value PA14Lowerer::EmitNewExpression(const CPPGMAstNodePtr& node,
     CallChoice allocation_choice = ChooseCall(call, scope);
     if(!allocation_choice.binding)
       throw logic_error("new-expression has no viable allocation function");
-    Value allocated = EmitChosenCall(allocation_choice, callee, allocation_arguments, scope);
+    // EmitChosenCall evaluates AST arguments itself.  Dynamic array bounds
+    // have already been evaluated above, so feed the saved size operand to a
+    // small direct-call bridge and evaluate only placement arguments here.
+    Value allocated;
+    if(array_new && !fixed_count) {
+      FunctionRecord* record = RecordForBinding(allocation_choice.binding);
+      if(!record || allocation_choice.function->parameters.empty())
+        throw logic_error("new-expression has no allocation record");
+      record->needed = true;
+      FunctionRecord* base_entry = BaseEntryFor(record);
+      if(base_entry) base_entry->needed = true;
+      Value first = ConvertValue(allocation_size,
+        allocation_choice.function->parameters[0], false, true);
+      vector<string> operands;
+      operands.push_back(first.operand);
+      vector<CPPGMAstNodePtr> args = placement_arguments;
+      while(args.size() + 1 < allocation_choice.function->parameters.size()) {
+        const size_t index = args.size() + 1;
+        if(index >= record->default_arguments.size() || !record->default_arguments[index]) break;
+        args.push_back(InitializerExpression(record->default_arguments[index]));
+      }
+      for(size_t i = 0; i < args.size(); ++i) {
+        const size_t parameter = i + 1;
+        TypePtr target = parameter < allocation_choice.function->parameters.size() ?
+          allocation_choice.function->parameters[parameter] : TypePtr();
+        if(target && type_is_reference(target))
+          operands.push_back(EmitReferenceArgument(args[i], scope, target));
+        else {
+          Value value = EmitValue(args[i], scope, target);
+          if(target) value = ConvertValue(value, target, false, true);
+          operands.push_back(value.operand);
+        }
+      }
+      string text = "call " + low_type(record->type->child) + " @" + record->symbol + "(";
+      for(size_t i = 0; i < operands.size(); ++i) {
+        if(i) text += ", ";
+        text += operands[i];
+      }
+      text += ")";
+      if(low_type(record->type->child) == "void") {
+        AddInstruction(text);
+        allocated.type = allocation_choice.function->child;
+      } else {
+        allocated.type = allocation_choice.function->child;
+        allocated.operand = new_temp();
+        AddInstruction(allocated.operand + " = " + text);
+      }
+    } else allocated = EmitChosenCall(allocation_choice, callee, allocation_arguments, scope);
 
     vector<CPPGMAstNodePtr> initializer_arguments;
     bool has_initializer = initializer.get() != 0;
@@ -84,6 +214,142 @@ PA14Lowerer::Value PA14Lowerer::EmitNewExpression(const CPPGMAstNodePtr& node,
       } else if(initializer->kind == "braced-init-list") {
         initializer_arguments = initializer->children;
       }
+    }
+
+    if(array_new) {
+      const bool class_array = type_value(element_type)->kind == TYPE_CLASS;
+      string init_label;
+      string end_label;
+      bool nothrow = allocation_choice.function && allocation_choice.function->parameters.size() >= 2;
+      if(nothrow) {
+        const TypePtr parameter = allocation_choice.function->parameters[1];
+        const TypePtr parameter_value = type_value(parameter);
+        nothrow = type_is_reference(parameter) && parameter_value &&
+          parameter_value->kind == TYPE_CLASS && LastComponent(parameter_value->name) == "nothrow_t";
+      }
+      if(nothrow) {
+        init_label = new_label("new_array_init");
+        end_label = new_label("new_array_end");
+        const string nonnull = new_temp();
+        AddInstruction(nonnull + " = cmp ne ptr " + allocated.operand + ", 0");
+        Terminate("branch " + nonnull + ", ^" + init_label + ", ^" + end_label);
+        AddBlock(init_label);
+      }
+
+      Value element_count;
+      string element_base = allocated.operand;
+      if(class_array) {
+        const string total = !fixed_count ? emit_load("$" + size_slot,
+          Fundamental("long int")) : string();
+        const string user_pointer = new_temp();
+        AddInstruction(user_pointer + " = index i8 " + allocated.operand + ", 8");
+        element_base = user_pointer;
+        if(fixed_count) {
+          element_count.type = Fundamental("long int");
+          element_count.operand = new_temp();
+          element_count.known_constant = true;
+          element_count.constant = fixed_elements;
+          AddInstruction(element_count.operand + " = const i64 " +
+            integer_text(fixed_elements));
+        } else {
+          const string payload = new_temp();
+          AddInstruction(payload + " = binary sub i64 " + total + ", 8");
+          element_count.type = Fundamental("long int");
+          element_count.operand = new_temp();
+          AddInstruction(element_count.operand + " = binary udiv i64 " + payload + ", " +
+            integer_text(static_cast<long long>(type_size(element_type))));
+        }
+        emit_store(Fundamental("long int"), element_count.operand, allocated.operand);
+        const bool needs_constructor = HasDefaultInitializationEffects(element_type) &&
+          HasConstructor(element_type);
+        if(needs_constructor) {
+          if(fixed_count) {
+            element_count.operand = new_temp();
+            AddInstruction(element_count.operand + " = const i64 " +
+              integer_text(fixed_elements));
+          }
+          const string index_slot = new_special_slot("array_new_index", "i64");
+          emit_store(Fundamental("long int"), "0", "$" + index_slot);
+          const string condition = new_label("array_new_ctor_cond");
+          const string body = new_label("array_new_ctor_body");
+          const string finish = new_label("array_new_ctor_end");
+          Terminate("jump ^" + condition);
+          AddBlock(condition);
+          const string index = emit_load("$" + index_slot, Fundamental("long int"));
+          const string test = new_temp();
+          AddInstruction(test + " = cmp ult i64 " + index + ", " + element_count.operand);
+          Terminate("branch " + test + ", ^" + body + ", ^" + finish);
+          AddBlock(body);
+          const string offset = new_temp();
+          AddInstruction(offset + " = binary mul i64 " + index + ", " +
+            integer_text(static_cast<long long>(type_size(element_type))));
+          const string element = new_temp();
+          AddInstruction(element + " = index i8 " + element_base + ", " + offset);
+          if(!EmitConstructorAt(element_type, element, vector<CPPGMAstNodePtr>(), scope))
+            throw logic_error("array new-expression has no default constructor");
+          const string next = new_temp();
+          AddInstruction(next + " = binary add i64 " + index + ", 1");
+          emit_store(Fundamental("long int"), next, "$" + index_slot);
+          Terminate("jump ^" + condition);
+          AddBlock(finish);
+        }
+      } else if(value_initialize) {
+        string total_bytes;
+        if(!fixed_count) total_bytes = emit_load("$" + size_slot,
+          Fundamental("long int"));
+        else {
+          total_bytes = new_temp();
+          AddInstruction(total_bytes + " = const i64 " + integer_text(
+            fixed_elements * static_cast<long long>(type_size(element_type))));
+        }
+        const string offset_slot = new_special_slot("zeroinit_offset", "i64");
+        emit_store(Fundamental("long int"), "0", "$" + offset_slot);
+        const string condition = new_label("zeroinit_cond");
+        const string body = new_label("zeroinit_body");
+        const string finish = new_label("zeroinit_end");
+        Terminate("jump ^" + condition);
+        AddBlock(condition);
+        const string offset = emit_load("$" + offset_slot, Fundamental("long int"));
+        const string test = new_temp();
+        AddInstruction(test + " = cmp ult i64 " + offset + ", " + total_bytes);
+        Terminate("branch " + test + ", ^" + body + ", ^" + finish);
+        AddBlock(body);
+        const string address = new_temp();
+        AddInstruction(address + " = index i8 " + allocated.operand + ", " + offset);
+        Value zero;
+        zero.type = Fundamental("int");
+        zero.operand = "0";
+        zero.known_constant = true;
+        zero.constant = 0;
+        TypePtr value_type = type_value(element_type);
+        if(value_type && (is_integral_type(value_type) ||
+                          (value_type->kind == TYPE_FUNDAMENTAL &&
+                           value_type->name == "bool"))) {
+          zero.type = value_type;
+          zero.operand = "0";
+        } else if(value_type && value_type->kind == TYPE_POINTER) {
+          zero.type = value_type;
+          zero.operand = "nullptr";
+        } else zero = ConvertValue(zero, element_type, false, true);
+        if(value_type && value_type->kind == TYPE_FUNDAMENTAL &&
+           value_type->name == "bool")
+          AddInstruction("store i8 0, " + address);
+        else emit_store(element_type, zero.operand, address);
+        const string next = new_temp();
+        AddInstruction(next + " = binary add i64 " + offset + ", " +
+          integer_text(static_cast<long long>(type_size(element_type))));
+        emit_store(Fundamental("long int"), next, "$" + offset_slot);
+        Terminate("jump ^" + condition);
+        AddBlock(finish);
+      }
+      if(nothrow) {
+        if(!state_->current->terminated) Terminate("jump ^" + end_label);
+        AddBlock(end_label);
+      }
+      Value result;
+      result.type = PointerTo(element_type);
+      result.operand = class_array ? element_base : allocated.operand;
+      return result;
     }
 
     bool nothrow = false;
@@ -173,6 +439,7 @@ PA14Lowerer::Value PA14Lowerer::EmitDeleteExpression(const CPPGMAstNodePtr& node
     }();
 
     const bool class_delete = object_type && object_type->kind == TYPE_CLASS && !array_delete;
+    const bool class_array_delete = object_type && object_type->kind == TYPE_CLASS && array_delete;
     if(class_delete) {
       const string nonnull_label = new_label("delete_nonnull");
       const string end_label = new_label("delete_end");
@@ -182,6 +449,45 @@ PA14Lowerer::Value PA14Lowerer::EmitDeleteExpression(const CPPGMAstNodePtr& node
       AddBlock(nonnull_label);
       (void)EmitDestructorAt(object_type, pointer.operand, scope);
       AddInstruction("call void @" + deallocator_symbol + "(" + pointer.operand + ")");
+      Terminate("jump ^" + end_label);
+      AddBlock(end_label);
+    } else if(class_array_delete) {
+      const string nonnull_label = new_label("array_delete_nonnull");
+      const string end_label = new_label("array_delete_end");
+      const string nonnull = new_temp();
+      AddInstruction(nonnull + " = cmp ne ptr " + pointer.operand + ", 0");
+      Terminate("branch " + nonnull + ", ^" + nonnull_label + ", ^" + end_label);
+      AddBlock(nonnull_label);
+      const string raw = new_temp();
+      AddInstruction(raw + " = index i8 " + pointer.operand + ", -8");
+      const TypePtr count_type = Fundamental("long int");
+      const string count = emit_load(raw, count_type);
+      if(DestructorHasEffects(object_type)) {
+        const string index_slot = new_special_slot("array_delete_index", "i64");
+        emit_store(count_type, count, "$" + index_slot);
+        const string condition = new_label("array_delete_dtor_cond");
+        const string body = new_label("array_delete_dtor_body");
+        const string finish = new_label("array_delete_dtor_end");
+        Terminate("jump ^" + condition);
+        AddBlock(condition);
+        const string index = emit_load("$" + index_slot, count_type);
+        const string test = new_temp();
+        AddInstruction(test + " = cmp ne i64 " + index + ", 0");
+        Terminate("branch " + test + ", ^" + body + ", ^" + finish);
+        AddBlock(body);
+        const string previous = new_temp();
+        AddInstruction(previous + " = binary sub i64 " + index + ", 1");
+        emit_store(count_type, previous, "$" + index_slot);
+        const string offset = new_temp();
+        AddInstruction(offset + " = binary mul i64 " + previous + ", " +
+          integer_text(static_cast<long long>(type_size(object_type))));
+        const string element = new_temp();
+        AddInstruction(element + " = index i8 " + pointer.operand + ", " + offset);
+        (void)EmitDestructorAt(object_type, element, scope);
+        Terminate("jump ^" + condition);
+        AddBlock(finish);
+      }
+      AddInstruction("call void @" + deallocator_symbol + "(" + raw + ")");
       Terminate("jump ^" + end_label);
       AddBlock(end_label);
     } else {
@@ -563,18 +869,18 @@ void PA14Lowerer::EmitAggregateClassFields(const string& base, const TypePtr& ra
           child->children : vector<CPPGMAstNodePtr>();
         if(arguments.empty() && child && child->kind != "braced-init-list")
           arguments.push_back(child);
-        if(EmitConstructorAt(child_type, field, arguments, scope)) continue;
-        if(child && child->kind == "braced-init-list") {
-          EmitAggregateAt(field, child_type, child, scope);
-          continue;
-        }
-        if(child) {
+        if(child && child->kind != "braced-init-list") {
           const ExprInfo child_info = Infer(child, scope);
           const TypePtr child_value_type = expression_value_type(child_info);
           if(child_value_type && child_value_type->kind == TYPE_CLASS &&
              (PA12SameType(child_value_type, child_type, true) ||
               IsDerivedFrom(child_value_type, child_type)) &&
              EmitObjectTransferAt(child_type, field, child, scope, true)) continue;
+        }
+        if(EmitConstructorAt(child_type, field, arguments, scope)) continue;
+        if(child && child->kind == "braced-init-list") {
+          EmitAggregateAt(field, child_type, child, scope);
+          continue;
         }
         // Aggregate initialization permits brace elision: a scalar can
         // initialize the first member of a nested aggregate, and the next

@@ -854,7 +854,13 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferAllocation(const CPPGMAstNodePtr& node,
       for(size_t i = 0; i < node->children.size(); ++i)
         if(node->children[i] && node->children[i]->kind == "type-id") type_id = node->children[i];
       if(!type_id) throw logic_error("new-expression has no allocated type");
-      TypePtr allocated = type_value(analyzer_.TypeFromTypeId(type_id, scope));
+      TypePtr allocated;
+      try {
+        allocated = type_value(analyzer_.TypeFromTypeId(type_id, scope));
+      } catch(const logic_error&) {
+        if(type_id->children.empty()) throw;
+        allocated = type_value(analyzer_.TypeFromSpecSeq(type_id->children[0], scope));
+      }
       if(allocated && allocated->kind == TYPE_ARRAY) allocated = type_value(allocated->child);
       result.type = PointerTo(allocated);
     }

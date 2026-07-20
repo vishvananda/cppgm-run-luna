@@ -501,7 +501,8 @@ void PA14Lowerer::EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr&
     }
     Value value = EmitValue(expression, scope, type_value(variable->type));
     if(value.known_constant && is_integral_type(value.type) &&
-       is_integral_type(variable->type)) {
+       is_integral_type(variable->type) &&
+       type_size(variable->type) <= type_size(value.type)) {
       value.type = type_value(variable->type);
       value.operand = integer_text(value.constant);
     } else value = ConvertValue(value, type_value(variable->type));
@@ -1291,6 +1292,9 @@ void PA14Lowerer::EmitGlobalInitializer(GlobalRecord& global, Scope* scope)
                   LastComponent(element_type->name) == child->children[0]->value)
             arguments = child->children[1] ? child->children[1]->children :
               vector<CPPGMAstNodePtr>();
+          if(child && child->kind != "braced-init-list" &&
+             child->kind != "paren-initializer" &&
+             EmitObjectTransferAt(element_type, element, child, scope, true)) continue;
           if(EmitConstructorAt(element_type, element, arguments, scope,
                                true, false, true)) continue;
           if(child && child->kind == "braced-init-list") {
@@ -1327,10 +1331,22 @@ void PA14Lowerer::EmitGlobalInitializer(GlobalRecord& global, Scope* scope)
       if(!expression && !HasConstructor(value_type)) return;
       if(!HasDefaultInitializationEffects(value_type) && !HasDestructor(value_type)) return;
       plan.initialization_address = global_address(&global);
-      if(EmitObjectConstructor(&plan, value_type, arguments, scope)) return;
-      if(expression && expression->kind == "braced-init-list" &&
-         !expression->children.empty())
+      bool declared_constructor = false;
+      const vector<Binding*> constructors =
+        MemberBindings(value_type, LastComponent(value_type->name));
+      for(size_t i = 0; i < constructors.size(); ++i) {
+        FunctionRecord* record = RecordForBinding(constructors[i]);
+        if(record && record->constructor && !record->implicit_constructor &&
+           !record->aggregate_constructor) {
+          declared_constructor = true;
+          break;
+        }
+      }
+      if(expression && expression->kind == "braced-init-list" && !declared_constructor) {
         EmitAggregateAt(plan.initialization_address, value_type, expression, scope);
+        return;
+      }
+      if(EmitObjectConstructor(&plan, value_type, arguments, scope)) return;
       return;
     }
 

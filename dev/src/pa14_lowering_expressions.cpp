@@ -223,8 +223,8 @@ PA14Lowerer::Value PA14Lowerer::EmitUnary(const CPPGMAstNodePtr& node, Scope* sc
         compare_type = "i64";
       } else if(is_integral_type(type) && compare_type != "i64" &&
                 compare_type != "u64") {
-        Value widened = ConvertValue(child, Fundamental(is_unsigned_type(type) ? "unsigned long int" : "long int"));
-        operand = widened.operand;
+        // The canonical LowIR form compares an ordinary narrow integral
+        // value directly against the i64 zero literal.
         compare_type = "i64";
       }
       result.operand = new_temp();
@@ -467,6 +467,22 @@ PA14Lowerer::Value PA14Lowerer::EmitAssignment(const CPPGMAstNodePtr& node, Scop
       if(ConversionRank(right_info, left_type) < 0)
         throw logic_error("invalid assignment conversion");
       right = EmitValue(node->children[1], scope, left_type);
+      // A constant scalar assignment already has its final value; retaining
+      // the literal avoids manufacturing a widening/truncation instruction
+      // just to store a byte-sized array element.
+      const TypePtr right_type = type_value(right.type);
+      const bool right_integral = right_type &&
+        (is_integral_type(right_type) ||
+         (right_type->kind == TYPE_FUNDAMENTAL && right_type->name == "bool"));
+      const TypePtr target_type = type_value(left_type);
+      const bool target_integral = target_type &&
+        (is_integral_type(target_type) ||
+         (target_type->kind == TYPE_FUNDAMENTAL && target_type->name == "bool"));
+      if(node->children[0] && node->children[0]->kind == "subscript-expression" &&
+         right.known_constant && right_integral && target_integral) {
+        right.type = left_type;
+        right.operand = integer_text(right.constant);
+      }
     }
     else {
       Value left = EmitValue(node->children[0], scope);
@@ -621,6 +637,15 @@ PA14Lowerer::Value PA14Lowerer::EmitCompare(const CPPGMAstNodePtr& node, Scope* 
        type_size(common) > type_size(left.type)) {
       left.type = common;
       left.operand = integer_text(left.constant);
+    } else if((right_info.known_constant && right_info.constant == 0) ||
+              (node->children[1] && node->children[1]->kind == "literal" &&
+               node->children[1]->value == "0")) {
+      if(common && low_type(common) == "i64" && left_type &&
+         low_type(left_type) == "i32") {
+        // LowIR's comparison form accepts the narrow loaded operand directly
+        // in this canonical zero-comparison case.
+        left.type = common;
+      } else left = ConvertValue(left, common);
     } else left = ConvertValue(left, common);
     if((pointer_difference || prefer_literal_common) && right.known_constant &&
        is_integral_type(right.type) &&
@@ -713,6 +738,7 @@ PA14Lowerer::Value PA14Lowerer::EmitBinary(const CPPGMAstNodePtr& node, Scope* s
       left.operand = integer_text(left_raw.constant);
     } else left = ConvertValue(left_raw, common);
     if(right_raw.known_constant && is_integral_type(right_raw.type) &&
+       !(node->children[0] && node->children[0]->kind == "sizeof-expression") &&
        is_integral_type(common) && type_size(common) > type_size(right_raw.type)) {
       right.type = common;
       right.operand = integer_text(right_raw.constant);
