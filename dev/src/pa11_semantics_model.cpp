@@ -10,14 +10,16 @@ Type::Type(TypeKind type_kind, const string& type_name)
 	  member_owner(), owned_scope(0),
 	  underlying(), class_members(), direct_base(), object_size(0), object_alignment(1),
 	  explicit_alignment(0), layout_complete(false), layout_in_progress(false),
-	  is_union(false), enclosing_type(), friend_names() {}
+	  is_union(false), enclosing_type(), friend_names(), virtual_methods(),
+	  polymorphic(false), has_vpointer(false) {}
 
 Binding::Binding(BindingKind binding_kind, const string& binding_name,
 	const TypePtr& binding_type)
 	: kind(binding_kind), name(binding_name), type(binding_type), has_value(false), value(0),
 	  type_override(), qualified_name(), injected_member(false), injected_object_name(),
 	  injected_owner(), hidden_friend(false), friend_owner(), is_member(false),
-	  is_static(false), member_owner(),
+	  is_static(false), is_virtual(false), is_pure(false), is_override(false),
+	  is_final(false), member_owner(),
 	  member_index(static_cast<size_t>(-1)),
 	  access(), declaration() {}
 

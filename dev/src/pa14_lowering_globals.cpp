@@ -499,6 +499,26 @@ void PA14Lowerer::EmitDeclarations(vector<string>& entries)
     for(size_t i = 0; i < functions_.size(); ++i) {
       FunctionRecord& function = functions_[i];
       if(function.definition || !function.needed) continue;
+      if(function.member && function.member_owner && function.source_type) {
+        const TypePtr owner = type_value(function.member_owner);
+        const TypePtr source = function_target_type(function.source_type);
+        bool pure_declaration = false;
+        if(owner && source) for(size_t slot = 0; slot < owner->virtual_methods.size(); ++slot) {
+          const VirtualMethodInfo& method = owner->virtual_methods[slot];
+          if(!method.pure || method.name != LastComponent(function.qualified_name) ||
+             !method.function || method.function->parameters.size() != source->parameters.size())
+            continue;
+          bool same_parameters = true;
+          for(size_t parameter = 0; parameter < source->parameters.size(); ++parameter)
+            if(TypeText(method.function->parameters[parameter], true) !=
+               TypeText(source->parameters[parameter], true)) {
+              same_parameters = false;
+              break;
+            }
+          if(same_parameters) { pure_declaration = true; break; }
+        }
+        if(pure_declaration) continue;
+      }
       ostringstream out;
       out << "declare function @" << function.symbol << "(";
       for(size_t p = 0; p < function.type->parameters.size(); ++p) {
@@ -519,7 +539,8 @@ void PA14Lowerer::EmitDeclarations(vector<string>& entries)
       if(function.unwind_no) metadata.push_back("unwind=no");
       if(function.noreturn) metadata.push_back("return=noreturn");
       metadata.push_back("binding=strong");
-      const string object = function.object_name.empty() ? function.symbol : function.object_name;
+      const string object = function.qualified_name == "__cxa_pure_virtual" ?
+        string() : (function.object_name.empty() ? function.symbol : function.object_name);
       if(!object.empty()) metadata.push_back("object=" + object);
       if(!metadata.empty()) {
         out << " [";

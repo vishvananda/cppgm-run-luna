@@ -240,6 +240,7 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
       if(base_entry) base_entry->needed = true;
     }
     string indirect_result_address;
+    string virtual_object_operand;
     if(function_record && function_record->indirect_result) {
       const TypePtr result_type = type_value(choice.function->child);
       if(!indirect_destination.empty()) indirect_result_address = indirect_destination;
@@ -300,6 +301,7 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
       object_operand = AdjustBaseAddress(object_operand, object_type,
         choice.binding ? choice.binding->member_owner : TypePtr());
       operands.push_back(object_operand);
+      if(choice.virtual_dispatch) virtual_object_operand = object_operand;
     }
     if(function_record) {
       while(all_arguments.size() < choice.function->parameters.size()) {
@@ -356,7 +358,26 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
     }
     string callee;
     ostringstream signature;
-    if(choice.direct) {
+    if(choice.virtual_dispatch) {
+      if(virtual_object_operand.empty()) throw logic_error("virtual call has no object operand");
+      const string vptr = emit_load(virtual_object_operand,
+        PointerTo(Fundamental("char")));
+      string slot_address = vptr;
+      if(choice.virtual_slot != 0) {
+        slot_address = new_temp();
+        AddInstruction(slot_address + " = index i8 " + vptr + ", " +
+          integer_text(static_cast<long long>(choice.virtual_slot * 8)));
+      }
+      callee = emit_load(slot_address, PointerTo(Fundamental("char")));
+      signature << " as (";
+      const TypePtr indirect_function = function_record ? function_record->type : choice.function;
+      for(size_t i = 0; indirect_function && i < indirect_function->parameters.size(); ++i) {
+        if(i != 0) signature << ", ";
+        signature << "%arg" << i << " : " << low_type(indirect_function->parameters[i]);
+        if(type_is_reference(indirect_function->parameters[i])) signature << " [pass=reference]";
+      }
+      signature << ") -> " << low_type(indirect_function ? indirect_function->child : choice.function->child);
+    } else if(choice.direct) {
       if(!function_record) throw logic_error("missing direct function record");
       callee = "@" + function_record->symbol;
     } else {

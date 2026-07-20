@@ -20,11 +20,13 @@ void PA14Lowerer::Lower(ostream& out)
     analyzer_.Analyze(program_);
     InstallBuiltins();
     CollectTopLevel(program_, analyzer_.global_.get());
+    PreparePolymorphicModel();
     FinalizeSymbols();
     CollectStringLiterals(program_);
 
     vector<string> entries;
     EmitGlobals(entries);
+    EmitPolymorphicGlobals(entries);
     MarkHiddenFriendDependencies();
     // Emit ordinary functions first so their calls establish the roots of
     // the demand-driven member-function set.  Member bodies can in turn

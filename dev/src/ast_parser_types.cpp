@@ -389,74 +389,85 @@ CPPGMAstNodePtr Parser::ParseParametersAndQualifiers()
 bool Parser::ParseFunctionSuffixes(const CPPGMAstNodePtr& declarator)
 {
 	bool parsed = false;
-	while (IsCv(Peek().text))
+	// Keep consuming suffixes until the next token is no longer part of a
+	// function declarator.  The C++ grammar permits the virtual specifiers to
+	// follow the exception specification (for example `noexcept override`),
+	// while the original PA10 parser only accepted one fixed ordering.
+	while (true)
 	{
-		const string text = Peek().text;
-		++position_;
-		Add(declarator, Node("cv-qualifier", TokenLabel(text) + ":" + text));
-		parsed = true;
-	}
-	if (Is("&") || Is("&&"))
-	{
-		const string text = Peek().text;
-		++position_;
-		Add(declarator, Node("ref-qualifier", TokenLabel(text) + ":" + text));
-		parsed = true;
-	}
-	while (Is("override") || Is("final"))
-	{
-		const string text = Peek().text;
-		++position_;
-		Add(declarator, Node("virt-specifier", TokenLabel(text) + ":" + text));
-		parsed = true;
-	}
-	if (Take("noexcept"))
-	{
-		string value = "noexcept";
-		if (Take("("))
+		if (IsCv(Peek().text))
+		{
+			const string text = Peek().text;
+			++position_;
+			Add(declarator, Node("cv-qualifier", TokenLabel(text) + ":" + text));
+			parsed = true;
+			continue;
+		}
+		if (Is("&") || Is("&&"))
+		{
+			const string text = Peek().text;
+			++position_;
+			Add(declarator, Node("ref-qualifier", TokenLabel(text) + ":" + text));
+			parsed = true;
+			continue;
+		}
+		if (Is("override") || Is("final"))
+		{
+			const string text = Peek().text;
+			++position_;
+			Add(declarator, Node("virt-specifier", TokenLabel(text) + ":" + text));
+			parsed = true;
+			continue;
+		}
+		if (Take("noexcept"))
+		{
+			string value = "noexcept";
+			if (Take("("))
+			{
+				CPPGMAstNodePtr expression = ParseExpression();
+				if (!expression || !Take(")")) return false;
+			}
+			Add(declarator, Node("function-qualifier", value));
+			parsed = true;
+			continue;
+		}
+		if (Take("throw"))
+		{
+			if (!Take("(")) return false;
+			string value = "throw(";
+			if (!Is(")"))
+			{
+				while (true)
+				{
+					const size_t begin = position_;
+					CPPGMAstNodePtr type = ParseTypeId();
+					if (!type) return false;
+					const size_t end = position_;
+					for (size_t i = begin; i < end; ++i) value += tokens_[i].text;
+					if (!Take(",")) break;
+					value += ",";
+				}
+			}
+			if (!Take(")")) return false;
+			value += ")";
+			Add(declarator, Node("function-qualifier", value));
+			parsed = true;
+			continue;
+		}
+		if (Take("->"))
 		{
 			const size_t begin = position_;
-			CPPGMAstNodePtr expression = ParseExpression();
-			if (!expression || !Take(")")) return false;
-			(void)begin;
-			value = "noexcept";
+			CPPGMAstNodePtr type = ParseTypeId();
+			if (!type) return false;
+			string value;
+			for (size_t i = begin; i < position_; ++i) value += tokens_[i].text;
+			CPPGMAstNodePtr trailing = Node("trailing-return-type", value);
+			Add(trailing, type);
+			Add(declarator, trailing);
+			parsed = true;
+			continue;
 		}
-		Add(declarator, Node("function-qualifier", value));
-		parsed = true;
-	}
-	if (Take("throw"))
-	{
-		if (!Take("(")) return false;
-		string value = "throw(";
-		if (!Is(")"))
-		{
-			while (true)
-			{
-				const size_t begin = position_;
-				CPPGMAstNodePtr type = ParseTypeId();
-				if (!type) return false;
-				const size_t end = position_;
-				for (size_t i = begin; i < end; ++i) value += tokens_[i].text;
-				if (!Take(",")) break;
-				value += ",";
-			}
-		}
-		if (!Take(")")) return false;
-		value += ")";
-		Add(declarator, Node("function-qualifier", value));
-		parsed = true;
-	}
-	if (Take("->"))
-	{
-		const size_t begin = position_;
-		CPPGMAstNodePtr type = ParseTypeId();
-		if (!type) return false;
-		string value;
-		for (size_t i = begin; i < position_; ++i) value += tokens_[i].text;
-		CPPGMAstNodePtr trailing = Node("trailing-return-type", value);
-		Add(trailing, type);
-		Add(declarator, trailing);
-		parsed = true;
+		break;
 	}
 	SkipAttributes();
 	return parsed;

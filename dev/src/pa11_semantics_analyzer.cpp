@@ -151,6 +151,7 @@ TypePtr ConversionTypeFromName(const Analyzer& analyzer, const string& raw_name,
 bool EmptyBaseStorage(const TypePtr& raw_type)
 {
 	if (!raw_type || raw_type->kind != TYPE_CLASS) return false;
+	if (raw_type->polymorphic || raw_type->has_vpointer) return false;
 	for (size_t i = 0; i < raw_type->class_members.size(); ++i)
 	{
 		const ClassMemberInfo& member = raw_type->class_members[i];
@@ -174,7 +175,227 @@ bool IsValidAlignment(size_t alignment)
 	return alignment == 0 || (alignment & (alignment - 1)) == 0;
 }
 
+TypePtr FunctionTypeForVirtual(const Binding& binding)
+{
+	if (!binding.type) return TypePtr();
+	return binding.type->kind == TYPE_FUNCTION ? binding.type : TypePtr();
+}
+
+bool SameVirtualParameters(const TypePtr& left, const TypePtr& right)
+{
+	if (!left || !right || left->kind != TYPE_FUNCTION || right->kind != TYPE_FUNCTION ||
+		left->variadic != right->variadic ||
+		left->function_const != right->function_const ||
+		left->function_volatile != right->function_volatile ||
+		left->function_lvalue_ref_qualified != right->function_lvalue_ref_qualified ||
+		left->function_rvalue_ref_qualified != right->function_rvalue_ref_qualified ||
+		left->parameters.size() != right->parameters.size()) return false;
+	for (size_t i = 0; i < left->parameters.size(); ++i)
+		if (!SameLayoutType(left->parameters[i], right->parameters[i])) return false;
+	return true;
+}
+
+bool IsDerivedClass(const TypePtr& derived, const TypePtr& base)
+{
+	for (TypePtr current = derived ? derived->direct_base : TypePtr(); current;
+		current = current->direct_base)
+		if (SameLayoutType(current, base)) return true;
+	return false;
+}
+
+bool CovariantVirtualReturn(const TypePtr& derived, const TypePtr& base)
+{
+	if (!derived || !base || derived->kind != TYPE_FUNCTION || base->kind != TYPE_FUNCTION)
+		return false;
+	if (SameLayoutType(derived->child, base->child)) return true;
+	const TypePtr derived_return = derived->child;
+	const TypePtr base_return = base->child;
+	if (!derived_return || !base_return ||
+		(derived_return->kind != TYPE_POINTER && derived_return->kind != TYPE_LVALUE_REFERENCE) ||
+		derived_return->kind != base_return->kind ||
+		!derived_return->child || !base_return->child) return false;
+	return derived_return->child->kind == TYPE_CLASS &&
+		base_return->child->kind == TYPE_CLASS &&
+	IsDerivedClass(derived_return->child, base_return->child);
+}
+
+bool IsDestructorName(const string& name)
+{
+	return name.size() > 1 && name[0] == '~';
+}
+
+bool SameVirtualSlot(const VirtualMethodInfo& slot, const Binding& binding)
+{
+	const TypePtr function = FunctionTypeForVirtual(binding);
+	if (!function) return false;
+	if (slot.destructor || IsDestructorName(binding.name))
+		return slot.destructor && IsDestructorName(binding.name) &&
+			SameVirtualParameters(slot.function, function);
+	return slot.name == binding.name && SameVirtualParameters(slot.function, function) &&
+		CovariantVirtualReturn(function, slot.function);
+}
+
+const VirtualMethodInfo* FindInheritedVirtual(const TypePtr& base,
+	const Binding& binding)
+{
+	if (!base) return 0;
+	for (size_t i = 0; i < base->virtual_methods.size(); ++i)
+		if (SameVirtualSlot(base->virtual_methods[i], binding))
+			return &base->virtual_methods[i];
+	return 0;
+}
+
+void ApplyPolymorphicLayout(const TypePtr& type, bool empty_base,
+	size_t* offset, size_t* maximum_alignment)
+{
+	if (!type || !type->has_vpointer || !offset || !maximum_alignment) return;
+	const size_t pointer_size = 8;
+	if (type->direct_base && !empty_base && !type->direct_base->polymorphic)
+		*offset += pointer_size;
+	else if (!type->direct_base || empty_base)
+		*offset = pointer_size;
+	*maximum_alignment = max(*maximum_alignment, pointer_size);
+}
+
 } // namespace
+
+void Analyzer::ProcessFunctionDefinition(const CPPGMAstNodePtr& node, Scope* scope)
+{
+	if (node->children.size() < 3) throw logic_error("invalid function definition");
+	SpecFacts facts;
+	TypePtr base = TypeFromSpecSeq(node->children[0], scope, &facts);
+	CPPGMAstNodePtr declarator = node->children[1];
+	const string raw_name = FirstIdentifier(declarator);
+	if (raw_name.empty()) throw logic_error("function has no name");
+	TypePtr function_type = BuildDeclarator(declarator, base, scope);
+	if (!function_type || function_type->kind != TYPE_FUNCTION)
+		throw logic_error("definition is not a function");
+	Scope* declaration_scope = scope;
+	TypePtr member_owner;
+	string name = raw_name;
+	const size_t separator = raw_name.rfind("::");
+	if (separator != string::npos)
+	{
+		PathTarget owner = ResolvePath(scope, raw_name.substr(0, separator));
+		if (owner.binding) member_owner = owner.binding->type;
+		else if (owner.scope) member_owner = owner.scope->owner_type;
+		if (member_owner && member_owner->kind == TYPE_CLASS && member_owner->owned_scope)
+		{
+			declaration_scope = member_owner->owned_scope;
+			name = LastComponent(raw_name);
+		}
+	}
+	else if (scope->kind == SCOPE_CLASS)
+	{
+		member_owner = scope->owner_type;
+	}
+	Binding binding(BIND_FUNCTION, name, function_type);
+	binding.hidden_friend = facts.is_friend;
+	binding.friend_owner = facts.is_friend ? member_owner : TypePtr();
+	binding.is_member = static_cast<bool>(member_owner) && !facts.is_friend;
+	binding.is_static = facts.is_static;
+	binding.member_owner = member_owner;
+	binding.is_virtual = facts.is_virtual;
+	binding.is_override = HasNodeValue(declarator, "virt-specifier", "override");
+	binding.is_final = HasNodeValue(declarator, "virt-specifier", "final");
+	Binding* stored = declaration_scope->add(binding);
+	if (member_owner)
+	{
+		for (size_t prior = 0; prior + 1 < declaration_scope->bindings.size(); ++prior)
+		{
+			Binding& candidate = declaration_scope->bindings[prior];
+			if (candidate.kind != BIND_FUNCTION || candidate.name != name ||
+				!candidate.is_member ||
+				TypeText(candidate.type, true) != TypeText(function_type, true)) continue;
+			stored->is_virtual = stored->is_virtual || candidate.is_virtual;
+			stored->is_pure = stored->is_pure || candidate.is_pure;
+			stored->is_override = stored->is_override || candidate.is_override;
+			stored->is_final = stored->is_final || candidate.is_final;
+		}
+	}
+	Scope* function_scope = NewChild(declaration_scope, SCOPE_FUNCTION, name);
+	function_scopes_[node.get()] = function_scope;
+	AddFunctionParameters(function_scope, declarator, declaration_scope);
+	ProcessCompound(node->children[2], function_scope);
+}
+
+void Analyzer::ProcessSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* scope)
+{
+	if (node->children.empty()) throw logic_error("invalid simple declaration");
+	SpecFacts facts;
+	TypePtr base = TypeFromSpecSeq(node->children[0], scope, &facts);
+	CPPGMAstNodePtr list = ChildOfKind(node, "init-declarator-list");
+	if (!list) return;
+	for (size_t i = 0; i < list->children.size(); ++i)
+	{
+		CPPGMAstNodePtr item = list->children[i];
+		if (!item || item->children.empty()) continue;
+		CPPGMAstNodePtr declarator = item->children[0];
+		TypePtr type = BuildDeclarator(declarator, base, scope);
+		if (facts.is_constexpr && type->kind != TYPE_FUNCTION) type = CloneWithCv(type, true, false);
+		const string name = FirstIdentifier(declarator);
+		if (name.empty()) continue;
+		CPPGMAstNodePtr initializer = item->children.size() > 1 ? item->children[1] : CPPGMAstNodePtr();
+		if (facts.is_typedef)
+		{
+			AddTypeBinding(scope, name, type, true);
+			continue;
+		}
+		Binding binding(type->kind == TYPE_FUNCTION ? BIND_FUNCTION : BIND_VARIABLE, name, type);
+		binding.hidden_friend = facts.is_friend && type->kind == TYPE_FUNCTION;
+		binding.friend_owner = binding.hidden_friend ?
+			(scope && scope->kind == SCOPE_CLASS ? scope->owner_type : TypePtr()) : TypePtr();
+		binding.is_member = binding.is_member && !binding.hidden_friend;
+		if (type->kind == TYPE_FUNCTION)
+		{
+			binding.is_virtual = facts.is_virtual;
+			binding.is_override = HasNodeValue(declarator, "virt-specifier", "override");
+			binding.is_final = HasNodeValue(declarator, "virt-specifier", "final");
+			binding.is_pure = IsPureInitializer(item);
+		}
+		if (initializer && (facts.is_const || facts.is_constexpr))
+		{
+			CPPGMAstNodePtr expression = initializer->children.empty() ?
+				CPPGMAstNodePtr() : initializer->children[0];
+			const bool floating_literal = expression && expression->kind == "literal" &&
+				(expression->value.find('.') != string::npos ||
+					expression->value.find('e') != string::npos ||
+					expression->value.find('E') != string::npos ||
+					expression->value.find('p') != string::npos ||
+					expression->value.find('P') != string::npos);
+			const bool string_literal = expression && expression->kind == "literal" &&
+				!expression->value.empty() && expression->value[0] == '"';
+			if (!floating_literal && !string_literal)
+			{
+				ConstantValue value = Evaluate(expression, scope);
+				if (value.known) { binding.has_value = true; binding.value = value.value; }
+			}
+		}
+		scope->add(binding);
+	}
+}
+
+bool Analyzer::HasNodeValue(const CPPGMAstNodePtr& node, const string& kind,
+	const string& value)
+{
+	if (!node) return false;
+	if (node->kind == kind &&
+		(node->value == value || node->value.find(":" + value) != string::npos))
+		return true;
+	for (size_t i = 0; i < node->children.size(); ++i)
+		if (HasNodeValue(node->children[i], kind, value)) return true;
+	return false;
+}
+
+bool Analyzer::IsPureInitializer(const CPPGMAstNodePtr& item)
+{
+	if (!item || item->children.size() < 2 || !item->children[1]) return false;
+	const CPPGMAstNodePtr initializer = item->children[1];
+	if (initializer->kind != "initializer" || initializer->children.size() != 1)
+		return false;
+	const CPPGMAstNodePtr expression = initializer->children[0];
+	return expression && expression->kind == "literal" && expression->value == "0";
+}
 
 size_t Analyzer::AlignUp(size_t value, size_t alignment)
 {
@@ -238,6 +459,12 @@ void Analyzer::ProcessSpecialMember(const CPPGMAstNodePtr& node, Scope* scope)
 			existing.is_member = true;
 			existing.is_static = false;
 			existing.member_owner = member_owner;
+			existing.is_virtual = existing.is_virtual ||
+				HasNodeValue(node, "specifier", "virtual");
+			existing.is_override = existing.is_override ||
+				HasNodeValue(declarator, "virt-specifier", "override");
+			existing.is_final = existing.is_final ||
+				HasNodeValue(declarator, "virt-specifier", "final");
 			existing.declaration = node;
 			return;
 		}
@@ -245,6 +472,9 @@ void Analyzer::ProcessSpecialMember(const CPPGMAstNodePtr& node, Scope* scope)
 		binding.is_member = true;
 		binding.is_static = false;
 		binding.member_owner = member_owner;
+		binding.is_virtual = HasNodeValue(node, "specifier", "virtual");
+		binding.is_override = HasNodeValue(declarator, "virt-specifier", "override");
+		binding.is_final = HasNodeValue(declarator, "virt-specifier", "final");
 		binding.access = member_owner->tag == "class" ? "private" : "public";
 		binding.declaration = node;
 		declaration_scope->add(binding);
@@ -274,6 +504,9 @@ void Analyzer::ProcessSpecialMember(const CPPGMAstNodePtr& node, Scope* scope)
 	binding->is_member = static_cast<bool>(member_owner);
 	binding->is_static = false;
 	binding->member_owner = member_owner;
+	binding->is_virtual = HasNodeValue(node, "specifier", "virtual");
+	binding->is_override = HasNodeValue(declarator, "virt-specifier", "override");
+	binding->is_final = HasNodeValue(declarator, "virt-specifier", "final");
 	binding->access = member_owner && member_owner->tag == "class" ? "private" : "public";
 	binding->declaration = node;
 	Scope* function_scope = NewChild(declaration_scope, SCOPE_FUNCTION, name);
@@ -309,9 +542,11 @@ void Analyzer::ComputeClassLayout(const CPPGMAstNodePtr& node, const TypePtr& ty
 		!type->direct_base->complete)
 		throw logic_error("incomplete direct base class");
 	const bool empty_base = type->direct_base && EmptyBaseStorage(type->direct_base);
+	const bool owns_vpointer = type->has_vpointer;
 	size_t offset = type->direct_base && !empty_base ? TypeSize(type->direct_base) : 0;
 	size_t maximum_alignment = type->direct_base && !empty_base ?
 		TypeAlignment(type->direct_base) : 1;
+	if (owns_vpointer) ApplyPolymorphicLayout(type, empty_base, &offset, &maximum_alignment);
 	size_t union_size = offset;
 
 	size_t bit_unit_offset = 0;
@@ -401,7 +636,7 @@ void Analyzer::ComputeClassLayout(const CPPGMAstNodePtr& node, const TypePtr& ty
 	if (union_type) offset = union_size;
 	type->object_alignment = max(maximum_alignment, type->explicit_alignment);
 	if (type->object_alignment == 0) type->object_alignment = 1;
-	if (type->class_members.empty() && !type->direct_base) offset = 1;
+	if (type->class_members.empty() && !type->direct_base && !owns_vpointer) offset = 1;
 	type->object_size = AlignUp(max<size_t>(1, offset), type->object_alignment);
 	type->layout_complete = true;
 	type->layout_in_progress = false;
@@ -512,6 +747,12 @@ void Analyzer::RecordClassDeclaration(const CPPGMAstNodePtr& child, const TypePt
 				binding.is_member = !facts.is_friend;
 				binding.is_static = facts.is_static;
 				binding.member_owner = type;
+				binding.is_virtual = binding.is_virtual || facts.is_virtual;
+				binding.is_override = binding.is_override ||
+					HasNodeValue(declarator, "virt-specifier", "override");
+				binding.is_final = binding.is_final ||
+					HasNodeValue(declarator, "virt-specifier", "final");
+				binding.is_pure = binding.is_pure || false;
 			}
 		}
 		return;
@@ -551,6 +792,12 @@ void Analyzer::RecordClassDeclaration(const CPPGMAstNodePtr& child, const TypePt
 			binding.is_member = true;
 			binding.is_static = facts.is_static;
 			binding.member_owner = type;
+			binding.is_virtual = binding.is_virtual || facts.is_virtual;
+			binding.is_override = binding.is_override ||
+				HasNodeValue(declarator, "virt-specifier", "override");
+			binding.is_final = binding.is_final ||
+				HasNodeValue(declarator, "virt-specifier", "final");
+			binding.is_pure = binding.is_pure || IsPureInitializer(item);
 		}
 		if (facts.is_typedef || field_type->kind == TYPE_FUNCTION || name.empty()) continue;
 		ClassMemberInfo member;
@@ -603,7 +850,19 @@ void Analyzer::RecordClassMembers(const CPPGMAstNodePtr& node, const TypePtr& ty
 			continue;
 		}
 		if (child->kind == "special-member-definition" ||
-			child->kind == "special-member-declaration") continue;
+			child->kind == "special-member-declaration")
+		{
+			const string special_name = SpecialMemberName(child->value);
+			for (size_t binding_index = 0; binding_index < class_scope->bindings.size();
+				++binding_index)
+			{
+				Binding& binding = class_scope->bindings[binding_index];
+				if (binding.kind == BIND_FUNCTION && binding.name == special_name &&
+					binding.declaration.get() == child.get())
+					binding.access = access;
+			}
+			continue;
+		}
 		if (child->kind == "simple-declaration" && !child->children.empty())
 		{
 			SpecFacts friend_facts;
@@ -621,6 +880,55 @@ void Analyzer::RecordClassMembers(const CPPGMAstNodePtr& node, const TypePtr& ty
 		RecordClassDeclaration(child, type, class_scope, access);
 	}
 	RecordMemberIndices(type, class_scope);
+
+	// Build the effective single-inheritance virtual-slot map after all direct
+	// member bindings have been recorded.  Keeping this map on Type makes the
+	// later LowIR pass consume typed semantic facts rather than re-parsing the
+	// source AST to rediscover overrides.
+	type->virtual_methods.clear();
+	if (type->direct_base)
+		type->virtual_methods = type->direct_base->virtual_methods;
+	for (size_t i = 0; i < class_scope->bindings.size(); ++i)
+	{
+		Binding& binding = class_scope->bindings[i];
+		if (binding.kind != BIND_FUNCTION || !binding.is_member ||
+			binding.is_static || binding.member_owner.get() != type.get()) continue;
+		const TypePtr function = FunctionTypeForVirtual(binding);
+		if (!function) continue;
+		const VirtualMethodInfo* inherited = FindInheritedVirtual(
+			type->direct_base, binding);
+		if (binding.is_override && !inherited) {
+			throw logic_error("override does not match a base virtual function: " + binding.name);
+		}
+		if (inherited && inherited->final)
+			throw logic_error("override of final virtual function");
+		if (inherited || binding.is_virtual || binding.is_pure || binding.is_override ||
+			binding.is_final)
+			binding.is_virtual = true;
+		else continue;
+
+		VirtualMethodInfo effective;
+		effective.name = binding.name;
+		effective.function = function;
+		effective.binding = &binding;
+		effective.owner = type;
+		effective.destructor = IsDestructorName(binding.name) ||
+			(inherited && inherited->destructor);
+		effective.pure = binding.is_pure;
+		effective.final = binding.is_final;
+		bool replaced = false;
+		for (size_t slot = 0; slot < type->virtual_methods.size(); ++slot)
+			if (SameVirtualSlot(type->virtual_methods[slot], binding))
+			{
+				type->virtual_methods[slot] = effective;
+				replaced = true;
+				break;
+			}
+		if (!replaced) type->virtual_methods.push_back(effective);
+	}
+	type->polymorphic = !type->virtual_methods.empty();
+	type->has_vpointer = type->polymorphic &&
+		(!type->direct_base || !type->direct_base->polymorphic);
 	(void)scope;
 }
 
@@ -683,6 +991,9 @@ TypePtr Analyzer::ProcessClass(const CPPGMAstNodePtr& node, Scope* scope)
 	type->complete = true;
 	type->layout_complete = false;
 	type->direct_base.reset();
+	type->virtual_methods.clear();
+	type->polymorphic = false;
+	type->has_vpointer = false;
 	Scope* class_scope = ClassScope(type, owner, name);
 	for (size_t i = 0; i < node->children.size(); ++i)
 	{

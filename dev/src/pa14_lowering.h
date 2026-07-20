@@ -75,10 +75,11 @@ class PA14Lowerer
     bool hidden_friend;
     bool explicit_constructor;
     bool builtin;
-    bool defaulted;
-    bool deleted;
-    bool destructor;
-    bool needed;
+	bool defaulted;
+	bool deleted;
+	bool destructor;
+	bool deleting_entry;
+	bool needed;
     bool emitted;
     bool variadic;
     bool unwind_no;
@@ -104,7 +105,7 @@ class PA14Lowerer
         explicit_constructor(false),
         builtin(false),
         defaulted(false), deleted(false),
-        destructor(false), needed(false),
+		destructor(false), deleting_entry(false), needed(false),
         emitted(false), variadic(false), unwind_no(false), noreturn(false), base_entry(false),
         indirect_result(false), effects(), object_name(), base_entry_for(), parameter_metadata(),
         indirect_parameters(), special_initializer(), default_arguments() {}
@@ -167,15 +168,19 @@ class PA14Lowerer
     CPPGMAstNodePtr object;
     bool direct;
     bool member;
-    bool static_member;
-    bool conversion;
-    int user_defined;
+	bool static_member;
+	bool conversion;
+	bool virtual_dispatch;
+	size_t virtual_slot;
+	TypePtr virtual_owner;
+	int user_defined;
     int worst;
     int total;
 
     CallChoice()
       : binding(), function(), object(), direct(false), member(false),
-        static_member(false), conversion(false), user_defined(1000000),
+		static_member(false), conversion(false), virtual_dispatch(false),
+		virtual_slot(0), virtual_owner(), user_defined(1000000),
         worst(1000000), total(1000000) {}
   };
 
@@ -262,9 +267,12 @@ class PA14Lowerer
   map<string, vector<unsigned char> > string_data_;
   map<string, string> string_symbols_;
   vector<string> string_order_;
-  bool needs_init_helper_;
-  bool needs_fini_helper_;
-  FunctionState* state_;
+	bool needs_init_helper_;
+	bool needs_fini_helper_;
+	set<const Type*> emitted_vtables_;
+	set<const Type*> external_vtables_;
+	set<const Type*> emitted_rtti_;
+	FunctionState* state_;
   map<const CPPGMAstNode*, pair<Scope*, ExprInfo> > infer_cache_;
 
 public:
@@ -329,6 +337,36 @@ void CollectSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* scope);
 bool HasStorageSpecifier(const CPPGMAstNodePtr& node, const string& word) const;
 
 void FinalizeSymbols();
+
+void PreparePolymorphicModel();
+
+void EmitPolymorphicGlobals(vector<string>& entries);
+
+bool IsVirtualFunction(const FunctionRecord& function) const;
+
+FunctionRecord* EnsureVirtualDestructor(const TypePtr& owner,
+                                        const VirtualMethodInfo& slot,
+                                        bool deleting);
+
+FunctionRecord* EnsurePureVirtual(const VirtualMethodInfo& slot);
+
+FunctionRecord* VirtualFunctionRecord(const TypePtr& owner,
+                                      const VirtualMethodInfo& slot);
+
+string TypeMangledName(const TypePtr& type) const;
+
+string VTableSymbol(const TypePtr& type) const;
+
+string VTableAddressSymbol(const TypePtr& type) const;
+
+TypePtr SemanticType(const Type* raw_type) const;
+
+bool ShouldUseExternalVtable(const TypePtr& type) const;
+
+void EmitVPointerStore(const TypePtr& owner, const string& address);
+
+bool VirtualSlotForCall(const TypePtr& object, Binding* binding,
+                        size_t* slot) const;
 
 void CollectStringLiterals(const CPPGMAstNodePtr& node, unsigned int braced_depth = 0);
 

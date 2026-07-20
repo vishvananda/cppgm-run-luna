@@ -345,7 +345,8 @@ PA14Lowerer::PA14Lowerer(const vector<CPPGMAstNodePtr>& trees)
     : trees_(trees), program_(new CPPGMAstNode("translation-unit")), analyzer_(),
       functions_(), globals_(), function_by_key_(), global_by_key_(),
       string_data_(), string_symbols_(), string_order_(), needs_init_helper_(false),
-      needs_fini_helper_(false), state_(), infer_cache_()
+      needs_fini_helper_(false), emitted_vtables_(), external_vtables_(),
+      emitted_rtti_(), state_(), infer_cache_()
 {}
 
 string PA14Lowerer::function_key(const string& name, const TypePtr& type)
@@ -1309,6 +1310,7 @@ bool PA14Lowerer::HasDefaultInitializationEffects(const TypePtr& raw_type) const
     if(type->kind == TYPE_ARRAY)
       return type->bound != 0 && HasDefaultInitializationEffects(type->child);
     if(type->kind != TYPE_CLASS) return true;
+    if(type->polymorphic) return true;
     const vector<Binding*> constructors =
       MemberBindings(type, LastComponent(type->name));
     for(size_t i = 0; i < constructors.size(); ++i) {
@@ -1336,6 +1338,7 @@ bool PA14Lowerer::HasDefaultConstructionEffects(const TypePtr& raw_type) const
     if(type->kind == TYPE_ARRAY)
       return type->bound != 0 && HasDefaultConstructionEffects(type->child);
     if(type->kind != TYPE_CLASS) return false;
+    if(type->polymorphic) return true;
     const vector<Binding*> constructors =
       MemberBindings(type, LastComponent(type->name));
     for(size_t i = 0; i < constructors.size(); ++i) {
@@ -1376,6 +1379,7 @@ bool PA14Lowerer::DestructorHasEffects(const TypePtr& raw_type) const
     TypePtr type = type_value(raw_type);
     if(type && type->kind == TYPE_ARRAY) return DestructorHasEffects(type->child);
     if(!type || type->kind != TYPE_CLASS) return false;
+    if(type->polymorphic) return true;
     const vector<Binding*> candidates = MemberBindings(type, "~" + LastComponent(type->name));
     FunctionRecord* destructor = 0;
     for(size_t i = 0; i < candidates.size(); ++i) {

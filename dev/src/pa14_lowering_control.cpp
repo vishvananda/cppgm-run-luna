@@ -280,8 +280,10 @@ bool PA14Lowerer::EmitDestructorAt(const TypePtr& raw_object_type, const string&
       if(!force_empty && !DestructorHasEffects(object_type)) continue;
       record->needed = true;
       FunctionRecord* base_entry = BaseEntryFor(record);
+      FunctionRecord* call_record = object_type->polymorphic && force_empty && base_entry ?
+        base_entry : record;
       if(base_entry) base_entry->needed = true;
-      AddInstruction("call void @" + record->symbol + "(" + address + ")");
+      AddInstruction("call void @" + call_record->symbol + "(" + address + ")");
       return true;
     }
     (void)scope;
@@ -620,7 +622,7 @@ void PA14Lowerer::EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr&
          type_size(variable->type) > type_size(value.type)))) {
       value.type = type_value(variable->type);
       value.operand = integer_text(value.constant);
-    } else value = ConvertValue(value, type_value(variable->type));
+    } else value = ConvertValue(value, type_value(variable->type), false, true);
     StoreLValue(CPPGMAstNodePtr(new CPPGMAstNode("id-expression", variable->source_name)),
       scope, type_value(variable->type), value.operand);
   }

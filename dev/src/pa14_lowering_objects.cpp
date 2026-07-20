@@ -447,8 +447,23 @@ PA14Lowerer::Value PA14Lowerer::EmitDeleteExpression(const CPPGMAstNodePtr& node
       AddInstruction(nonnull + " = cmp ne ptr " + pointer.operand + ", 0");
       Terminate("branch " + nonnull + ", ^" + nonnull_label + ", ^" + end_label);
       AddBlock(nonnull_label);
-      (void)EmitDestructorAt(object_type, pointer.operand, scope);
-      AddInstruction("call void @" + deallocator_symbol + "(" + pointer.operand + ")");
+      if(object_type->polymorphic) {
+        size_t ordinary_slots = 0;
+        for(size_t slot = 0; slot < object_type->virtual_methods.size(); ++slot)
+          if(!object_type->virtual_methods[slot].destructor) ++ordinary_slots;
+        const string vptr = emit_load(pointer.operand,
+          PointerTo(Fundamental("char")));
+        const size_t deleting_offset = (ordinary_slots + 1) * 8;
+        const string entry_address = new_temp();
+        AddInstruction(entry_address + " = index i8 " + vptr + ", " +
+          integer_text(static_cast<long long>(deleting_offset)));
+        const string entry = emit_load(entry_address,
+          PointerTo(Fundamental("char")));
+        AddInstruction("call void " + entry + "(" + pointer.operand + ") as (%arg0 : ptr) -> void");
+      } else {
+        (void)EmitDestructorAt(object_type, pointer.operand, scope);
+        AddInstruction("call void @" + deallocator_symbol + "(" + pointer.operand + ")");
+      }
       Terminate("jump ^" + end_label);
       AddBlock(end_label);
     } else if(class_array_delete) {
@@ -1120,6 +1135,8 @@ void PA14Lowerer::EmitDestructorBody(FunctionRecord& function, Scope* scope)
     TypePtr owner = type_value(function.member_owner);
     if(!owner) return;
     CPPGMAstNodePtr this_node(new CPPGMAstNode("keyword-literal", "KW_THIS:this"));
+    if(owner->polymorphic)
+      EmitVPointerStore(owner, EmitValue(this_node, scope).operand);
     for(size_t i = owner->class_members.size(); i > 0; --i) {
       const ClassMemberInfo& member = owner->class_members[i - 1];
       TypePtr member_type = type_value(member.type);
@@ -1153,7 +1170,19 @@ void PA14Lowerer::EmitDestructorBody(FunctionRecord& function, Scope* scope)
     if(base) {
       const string this_address = EmitValue(this_node, scope).operand;
       const string base_address = AdjustBaseAddress(this_address, owner, base);
-      (void)EmitDestructorAt(base, base_address, scope);
+      // A virtual base destructor still has to run when its body is empty;
+      // the derived destructor owns the base-subobject transition.
+      (void)EmitDestructorAt(base, base_address, scope, true);
+    }
+    if(function.deleting_entry) {
+      TypePtr parameter = PointerTo(Fundamental("void"));
+      FunctionRecord* deallocator = FindFunction("operatordelete",
+        FunctionOf(vector<TypePtr>(1, parameter), false, Fundamental("void"), false));
+      if(deallocator) {
+        deallocator->needed = true;
+        const string address = EmitValue(this_node, scope).operand;
+        AddInstruction("call void @" + deallocator->symbol + "(" + address + ")");
+      }
     }
   }
 

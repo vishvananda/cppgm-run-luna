@@ -148,6 +148,7 @@ bool PA14Lowerer::IsEmptyBaseStorage(const TypePtr& raw_type) const
 {
     TypePtr type = type_value(raw_type);
     if(!type || type->kind != TYPE_CLASS) return false;
+    if(type->polymorphic || type->has_vpointer) return false;
     for(size_t i = 0; i < type->class_members.size(); ++i) {
       const ClassMemberInfo& member = type->class_members[i];
       if(!member.is_static && member.type) return false;

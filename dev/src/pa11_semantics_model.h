@@ -20,6 +20,7 @@ using namespace std;
 struct Scope;
 struct Type;
 struct ClassMemberInfo;
+struct Binding;
 typedef shared_ptr<Type> TypePtr;
 
 // The PA15 object model keeps layout facts in the semantic type rather than
@@ -41,6 +42,25 @@ struct ClassMemberInfo
 	ClassMemberInfo()
 		: name(), type(), offset(0), bit_offset(0), bit_width(0),
 		  bit_field(false), is_static(false), is_mutable(false), initializer() {}
+};
+
+// A virtual slot is a semantic class fact.  It records the effective
+// declaration for one logical slot after single-inheritance overrides have
+// been applied; the LowIR layer expands a virtual destructor into its two
+// ABI entries when it renders a vtable.
+struct VirtualMethodInfo
+{
+	string name;
+	TypePtr function;
+	Binding* binding;
+	TypePtr owner;
+	bool destructor;
+	bool pure;
+	bool final;
+
+	VirtualMethodInfo()
+		: name(), function(), binding(0), owner(), destructor(false),
+		  pure(false), final(false) {}
 };
 
 enum TypeKind
@@ -89,6 +109,9 @@ struct Type
 	bool is_union;
 	TypePtr enclosing_type;
 	vector<string> friend_names;
+	vector<VirtualMethodInfo> virtual_methods;
+	bool polymorphic;
+	bool has_vpointer;
 
 	Type(TypeKind type_kind = TYPE_FUNDAMENTAL,
 		const string& type_name = string());
@@ -134,6 +157,10 @@ struct Binding
 	TypePtr friend_owner;
 	bool is_member;
 	bool is_static;
+	bool is_virtual;
+	bool is_pure;
+	bool is_override;
+	bool is_final;
 	// ClassMemberInfo is the canonical owner of layout and member-kind facts.
 	// Bindings retain lookup identity and refer to that record through a stable
 	// owner/index pair rather than a pointer into a relocatable member vector.

@@ -289,6 +289,9 @@ public:
 		return node && ((node->kind == "cv-qualifier" || node->kind == "decl-specifier") &&
 			node->value.find(":" + word) != string::npos);
 	}
+	static bool HasNodeValue(const CPPGMAstNodePtr& node, const string& kind,
+		const string& value);
+	static bool IsPureInitializer(const CPPGMAstNodePtr& item);
 	struct SpecFacts
 	{
 		bool is_typedef;
@@ -298,11 +301,13 @@ public:
 		bool is_static;
 		bool is_mutable;
 		bool is_friend;
+		bool is_virtual;
 		vector<string> fundamental_words;
 		TypePtr named_type;
 		SpecFacts()
 			: is_typedef(false), is_constexpr(false), is_const(false),
 			  is_volatile(false), is_static(false), is_mutable(false), is_friend(false),
+			  is_virtual(false),
 			  fundamental_words(), named_type() {}
 	};
 	TypePtr TypeFromDecltype(const CPPGMAstNodePtr& node, Scope* scope)
@@ -396,6 +401,7 @@ public:
 			else if (value == "KW_STATIC:static") info.is_static = true;
 			else if (value == "KW_MUTABLE:mutable") info.is_mutable = true;
 			else if (value == "KW_FRIEND:friend") info.is_friend = true;
+			else if (value == "KW_VIRTUAL:virtual") info.is_virtual = true;
 			else if (value == "KW_CONST:const") info.is_const = true;
 			else if (value == "KW_VOLATILE:volatile") info.is_volatile = true;
 			else
@@ -1027,100 +1033,8 @@ public:
 			if (!name.empty()) function_scope->add(Binding(BIND_PARAMETER, name, type));
 		}
 	}
-	void ProcessFunctionDefinition(const CPPGMAstNodePtr& node, Scope* scope)
-	{
-		if (node->children.size() < 3) throw logic_error("invalid function definition");
-		SpecFacts facts;
-		TypePtr base = TypeFromSpecSeq(node->children[0], scope, &facts);
-		CPPGMAstNodePtr declarator = node->children[1];
-		const string raw_name = FirstIdentifier(declarator);
-		if (raw_name.empty()) throw logic_error("function has no name");
-		TypePtr function_type = BuildDeclarator(declarator, base, scope);
-		if (!function_type || function_type->kind != TYPE_FUNCTION)
-			throw logic_error("definition is not a function");
-		Scope* declaration_scope = scope;
-		TypePtr member_owner;
-		string name = raw_name;
-		const size_t separator = raw_name.rfind("::");
-		if (separator != string::npos)
-		{
-			PathTarget owner = ResolvePath(scope, raw_name.substr(0, separator));
-			if (owner.binding) member_owner = owner.binding->type;
-			else if (owner.scope) member_owner = owner.scope->owner_type;
-			if (member_owner && member_owner->kind == TYPE_CLASS && member_owner->owned_scope)
-			{
-				declaration_scope = member_owner->owned_scope;
-				name = LastComponent(raw_name);
-			}
-		}
-		else if (scope->kind == SCOPE_CLASS)
-		{
-			member_owner = scope->owner_type;
-		}
-		Binding binding(BIND_FUNCTION, name, function_type);
-		binding.hidden_friend = facts.is_friend;
-		binding.friend_owner = facts.is_friend ? member_owner : TypePtr();
-		binding.is_member = static_cast<bool>(member_owner) && !facts.is_friend;
-		binding.is_static = facts.is_static;
-		binding.member_owner = member_owner;
-		declaration_scope->add(binding);
-		Scope* function_scope = NewChild(declaration_scope, SCOPE_FUNCTION, name);
-		function_scopes_[node.get()] = function_scope;
-		AddFunctionParameters(function_scope, declarator, declaration_scope);
-		ProcessCompound(node->children[2], function_scope);
-	}
-	void ProcessSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* scope)
-	{
-		if (node->children.empty()) throw logic_error("invalid simple declaration");
-		SpecFacts facts;
-		TypePtr base = TypeFromSpecSeq(node->children[0], scope, &facts);
-		CPPGMAstNodePtr list = ChildOfKind(node, "init-declarator-list");
-		if (!list) return;
-		for (size_t i = 0; i < list->children.size(); ++i)
-		{
-			CPPGMAstNodePtr item = list->children[i];
-			if (!item || item->children.empty()) continue;
-			CPPGMAstNodePtr declarator = item->children[0];
-			TypePtr type = BuildDeclarator(declarator, base, scope);
-			if (facts.is_constexpr && type->kind != TYPE_FUNCTION) type = CloneWithCv(type, true, false);
-			const string name = FirstIdentifier(declarator);
-			if (name.empty()) continue;
-			CPPGMAstNodePtr initializer = item->children.size() > 1 ? item->children[1] : CPPGMAstNodePtr();
-			if (facts.is_typedef)
-			{
-				AddTypeBinding(scope, name, type, true);
-				continue;
-			}
-				Binding binding(type->kind == TYPE_FUNCTION ? BIND_FUNCTION : BIND_VARIABLE, name, type);
-				binding.hidden_friend = facts.is_friend && type->kind == TYPE_FUNCTION;
-				binding.friend_owner = binding.hidden_friend ?
-					(scope && scope->kind == SCOPE_CLASS ? scope->owner_type : TypePtr()) : TypePtr();
-				binding.is_member = binding.is_member && !binding.hidden_friend;
-			if (initializer && (facts.is_const || facts.is_constexpr))
-			{
-				CPPGMAstNodePtr expression = initializer->children.empty() ?
-					CPPGMAstNodePtr() : initializer->children[0];
-				// The PA11 constant table stores integer values.  A floating
-				// const object is still a valid typed binding; leave it out of
-				// that integer-only table rather than asking ParseLiteral to
-				// interpret a floating token as an integer expression.
-				const bool floating_literal = expression && expression->kind == "literal" &&
-					(expression->value.find('.') != string::npos ||
-						expression->value.find('e') != string::npos ||
-						expression->value.find('E') != string::npos ||
-						expression->value.find('p') != string::npos ||
-						expression->value.find('P') != string::npos);
-				const bool string_literal = expression && expression->kind == "literal" &&
-					!expression->value.empty() && expression->value[0] == '"';
-				if (!floating_literal && !string_literal)
-				{
-					ConstantValue value = Evaluate(expression, scope);
-					if (value.known) { binding.has_value = true; binding.value = value.value; }
-				}
-			}
-			scope->add(binding);
-		}
-	}
+	void ProcessFunctionDefinition(const CPPGMAstNodePtr& node, Scope* scope);
+	void ProcessSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* scope);
 	void ProcessSpecialMember(const CPPGMAstNodePtr& node, Scope* scope);
 	void ProcessTemplate(const CPPGMAstNodePtr& node, Scope* scope)
 	{

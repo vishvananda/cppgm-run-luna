@@ -306,6 +306,7 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
           ordered_initializers.push_back(initializer);
       }
     }
+    bool vptr_stored = false;
     for(size_t i = 0; i < ordered_initializers.size(); ++i) {
       CPPGMAstNodePtr initializer = ordered_initializers[i];
       if(!initializer || initializer->kind != "mem-initializer") continue;
@@ -316,6 +317,13 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
       if(!argument_node) argument_node = ChildOfKind(initializer, "braced-init-list");
       vector<CPPGMAstNodePtr> arguments = argument_node ? argument_node->children :
         vector<CPPGMAstNodePtr>();
+      const bool is_base_initializer = base &&
+        (name == LastComponent(base->name) || name == base->name);
+      if(owner->polymorphic && !vptr_stored && !delegating &&
+         !is_base_initializer && name != LastComponent(owner->name)) {
+        EmitVPointerStore(owner, EmitValue(this_node, scope).operand);
+        vptr_stored = true;
+      }
       if(name == LastComponent(owner->name)) {
         const string this_address = EmitValue(this_node, scope).operand;
         if(!EmitConstructorAt(owner, this_address, arguments, scope, true))
@@ -486,7 +494,11 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
         emit_store(field->type, value.operand, address);
       }
     }
-    if(owner->is_union) return;
+	if(owner->is_union) return;
+	if(owner->polymorphic && !vptr_stored && !delegating) {
+		EmitVPointerStore(owner, EmitValue(this_node, scope).operand);
+		vptr_stored = true;
+	}
     for(size_t i = 0; i < owner->class_members.size(); ++i) {
       const ClassMemberInfo& member_fact = owner->class_members[i];
       if(member_fact.is_static || member_fact.name.empty() || !member_fact.type ||

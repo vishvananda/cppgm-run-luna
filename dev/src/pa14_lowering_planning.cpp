@@ -231,7 +231,28 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
         throw logic_error(detail);
       }
       FunctionRecord* selected = RecordForBinding(best.binding);
-      if(selected) {
+      const bool qualified_member_id = lookup_callee &&
+        lookup_callee->kind == "id-expression" &&
+        lookup_callee->value.find("::") != string::npos;
+      const bool destructor_call = selected && selected->destructor;
+      if(best.member && !best.static_member && !qualified_member_id &&
+         !destructor_call) {
+        TypePtr dispatch_object = expression_value_type(Infer(best.object, scope));
+        if(dispatch_object && dispatch_object->kind == TYPE_POINTER)
+          dispatch_object = type_value(dispatch_object->child);
+        size_t virtual_slot = 0;
+        if(VirtualSlotForCall(dispatch_object, best.binding, &virtual_slot)) {
+          best.direct = false;
+          best.virtual_dispatch = true;
+          best.virtual_slot = virtual_slot;
+          best.virtual_owner = dispatch_object;
+        }
+      }
+      const bool pure_virtual_dispatch = best.virtual_dispatch && best.virtual_owner &&
+        best.virtual_slot < best.virtual_owner->virtual_methods.size() &&
+        best.virtual_owner->virtual_methods[best.virtual_slot].pure;
+      if(selected && !pure_virtual_dispatch &&
+         !(best.binding && best.binding->is_pure)) {
         selected->needed = true;
         FunctionRecord* base_entry = BaseEntryFor(selected);
         if(base_entry) base_entry->needed = true;
