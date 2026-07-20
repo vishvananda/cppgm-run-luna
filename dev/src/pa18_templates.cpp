@@ -168,6 +168,18 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 	if(spelling.find("::") == string::npos && spelling.find('<') == string::npos) {
 	string current = context;
 	for(;;) {
+		map<string, CPPGMAstNodePtr>::const_iterator class_declaration =
+			class_declarations_.find(current);
+		if(class_declaration != class_declarations_.end() &&
+			specialization_bases_.find(LastComponent(current)) != specialization_bases_.end()) {
+			const CPPGMAstNodePtr& declaration = class_declaration->second;
+			for(size_t i = 0; i < declaration->children.size(); ++i)
+				if(declaration->children[i] && declaration->children[i]->kind == "enum-specifier" &&
+					LastComponent(declaration->children[i]->value) == spelling) {
+					spelling = current + "::" + spelling;
+					return CanonicalSpelling(prefix + spelling + suffix);
+				}
+		}
 		const string candidate = JoinPath(current, spelling);
 		if(class_contexts_.find(candidate) != class_contexts_.end() ||
 			named_type_contexts_.find(candidate) != named_type_contexts_.end()) {

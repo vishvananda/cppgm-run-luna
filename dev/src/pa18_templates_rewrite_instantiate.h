@@ -224,7 +224,7 @@
 				local_name += TypeSuffix(args[i]);
 				if(i + 1 == args.size()) local_name += i == 0 ? "_" : "__";
 			}
-		} else {
+		} else if(definition.name.compare(0, 8, "operator") != 0) {
 			// Function specializations share the source spelling of the primary
 			// template, but each concrete argument list is a distinct binding.
 			// Keep that identity in the generated AST so a later specialization

@@ -658,8 +658,7 @@ bool MatchTypePattern(string pattern, string actual,
 		const string& context, const map<string, string>& substitutions)
 	{
 		CPPGMAstNodePtr result(new CPPGMAstNode(input->kind, input->value)); result->initializer_form = input->initializer_form;
-		result->template_instantiation = input->template_instantiation;
-		result->template_primary = input->template_primary; result->template_arguments = input->template_arguments;
+		result->template_instantiation = input->template_instantiation; result->template_primary = input->template_primary; result->template_arguments = input->template_arguments;
 		CPPGMAstNodePtr input_callee = input->children.empty() ? CPPGMAstNodePtr() : input->children[0];
 		if(input_callee && input_callee->kind == "parenthesized-expression" &&
 			input_callee->children.size() == 1 && input_callee->children[0] &&
@@ -721,8 +720,7 @@ bool MatchTypePattern(string pattern, string actual,
 			}
 		}
 		for(size_t i = 0; i < input->children.size(); ++i) {
-			CPPGMAstNodePtr child = TransformNode(input->children[i], context, substitutions);
-			if(child) result->children.push_back(child);
+			CPPGMAstNodePtr child = TransformNode(input->children[i], context, substitutions); if(child) result->children.push_back(child);
 		}
 		CPPGMAstNodePtr result_callee = result->children.empty() ? CPPGMAstNodePtr() : result->children[0];
 		if(result_callee && result_callee->kind == "parenthesized-expression" &&
@@ -733,17 +731,19 @@ bool MatchTypePattern(string pattern, string actual,
 		}
 		if(result_callee && result_callee->kind == "id-expression" &&
 			result_callee->value.find('<') == string::npos) {
-			const string callee_name = result_callee->value;
-			const vector<const TemplateDefinition*> definitions =
-				FindFunctionDefinitions(callee_name, context);
+				const string callee_name = result_callee->value;
+				const vector<const TemplateDefinition*> definitions =
+					FindFunctionDefinitions(callee_name, context);
 			if(!HasExactOrdinaryMatch(result, callee_name, substitutions, context))
 				for(size_t candidate = 0; candidate < definitions.size(); ++candidate) {
 					const TemplateDefinition* definition = definitions[candidate];
 					vector<string> inferred;
-					if(InferFunctionArguments(*definition, result, &inferred,
-						substitutions, context)) {
+					const bool inferred_ok = InferFunctionArguments(*definition, result, &inferred,
+						substitutions, context);
+					if(inferred_ok) {
 						const string local_name = Instantiate(*definition, inferred, context);
-						const string qualifier = PrefixComponent(callee_name);
+							const string qualifier = GeneratedFunctionQualifier(*definition,
+								callee_name, context);
 						result_callee->value = qualifier.empty() ? local_name : qualifier + "::" + local_name;
 						break;
 					}
@@ -931,7 +931,9 @@ bool MatchTypePattern(string pattern, string actual,
 								function_target = true;
 								break;
 							}
-						const CPPGMAstNodePtr owner_declaration = FindClassDeclaration(owner, child_context);
+						const string rewritten_owner = rewritten ? PrefixComponent(rewritten->value) : owner;
+						const CPPGMAstNodePtr owner_declaration = FindClassDeclaration(
+							rewritten_owner.empty() ? owner : rewritten_owner, child_context);
 						if(owner_declaration) for(size_t member = 0;
 							member < owner_declaration->children.size(); ++member) {
 								const CPPGMAstNodePtr declaration = owner_declaration->children[member];
@@ -1167,6 +1169,11 @@ bool MatchTypePattern(string pattern, string actual,
 					MakeClassShell(LastComponent(input->children[1]->value)) :
 					CPPGMAstNodePtr();
 			return CPPGMAstNodePtr();
+		}
+		if(input->kind == "using-declaration") {
+			const CPPGMAstNodePtr target = ChildOfKindLocal(input, "target");
+			if(target && IsOrdinaryTemplateUsingTarget(target->value, context))
+				return CPPGMAstNodePtr();
 		}
 		if(input->kind == "parameter-declaration" && !input->children.empty() &&
 			input->children[0] && input->children[0]->kind == "decl-specifier-seq") {

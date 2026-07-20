@@ -24,7 +24,23 @@
 		const map<string, string>& substitutions, const string& context)
 	{
 		const FunctionSignature* signature = FindFunctionSignature(callee, context);
+		// A call from a class member must prefer a member declaration over an
+		// out-of-class function-template definition with the same source name.
+		// The member's parameter spelling can still be dependent in the source
+		// class, so type equality alone cannot identify this ordinary match.
+		if(callee.find("::") == string::npos) {
+			const string owner = PrefixComponent(context);
+			const FunctionSignature* member = owner.empty() ? 0 :
+				FindFunctionSignature(JoinPath(owner, callee), context);
+			if(!member && !owner.empty())
+				member = FindFunctionSignature(JoinPath(owner, JoinPath(owner, callee)), context);
+			const bool class_scope = class_contexts_.find(owner) != class_contexts_.end() ||
+				(!owner.empty() && class_contexts_.find(JoinPath(owner, owner)) != class_contexts_.end());
+			if(member && class_scope && (!signature || member == signature))
+				return true;
+		}
 		if(!signature || !signature->parameters || call->children.size() < 2) return false;
+		const vector<const TemplateDefinition*> templates = FindFunctionDefinitions(callee, context);
 		const CPPGMAstNodePtr arguments = call->children[1] &&
 			call->children[1]->kind == "argument-list" ? call->children[1] :
 			ChildOfKindLocal(call->children[1], "argument-list");
@@ -34,10 +50,23 @@
 			const CPPGMAstNodePtr parameter_node = signature->parameters->children[parameter];
 			if(!parameter_node || parameter_node->kind != "parameter-declaration") continue;
 			if(argument >= arguments->children.size()) break;
+			const string pattern = ParameterTypeSpelling(parameter_node);
+			for(size_t candidate = 0; candidate < templates.size(); ++candidate) {
+				const CPPGMAstNodePtr declarator = FunctionDeclarator(templates[candidate]->declaration);
+				const CPPGMAstNodePtr parameters = DescendantOfKind(declarator, "parameter-clause");
+				if(!parameters || parameter >= parameters->children.size()) continue;
+				const CPPGMAstNodePtr template_parameter = parameters->children[parameter];
+				if(template_parameter && template_parameter->kind == "parameter-declaration" &&
+					CanonicalSpelling(ParameterTypeSpelling(template_parameter)) == CanonicalSpelling(pattern))
+					return false;
+			}
+			for(map<string, string>::const_iterator substitution = substitutions.begin();
+				substitution != substitutions.end(); ++substitution)
+				if(pattern == substitution->first || pattern.find(substitution->first) != string::npos)
+					return false;
 			string actual;
 			if(!InferArgument(arguments->children[argument], &actual, substitutions, context)) return false;
-			const string expected = NormalizeTypeArgument(RewriteText(
-				ParameterTypeSpelling(parameter_node), context, substitutions, 0));
+			const string expected = NormalizeTypeArgument(RewriteText(pattern, context, substitutions, 0));
 			if(CanonicalSpelling(actual) != expected) return false;
 			++argument;
 		}

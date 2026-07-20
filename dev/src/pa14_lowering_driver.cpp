@@ -120,6 +120,18 @@ void PA14Lowerer::Lower(ostream& out)
         }
       }
     }
+    bool added_hidden = true;
+    while(added_hidden) {
+      added_hidden = false;
+      for(size_t i = 0; i < functions_.size(); ++i) {
+        FunctionRecord& function = functions_[i];
+        if(!function.definition || !function.hidden_friend || !function.needed || function.emitted)
+          continue;
+        entries.push_back(EmitFunction(function));
+        function.emitted = true;
+        added_hidden = true;
+      }
+    }
 
     vector<string> declarations;
     EmitDeclarations(declarations);

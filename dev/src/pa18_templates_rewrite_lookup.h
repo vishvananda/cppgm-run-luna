@@ -1,4 +1,33 @@
 #pragma once
+	bool IsOrdinaryTemplateUsingTarget(const string& raw_target,
+		const string& context) const
+	{
+		if(LastComponent(raw_target).compare(0, 8, "operator") == 0) return false;
+		const TemplateDefinition* direct = FindDefinition(raw_target, context);
+		if(direct && !direct->class_template) return true;
+		const string suffix = "::" + raw_target;
+		for(map<string, TemplateDefinition>::const_iterator it = definitions_.begin();
+			it != definitions_.end(); ++it)
+			if(!it->second.class_template && (it->second.qualified_name == raw_target ||
+				(it->second.qualified_name.size() > suffix.size() &&
+				 it->second.qualified_name.compare(it->second.qualified_name.size() - suffix.size(),
+				 suffix.size(), suffix) == 0))) return true;
+		return false;
+	}
+	string GeneratedFunctionQualifier(const TemplateDefinition& definition,
+		const string& raw_callee, const string& context) const
+	{
+		string qualifier = PrefixComponent(raw_callee);
+		if(!qualifier.empty()) return qualifier;
+		const string owner = definition.lexical_owner.empty() ? definition.owner : definition.lexical_owner;
+		bool visible = owner.empty() || context == owner ||
+			(context.size() > owner.size() && context.compare(0, owner.size(), owner) == 0 &&
+			 context[owner.size()] == ':');
+		const string current = PrefixComponent(context);
+		map<string, string>::const_iterator specialized = specialization_bases_.find(LastComponent(current));
+		if(specialized != specialization_bases_.end() && specialized->second == owner) visible = true;
+		return visible ? string() : owner;
+	}
 
 	CPPGMAstNodePtr TransformNamespace(const CPPGMAstNodePtr& input, const string& context,
 		const map<string, string>& substitutions)

@@ -181,10 +181,12 @@ void PA14Lowerer::AppendAssociatedOperatorBindings(const TypePtr& raw_type,
       const vector<Binding*> namespace_bindings = DirectBindings(associated, last_component(name));
       const string expected_name = associated->qualified_prefix.empty() ?
         last_component(name) : associated->qualified_prefix + "::" + last_component(name);
+      const bool operator_lookup = name.compare(0, 8, "operator") == 0;
       for(size_t i = 0; i < namespace_bindings.size(); ++i)
         if(namespace_bindings[i]->kind == BIND_FUNCTION &&
            !namespace_bindings[i]->is_member && !namespace_bindings[i]->hidden_friend &&
-           namespace_bindings[i]->qualified_name == expected_name &&
+           (namespace_bindings[i]->qualified_name == expected_name ||
+            operator_lookup) &&
            find(result.begin(), result.end(), namespace_bindings[i]) == result.end())
           result.push_back(namespace_bindings[i]);
     }
