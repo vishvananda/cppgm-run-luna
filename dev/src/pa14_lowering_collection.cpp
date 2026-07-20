@@ -92,6 +92,8 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
            existing->variadic != function->variadic ||
            existing->function_const != function->function_const ||
            existing->function_volatile != function->function_volatile ||
+           existing->function_lvalue_ref_qualified != function->function_lvalue_ref_qualified ||
+           existing->function_rvalue_ref_qualified != function->function_rvalue_ref_qualified ||
            existing->parameters.size() != function->parameters.size()) continue;
         bool same_signature = true;
         for(size_t parameter = 0; parameter < function->parameters.size(); ++parameter)
@@ -160,7 +162,9 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
       vector<TypePtr> parameters;
       parameters.push_back(PointerTo(this_type));
       parameters.insert(parameters.end(), function->parameters.begin(), function->parameters.end());
-      record->type = FunctionOf(parameters, function->variadic, function->child, false);
+      record->type = FunctionOf(parameters, function->variadic, function->child, false,
+        false, function->function_lvalue_ref_qualified,
+        function->function_rvalue_ref_qualified);
     } else record->type = function;
     record->qualified_name = qname;
     record->definition = record->definition || definition;
@@ -168,6 +172,35 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
     record->variadic = function->variadic;
     if(definition) record->unwind_no = record->unwind_no || HasNoexcept(node->children[1]);
     RememberDefaults(record, node->children[1]);
+    ClassifySpecialMember(record);
+  }
+
+void PA14Lowerer::ClassifySpecialMember(FunctionRecord* record)
+{
+    if(!record || !record->member || record->static_member ||
+       !record->member_owner || !record->source_type) return;
+    TypePtr owner = type_value(record->member_owner);
+    TypePtr function = function_target_type(record->source_type);
+    if(!owner || owner->kind != TYPE_CLASS || !function) return;
+    const string name = LastComponent(record->qualified_name);
+    const bool constructor = name == LastComponent(owner->name);
+    const bool assignment = name == "operator=";
+    if(!constructor && !assignment) return;
+    if(function->parameters.empty()) return;
+    for(size_t i = 1; i < function->parameters.size(); ++i)
+      if(i >= record->default_arguments.size() || !record->default_arguments[i]) return;
+    TypePtr parameter = function->parameters[0];
+    if(!type_is_reference(parameter) ||
+       !PA12SameType(type_value(parameter), owner, true)) return;
+    record->value_special_member = true;
+    if(parameter->kind == TYPE_RVALUE_REFERENCE) {
+      if(constructor) record->move_constructor = true;
+      else record->move_assignment = true;
+    } else if(constructor) {
+      record->copy_constructor = true;
+    } else {
+      record->copy_assignment = true;
+    }
   }
 
 void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope,
@@ -278,6 +311,7 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
       base_entry.default_arguments = record->default_arguments;
       functions_.push_back(base_entry);
     }
+    ClassifySpecialMember(record);
     (void)facts;
   }
 

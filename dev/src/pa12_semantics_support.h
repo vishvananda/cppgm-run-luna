@@ -122,6 +122,8 @@ inline bool PA12SameType(const TypePtr& left, const TypePtr& right, bool ignore_
 	case TYPE_FUNCTION:
 		if (left->variadic != right->variadic || left->function_const != right->function_const ||
 			left->function_volatile != right->function_volatile ||
+			left->function_lvalue_ref_qualified != right->function_lvalue_ref_qualified ||
+			left->function_rvalue_ref_qualified != right->function_rvalue_ref_qualified ||
 			left->parameters.size() != right->parameters.size() ||
 			!PA12SameType(left->child, right->child, ignore_cv)) return false;
 		for (size_t i = 0; i < left->parameters.size(); ++i)

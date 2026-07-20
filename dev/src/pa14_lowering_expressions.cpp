@@ -46,6 +46,12 @@ PA14Lowerer::Value PA14Lowerer::EmitIdentifier(const CPPGMAstNodePtr& node, Scop
         result.operand = emit_load(address, referred);
         return result;
       }
+      if(local->parameter_address) {
+        result.type = local->type;
+        result.operand = local->parameter_operand;
+        result.lvalue = true;
+        return result;
+      }
       result.type = local->type;
       result.operand = emit_load(StorageForVariable(*local), local->type);
       return result;
@@ -404,6 +410,20 @@ PA14Lowerer::Value PA14Lowerer::EmitAssignment(const CPPGMAstNodePtr& node, Scop
     vector<CPPGMAstNodePtr> operator_arguments;
     operator_arguments.push_back(node->children[0]);
     operator_arguments.push_back(node->children[1]);
+    if(op == "=") {
+      ExprInfo left_probe = Infer(node->children[0], scope);
+      TypePtr left_probe_type = expression_value_type(left_probe);
+      if(left_probe_type && left_probe_type->kind == TYPE_CLASS) {
+        const vector<Binding*> assignments =
+          MemberBindings(left_probe_type, "operator=");
+        if(assignments.empty()) {
+          ExprInfo right_probe = Infer(node->children[1], scope);
+          (void)EnsureImplicitAssignment(left_probe_type, false);
+          if(right_probe.category == "xvalue")
+            (void)EnsureImplicitAssignment(left_probe_type, true);
+        }
+      }
+    }
     if(ChooseOperatorCall(OperatorFunctionName(op), operator_arguments, scope).binding)
       return EmitOperatorCall(OperatorFunctionName(op), operator_arguments, scope);
     ExprInfo left_info = Infer(node->children[0], scope);
@@ -698,16 +718,44 @@ string PA14Lowerer::EmitReferenceArgument(const CPPGMAstNodePtr& node, Scope* sc
         return AdjustBaseAddress(
           EmitTemporaryObjectAddress(node, scope, "tmpobj"),
           constructed, referred);
-      if(constructed) return EmitAddress(node, scope);
+      if(constructed) return EmitTemporaryObjectAddress(node, scope, "arg");
     }
     ExprInfo source = Infer(node, scope);
     TypePtr source_type = expression_value_type(source);
     const bool direct_address = source.category == "lvalue" &&
       PA12SameType(source_type, referred, true) &&
       (!referred->is_const || !source_type->is_const || referred->is_const);
-    if(direct_address) return EmitAddress(node, scope);
+    // An xvalue already denotes a usable object address for an rvalue
+    // reference.  Trying to construct another object here recursively
+    // re-enters this same binding path for move constructors.
+    const bool direct_rvalue = source.category == "xvalue" &&
+      target->kind == TYPE_RVALUE_REFERENCE &&
+      PA12SameType(source_type, referred, true);
+    const bool direct_const_lvalue = source.category == "xvalue" &&
+      target->kind == TYPE_LVALUE_REFERENCE && referred && referred->is_const &&
+      PA12SameType(source_type, referred, true);
+    if(direct_address || direct_rvalue || direct_const_lvalue)
+      return EmitAddress(node, scope);
     if(source.category == "lvalue" && IsDerivedFrom(source_type, referred))
       return AdjustBaseAddress(EmitAddress(node, scope), source_type, referred);
+    if(referred && referred->kind == TYPE_CLASS && source.category == "prvalue" &&
+       PA12SameType(source_type, referred, true)) {
+      // An indirect class result is already materialized by the call.  Bind
+      // the reference to that result instead of recursively invoking a copy
+      // constructor on the same call expression.
+      Value value = EmitValue(node, scope, referred);
+      FunctionRecord* source_record = source.binding ? RecordForBinding(source.binding) : 0;
+      if(source_record && source_record->indirect_result) {
+        RegisterTemporaryObject(referred, value.operand);
+        return value.operand;
+      }
+      const string slot = new_special_slot("refarg", low_type(referred));
+      emit_store(referred, value.operand, "$" + slot);
+      const string address = new_temp();
+      AddInstruction(address + " = addr $" + slot);
+      RegisterTemporaryObject(referred, address);
+      return address;
+    }
     if(referred && referred->kind == TYPE_CLASS) {
       const string slot = new_special_slot("arg", low_type(referred));
       const string address = new_temp();
@@ -752,9 +800,11 @@ PA14Lowerer::Value PA14Lowerer::EmitCall(const CPPGMAstNodePtr& node, Scope* sco
 
 PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
     const CallChoice& choice, const CPPGMAstNodePtr& callee_node,
-    const vector<CPPGMAstNodePtr>& arguments, Scope* scope)
+    const vector<CPPGMAstNodePtr>& arguments, Scope* scope,
+    const string& indirect_destination)
 {
     FunctionRecord* function_record = 0;
+    const size_t temporary_mark = state_ ? state_->temporary_objects.size() : 0;
     // Synthetic operator calls include the object in their argument vector;
     // ordinary member calls do not.  Keep the latter's first explicit
     // argument intact.
@@ -764,6 +814,18 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
     for(size_t i = argument_offset; i < arguments.size(); ++i)
       all_arguments.push_back(arguments[i]);
     vector<string> operands;
+    function_record = choice.binding ? RecordForBinding(choice.binding) : 0;
+    string indirect_result_address;
+    if(function_record && function_record->indirect_result) {
+      const TypePtr result_type = type_value(choice.function->child);
+      if(!indirect_destination.empty()) indirect_result_address = indirect_destination;
+      else {
+        const string slot = new_special_slot("retobj", low_type(result_type));
+        indirect_result_address = new_temp();
+        AddInstruction(indirect_result_address + " = addr $" + slot);
+      }
+      operands.push_back(indirect_result_address);
+    }
     if(choice.member && !choice.static_member) {
       if(!choice.object) throw logic_error("member call has no object");
       string object_operand;
@@ -780,6 +842,12 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
                 !choice.object->children.empty() &&
                 ConstructorObjectType(choice.object->children[0], scope)) {
         object_operand = EmitTemporaryObjectAddress(choice.object, scope, "tmpobj");
+      } else if(choice.object->kind == "call-expression" && object_type &&
+                object_type->kind == TYPE_CLASS) {
+        // A class-valued call is a prvalue object, not a scalar to spill into
+        // an arbitrary member-call slot.  Materialize it through the common
+        // temporary path so the object ABI and lifetime stay consistent.
+        object_operand = EmitAddress(choice.object, scope);
       } else {
         Value object_value = EmitValue(choice.object, scope);
         const string slot = new_special_slot("object", low_type(object_type));
@@ -791,7 +859,6 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
         choice.binding ? choice.binding->member_owner : TypePtr());
       operands.push_back(object_operand);
     }
-    function_record = choice.binding ? RecordForBinding(choice.binding) : 0;
     if(function_record) {
       while(all_arguments.size() < choice.function->parameters.size()) {
         const size_t index = all_arguments.size();
@@ -805,6 +872,19 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
       TypePtr target = i < choice.function->parameters.size() ? choice.function->parameters[i] : TypePtr();
       if(target && type_is_reference(target)) {
         operands.push_back(EmitReferenceArgument(all_arguments[i], scope, target));
+        continue;
+      }
+      const size_t low_index = (function_record && function_record->indirect_result ? 1 : 0) +
+        (choice.member && !choice.static_member ? 1 : 0) + i;
+      if(function_record && target && type_value(target) &&
+         type_value(target)->kind == TYPE_CLASS &&
+         LowParameterIsByAddress(*function_record, low_index)) {
+        const string slot = new_special_slot("arg", low_type(type_value(target)));
+        const string address = new_temp();
+        AddInstruction(address + " = addr $" + slot);
+        if(!EmitObjectTransferAt(type_value(target), address, all_arguments[i], scope, true))
+          throw logic_error("no viable value argument transfer");
+        operands.push_back(address);
         continue;
       }
       Value value = target && type_value(target) &&
@@ -844,18 +924,22 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
       signature << ") -> " << low_type(choice.function->child);
     }
     TypePtr return_type = choice.function->child;
-    const string return_low = low_type(return_type);
+    const TypePtr low_function = function_record ? function_record->type : choice.function;
+    const string return_low = low_type(low_function->child);
     Value result;
     result.type = type_is_reference(return_type) ? return_type->child : return_type;
     result.lvalue = type_is_reference(return_type);
     if(return_low == "void") {
       AddInstruction("call void " + callee + "(" + arguments_text.str() + ")" + signature.str());
-      result.operand.clear();
+      EmitTemporaryDestructors(temporary_mark, scope);
+      if(function_record && function_record->indirect_result)
+        result.operand = indirect_result_address;
       return result;
     }
     result.operand = new_temp();
     AddInstruction(result.operand + " = call " + return_low + " " + callee + "(" +
       arguments_text.str() + ")" + signature.str());
+    EmitTemporaryDestructors(temporary_mark, scope);
     return result;
   }
 

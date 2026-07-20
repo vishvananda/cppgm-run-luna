@@ -6,6 +6,7 @@ Type::Type(TypeKind type_kind, const string& type_name)
 	: kind(type_kind), name(type_name), tag(), scoped_enum(false), complete(true),
 	  underlying_explicit(false), is_const(false), is_volatile(false), child(), bound(-1),
 	  parameters(), variadic(false), function_const(false), function_volatile(false),
+	  function_lvalue_ref_qualified(false), function_rvalue_ref_qualified(false),
 	  member_owner(), owned_scope(0),
 	  underlying(), class_members(), direct_base(), object_size(0), object_alignment(1),
 	  explicit_alignment(0), layout_complete(false), layout_in_progress(false),
@@ -134,13 +135,16 @@ TypePtr ArrayOf(long long bound, const TypePtr& element)
 }
 
 TypePtr FunctionOf(const vector<TypePtr>& parameters, bool variadic,
-	const TypePtr& result_type, bool function_const, bool function_volatile)
+	const TypePtr& result_type, bool function_const, bool function_volatile,
+	bool function_lvalue_ref_qualified, bool function_rvalue_ref_qualified)
 {
 	TypePtr result(new Type(TYPE_FUNCTION));
 	result->parameters = parameters;
 	result->variadic = variadic;
 	result->function_const = function_const;
 	result->function_volatile = function_volatile;
+	result->function_lvalue_ref_qualified = function_lvalue_ref_qualified;
+	result->function_rvalue_ref_qualified = function_rvalue_ref_qualified;
 	result->child = result_type;
 	return result;
 }
@@ -201,6 +205,8 @@ string TypeText(const TypePtr& type, bool extended)
 			output << ")";
 			if (extended && type->function_const) output << " const";
 			if (extended && type->function_volatile) output << " volatile";
+			if (extended && type->function_lvalue_ref_qualified) output << " &";
+			if (extended && type->function_rvalue_ref_qualified) output << " &&";
 			output << " returning " << TypeText(type->child, extended);
 			return output.str();
 		}

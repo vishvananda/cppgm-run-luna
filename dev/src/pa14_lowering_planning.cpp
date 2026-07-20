@@ -137,6 +137,12 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
           FunctionRecord* member_record = RecordForBinding(binding);
           const bool destructor = (member_record && member_record->destructor) ||
             (binding->name.size() > 1 && binding->name[0] == '~');
+          if(!destructor && function->function_lvalue_ref_qualified &&
+             object_info.category != "lvalue" && !function->function_const)
+            viable = false;
+          if(!destructor && function->function_rvalue_ref_qualified &&
+             object_info.category == "lvalue")
+            viable = false;
           if(!destructor && object && object->is_const && !function->function_const)
             viable = false;
           if(!destructor && object && object->is_volatile && !function->function_volatile)
@@ -231,6 +237,10 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseOperatorCall(
         if(!object || object->kind != TYPE_CLASS) continue;
         if(!PA12SameType(object, binding->member_owner, true) &&
            BaseDistance(object, binding->member_owner) < 1) continue;
+        if(function->function_lvalue_ref_qualified &&
+           arguments[0].category != "lvalue" && !function->function_const) continue;
+        if(function->function_rvalue_ref_qualified &&
+           arguments[0].category == "lvalue") continue;
         if(object->is_const && !function->function_const) continue;
         if(object->is_volatile && !function->function_volatile) continue;
       }
@@ -359,9 +369,11 @@ string PA14Lowerer::parameter_name(const CPPGMAstNodePtr& declarator, size_t ind
 vector<string> PA14Lowerer::ParameterNames(const FunctionRecord& function) const
 {
     vector<string> result;
+    if(function.indirect_result) result.push_back("ret");
     if(function.member && !function.static_member) result.push_back("this");
     CPPGMAstNodePtr declarator;
-    if(function.node) declarator = function.constructor || function.destructor ?
+    if(function.node) declarator = function.constructor || function.destructor ||
+      function.value_special_member ?
       ChildOfKind(function.node, "declarator") :
       (function.node->children.size() > 1 ? function.node->children[1] : CPPGMAstNodePtr());
     CPPGMAstNodePtr clause = declarator ? ChildOfKind(declarator, "parameter-clause") :
@@ -429,6 +441,9 @@ PA14Lowerer::VariablePlan* PA14Lowerer::AddVariablePlan(const string& name, cons
     plan.declarator = declarator;
     plan.initializer = initializer;
     plan.global = 0;
+    plan.parameter = false;
+    plan.parameter_address = false;
+    plan.parameter_operand.clear();
     if(declarator) state_->plans[declarator.get()] = &plan;
     if(state_->environments.empty()) state_->environments.push_back(map<string, VariablePlan*>());
     state_->environments.back()[name] = &plan;
@@ -545,8 +560,19 @@ void PA14Lowerer::PlanFunction(FunctionState& state)
     const vector<string> names = ParameterNames(*state.record);
     for(size_t i = 0; i < names.size(); ++i)
       state.reserved_value_names.insert(names[i]);
-    for(size_t i = 0; i < state.record->type->parameters.size(); ++i)
-      AddVariablePlan(names[i], state.record->type->parameters[i], CPPGMAstNodePtr(), CPPGMAstNodePtr());
+    for(size_t i = 0; i < state.record->type->parameters.size(); ++i) {
+      if(state.record->indirect_result && i == 0) continue;
+      const string name = names[i];
+      TypePtr source_type = LowParameterSourceType(*state.record, i);
+      VariablePlan* parameter = AddVariablePlan(name,
+        LowParameterIsByAddress(*state.record, i) ? source_type :
+          state.record->type->parameters[i], CPPGMAstNodePtr(), CPPGMAstNodePtr());
+      if(parameter) {
+        parameter->parameter = true;
+        parameter->parameter_address = LowParameterIsByAddress(*state.record, i);
+        parameter->parameter_operand = "%" + name;
+      }
+    }
     if(!state.record->node) return;
     Scope* scope = analyzer_.function_scopes_[state.record->node.get()];
     if(!scope) scope = state.record->scope;

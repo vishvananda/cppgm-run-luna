@@ -1076,6 +1076,7 @@ void PA14Lowerer::FinalizeSymbols()
     map<string, unsigned int> overloads;
     for(size_t i = 0; i < functions_.size(); ++i) {
       FunctionRecord& function = functions_[i];
+      BuildFunctionABI(function);
       string base = low_symbol_component(function.qualified_name);
       unsigned int& count = overloads[base];
       ++count;
@@ -1137,123 +1138,6 @@ int PA14Lowerer::BaseDistance(const TypePtr& raw_derived, const TypePtr& raw_bas
     return -1;
   }
 
-int PA14Lowerer::ConversionRank(const ExprInfo& source, const TypePtr& target) const
-{
-    if(!target || !source.type) return -1;
-    TypePtr source_value = type_value(source.type);
-    TypePtr target_value = type_value(target);
-    if(!source_value || !target_value) return -1;
-    if(target->kind == TYPE_LVALUE_REFERENCE || target->kind == TYPE_RVALUE_REFERENCE) {
-      if(target->kind == TYPE_LVALUE_REFERENCE) {
-        if(source.category == "lvalue") {
-          if(!target_value->is_const && source_value->is_const) return -1;
-          if(PA12SameType(source_value, target_value, true)) return
-            0;
-          if(IsDerivedFrom(source_value, target_value))
-            return BaseDistance(source_value, target_value);
-          if(is_arithmetic_type(source_value) && is_arithmetic_type(target_value) &&
-             target_value->is_const) return 2;
-          return -1;
-        }
-        if(target_value->kind == TYPE_CLASS && target_value->is_const) {
-          const vector<Binding*> constructors =
-            MemberBindings(target_value, last_component(target_value->name));
-          for(size_t i = 0; i < constructors.size(); ++i) {
-            Binding* binding = constructors[i];
-            if(!binding || binding->kind != BIND_FUNCTION ||
-               !binding->is_member || binding->is_static) continue;
-            FunctionRecord* record = RecordForBinding(binding);
-            if(!record || !record->constructor || record->deleted ||
-               record->explicit_constructor) continue;
-            TypePtr function = function_target_type(binding->type);
-            if(!function || function->parameters.empty()) continue;
-            const int first_rank =
-              ConversionRank(source, function->parameters[0]);
-            if(first_rank < 0) continue;
-            bool defaults = true;
-            for(size_t p = 1; p < function->parameters.size(); ++p)
-              if(!HasDefaultArgument(binding, p)) { defaults = false; break; }
-            if(defaults) return 3 + first_rank;
-          }
-        }
-        const bool derived_pointer = source_value->kind == TYPE_POINTER &&
-          target_value->kind == TYPE_POINTER &&
-          IsDerivedFrom(source_value->child, target_value->child);
-        const bool derived_object = source_value->kind == TYPE_CLASS &&
-          target_value->kind == TYPE_CLASS &&
-          IsDerivedFrom(source_value, target_value);
-        if(target_value->is_const &&
-           (PA12SameType(source_value, target_value, true) ||
-            (is_arithmetic_type(source_value) && is_arithmetic_type(target_value)) ||
-            derived_pointer || derived_object)) {
-          return derived_object ? BaseDistance(source_value, target_value) : 2;
-        }
-        return -1;
-      }
-      if(source.category == "lvalue") return -1;
-      return PA12SameType(source_value, target_value, true) ||
-        (is_arithmetic_type(source_value) && is_arithmetic_type(target_value)) ? 1 : -1;
-    }
-    if(target_value->kind == TYPE_POINTER) {
-      if(source.null_pointer_constant ||
-         (source_value->kind == TYPE_FUNDAMENTAL && source_value->name == "nullptr_t")) return 2;
-      if(source_value->kind == TYPE_ARRAY &&
-         PA12SameType(source_value->child, target_value->child, true)) return 0;
-      if(source_value->kind == TYPE_FUNCTION && target_value->child &&
-         target_value->child->kind == TYPE_FUNCTION &&
-         PA12SameType(source_value, target_value->child, true)) return 0;
-      if(source_value->kind == TYPE_POINTER) {
-        if(PA12SameType(source_value, target_value, false)) return 0;
-        if(source_value->child && target_value->child &&
-           source_value->child->kind == TYPE_POINTER &&
-           target_value->child->kind == TYPE_POINTER &&
-           !PA12SameType(source_value->child, target_value->child, false) &&
-           PA12SameType(source_value->child, target_value->child, true)) return -1;
-        if(PA12SameType(source_value, target_value, true)) return 1;
-        if(source_value->child && target_value->child &&
-           IsDerivedFrom(source_value->child, target_value->child))
-          return BaseDistance(source_value->child, target_value->child);
-        if(target_value->child && target_value->child->kind == TYPE_FUNDAMENTAL &&
-           target_value->child->name == "void") return 2;
-      }
-      return -1;
-    }
-    if(target_value->kind == TYPE_FUNDAMENTAL && target_value->name == "nullptr_t")
-      return source.null_pointer_constant || source_value->name == "nullptr_t" ? 1 : -1;
-    if(target_value->kind == TYPE_FUNDAMENTAL && target_value->name == "bool" &&
-       source_value->kind == TYPE_POINTER) return 3;
-    if(PA12SameType(source_value, target_value, false)) return 0;
-    if(PA12SameType(source_value, target_value, true)) return 1;
-    if(is_arithmetic_type(source_value) && is_arithmetic_type(target_value)) {
-      if(source_value->kind == TYPE_ENUM && !source_value->scoped_enum &&
-         target_value->kind == TYPE_FUNDAMENTAL && target_value->name == "int") return 1;
-      return 2;
-    }
-    if(source_value->kind == TYPE_FUNCTION && target_value->kind == TYPE_FUNCTION &&
-       PA12SameType(source_value, target_value, true)) return 0;
-    if(target_value->kind == TYPE_CLASS) {
-      const vector<Binding*> constructors =
-        MemberBindings(target_value, last_component(target_value->name));
-      for(size_t i = 0; i < constructors.size(); ++i) {
-        Binding* binding = constructors[i];
-        if(!binding || binding->kind != BIND_FUNCTION || !binding->is_member ||
-           binding->is_static) continue;
-        FunctionRecord* record = RecordForBinding(binding);
-        if(!record || !record->constructor || record->deleted ||
-           record->explicit_constructor) continue;
-        TypePtr function = function_target_type(binding->type);
-        if(!function || function->parameters.empty()) continue;
-        const int first_rank = ConversionRank(source, function->parameters[0]);
-        if(first_rank < 0) continue;
-        bool defaults = true;
-        for(size_t p = 1; p < function->parameters.size(); ++p)
-          if(!HasDefaultArgument(binding, p)) { defaults = false; break; }
-        if(defaults) return 3 + first_rank;
-      }
-    }
-    return -1;
-  }
-
 bool PA14Lowerer::DirectFunctionName(const CPPGMAstNodePtr& callee, Scope* scope) const
 {
     if(!callee || callee->kind != "id-expression") return false;
@@ -1277,7 +1161,8 @@ PA14Lowerer::FunctionRecord* PA14Lowerer::BaseEntryFor(FunctionRecord* function)
     if(!function) return 0;
     for(size_t i = 0; i < functions_.size(); ++i)
       if(functions_[i].base_entry &&
-         functions_[i].base_entry_for == function->qualified_name)
+         functions_[i].base_entry_for == function->qualified_name &&
+         PA12SameType(functions_[i].type, function->type, false))
         return const_cast<FunctionRecord*>(&functions_[i]);
     return 0;
   }
@@ -1437,7 +1322,10 @@ bool PA14Lowerer::HasDefaultInitializationEffects(const TypePtr& raw_type) const
     if(type->kind != TYPE_CLASS) return true;
     const vector<Binding*> constructors =
       MemberBindings(type, LastComponent(type->name));
-    if(!constructors.empty()) return true;
+    for(size_t i = 0; i < constructors.size(); ++i) {
+      FunctionRecord* record = RecordForBinding(constructors[i]);
+      if(record && record->constructor && !record->implicit_constructor) return true;
+    }
     if(type->direct_base && HasDefaultInitializationEffects(type->direct_base)) return true;
     for(size_t i = 0; i < type->class_members.size(); ++i) {
       const ClassMemberInfo& member = type->class_members[i];
@@ -1460,6 +1348,38 @@ bool PA14Lowerer::HasDestructor(const TypePtr& raw_type) const
          record && record->destructor) return true;
     }
     return false;
+  }
+
+bool PA14Lowerer::DestructorHasEffects(const TypePtr& raw_type) const
+{
+    TypePtr type = type_value(raw_type);
+    if(type && type->kind == TYPE_ARRAY) return DestructorHasEffects(type->child);
+    if(!type || type->kind != TYPE_CLASS) return false;
+    const vector<Binding*> candidates = MemberBindings(type, "~" + LastComponent(type->name));
+    FunctionRecord* destructor = 0;
+    for(size_t i = 0; i < candidates.size(); ++i) {
+      Binding* binding = candidates[i];
+      FunctionRecord* record = RecordForBinding(binding);
+      if(binding->kind == BIND_FUNCTION && binding->is_member && !binding->is_static &&
+         record && record->destructor) {
+        destructor = record;
+        break;
+      }
+    }
+    if(!destructor) return false;
+    CPPGMAstNodePtr body = destructor->node ?
+      ChildOfKind(destructor->node, "compound-statement") : CPPGMAstNodePtr();
+    if(body && !body->children.empty()) return true;
+    for(size_t i = 0; i < type->class_members.size(); ++i) {
+      const ClassMemberInfo& member = type->class_members[i];
+      if(member.is_static || !member.type) continue;
+      TypePtr member_type = type_value(member.type);
+      if(member_type && member_type->kind == TYPE_CLASS &&
+         DestructorHasEffects(member_type)) return true;
+      if(member_type && member_type->kind == TYPE_ARRAY && member_type->child &&
+         DestructorHasEffects(member_type->child)) return true;
+    }
+    return type->direct_base && DestructorHasEffects(type->direct_base);
   }
 
 bool PA14Lowerer::IsBitField(Binding* binding, long long* bit_offset,

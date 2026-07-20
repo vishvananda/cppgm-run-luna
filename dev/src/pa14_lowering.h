@@ -66,6 +66,12 @@ class PA14Lowerer
     bool constructor;
     bool implicit_constructor;
     bool aggregate_constructor;
+    bool copy_constructor;
+    bool move_constructor;
+    bool copy_assignment;
+    bool move_assignment;
+    bool value_special_member;
+    bool synthesized_value_member;
     bool hidden_friend;
     bool explicit_constructor;
     bool builtin;
@@ -78,10 +84,12 @@ class PA14Lowerer
     bool unwind_no;
     bool noreturn;
     bool base_entry;
+    bool indirect_result;
     string effects;
     string object_name;
     string base_entry_for;
     vector<string> parameter_metadata;
+    vector<bool> indirect_parameters;
     CPPGMAstNodePtr special_initializer;
     vector<CPPGMAstNodePtr> default_arguments;
 
@@ -89,14 +97,17 @@ class PA14Lowerer
       : node(), scope(), type(), source_type(), member_owner(), qualified_name(),
         symbol(), definition(false), member(false), static_member(false),
         constructor(false), implicit_constructor(false), aggregate_constructor(false),
+        copy_constructor(false), move_constructor(false),
+        copy_assignment(false), move_assignment(false), value_special_member(false),
+        synthesized_value_member(false),
         hidden_friend(false),
         explicit_constructor(false),
         builtin(false),
         defaulted(false), deleted(false),
         destructor(false), needed(false),
-        emitted(false), variadic(false), unwind_no(false), noreturn(false), base_entry(false), effects(),
-        object_name(), base_entry_for(), parameter_metadata(),
-        special_initializer(), default_arguments() {}
+        emitted(false), variadic(false), unwind_no(false), noreturn(false), base_entry(false),
+        indirect_result(false), effects(), object_name(), base_entry_for(), parameter_metadata(),
+        indirect_parameters(), special_initializer(), default_arguments() {}
   };
 
   struct GlobalRecord
@@ -128,6 +139,9 @@ class PA14Lowerer
     CPPGMAstNodePtr declarator;
     CPPGMAstNodePtr initializer;
     GlobalRecord* global;
+    bool parameter;
+    bool parameter_address;
+    string parameter_operand;
   };
 
   struct Value
@@ -173,12 +187,23 @@ class PA14Lowerer
 
   struct FunctionState
   {
+    struct TemporaryObject
+    {
+      TypePtr type;
+      string address;
+
+      TemporaryObject(const TypePtr& object_type = TypePtr(),
+                      const string& object_address = string())
+        : type(object_type), address(object_address) {}
+    };
+
     PA14Lowerer* owner;
     FunctionRecord* record;
     deque<VariablePlan> variables;
     map<const CPPGMAstNode*, VariablePlan*> plans;
     vector<string> special_slots;
     map<string, string> special_slot_types;
+    vector<TemporaryObject> temporary_objects;
     vector<Block> blocks;
     Block* current;
     unsigned int next_temp;
@@ -196,7 +221,7 @@ class PA14Lowerer
 
     FunctionState(PA14Lowerer* lowerer, FunctionRecord* function)
       : owner(lowerer), record(function), variables(), plans(), special_slots(),
-        special_slot_types(), blocks(), current(), next_temp(1), next_label(1),
+        special_slot_types(), temporary_objects(), blocks(), current(), next_temp(1), next_label(1),
         next_special(1), environments(), variable_name_counts(),
         reserved_value_names(), case_labels(), emitted_cases(), named_labels(),
         switch_end_targets(), break_targets(), continue_targets() {}
@@ -469,6 +494,10 @@ int ConversionRank(const ExprInfo& source, const TypePtr& target) const
 
 ;
 
+int ConversionRankToClass(const ExprInfo& source, const TypePtr& target) const
+
+;
+
 bool DirectFunctionName(const CPPGMAstNodePtr& callee, Scope* scope) const
 
 ;
@@ -485,6 +514,60 @@ FunctionRecord* EnsureAggregateConstructor(const TypePtr& type)
 
 ;
 
+void ClassifySpecialMember(FunctionRecord* record)
+
+;
+
+bool ClassHasDeclaredValueMember(const TypePtr& type) const
+
+;
+
+bool ClassHasDeclaredMoveMember(const TypePtr& type) const
+
+;
+
+bool ClassValueNeedsIndirect(const TypePtr& type) const
+
+;
+
+bool IsTrivialValueStorage(const TypePtr& type) const
+
+;
+
+FunctionRecord* EnsureImplicitCopyConstructor(const TypePtr& type, bool move)
+
+;
+
+FunctionRecord* EnsureImplicitAssignment(const TypePtr& type, bool move)
+
+;
+
+bool EmitObjectTransferAt(const TypePtr& target, const string& destination,
+                          const CPPGMAstNodePtr& source, Scope* scope,
+                          bool allow_explicit = true)
+
+;
+
+bool EmitValueSpecialMemberBody(FunctionRecord& function, Scope* scope)
+
+;
+
+TypePtr SourceReturnType(const FunctionRecord& function) const
+
+;
+
+bool LowParameterIsByAddress(const FunctionRecord& function, size_t index) const
+
+;
+
+TypePtr LowParameterSourceType(const FunctionRecord& function, size_t index) const
+
+;
+
+void BuildFunctionABI(FunctionRecord& function)
+
+;
+
 bool HasDefaultArgument(Binding* binding, size_t index) const
 
 ;
@@ -498,6 +581,10 @@ bool HasDefaultInitializationEffects(const TypePtr& type) const
 ;
 
 bool HasDestructor(const TypePtr& type) const
+
+;
+
+bool DestructorHasEffects(const TypePtr& type) const
 
 ;
 
@@ -727,6 +814,10 @@ string EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
 
 ;
 
+string EmitCallAddress(const CPPGMAstNodePtr& node, Scope* scope)
+
+;
+
 string EmitLiteralAddress(const CPPGMAstNodePtr& node)
 
 ;
@@ -810,7 +901,8 @@ Value EmitCall(const CPPGMAstNodePtr& node, Scope* scope)
 Value EmitChosenCall(const CallChoice& choice,
                      const CPPGMAstNodePtr& callee,
                      const vector<CPPGMAstNodePtr>& arguments,
-                     Scope* scope)
+                     Scope* scope,
+                     const string& indirect_destination = string())
 
 ;
 
@@ -875,6 +967,14 @@ bool EmitConstructorAt(const TypePtr& object_type, const string& address,
 
 string EmitTemporaryObjectAddress(const CPPGMAstNodePtr& node, Scope* scope,
                                   const string& prefix)
+
+;
+
+void RegisterTemporaryObject(const TypePtr& type, const string& address)
+
+;
+
+void EmitTemporaryDestructors(size_t mark, Scope* scope)
 
 ;
 

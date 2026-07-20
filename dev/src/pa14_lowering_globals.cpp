@@ -584,6 +584,7 @@ string PA14Lowerer::local_address(VariablePlan* variable)
 {
     if(!variable) throw logic_error("missing local variable");
     if(variable->global) return global_address(variable->global);
+    if(variable->parameter_address) return variable->parameter_operand;
     if(type_is_reference(variable->type)) return emit_load(StorageForVariable(*variable), PointerTo(Fundamental("char")));
     const string temp = new_temp();
     AddInstruction(temp + " = addr " + StorageForVariable(*variable));
@@ -836,23 +837,33 @@ string PA14Lowerer::EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
       TypePtr target = analyzer_.TypeFromTypeId(node->children[0], scope);
       if(type_is_reference(target)) return EmitAddress(node->children[1], scope);
     }
-    if(node->kind == "call-expression") {
-      TypePtr constructor_type = node->children.empty() ? TypePtr() :
-        ConstructorObjectType(node->children[0], scope);
-      if(constructor_type) {
-        const string slot = new_special_slot("arg", low_type(constructor_type));
-        const string address = new_temp();
-        AddInstruction(address + " = addr $" + slot);
-        const CPPGMAstNodePtr argument_list = node->children.size() > 1 ?
-          node->children[1] : CPPGMAstNodePtr();
-        const vector<CPPGMAstNodePtr> arguments = argument_list ?
-          argument_list->children : vector<CPPGMAstNodePtr>();
-        if(!EmitConstructorAt(constructor_type, address, arguments, scope))
-          throw logic_error("no viable functional construction");
-        return address;
+    if(node->kind == "call-expression") return EmitCallAddress(node, scope);
+    throw logic_error("expression is not addressable");
+  }
+
+string PA14Lowerer::EmitCallAddress(const CPPGMAstNodePtr& node, Scope* scope)
+{
+    TypePtr constructor_type = node->children.empty() ? TypePtr() :
+      ConstructorObjectType(node->children[0], scope);
+    if(constructor_type) return EmitTemporaryObjectAddress(node, scope, "arg");
+    ExprInfo info = Infer(node, scope);
+    if(type_is_reference(info.type)) return EmitCall(node, scope).operand;
+    TypePtr value_type = expression_value_type(info);
+    if(value_type && value_type->kind == TYPE_CLASS) {
+      FunctionRecord* function = info.binding ? RecordForBinding(info.binding) : 0;
+      const string slot = new_special_slot("tmpobj", low_type(value_type));
+      const string address = new_temp();
+      AddInstruction(address + " = addr $" + slot);
+      Value value = EmitCall(node, scope);
+      if(function && function->indirect_result) {
+        RegisterTemporaryObject(value_type, value.operand);
+        return value.operand;
       }
-      ExprInfo info = Infer(node, scope);
-      if(type_is_reference(info.type)) return EmitCall(node, scope).operand;
+      AddInstruction("copyobj " + integer_text(static_cast<long long>(type_size(value_type))) +
+        "x" + integer_text(static_cast<long long>(type_alignment(value_type))) + " " +
+        value.operand + ", " + address);
+      RegisterTemporaryObject(value_type, address);
+      return address;
     }
     throw logic_error("expression is not addressable");
   }

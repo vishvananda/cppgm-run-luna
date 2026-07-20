@@ -656,6 +656,8 @@ public:
 		CPPGMAstNodePtr nested;
 		bool function_const = false;
 		bool function_volatile = false;
+		bool function_lvalue_ref_qualified = false;
+		bool function_rvalue_ref_qualified = false;
 		bool saw_function_suffix = false;
 		for (size_t i = 0; i < declarator->children.size(); ++i)
 		{
@@ -669,6 +671,12 @@ public:
 				else if (saw_function_suffix && child->value.find(":volatile") != string::npos)
 					function_volatile = true;
 				else if (!saw_function_suffix) pointers.push_back(child);
+			}
+			else if (child->kind == "ref-qualifier")
+			{
+				if (child->value.find("&&") != string::npos)
+					function_rvalue_ref_qualified = true;
+				else function_lvalue_ref_qualified = true;
 			}
 			else if (child->kind == "nested-declarator") nested = child->children.empty() ?
 				CPPGMAstNodePtr() : child->children[0];
@@ -706,6 +714,17 @@ public:
 				result->child->kind == TYPE_FUNCTION) result->child->function_const = true;
 			if (function_volatile && result->kind == TYPE_MEMBER_POINTER && result->child &&
 				result->child->kind == TYPE_FUNCTION) result->child->function_volatile = true;
+			if (result->kind == TYPE_FUNCTION)
+			{
+				result->function_lvalue_ref_qualified = function_lvalue_ref_qualified;
+				result->function_rvalue_ref_qualified = function_rvalue_ref_qualified;
+			}
+			else if (result->kind == TYPE_MEMBER_POINTER && result->child &&
+				result->child->kind == TYPE_FUNCTION)
+			{
+				result->child->function_lvalue_ref_qualified = function_lvalue_ref_qualified;
+				result->child->function_rvalue_ref_qualified = function_rvalue_ref_qualified;
+			}
 			return result;
 		}
 		TypePtr result = base;
@@ -729,6 +748,17 @@ public:
 		for (size_t i = suffixes.size(); i-- > 0;) result = ApplySuffix(suffixes[i], result, scope);
 		if (function_const && result->kind == TYPE_FUNCTION) result->function_const = true;
 		if (function_volatile && result->kind == TYPE_FUNCTION) result->function_volatile = true;
+		if (result->kind == TYPE_FUNCTION)
+		{
+			result->function_lvalue_ref_qualified = function_lvalue_ref_qualified;
+			result->function_rvalue_ref_qualified = function_rvalue_ref_qualified;
+		}
+		else if (result->kind == TYPE_MEMBER_POINTER && result->child &&
+			result->child->kind == TYPE_FUNCTION)
+		{
+			result->child->function_lvalue_ref_qualified = function_lvalue_ref_qualified;
+			result->child->function_rvalue_ref_qualified = function_rvalue_ref_qualified;
+		}
 		return result;
 	}
 	void AddTypeBinding(Scope* scope, const string& name, const TypePtr& type,

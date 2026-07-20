@@ -74,6 +74,8 @@ struct Type
 	bool variadic;
 	bool function_const;
 	bool function_volatile;
+	bool function_lvalue_ref_qualified;
+	bool function_rvalue_ref_qualified;
 	TypePtr member_owner;
 	Scope* owned_scope;
 	TypePtr underlying;
@@ -188,7 +190,9 @@ TypePtr ReferenceTo(TypeKind reference_kind, const TypePtr& referred);
 TypePtr ArrayOf(long long bound, const TypePtr& element);
 TypePtr FunctionOf(const vector<TypePtr>& parameters, bool variadic,
 	const TypePtr& result_type, bool function_const = false,
-	bool function_volatile = false);
+	bool function_volatile = false,
+	bool function_lvalue_ref_qualified = false,
+	bool function_rvalue_ref_qualified = false);
 TypePtr MemberPointerTo(const TypePtr& owner, const TypePtr& target);
 string CvPrefix(const TypePtr& type);
 string ScopeKindText(ScopeKind kind);

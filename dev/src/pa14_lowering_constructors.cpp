@@ -6,6 +6,88 @@ using namespace std;
 
 namespace cppgm_pa14_lowering {
 
+bool PA14Lowerer::EmitValueSpecialMemberBody(FunctionRecord& function, Scope* scope)
+{
+    if(!function.value_special_member || (!function.defaulted &&
+       !function.implicit_constructor)) return false;
+    TypePtr owner = type_value(function.member_owner);
+    if(!owner) return false;
+    const vector<string> names = ParameterNames(function);
+    const size_t source_index = function.member && !function.static_member ? 1 : 0;
+    if(source_index >= names.size()) throw logic_error("value member has no source parameter");
+    CPPGMAstNodePtr this_node(new CPPGMAstNode("keyword-literal", "KW_THIS:this"));
+    const string destination = EmitValue(this_node, scope).operand;
+    const string source = emit_load("$" + names[source_index],
+      PointerTo(Fundamental("char")));
+    const bool assignment = function.copy_assignment || function.move_assignment;
+    const bool move = function.move_constructor || function.move_assignment;
+    if(IsTrivialValueStorage(owner)) {
+      AddInstruction("copyobj " + integer_text(static_cast<long long>(type_size(owner))) +
+        "x" + integer_text(static_cast<long long>(type_alignment(owner))) + " " +
+        source + ", " + destination);
+    } else {
+      if(owner->direct_base) {
+        TypePtr base = type_value(owner->direct_base);
+        const string destination_base = new_temp();
+        AddInstruction(destination_base + " = index i8 [projection=base_subobject] " +
+          destination + ", 0");
+        const string source_base = new_temp();
+        AddInstruction(source_base + " = index i8 [projection=base_subobject] " +
+          source + ", 0");
+        if(IsTrivialValueStorage(base)) {
+          AddInstruction("copyobj " + integer_text(static_cast<long long>(type_size(base))) +
+            "x" + integer_text(static_cast<long long>(type_alignment(base))) + " " +
+            source_base + ", " + destination_base);
+        } else {
+          FunctionRecord* base_record = assignment ?
+            EnsureImplicitAssignment(base, move) : EnsureImplicitCopyConstructor(base, move);
+          if(!base_record || base_record->deleted)
+            throw logic_error("value member has deleted base operation");
+          base_record->needed = true;
+          AddInstruction("call void @" + base_record->symbol + "(" + destination_base +
+            ", " + source_base + ")");
+        }
+      }
+      for(size_t i = 0; i < owner->class_members.size(); ++i) {
+        const ClassMemberInfo& member = owner->class_members[i];
+        if(member.is_static || !member.type || member.name.empty()) continue;
+        const string destination_member = new_temp();
+        AddInstruction(destination_member + " = index i8 [projection=field] " +
+          destination + ", " + integer_text(member.offset));
+        const string source_member = new_temp();
+        AddInstruction(source_member + " = index i8 [projection=field] " + source +
+          ", " + integer_text(member.offset));
+        TypePtr member_type = type_value(member.type);
+        if(member_type && member_type->kind == TYPE_CLASS &&
+           !IsTrivialValueStorage(member_type)) {
+          FunctionRecord* member_record = assignment ?
+            EnsureImplicitAssignment(member_type, move) :
+            EnsureImplicitCopyConstructor(member_type, move);
+          if(!member_record || member_record->deleted)
+            throw logic_error("value member has deleted class operation");
+          member_record->needed = true;
+          AddInstruction("call " + string(assignment ? "ptr" : "void") + " @" +
+            member_record->symbol + "(" + destination_member + ", " + source_member + ")");
+        } else if(member_type && member_type->kind == TYPE_ARRAY &&
+                  member_type->child && !IsTrivialValueStorage(member_type->child)) {
+          throw logic_error("nontrivial class array value member is not lowered yet");
+        } else {
+          AddInstruction("copyobj " + integer_text(static_cast<long long>(type_size(member.type))) +
+            "x" + integer_text(static_cast<long long>(type_alignment(member.type))) + " " +
+            source_member + ", " + destination_member);
+        }
+      }
+    }
+    if(assignment) {
+      // Keep the ABI result tied to the stored this pointer.  Besides
+      // matching the reference return convention, this avoids treating the
+      // destination address temporary as an independently returned value.
+      const string result = EmitValue(this_node, scope).operand;
+      Terminate("return ptr " + result);
+    }
+    return true;
+  }
+
 void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* scope)
 {
     TypePtr owner = type_value(function.member_owner);

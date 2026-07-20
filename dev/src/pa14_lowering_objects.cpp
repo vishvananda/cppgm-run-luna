@@ -431,16 +431,21 @@ void PA14Lowerer::EmitLiveDestructors(Scope* scope)
           if(it->second == &variable) { live = true; break; }
       }
       if(!live) continue;
+      // A reference parameter is an alias, not an object with storage owned
+      // by the current function.  Its referred class must not be destroyed
+      // when the reference leaves scope.
+      if(type_is_reference(variable.type)) continue;
       TypePtr object_type = type_value(variable.type);
       if(!object_type) continue;
       if(object_type->kind == TYPE_CLASS) {
-        if(!HasDestructor(object_type)) continue;
+        if(!DestructorHasEffects(object_type)) continue;
         (void)EmitDestructorAt(object_type, local_address(&variable), scope);
         continue;
       }
       TypePtr element_type = object_type->child ? type_value(object_type->child) : TypePtr();
       if(object_type->kind != TYPE_ARRAY || object_type->bound < 0 ||
-         !element_type || element_type->kind != TYPE_CLASS || !HasDestructor(element_type)) continue;
+         !element_type || element_type->kind != TYPE_CLASS ||
+         !DestructorHasEffects(element_type)) continue;
       for(size_t element_index = 0;
           element_index < static_cast<size_t>(object_type->bound); ++element_index) {
         const string base = local_address(&variable);
@@ -452,6 +457,23 @@ void PA14Lowerer::EmitLiveDestructors(Scope* scope)
         (void)EmitDestructorAt(element_type, element, scope);
       }
     }
+  }
+
+void PA14Lowerer::RegisterTemporaryObject(const TypePtr& type, const string& address)
+{
+    if(!state_ || !type || address.empty()) return;
+    if(!HasDestructor(type)) return;
+    state_->temporary_objects.push_back(FunctionState::TemporaryObject(type, address));
+  }
+
+void PA14Lowerer::EmitTemporaryDestructors(size_t mark, Scope* scope)
+{
+    if(!state_) return;
+    for(size_t i = state_->temporary_objects.size(); i > mark; --i) {
+      const FunctionState::TemporaryObject& temporary = state_->temporary_objects[i - 1];
+      (void)EmitDestructorAt(temporary.type, temporary.address, scope);
+    }
+    state_->temporary_objects.resize(mark);
   }
 
 } // namespace cppgm_pa14_lowering
