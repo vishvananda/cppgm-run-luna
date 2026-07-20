@@ -585,6 +585,11 @@ string PA14Lowerer::local_address(VariablePlan* variable)
     if(!variable) throw logic_error("missing local variable");
     if(variable->global) return global_address(variable->global);
     if(variable->parameter_address) return variable->parameter_operand;
+    if(state_ && state_->return_slot_plan == variable) {
+      const vector<string> names = ParameterNames(*state_->record);
+      if(names.empty()) throw logic_error("indirect result has no destination");
+      return "%" + names[0];
+    }
     if(type_is_reference(variable->type)) return emit_load(StorageForVariable(*variable), PointerTo(Fundamental("char")));
     const string temp = new_temp();
     AddInstruction(temp + " = addr " + StorageForVariable(*variable));
@@ -835,7 +840,24 @@ string PA14Lowerer::EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
     }
     if(node->kind == "cast-expression" && node->children.size() > 1) {
       TypePtr target = analyzer_.TypeFromTypeId(node->children[0], scope);
-      if(type_is_reference(target)) return EmitAddress(node->children[1], scope);
+      if(type_is_reference(target)) {
+        TypePtr target_value = type_value(target);
+        ExprInfo source_info = Infer(node->children[1], scope);
+        TypePtr source_value = expression_value_type(source_info);
+        if(target_value && target_value->kind == TYPE_CLASS && source_value &&
+           source_value->kind == TYPE_CLASS &&
+           !PA12SameType(target_value, source_value, true)) {
+          const string slot = new_special_slot("tmpobj", low_type(target_value));
+          const string address = new_temp();
+          AddInstruction(address + " = addr $" + slot);
+          vector<CPPGMAstNodePtr> arguments(1, node->children[1]);
+          if(!EmitConstructorAt(target_value, address, arguments, scope, true))
+            throw logic_error("class reference cast has no viable constructor");
+          RegisterTemporaryObject(target_value, address);
+          return address;
+        }
+        return EmitAddress(node->children[1], scope);
+      }
     }
     if(node->kind == "call-expression") return EmitCallAddress(node, scope);
     throw logic_error("expression is not addressable");

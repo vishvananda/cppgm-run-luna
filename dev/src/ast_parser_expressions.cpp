@@ -163,6 +163,19 @@ CPPGMAstNodePtr Parser::ParsePostfixSuffix(const CPPGMAstNodePtr& expression)
 	CPPGMAstNodePtr result = expression;
 	while (true)
 	{
+		if (Is("{") && result->kind == "id-expression")
+		{
+			CPPGMAstNodePtr list = ParseBracedInitList();
+			if (!list) return CPPGMAstNodePtr();
+			CPPGMAstNodePtr arguments = Node("argument-list");
+			Add(arguments, list);
+			CPPGMAstNodePtr call = Node("call-expression");
+			call->value = "braced-construction";
+			Add(call, result);
+			Add(call, arguments);
+			result = call;
+			continue;
+		}
 		if (Is("("))
 		{
 			const bool builtin = result->kind == "id-expression" &&

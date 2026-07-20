@@ -225,8 +225,6 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseOperatorCall(
         continue;
       TypePtr function = function_target_type(binding->type);
       if(!function || !IsAccessible(binding, scope)) continue;
-      FunctionRecord* record = RecordForBinding(binding);
-      if(record && record->deleted) continue;
       const bool member = binding->is_member && !binding->is_static &&
         binding->member_owner;
       const size_t argument_offset = member ? 1 : 0;
@@ -330,6 +328,7 @@ string PA14Lowerer::new_special_slot(const string& prefix, const string& type)
     result << prefix << "__" << state_->next_special++;
     state_->special_slots.push_back(result.str());
     state_->special_slot_types[result.str()] = type;
+    state_->slot_order.push_back(FunctionState::SlotEntry(true, result.str()));
     return result.str();
   }
 
@@ -443,6 +442,7 @@ PA14Lowerer::VariablePlan* PA14Lowerer::AddVariablePlan(const string& name, cons
     plan.global = 0;
     plan.parameter = false;
     plan.parameter_address = false;
+    plan.slot_declared = false;
     plan.parameter_operand.clear();
     if(declarator) state_->plans[declarator.get()] = &plan;
     if(state_->environments.empty()) state_->environments.push_back(map<string, VariablePlan*>());
@@ -580,6 +580,39 @@ void PA14Lowerer::PlanFunction(FunctionState& state)
       ChildOfKind(state.record->node, "compound-statement") :
       (state.record->node->children.size() > 2 ? state.record->node->children[2] : CPPGMAstNodePtr());
     if(body) PlanStatement(body, scope);
+    if(state.record->indirect_result && body) {
+      unsigned int return_count = 0;
+      CPPGMAstNodePtr expression = FindDirectReturnExpression(body, return_count);
+      TypePtr return_type = type_value(SourceReturnType(*state.record));
+      if(return_count == 1 && expression && expression->kind == "id-expression" &&
+         return_type && return_type->kind == TYPE_CLASS) {
+        for(size_t i = state.variables.size(); i > 0; --i) {
+          VariablePlan& variable = state.variables[i - 1];
+          if(variable.parameter || variable.source_name != expression->value ||
+             !PA12SameType(type_value(variable.type), return_type, true) ||
+             DestructorHasEffects(variable.type)) continue;
+          state.return_slot_plan = &variable;
+          variable.initialization_address = "%" + names[0];
+          break;
+        }
+      }
+    }
+  }
+
+CPPGMAstNodePtr PA14Lowerer::FindDirectReturnExpression(
+  const CPPGMAstNodePtr& node, unsigned int& count) const
+{
+    if(!node) return CPPGMAstNodePtr();
+    if(node->kind == "return-statement") {
+      ++count;
+      return node->children.empty() ? CPPGMAstNodePtr() : node->children[0];
+    }
+    CPPGMAstNodePtr result;
+    for(size_t i = 0; i < node->children.size(); ++i) {
+      CPPGMAstNodePtr candidate = FindDirectReturnExpression(node->children[i], count);
+      if(!result && candidate) result = candidate;
+    }
+    return result;
   }
 
 string PA14Lowerer::FunctionSymbolForBinding(Binding* binding, const TypePtr& fallback) const

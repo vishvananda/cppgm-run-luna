@@ -141,6 +141,7 @@ class PA14Lowerer
     GlobalRecord* global;
     bool parameter;
     bool parameter_address;
+    bool slot_declared;
     string parameter_operand;
   };
 
@@ -187,6 +188,17 @@ class PA14Lowerer
 
   struct FunctionState
   {
+    struct SlotEntry
+    {
+      bool special;
+      string name;
+      VariablePlan* variable;
+
+      SlotEntry(bool is_special = false, const string& slot_name = string(),
+                VariablePlan* slot_variable = 0)
+        : special(is_special), name(slot_name), variable(slot_variable) {}
+    };
+
     struct TemporaryObject
     {
       TypePtr type;
@@ -203,6 +215,7 @@ class PA14Lowerer
     map<const CPPGMAstNode*, VariablePlan*> plans;
     vector<string> special_slots;
     map<string, string> special_slot_types;
+    vector<SlotEntry> slot_order;
     vector<TemporaryObject> temporary_objects;
     vector<Block> blocks;
     Block* current;
@@ -210,6 +223,7 @@ class PA14Lowerer
     unsigned int next_label;
     unsigned int next_special;
     vector<map<string, VariablePlan*> > environments;
+    VariablePlan* return_slot_plan;
     map<string, unsigned int> variable_name_counts;
     set<string> reserved_value_names;
     map<const CPPGMAstNode*, string> case_labels;
@@ -221,8 +235,9 @@ class PA14Lowerer
 
     FunctionState(PA14Lowerer* lowerer, FunctionRecord* function)
       : owner(lowerer), record(function), variables(), plans(), special_slots(),
-        special_slot_types(), temporary_objects(), blocks(), current(), next_temp(1), next_label(1),
-        next_special(1), environments(), variable_name_counts(),
+        special_slot_types(), slot_order(), temporary_objects(), blocks(), current(), next_temp(1), next_label(1),
+        next_special(1), environments(), return_slot_plan(0),
+        variable_name_counts(),
         reserved_value_names(), case_labels(), emitted_cases(), named_labels(),
         switch_end_targets(), break_targets(), continue_targets() {}
   };
@@ -542,9 +557,23 @@ FunctionRecord* EnsureImplicitAssignment(const TypePtr& type, bool move)
 
 ;
 
+FunctionRecord* FindValueMember(const TypePtr& type, bool move, bool assignment) const
+
+;
+
+bool ValueOperationDeleted(const TypePtr& type, bool move, bool assignment,
+                           FunctionRecord* ignored = 0) const
+
+;
+
+void MarkValueMemberDeleted(FunctionRecord* record)
+
+;
+
 bool EmitObjectTransferAt(const TypePtr& target, const string& destination,
                           const CPPGMAstNodePtr& source, Scope* scope,
-                          bool allow_explicit = true)
+                          bool allow_explicit = true,
+                          bool implicit_return_move = false)
 
 ;
 
@@ -682,6 +711,11 @@ void PlanStatement(const CPPGMAstNodePtr& node, Scope* scope)
 ;
 
 void PlanFunction(FunctionState& state)
+
+;
+
+CPPGMAstNodePtr FindDirectReturnExpression(const CPPGMAstNodePtr& node,
+                                          unsigned int& count) const
 
 ;
 
@@ -961,7 +995,7 @@ bool EmitObjectConstructor(VariablePlan* variable, const TypePtr& object_type,
 bool EmitConstructorAt(const TypePtr& object_type, const string& address,
                        const vector<CPPGMAstNodePtr>& arguments, Scope* scope,
                        bool allow_explicit = true, bool base_entry = false,
-                       bool allow_aggregate = false)
+                       bool allow_aggregate = false, bool force_move = false)
 
 ;
 

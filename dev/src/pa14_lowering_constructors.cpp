@@ -17,11 +17,12 @@ bool PA14Lowerer::EmitValueSpecialMemberBody(FunctionRecord& function, Scope* sc
     if(source_index >= names.size()) throw logic_error("value member has no source parameter");
     CPPGMAstNodePtr this_node(new CPPGMAstNode("keyword-literal", "KW_THIS:this"));
     const string destination = EmitValue(this_node, scope).operand;
-    const string source = emit_load("$" + names[source_index],
-      PointerTo(Fundamental("char")));
+    const string source_storage = "$" + names[source_index];
+    string source;
     const bool assignment = function.copy_assignment || function.move_assignment;
     const bool move = function.move_constructor || function.move_assignment;
     if(IsTrivialValueStorage(owner)) {
+      source = emit_load(source_storage, PointerTo(Fundamental("char")));
       AddInstruction("copyobj " + integer_text(static_cast<long long>(type_size(owner))) +
         "x" + integer_text(static_cast<long long>(type_alignment(owner))) + " " +
         source + ", " + destination);
@@ -31,6 +32,7 @@ bool PA14Lowerer::EmitValueSpecialMemberBody(FunctionRecord& function, Scope* sc
         const string destination_base = new_temp();
         AddInstruction(destination_base + " = index i8 [projection=base_subobject] " +
           destination + ", 0");
+        source = emit_load(source_storage, PointerTo(Fundamental("char")));
         const string source_base = new_temp();
         AddInstruction(source_base + " = index i8 [projection=base_subobject] " +
           source + ", 0");
@@ -44,8 +46,16 @@ bool PA14Lowerer::EmitValueSpecialMemberBody(FunctionRecord& function, Scope* sc
           if(!base_record || base_record->deleted)
             throw logic_error("value member has deleted base operation");
           base_record->needed = true;
-          AddInstruction("call void @" + base_record->symbol + "(" + destination_base +
-            ", " + source_base + ")");
+          FunctionRecord* base_call = BaseEntryFor(base_record);
+          if(base_call) base_call->needed = true;
+          if(!base_call) base_call = base_record;
+          const string base_arguments = destination_base + ", " + source_base;
+          if(assignment) {
+            const string result = new_temp();
+            AddInstruction(result + " = call ptr @" + base_call->symbol + "(" +
+              base_arguments + ")");
+          } else AddInstruction("call void @" + base_call->symbol + "(" +
+            base_arguments + ")");
         }
       }
       for(size_t i = 0; i < owner->class_members.size(); ++i) {
@@ -54,20 +64,33 @@ bool PA14Lowerer::EmitValueSpecialMemberBody(FunctionRecord& function, Scope* sc
         const string destination_member = new_temp();
         AddInstruction(destination_member + " = index i8 [projection=field] " +
           destination + ", " + integer_text(member.offset));
+        if(source.empty()) source = emit_load(source_storage, PointerTo(Fundamental("char")));
         const string source_member = new_temp();
         AddInstruction(source_member + " = index i8 [projection=field] " + source +
           ", " + integer_text(member.offset));
         TypePtr member_type = type_value(member.type);
         if(member_type && member_type->kind == TYPE_CLASS &&
            !IsTrivialValueStorage(member_type)) {
+          if(assignment && move) {
+            FunctionRecord* member_move_constructor =
+              FindValueMember(member_type, true, false);
+            if(member_move_constructor && !member_move_constructor->deleted &&
+               !member_move_constructor->defaulted)
+              member_move_constructor->needed = true;
+          }
           FunctionRecord* member_record = assignment ?
             EnsureImplicitAssignment(member_type, move) :
             EnsureImplicitCopyConstructor(member_type, move);
           if(!member_record || member_record->deleted)
             throw logic_error("value member has deleted class operation");
           member_record->needed = true;
-          AddInstruction("call " + string(assignment ? "ptr" : "void") + " @" +
-            member_record->symbol + "(" + destination_member + ", " + source_member + ")");
+          const string member_arguments = destination_member + ", " + source_member;
+          if(assignment) {
+            const string result = new_temp();
+            AddInstruction(result + " = call ptr @" + member_record->symbol + "(" +
+              member_arguments + ")");
+          } else AddInstruction("call void @" + member_record->symbol + "(" +
+            member_arguments + ")");
         } else if(member_type && member_type->kind == TYPE_ARRAY &&
                   member_type->child && !IsTrivialValueStorage(member_type->child)) {
           throw logic_error("nontrivial class array value member is not lowered yet");
@@ -275,7 +298,8 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
         }
         continue;
       }
-      if(field_type && field_type->kind == TYPE_CLASS && arguments.empty()) {
+      if(field_type && field_type->kind == TYPE_CLASS &&
+         !type_is_reference(field->type) && arguments.empty()) {
         const vector<Binding*> constructors =
           MemberBindings(field_type, LastComponent(field_type->name));
         if(!constructors.empty()) {
@@ -303,7 +327,12 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
         EmitAggregateAt(address, field_type, empty, scope);
         continue;
       }
-      if(field_type && field_type->kind == TYPE_CLASS && !arguments.empty()) {
+      if(field_type && field_type->kind == TYPE_CLASS &&
+         !type_is_reference(field->type) && !arguments.empty()) {
+        if(arguments.size() == 1 && arguments[0] &&
+           arguments[0]->kind != "braced-init-list" &&
+           EmitObjectTransferAt(field_type, address, arguments[0], scope, true))
+          continue;
         if(EmitConstructorAt(field_type, address, arguments, scope)) continue;
         if(argument_node && argument_node->kind == "braced-init-list") {
           CPPGMAstNodePtr aggregate(new CPPGMAstNode("braced-init-list"));
@@ -407,6 +436,13 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
         continue;
       }
       const string address = EmitMemberAddress(member, scope);
+      if(field_type && field_type->kind == TYPE_CLASS &&
+         !type_is_reference(field->type) &&
+         arguments.size() == 1 && arguments[0] &&
+         EmitObjectTransferAt(field_type, address, arguments[0], scope, true)) {
+        initialized_members.insert(member_fact.name);
+        continue;
+      }
       if(field_type && field_type->kind == TYPE_CLASS &&
          EmitConstructorAt(field_type, address, arguments, scope)) {
         initialized_members.insert(member_fact.name);

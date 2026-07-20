@@ -91,6 +91,9 @@ vector<Binding*> PA14Lowerer::Lookup(const string& raw, Scope* from) const
         if(target.binding && !target.binding->hidden_friend)
           result.push_back(target.binding);
       }
+      if(result.empty() && state_ && state_->record &&
+         state_->record->member_owner)
+        result = MemberBindings(state_->record->member_owner, parts[0]);
       return result;
     }
     Scope* current = absolute ? analyzer_.global_.get() : from;

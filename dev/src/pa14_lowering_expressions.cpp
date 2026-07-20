@@ -410,6 +410,38 @@ PA14Lowerer::Value PA14Lowerer::EmitAssignment(const CPPGMAstNodePtr& node, Scop
     vector<CPPGMAstNodePtr> operator_arguments;
     operator_arguments.push_back(node->children[0]);
     operator_arguments.push_back(node->children[1]);
+    if(op == "=" && node->children[1] &&
+       node->children[1]->kind == "braced-init-list") {
+      ExprInfo left_info = Infer(node->children[0], scope);
+      TypePtr left_type = expression_value_type(left_info);
+      if(left_type && left_type->kind == TYPE_CLASS) {
+        const size_t temporary_mark = state_ ? state_->temporary_objects.size() : 0;
+        FunctionRecord* assignment = EnsureImplicitAssignment(left_type, true);
+        if(assignment && !assignment->deleted) {
+          const string destination = EmitAddress(node->children[0], scope);
+          const string slot = new_special_slot("arg", low_type(left_type));
+          const string temporary = new_temp();
+          AddInstruction(temporary + " = addr $" + slot);
+          if(!EmitConstructorAt(left_type, temporary, node->children[1]->children,
+                                scope, true, false, true))
+            throw logic_error("braced assignment temporary has no constructor");
+          assignment->needed = true;
+          FunctionRecord* base_entry = BaseEntryFor(assignment);
+          if(base_entry) base_entry->needed = true;
+          const string result = new_temp();
+          const string return_type = low_type(assignment->type->child);
+          AddInstruction(result + " = call " + return_type + " @" +
+            assignment->symbol + "(" + destination + ", " + temporary + ")");
+          RegisterTemporaryObject(left_type, temporary);
+          EmitTemporaryDestructors(temporary_mark, scope);
+          Value assigned;
+          assigned.type = left_type;
+          assigned.operand = result;
+          assigned.lvalue = true;
+          return assigned;
+        }
+      }
+    }
     if(op == "=") {
       ExprInfo left_probe = Infer(node->children[0], scope);
       TypePtr left_probe_type = expression_value_type(left_probe);
@@ -419,7 +451,7 @@ PA14Lowerer::Value PA14Lowerer::EmitAssignment(const CPPGMAstNodePtr& node, Scop
         if(assignments.empty()) {
           ExprInfo right_probe = Infer(node->children[1], scope);
           (void)EnsureImplicitAssignment(left_probe_type, false);
-          if(right_probe.category == "xvalue")
+          if(right_probe.category != "lvalue")
             (void)EnsureImplicitAssignment(left_probe_type, true);
         }
       }
@@ -709,6 +741,25 @@ string PA14Lowerer::EmitReferenceArgument(const CPPGMAstNodePtr& node, Scope* sc
                                const TypePtr& target)
 {
     TypePtr referred = target->child;
+    if(node && node->kind == "cast-expression" && node->children.size() > 1 &&
+       target->kind == TYPE_RVALUE_REFERENCE &&
+       ConstructorObjectType(node->children[1]->children.empty() ?
+         CPPGMAstNodePtr() : node->children[1]->children[0], scope) &&
+       node->children[1]->kind == "call-expression")
+      return EmitTemporaryObjectAddress(node->children[1], scope, "refcall");
+    if(node && node->kind == "braced-init-list" && referred &&
+       type_value(referred)->kind == TYPE_CLASS) {
+      TypePtr object_type = type_value(referred);
+      const string slot = new_special_slot("arg", low_type(object_type));
+      const string address = new_temp();
+      AddInstruction(address + " = addr $" + slot);
+      const vector<CPPGMAstNodePtr> arguments = node->children;
+      if(EmitConstructorAt(object_type, address, arguments, scope, false,
+                           false, true)) {
+        RegisterTemporaryObject(object_type, address);
+        return address;
+      }
+    }
     if(node && node->kind == "call-expression" && !node->children.empty()) {
       TypePtr constructed = ConstructorObjectType(node->children[0], scope);
       if(constructed && referred && constructed->kind == TYPE_CLASS &&
@@ -719,6 +770,31 @@ string PA14Lowerer::EmitReferenceArgument(const CPPGMAstNodePtr& node, Scope* sc
           EmitTemporaryObjectAddress(node, scope, "tmpobj"),
           constructed, referred);
       if(constructed) return EmitTemporaryObjectAddress(node, scope, "arg");
+    }
+    if(node && node->kind == "call-expression" && !node->children.empty()) {
+      CallChoice choice = ChooseCall(node, scope);
+      FunctionRecord* function = choice.binding ? RecordForBinding(choice.binding) : 0;
+      TypePtr result_type = choice.function ? type_value(choice.function->child) : TypePtr();
+      if(function && function->indirect_result && result_type &&
+         result_type->kind == TYPE_CLASS && referred &&
+         type_value(referred)->kind == TYPE_CLASS) {
+        const string slot = new_special_slot("arg", low_type(result_type));
+        const string address = new_temp();
+        AddInstruction(address + " = addr $" + slot);
+        const CPPGMAstNodePtr argument_list = node->children.size() > 1 ?
+          node->children[1] : CPPGMAstNodePtr();
+        vector<CPPGMAstNodePtr> arguments = argument_list ?
+          argument_list->children : vector<CPPGMAstNodePtr>();
+        if(node->value == "braced-construction" && arguments.size() == 1 &&
+           arguments[0] && arguments[0]->kind == "braced-init-list")
+          arguments = arguments[0]->children;
+        (void)EmitChosenCall(choice, node->children[0], arguments, scope, address);
+        RegisterTemporaryObject(result_type, address);
+        if(!PA12SameType(result_type, type_value(referred), true) &&
+           IsDerivedFrom(result_type, type_value(referred)))
+          return AdjustBaseAddress(address, result_type, type_value(referred));
+        return address;
+      }
     }
     ExprInfo source = Infer(node, scope);
     TypePtr source_type = expression_value_type(source);
@@ -815,6 +891,8 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
       all_arguments.push_back(arguments[i]);
     vector<string> operands;
     function_record = choice.binding ? RecordForBinding(choice.binding) : 0;
+    if(function_record && function_record->deleted)
+      throw logic_error("call to deleted function " + function_record->qualified_name);
     string indirect_result_address;
     if(function_record && function_record->indirect_result) {
       const TypePtr result_type = type_value(choice.function->child);
@@ -1271,8 +1349,11 @@ PA14Lowerer::Value PA14Lowerer::EmitValue(const CPPGMAstNodePtr& node, Scope* sc
         AddInstruction(address + " = addr $" + slot);
         const CPPGMAstNodePtr argument_list = node->children.size() > 1 ?
           node->children[1] : CPPGMAstNodePtr();
-        const vector<CPPGMAstNodePtr> arguments = argument_list ?
+        vector<CPPGMAstNodePtr> arguments = argument_list ?
           argument_list->children : vector<CPPGMAstNodePtr>();
+        if(node->value == "braced-construction" && arguments.size() == 1 &&
+           arguments[0] && arguments[0]->kind == "braced-init-list")
+          arguments = arguments[0]->children;
         if(!EmitConstructorAt(constructor_type, address, arguments, scope))
           throw logic_error("no viable functional construction");
         Value result;

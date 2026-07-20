@@ -39,6 +39,87 @@ bool PA14Lowerer::ClassHasDeclaredMoveMember(const TypePtr& raw_type) const
     return false;
   }
 
+PA14Lowerer::FunctionRecord* PA14Lowerer::FindValueMember(
+  const TypePtr& raw_type, bool move, bool assignment) const
+{
+    TypePtr owner = type_value(raw_type);
+    if(!owner || owner->kind != TYPE_CLASS || !owner->owned_scope) return 0;
+    const string name = assignment ? "operator=" : LastComponent(owner->name);
+    const vector<Binding*> candidates = DirectBindings(owner->owned_scope, name);
+    for(size_t i = 0; i < candidates.size(); ++i) {
+      Binding* binding = candidates[i];
+      if(!binding || binding->kind != BIND_FUNCTION) continue;
+      TypePtr function = function_target_type(binding->type);
+      if(!function || function->parameters.empty() ||
+         !type_is_reference(function->parameters[0]) ||
+         !PA12SameType(type_value(function->parameters[0]), owner, true)) continue;
+      const bool candidate_move = function->parameters[0]->kind == TYPE_RVALUE_REFERENCE;
+      if(candidate_move == move) return RecordForBinding(binding);
+    }
+    return 0;
+  }
+
+bool PA14Lowerer::ValueOperationDeleted(const TypePtr& raw_type, bool move,
+                                        bool assignment,
+                                        FunctionRecord* ignored) const
+{
+    TypePtr type = type_value(raw_type);
+    if(!type) return false;
+    if(type->kind == TYPE_ARRAY) return ValueOperationDeleted(type->child, move,
+      assignment, ignored);
+    if(type->kind != TYPE_CLASS) return assignment && type->is_const;
+    FunctionRecord* candidate = FindValueMember(type, move, assignment);
+    if(candidate && candidate != ignored) {
+      if(candidate->deleted) return true;
+      if(candidate->defaulted || candidate->synthesized_value_member)
+        return ValueOperationDeleted(type, move, assignment, candidate);
+      return false;
+    }
+    if(!candidate) {
+      if(move) {
+        FunctionRecord* fallback = FindValueMember(type, false, assignment);
+        if(fallback && fallback != ignored) {
+          if(fallback->deleted) return true;
+          if(fallback->defaulted || fallback->synthesized_value_member)
+            return ValueOperationDeleted(type, false, assignment, fallback);
+          return false;
+        }
+      }
+      bool declared_move = false;
+      const string name = assignment ? "operator=" : LastComponent(type->name);
+      const vector<Binding*> candidates = DirectBindings(type->owned_scope, name);
+      for(size_t i = 0; i < candidates.size(); ++i) {
+        FunctionRecord* record = RecordForBinding(candidates[i]);
+        if(record && !record->synthesized_value_member &&
+           ((assignment && record->move_assignment) ||
+            (!assignment && record->move_constructor))) {
+          declared_move = true;
+          break;
+        }
+      }
+      if(!move && declared_move) return true;
+    }
+    if(assignment && type->direct_base &&
+       ValueOperationDeleted(type->direct_base, move, true)) return true;
+    for(size_t i = 0; i < type->class_members.size(); ++i) {
+      const ClassMemberInfo& member = type->class_members[i];
+      if(member.is_static || !member.type) continue;
+      if(assignment && (type_is_reference(member.type) || member.type->is_const)) return true;
+      if(ValueOperationDeleted(member.type, move, assignment)) return true;
+    }
+    return false;
+  }
+
+void PA14Lowerer::MarkValueMemberDeleted(FunctionRecord* record)
+{
+    if(!record || !record->value_special_member ||
+       (!record->defaulted && !record->synthesized_value_member)) return;
+    const bool assignment = record->copy_assignment || record->move_assignment;
+    const bool move = record->move_constructor || record->move_assignment;
+    record->deleted = record->deleted ||
+      ValueOperationDeleted(record->member_owner, move, assignment, record);
+  }
+
 bool PA14Lowerer::IsTrivialValueStorage(const TypePtr& raw_type) const
 {
     TypePtr type = type_value(raw_type);
@@ -67,7 +148,19 @@ bool PA14Lowerer::ClassValueNeedsIndirect(const TypePtr& raw_type) const
 {
     TypePtr type = type_value(raw_type);
     if(!type || type->kind != TYPE_CLASS) return false;
-    return !IsTrivialValueStorage(type);
+    if(type_size(type) > 16) return true;
+    if(!IsTrivialValueStorage(type)) return true;
+    if(type->direct_base && ClassValueNeedsIndirect(type->direct_base)) return true;
+    for(size_t i = 0; i < type->class_members.size(); ++i) {
+      const ClassMemberInfo& member = type->class_members[i];
+      if(member.is_static || !member.type) continue;
+      TypePtr member_type = type_value(member.type);
+      if(member_type && member_type->kind == TYPE_CLASS &&
+         ClassValueNeedsIndirect(member_type)) return true;
+      if(member_type && member_type->kind == TYPE_ARRAY && member_type->child &&
+         ClassValueNeedsIndirect(member_type->child)) return true;
+    }
+    return false;
   }
 
 TypePtr PA14Lowerer::SourceReturnType(const FunctionRecord& function) const
@@ -199,7 +292,7 @@ PA14Lowerer::FunctionRecord* PA14Lowerer::EnsureImplicitCopyConstructor(
       FunctionOf(vector<TypePtr>(1, parameter), false, Fundamental("void"), false));
     map<string, FunctionRecord*>::const_iterator found = function_by_key_.find(key);
     if(found != function_by_key_.end()) return found->second;
-    const string parameter_name = move ? "__param1" : "__param1";
+    const string parameter_name = "other";
     CPPGMAstNodePtr special = SyntheticValueMember(name, parameter_name, move, false);
     Binding binding(BIND_FUNCTION, name, FunctionOf(vector<TypePtr>(1, parameter), false,
       Fundamental("void"), false));
@@ -235,6 +328,7 @@ PA14Lowerer::FunctionRecord* PA14Lowerer::EnsureImplicitCopyConstructor(
     low_parameters.push_back(parameter);
     record->type = FunctionOf(low_parameters, false, Fundamental("void"), false);
     BuildFunctionABI(*record);
+    MarkValueMemberDeleted(record);
     record->symbol = low_symbol_component(record->qualified_name);
     unsigned int suffix = 2;
     for(;; ++suffix) {
@@ -255,9 +349,20 @@ PA14Lowerer::FunctionRecord* PA14Lowerer::EnsureImplicitAssignment(
     if(!owner || owner->kind != TYPE_CLASS || !owner->owned_scope) return 0;
     const string name = "operator=";
     const vector<Binding*> candidates = DirectBindings(owner->owned_scope, name);
-    for(size_t i = 0; i < candidates.size(); ++i)
-      if(candidates[i]->kind == BIND_FUNCTION) return RecordForBinding(candidates[i]);
-    if(move && ClassHasDeclaredValueMember(owner)) return 0;
+    FunctionRecord* copy_fallback = 0;
+    for(size_t i = 0; i < candidates.size(); ++i) {
+      if(candidates[i]->kind != BIND_FUNCTION) continue;
+      TypePtr function = function_target_type(candidates[i]->type);
+      if(!function || function->parameters.empty() ||
+         !type_is_reference(function->parameters[0]) ||
+         !PA12SameType(type_value(function->parameters[0]), owner, true)) continue;
+      FunctionRecord* candidate = RecordForBinding(candidates[i]);
+      if(!candidate) continue;
+      if(function->parameters[0]->kind == TYPE_RVALUE_REFERENCE) {
+        if(move) return candidate;
+      } else if(!copy_fallback) copy_fallback = candidate;
+    }
+    if(move && ClassHasDeclaredValueMember(owner)) return copy_fallback;
     const TypePtr parameter = move ? ReferenceTo(TYPE_RVALUE_REFERENCE, owner) :
       ReferenceTo(TYPE_LVALUE_REFERENCE, CloneWithCv(owner, true, false));
     const TypePtr result = ReferenceTo(TYPE_LVALUE_REFERENCE, owner);
@@ -297,6 +402,7 @@ PA14Lowerer::FunctionRecord* PA14Lowerer::EnsureImplicitAssignment(
     low_parameters.push_back(parameter);
     record->type = FunctionOf(low_parameters, false, result, false);
     BuildFunctionABI(*record);
+    MarkValueMemberDeleted(record);
     record->symbol = low_symbol_component(record->qualified_name);
     unsigned int suffix = 2;
     for(;; ++suffix) {
@@ -326,6 +432,8 @@ int PA14Lowerer::ConversionRankToClass(const ExprInfo& source,
          record->explicit_constructor) continue;
       TypePtr function = function_target_type(binding->type);
       if(!function || function->parameters.empty()) continue;
+      if(type_is_reference(function->parameters[0]) &&
+         PA12SameType(type_value(function->parameters[0]), target_value, true)) continue;
       const int first_rank = ConversionRank(source, function->parameters[0]);
       if(first_rank < 0) continue;
       bool defaults = true;
@@ -351,7 +459,6 @@ int PA14Lowerer::ConversionRank(const ExprInfo& source, const TypePtr& target) c
             return BaseDistance(source_value, target_value);
           if(is_arithmetic_type(source_value) && is_arithmetic_type(target_value) &&
              target_value->is_const) return 2;
-          return -1;
         }
         if(target_value->is_const &&
            PA12SameType(source_value, target_value, true)) return 1;
@@ -371,6 +478,8 @@ int PA14Lowerer::ConversionRank(const ExprInfo& source, const TypePtr& target) c
                record->explicit_constructor) continue;
             TypePtr function = function_target_type(binding->type);
             if(!function || function->parameters.empty()) continue;
+            if(type_is_reference(function->parameters[0]) &&
+               PA12SameType(type_value(function->parameters[0]), target_value, true)) continue;
             const int first_rank = ConversionRank(source, function->parameters[0]);
             if(first_rank < 0) continue;
             bool defaults = true;
@@ -393,8 +502,35 @@ int PA14Lowerer::ConversionRank(const ExprInfo& source, const TypePtr& target) c
         }
         return -1;
       }
-      if(source.category == "lvalue") return -1;
+      if(source.category == "lvalue") {
+        if(target_value->kind == TYPE_POINTER && source_value->kind == TYPE_ARRAY &&
+           source_value->child && target_value->child &&
+           PA12SameType(source_value->child, target_value->child, true)) return 1;
+        return -1;
+      }
       if(PA12SameType(source_value, target_value, true)) return 0;
+      if(target_value->kind == TYPE_CLASS) {
+        const vector<Binding*> constructors =
+          MemberBindings(target_value, last_component(target_value->name));
+        for(size_t i = 0; i < constructors.size(); ++i) {
+          Binding* binding = constructors[i];
+          if(!binding || binding->kind != BIND_FUNCTION ||
+             !binding->is_member || binding->is_static) continue;
+          FunctionRecord* record = RecordForBinding(binding);
+          if(!record || !record->constructor || record->deleted ||
+             record->explicit_constructor) continue;
+          TypePtr function = function_target_type(binding->type);
+          if(!function || function->parameters.empty()) continue;
+          if(type_is_reference(function->parameters[0]) &&
+             PA12SameType(type_value(function->parameters[0]), target_value, true)) continue;
+          const int first_rank = ConversionRank(source, function->parameters[0]);
+          if(first_rank < 0) continue;
+          bool defaults = true;
+          for(size_t p = 1; p < function->parameters.size(); ++p)
+            if(!HasDefaultArgument(binding, p)) { defaults = false; break; }
+          if(defaults) return 2 + first_rank;
+        }
+      }
       return is_arithmetic_type(source_value) && is_arithmetic_type(target_value) ? 1 : -1;
     }
     if(target_value->kind == TYPE_POINTER) {

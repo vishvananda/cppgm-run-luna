@@ -10,6 +10,173 @@ using namespace std;
 
 namespace cppgm_pa14_lowering {
 
+bool PA14Lowerer::EmitObjectTransferAt(const TypePtr& raw_target,
+                                       const string& destination,
+                                       const CPPGMAstNodePtr& source,
+                                       Scope* scope, bool allow_explicit,
+                                       bool implicit_return_move)
+{
+    TypePtr target = type_value(raw_target);
+    if(!target || target->kind != TYPE_CLASS || !source) return false;
+    if(source->kind == "braced-init-list") {
+      const vector<CPPGMAstNodePtr> arguments = source->children;
+      const bool allow_aggregate = !arguments.empty() &&
+        EnsureAggregateConstructor(target);
+      return EmitConstructorAt(target, destination, arguments, scope,
+        allow_explicit, false, allow_aggregate);
+    }
+    if(source->kind == "conditional-expression") {
+      ExprInfo conditional_info = Infer(source, scope);
+      TypePtr conditional_type = expression_value_type(conditional_info);
+      if(conditional_type && conditional_type->kind == TYPE_CLASS &&
+         (PA12SameType(conditional_type, target, true) ||
+          IsDerivedFrom(conditional_type, target))) {
+        const string then_label = new_label("condobj_then");
+        const string else_label = new_label("condobj_else");
+        const string end_label = new_label("condobj_end");
+        EmitCondition(source->children[0], scope, then_label, else_label);
+        AddBlock(then_label);
+        if(!EmitObjectTransferAt(target, destination, source->children[1], scope,
+                                 allow_explicit)) return false;
+        if(!state_->current->terminated) Terminate("jump ^" + end_label);
+        AddBlock(else_label);
+        if(!EmitObjectTransferAt(target, destination, source->children[2], scope,
+                                 allow_explicit)) return false;
+        if(!state_->current->terminated) Terminate("jump ^" + end_label);
+        AddBlock(end_label);
+        return true;
+      }
+    }
+    if(source->kind == "cast-expression" && source->children.size() > 1) {
+      TypePtr cast_type = analyzer_.TypeFromTypeId(source->children[0], scope);
+      if(cast_type && type_value(cast_type) &&
+         type_value(cast_type)->kind == TYPE_CLASS &&
+         PA12SameType(type_value(cast_type), target, true)) {
+        vector<CPPGMAstNodePtr> arguments;
+        // Preserve a reference cast's value category.  Dropping the cast
+        // turns static_cast<T&&>(object) back into an lvalue and selects the
+        // copy constructor instead of the move constructor.
+        const bool move = cast_type->kind == TYPE_RVALUE_REFERENCE;
+        if(type_is_reference(cast_type)) {
+          FunctionRecord* value_member = EnsureImplicitCopyConstructor(target, move);
+          if(value_member && value_member->deleted) return false;
+          if(PA12SameType(type_value(cast_type), target, true) &&
+             IsTrivialValueStorage(target) &&
+             !(move && ClassHasDeclaredMoveMember(target))) {
+            const string source_address = EmitAddress(source->children[1], scope);
+            AddInstruction("copyobj " +
+              integer_text(static_cast<long long>(type_size(target))) + "x" +
+              integer_text(static_cast<long long>(type_alignment(target))) + " " +
+              source_address + ", " + destination);
+            return true;
+          }
+        }
+        arguments.push_back(type_is_reference(cast_type) ? source : source->children[1]);
+        return EmitConstructorAt(target, destination, arguments, scope, true);
+      }
+    }
+    TypePtr constructed = source->kind == "call-expression" &&
+      !source->children.empty() ? ConstructorObjectType(source->children[0], scope) : TypePtr();
+    if(constructed && PA12SameType(constructed, target, true)) {
+      CPPGMAstNodePtr argument_list = source->children.size() > 1 ?
+        source->children[1] : CPPGMAstNodePtr();
+      vector<CPPGMAstNodePtr> arguments = argument_list ? argument_list->children :
+        vector<CPPGMAstNodePtr>();
+      if(source->value == "braced-construction" && arguments.size() == 1 &&
+         arguments[0] && arguments[0]->kind == "braced-init-list")
+        arguments = arguments[0]->children;
+      if(arguments.empty())
+        CollectImplicitConstructor(constructed, constructed->owned_scope, true);
+      const bool allow_aggregate = !arguments.empty() &&
+        EnsureAggregateConstructor(constructed);
+      return EmitConstructorAt(target, destination, arguments, scope, allow_explicit,
+        false, allow_aggregate);
+    }
+    if(!constructed && source->kind == "call-expression") {
+      CallChoice choice = ChooseCall(source, scope);
+      FunctionRecord* function = choice.binding ? RecordForBinding(choice.binding) : 0;
+      TypePtr result_type = expression_value_type(Infer(source, scope));
+      if(function && function->indirect_result && result_type &&
+         PA12SameType(result_type, target, true)) {
+        CPPGMAstNodePtr argument_list = source->children.size() > 1 ?
+          source->children[1] : CPPGMAstNodePtr();
+        vector<CPPGMAstNodePtr> arguments = argument_list ? argument_list->children :
+          vector<CPPGMAstNodePtr>();
+        EmitChosenCall(choice, source->children[0], arguments, scope, destination);
+        return true;
+      }
+    }
+    ExprInfo source_info = Infer(source, scope);
+    TypePtr source_type = expression_value_type(source_info);
+    if(!source_type || source_type->kind != TYPE_CLASS) {
+      vector<CPPGMAstNodePtr> arguments;
+      arguments.push_back(source);
+      return EmitConstructorAt(target, destination, arguments, scope, true);
+    }
+    const bool same_type = PA12SameType(source_type, target, true);
+    const bool move = source_info.category == "xvalue" || implicit_return_move;
+    if(source_type && source_type->kind == TYPE_CLASS &&
+       IsDerivedFrom(source_type, target)) {
+      vector<CPPGMAstNodePtr> constructor_arguments;
+      constructor_arguments.push_back(source);
+      if(EmitConstructorAt(target, destination, constructor_arguments, scope,
+                           allow_explicit)) return true;
+      string source_address;
+      if(source_info.category == "lvalue" || source_info.category == "xvalue")
+        source_address = EmitAddress(source, scope);
+      else if(source->kind == "call-expression" &&
+              ConstructorObjectType(source->children.empty() ?
+                CPPGMAstNodePtr() : source->children[0], scope))
+        source_address = EmitTemporaryObjectAddress(source, scope, "tmpobj");
+      else
+        source_address = EmitAddress(source, scope);
+      source_address = AdjustBaseAddress(source_address, source_type, target);
+      bool empty_target = !target->direct_base;
+      for(size_t member_index = 0; member_index < target->class_members.size();
+          ++member_index)
+        if(!target->class_members[member_index].is_static &&
+           !target->class_members[member_index].name.empty()) {
+          empty_target = false;
+          break;
+        }
+      if(empty_target) return true;
+      if(IsTrivialValueStorage(target)) {
+        AddInstruction("copyobj " + integer_text(static_cast<long long>(type_size(target))) +
+          "x" + integer_text(static_cast<long long>(type_alignment(target))) + " " +
+          source_address + ", " + destination);
+        return true;
+      }
+    }
+    if(same_type && ValueOperationDeleted(target, move, false)) return false;
+    if(same_type && IsTrivialValueStorage(target) &&
+       !(move && ClassHasDeclaredMoveMember(target))) {
+      string source_operand;
+      if(source_info.category == "lvalue" || source_info.category == "xvalue")
+        source_operand = EmitAddress(source, scope);
+      else source_operand = EmitValue(source, scope, target).operand;
+      AddInstruction("copyobj " + integer_text(static_cast<long long>(type_size(target))) +
+        "x" + integer_text(static_cast<long long>(type_alignment(target))) + " " +
+        source_operand + ", " + destination);
+      return true;
+    }
+    if(same_type) {
+      FunctionRecord* value_member = EnsureImplicitCopyConstructor(target, move);
+      if(value_member && value_member->deleted) return false;
+    }
+    vector<CPPGMAstNodePtr> arguments;
+    arguments.push_back(source);
+    if(!EmitConstructorAt(target, destination, arguments, scope, allow_explicit,
+                          false, false, implicit_return_move)) {
+      if(same_type && !move) {
+        FunctionRecord* value_member = EnsureImplicitCopyConstructor(target, false);
+        if(value_member && !value_member->deleted)
+          return EmitConstructorAt(target, destination, arguments, scope, allow_explicit);
+      }
+      return false;
+    }
+    return true;
+  }
+
 void PA14Lowerer::EmitAggregateArrayAt(const string& base, const TypePtr& raw_type,
                                         const CPPGMAstNodePtr& expression, Scope* scope,
                                         const CPPGMAstNodePtr& refresh_node,
@@ -152,13 +319,21 @@ void PA14Lowerer::EmitAggregateClassFields(const string& base, const TypePtr& ra
         child_type->kind != TYPE_ARRAY;
       if(precompute_address_of)
         precomputed_value = EmitValue(child, scope, child_type);
+      const bool precompute_scalar = child && !precompute_address_of &&
+        child->kind != "braced-init-list" && child_type &&
+        child_type->kind != TYPE_CLASS && child_type->kind != TYPE_ARRAY &&
+        !type_is_reference(member.type);
+      if(precompute_scalar)
+        precomputed_value = EmitValue(child, scope, child_type);
+      const bool have_precomputed_value = precompute_address_of || precompute_scalar;
       Binding* member_binding = 0;
       vector<Binding*> member_bindings = DirectBindings(type->owned_scope, member.name);
       for(size_t j = 0; j < member_bindings.size(); ++j)
         if(member_bindings[j]->kind == BIND_VARIABLE && member_bindings[j]->is_member &&
            !member_bindings[j]->is_static) { member_binding = member_bindings[j]; break; }
       if(member_binding && IsBitField(member_binding)) {
-        Value value = EmitValue(child, scope, child_type);
+        Value value = have_precomputed_value ? precomputed_value :
+          EmitValue(child, scope, child_type);
         if(value.known_constant && is_integral_type(value.type) &&
            is_integral_type(child_type)) {
           value.type = child_type;
@@ -211,6 +386,14 @@ void PA14Lowerer::EmitAggregateClassFields(const string& base, const TypePtr& ra
           EmitAggregateAt(field, child_type, child, scope);
           continue;
         }
+        if(child) {
+          const ExprInfo child_info = Infer(child, scope);
+          const TypePtr child_value_type = expression_value_type(child_info);
+          if(child_value_type && child_value_type->kind == TYPE_CLASS &&
+             (PA12SameType(child_value_type, child_type, true) ||
+              IsDerivedFrom(child_value_type, child_type)) &&
+             EmitObjectTransferAt(child_type, field, child, scope, true)) continue;
+        }
         // Aggregate initialization permits brace elision: a scalar can
         // initialize the first member of a nested aggregate, and the next
         // enclosing initializer then continues with the nested aggregate's
@@ -251,7 +434,7 @@ void PA14Lowerer::EmitAggregateClassFields(const string& base, const TypePtr& ra
         EmitAggregateAt(field, child_type, child, scope, refresh_node, member.offset);
         continue;
       }
-      Value value = precompute_address_of ? precomputed_value :
+      Value value = have_precomputed_value ? precomputed_value :
         EmitValue(child, scope, child_type);
       if(value.known_constant && is_integral_type(value.type) &&
          is_integral_type(child_type)) {
@@ -420,6 +603,7 @@ void PA14Lowerer::EmitLiveDestructors(Scope* scope)
 {
     for(size_t i = state_->variables.size(); i > 0; --i) {
       VariablePlan& variable = state_->variables[i - 1];
+      if(state_->return_slot_plan == &variable) continue;
       bool live = false;
       for(size_t environment_index = 0;
           environment_index < state_->environments.size() && !live;

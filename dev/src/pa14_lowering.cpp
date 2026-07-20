@@ -694,7 +694,8 @@ void PA14Lowerer::CollectTopLevel(const CPPGMAstNodePtr& node, Scope* scope)
       CollectFunction(node, scope, true);
       return;
     }
-    if(node->kind == "special-member-definition") {
+    if(node->kind == "special-member-definition" ||
+       node->kind == "special-member-declaration") {
       const size_t separator = node->value.rfind("::");
       Scope* owner_scope = scope;
       if(separator != string::npos) {
@@ -704,7 +705,11 @@ void PA14Lowerer::CollectTopLevel(const CPPGMAstNodePtr& node, Scope* scope)
         if(owner_type && owner_type->kind == TYPE_CLASS && owner_type->owned_scope)
           owner_scope = owner_type->owned_scope;
       }
-      CollectSpecialMember(node, owner_scope, true);
+      CPPGMAstNodePtr declarator = ChildOfKind(node, "declarator");
+      CPPGMAstNodePtr initializer = ChildOfKind(declarator, "special-initializer");
+      const bool definition = node->kind == "special-member-definition" ||
+        (initializer && initializer->value == "default");
+      CollectSpecialMember(node, owner_scope, definition);
       return;
     }
     if(node->kind == "simple-declaration" || node->kind == "bit-field-declaration") {
@@ -800,7 +805,12 @@ void PA14Lowerer::CollectClassMembers(const CPPGMAstNodePtr& node, Scope* scope)
         CPPGMAstNodePtr wrapper(new CPPGMAstNode("function-declaration"));
         wrapper->children.push_back(child->children[0]);
         wrapper->children.push_back(declarator);
-        CollectFunction(wrapper, class_scope, false);
+        if(item->children.size() > 1) wrapper->children.push_back(item->children[1]);
+        CPPGMAstNodePtr initializer = item->children.size() > 1 ? item->children[1] :
+          CPPGMAstNodePtr();
+        CPPGMAstNodePtr special_initializer = ChildOfKind(initializer, "special-initializer");
+        const bool definition = special_initializer && special_initializer->value == "default";
+        CollectFunction(wrapper, class_scope, definition);
       }
     }
     CollectImplicitConstructor(type_found->second, class_scope);
@@ -1011,7 +1021,10 @@ void PA14Lowerer::CollectSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* s
         CPPGMAstNodePtr wrapper(new CPPGMAstNode("function-declaration"));
         wrapper->children.push_back(node->children[0]);
         wrapper->children.push_back(declarator);
-        CollectFunction(wrapper, scope, false);
+        if(item->children.size() > 1) wrapper->children.push_back(item->children[1]);
+        CPPGMAstNodePtr special_initializer = ChildOfKind(initializer, "special-initializer");
+        const bool definition = special_initializer && special_initializer->value == "default";
+        CollectFunction(wrapper, scope, definition);
         continue;
       }
       const bool is_extern = HasStorageSpecifier(node, "extern");
@@ -1169,7 +1182,7 @@ PA14Lowerer::FunctionRecord* PA14Lowerer::BaseEntryFor(FunctionRecord* function)
 
 void PA14Lowerer::EnsureConstructorBaseEntry(FunctionRecord* function)
 {
-    if(!function || !function->constructor || function->defaulted || function->deleted) return;
+    if(!function || !function->constructor || function->deleted) return;
     FunctionRecord* existing = BaseEntryFor(function);
     if(existing) {
       existing->definition = function->definition;
@@ -1179,8 +1192,17 @@ void PA14Lowerer::EnsureConstructorBaseEntry(FunctionRecord* function)
       existing->source_type = function->source_type;
       existing->special_initializer = function->special_initializer;
       existing->default_arguments = function->default_arguments;
+      existing->copy_constructor = function->copy_constructor;
+      existing->move_constructor = function->move_constructor;
+      existing->value_special_member = function->value_special_member;
+      existing->synthesized_value_member = function->synthesized_value_member;
+      existing->defaulted = function->defaulted;
+      existing->deleted = function->deleted;
       return;
     }
+    if(function->defaulted &&
+       (!function->definition || !function->node ||
+        function->node->value.find("::") == string::npos)) return;
     FunctionRecord base_entry;
     base_entry.node = function->node;
     base_entry.scope = function->scope;
@@ -1195,6 +1217,12 @@ void PA14Lowerer::EnsureConstructorBaseEntry(FunctionRecord* function)
     base_entry.implicit_constructor = function->implicit_constructor;
     base_entry.explicit_constructor = function->explicit_constructor;
     base_entry.aggregate_constructor = function->aggregate_constructor;
+    base_entry.copy_constructor = function->copy_constructor;
+    base_entry.move_constructor = function->move_constructor;
+    base_entry.value_special_member = function->value_special_member;
+    base_entry.synthesized_value_member = function->synthesized_value_member;
+    base_entry.defaulted = function->defaulted;
+    base_entry.deleted = function->deleted;
     base_entry.unwind_no = function->unwind_no;
     base_entry.base_entry = true;
     base_entry.base_entry_for = function->qualified_name;
@@ -1211,7 +1239,8 @@ PA14Lowerer::FunctionRecord* PA14Lowerer::EnsureAggregateConstructor(const TypeP
     for(size_t i = 0; i < existing_constructors.size(); ++i) {
       FunctionRecord* existing = RecordForBinding(existing_constructors[i]);
       if(existing && existing->constructor && !existing->implicit_constructor &&
-         !existing->defaulted && !existing->deleted) return 0;
+         !existing->defaulted && !existing->deleted && !existing->aggregate_constructor)
+        return 0;
     }
     vector<TypePtr> member_parameters;
     vector<string> member_names;
@@ -1324,7 +1353,8 @@ bool PA14Lowerer::HasDefaultInitializationEffects(const TypePtr& raw_type) const
       MemberBindings(type, LastComponent(type->name));
     for(size_t i = 0; i < constructors.size(); ++i) {
       FunctionRecord* record = RecordForBinding(constructors[i]);
-      if(record && record->constructor && !record->implicit_constructor) return true;
+      if(record && record->constructor && !record->implicit_constructor &&
+         !record->defaulted) return true;
     }
     if(type->direct_base && HasDefaultInitializationEffects(type->direct_base)) return true;
     for(size_t i = 0; i < type->class_members.size(); ++i) {

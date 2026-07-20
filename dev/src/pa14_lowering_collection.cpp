@@ -172,6 +172,16 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
     record->variadic = function->variadic;
     if(definition) record->unwind_no = record->unwind_no || HasNoexcept(node->children[1]);
     RememberDefaults(record, node->children[1]);
+    CPPGMAstNodePtr special_initializer = ChildOfKind(node->children[1], "special-initializer");
+    if(!special_initializer) {
+      CPPGMAstNodePtr initializer = ChildOfKind(node, "initializer");
+      special_initializer = ChildOfKind(initializer, "special-initializer");
+    }
+    if(special_initializer) {
+      record->special_initializer = special_initializer;
+      record->defaulted = special_initializer->value == "default";
+      record->deleted = special_initializer->value == "delete";
+    }
     ClassifySpecialMember(record);
   }
 
@@ -201,6 +211,7 @@ void PA14Lowerer::ClassifySpecialMember(FunctionRecord* record)
     } else {
       record->copy_assignment = true;
     }
+    if(record->defaulted) MarkValueMemberDeleted(record);
   }
 
 void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope,
@@ -282,6 +293,12 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
     record->variadic = function->variadic;
     if(definition) record->unwind_no = record->unwind_no || HasNoexcept(declarator);
     RememberDefaults(record, declarator);
+    ClassifySpecialMember(record);
+    const bool out_of_class_definition = definition && node->value.find("::") != string::npos;
+    if(out_of_class_definition && record->defaulted) {
+      record->needed = true;
+      if(record->destructor) record->unwind_no = true;
+    }
     const bool constructor_record = record->constructor;
     if(constructor_record) {
       EnsureConstructorBaseEntry(record);
@@ -290,7 +307,7 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
         if(base_entry) base_entry->needed = true;
       }
     }
-    if(!constructor_record && definition && node->value.find("::") != string::npos &&
+    if(!constructor_record && out_of_class_definition &&
        record->destructor && record->unwind_no &&
        !BaseEntryFor(record)) {
       FunctionRecord base_entry;
@@ -305,13 +322,13 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
       base_entry.static_member = record->static_member;
       base_entry.destructor = true;
       base_entry.unwind_no = record->unwind_no;
+      base_entry.needed = true;
       base_entry.base_entry = true;
       base_entry.base_entry_for = record->qualified_name;
       base_entry.special_initializer = record->special_initializer;
       base_entry.default_arguments = record->default_arguments;
       functions_.push_back(base_entry);
     }
-    ClassifySpecialMember(record);
     (void)facts;
   }
 
