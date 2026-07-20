@@ -16,12 +16,44 @@ bool PA14Lowerer::EmitValueSpecialMemberBody(FunctionRecord& function, Scope* sc
     const size_t source_index = function.member && !function.static_member ? 1 : 0;
     if(source_index >= names.size()) throw logic_error("value member has no source parameter");
     CPPGMAstNodePtr this_node(new CPPGMAstNode("keyword-literal", "KW_THIS:this"));
-    const string destination = EmitValue(this_node, scope).operand;
     const string source_storage = "$" + names[source_index];
-    string source;
     const bool assignment = function.copy_assignment || function.move_assignment;
     const bool move = function.move_constructor || function.move_assignment;
-    if(IsTrivialValueStorage(owner)) {
+    bool has_bit_field = false;
+    for(size_t i = 0; i < owner->class_members.size(); ++i)
+      if(owner->class_members[i].bit_field) { has_bit_field = true; break; }
+    const bool defer_destination = assignment && owner->direct_base &&
+      IsEmptyBaseStorage(owner->direct_base);
+    const bool defer_bit_field_destination = assignment && has_bit_field;
+    string destination;
+    if(!defer_destination && !defer_bit_field_destination)
+      destination = EmitValue(this_node, scope).operand;
+    string source;
+    if(IsEmptyBaseStorage(owner)) {
+      // Empty class/base subobjects have no payload.  Their special members
+      // still return the ABI this pointer for assignment, but must not copy
+      // the complete-object size byte used by standalone empty objects.
+      if(assignment) {
+        const string result = EmitValue(this_node, scope).operand;
+        Terminate("return ptr " + result);
+      }
+      return true;
+    }
+    bool defaulted_copy_storage = function.copy_assignment && function.defaulted &&
+      !owner->direct_base;
+    if(defaulted_copy_storage) {
+      for(size_t i = 0; i < owner->class_members.size(); ++i) {
+        const ClassMemberInfo& member = owner->class_members[i];
+        if(member.is_static || !member.type) continue;
+        if(member.bit_field || !IsTrivialValueStorage(member.type)) {
+          defaulted_copy_storage = false;
+          break;
+        }
+      }
+    }
+    set<long long> copied_bit_offsets;
+    if((IsTrivialValueStorage(owner) && !(assignment && has_bit_field)) ||
+       defaulted_copy_storage) {
       source = emit_load(source_storage, PointerTo(Fundamental("char")));
       AddInstruction("copyobj " + integer_text(static_cast<long long>(type_size(owner))) +
         "x" + integer_text(static_cast<long long>(type_alignment(owner))) + " " +
@@ -29,38 +61,99 @@ bool PA14Lowerer::EmitValueSpecialMemberBody(FunctionRecord& function, Scope* sc
     } else {
       if(owner->direct_base) {
         TypePtr base = type_value(owner->direct_base);
-        const string destination_base = new_temp();
-        AddInstruction(destination_base + " = index i8 [projection=base_subobject] " +
-          destination + ", 0");
-        source = emit_load(source_storage, PointerTo(Fundamental("char")));
-        const string source_base = new_temp();
-        AddInstruction(source_base + " = index i8 [projection=base_subobject] " +
-          source + ", 0");
-        if(IsTrivialValueStorage(base)) {
+        if(!IsEmptyBaseStorage(base)) {
+          const string destination_base = new_temp();
+          AddInstruction(destination_base + " = index i8 [projection=base_subobject] " +
+            destination + ", 0");
+          source = emit_load(source_storage, PointerTo(Fundamental("char")));
+          const string source_base = new_temp();
+          AddInstruction(source_base + " = index i8 [projection=base_subobject] " +
+            source + ", 0");
+          if(IsTrivialValueStorage(base)) {
           AddInstruction("copyobj " + integer_text(static_cast<long long>(type_size(base))) +
             "x" + integer_text(static_cast<long long>(type_alignment(base))) + " " +
             source_base + ", " + destination_base);
-        } else {
-          FunctionRecord* base_record = assignment ?
-            EnsureImplicitAssignment(base, move) : EnsureImplicitCopyConstructor(base, move);
-          if(!base_record || base_record->deleted)
-            throw logic_error("value member has deleted base operation");
-          base_record->needed = true;
-          FunctionRecord* base_call = BaseEntryFor(base_record);
-          if(base_call) base_call->needed = true;
-          if(!base_call) base_call = base_record;
-          const string base_arguments = destination_base + ", " + source_base;
-          if(assignment) {
-            const string result = new_temp();
-            AddInstruction(result + " = call ptr @" + base_call->symbol + "(" +
+          } else {
+            FunctionRecord* base_record = assignment ?
+              EnsureImplicitAssignment(base, move) : EnsureImplicitCopyConstructor(base, move);
+            if(!base_record || base_record->deleted)
+              throw logic_error("value member has deleted base operation");
+            base_record->needed = true;
+            FunctionRecord* base_call = BaseEntryFor(base_record);
+            if(base_call) base_call->needed = true;
+            if(!base_call) base_call = base_record;
+            const string base_arguments = destination_base + ", " + source_base;
+            if(assignment) {
+              const string result = new_temp();
+              AddInstruction(result + " = call ptr @" + base_call->symbol + "(" +
+                base_arguments + ")");
+            } else AddInstruction("call void @" + base_call->symbol + "(" +
               base_arguments + ")");
-          } else AddInstruction("call void @" + base_call->symbol + "(" +
-            base_arguments + ")");
+          }
         }
+      }
+      long long trivial_prefix_size = 0;
+      for(size_t i = 0; i < owner->class_members.size(); ++i) {
+        const ClassMemberInfo& member = owner->class_members[i];
+        if(member.is_static || !member.type || member.name.empty()) continue;
+        TypePtr member_type = type_value(member.type);
+        if(member.bit_field || !IsTrivialValueStorage(member_type)) {
+          trivial_prefix_size = member.offset;
+          break;
+        }
+      }
+      if(trivial_prefix_size > 0) {
+        if(destination.empty()) destination = EmitValue(this_node, scope).operand;
+        if(source.empty()) source = emit_load(source_storage, PointerTo(Fundamental("char")));
+        AddInstruction("copyobj " + integer_text(trivial_prefix_size) + "x" +
+          integer_text(static_cast<long long>(type_alignment(owner))) + " " +
+          source + ", " + destination);
+        // The non-trivial suffix gets the normal typed member-operation
+        // sequence, whose fresh loads keep the source/destination lifetime
+        // visible in LowIR.
+        destination.clear();
+        source.clear();
       }
       for(size_t i = 0; i < owner->class_members.size(); ++i) {
         const ClassMemberInfo& member = owner->class_members[i];
         if(member.is_static || !member.type || member.name.empty()) continue;
+        if(trivial_prefix_size > 0 && member.offset < trivial_prefix_size) continue;
+        TypePtr member_type = type_value(member.type);
+        if(member.bit_field) {
+          if(copied_bit_offsets.find(member.offset) != copied_bit_offsets.end()) continue;
+          copied_bit_offsets.insert(member.offset);
+          if(source.empty()) source = emit_load(source_storage, PointerTo(Fundamental("char")));
+          const string source_member = new_temp();
+          AddInstruction(source_member + " = index i8 " + source + ", " +
+            integer_text(member.offset));
+          const string loaded = emit_load(source_member, member.type);
+          const string destination_object = emit_load(
+            "$" + names[0], PointerTo(Fundamental("char")));
+          const string destination_member = new_temp();
+          AddInstruction(destination_member + " = index i8 " + destination_object + ", " +
+            integer_text(member.offset));
+          emit_store(member.type, loaded, destination_member);
+          continue;
+        }
+        if(assignment && owner->direct_base &&
+           IsEmptyBaseStorage(owner->direct_base) && member_type &&
+           member_type->kind != TYPE_CLASS && member_type->kind != TYPE_ARRAY) {
+          if(source.empty())
+            source = emit_load(source_storage, PointerTo(Fundamental("char")));
+          const string source_member = new_temp();
+          AddInstruction(source_member + " = index i8 [projection=field] " + source +
+            ", " + integer_text(member.offset));
+          const string loaded = emit_load(source_member, member.type);
+          const string destination_object = emit_load(
+            "$" + names[0], PointerTo(Fundamental("char")));
+          const string destination_member = new_temp();
+          AddInstruction(destination_member +
+            " = index i8 [projection=field] " + destination_object + ", " +
+            integer_text(member.offset));
+          emit_store(member.type, loaded, destination_member);
+          continue;
+        }
+        if(destination.empty()) destination = EmitValue(this_node, scope).operand;
         const string destination_member = new_temp();
         AddInstruction(destination_member + " = index i8 [projection=field] " +
           destination + ", " + integer_text(member.offset));
@@ -68,7 +161,6 @@ bool PA14Lowerer::EmitValueSpecialMemberBody(FunctionRecord& function, Scope* sc
         const string source_member = new_temp();
         AddInstruction(source_member + " = index i8 [projection=field] " + source +
           ", " + integer_text(member.offset));
-        TypePtr member_type = type_value(member.type);
         if(member_type && member_type->kind == TYPE_CLASS &&
            !IsTrivialValueStorage(member_type)) {
           if(assignment && move) {
@@ -149,7 +241,8 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
         }
       }
     }
-    if(base && !delegating && !explicitly_initialized_base && HasConstructor(base)) {
+    if(base && !delegating && !explicitly_initialized_base && HasConstructor(base) &&
+       (!IsEmptyBaseStorage(base) || HasDefaultConstructionEffects(base))) {
       const string this_address = EmitValue(this_node, scope).operand;
       const string base_address = AdjustBaseAddress(this_address, owner, base);
       (void)EmitConstructorAt(base, base_address, vector<CPPGMAstNodePtr>(), scope,
@@ -239,6 +332,15 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
       if(named_base) {
         const string this_address = EmitValue(this_node, scope).operand;
         const string base_address = AdjustBaseAddress(this_address, owner, named_base);
+        if(arguments.size() == 1 && arguments[0] &&
+           arguments[0]->kind != "braced-init-list") {
+          const TypePtr argument_type = expression_value_type(Infer(arguments[0], scope));
+          if(argument_type && argument_type->kind == TYPE_CLASS &&
+             (PA12SameType(argument_type, named_base, true) ||
+              IsDerivedFrom(argument_type, named_base)) &&
+             EmitObjectTransferAt(named_base, base_address, arguments[0], scope, true))
+            continue;
+        }
         if(!EmitConstructorAt(named_base, base_address, arguments, scope, true, true))
           throw logic_error("base mem-initializer has no constructor");
         continue;
@@ -264,7 +366,13 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
           reference_source = EmitReferenceArgument(arguments[0], scope, field->type);
         else {
           value = EmitValue(arguments[0], scope, field->type);
-          value = ConvertValue(value, field->type, false, true);
+          if(value.known_constant && is_integral_type(value.type) &&
+             is_integral_type(field->type) &&
+             type_size(field->type) > type_size(value.type) &&
+             !is_unsigned_type(field->type)) {
+            value.type = field->type;
+            value.operand = integer_text(value.constant);
+          } else value = ConvertValue(value, field->type, false, true);
         }
       }
       CPPGMAstNodePtr member(new CPPGMAstNode("member-expression", "OP_ARROW:->"));
@@ -298,6 +406,12 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
         emit_store(field->type, stored, store_address);
         continue;
       }
+      if(field_type && field_type->kind == TYPE_CLASS &&
+         !type_is_reference(field->type) && arguments.empty()) {
+        const vector<Binding*> constructors =
+          MemberBindings(field_type, LastComponent(field_type->name));
+        if(field_type->is_union && constructors.empty()) continue;
+      }
       const string address = EmitMemberAddress(member, scope);
       if(field_type && field_type->kind == TYPE_ARRAY && arguments.empty() &&
          field_type->bound >= 0 && field_type->child &&
@@ -319,6 +433,7 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
          !type_is_reference(field->type) && arguments.empty()) {
         const vector<Binding*> constructors =
           MemberBindings(field_type, LastComponent(field_type->name));
+        if(field_type->is_union && constructors.empty()) continue;
         if(!constructors.empty()) {
           // An explicitly empty mem-initializer is value-initialization.  The
           // object ABI models its zero-initialization before invoking the
@@ -371,6 +486,7 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
         emit_store(field->type, value.operand, address);
       }
     }
+    if(owner->is_union) return;
     for(size_t i = 0; i < owner->class_members.size(); ++i) {
       const ClassMemberInfo& member_fact = owner->class_members[i];
       if(member_fact.is_static || member_fact.name.empty() || !member_fact.type ||
@@ -420,6 +536,23 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
       if(arguments.empty() && field_type && field_type->kind == TYPE_CLASS &&
          !empty_value_initializer && field_type->class_members.empty() &&
          MemberBindings(field_type, LastComponent(field_type->name)).empty()) continue;
+      if(arguments.empty() && !empty_value_initializer && field_type &&
+         field_type->kind == TYPE_CLASS && field_type->is_union &&
+         !HasDefaultConstructionEffects(field_type)) {
+        bool has_user_constructor = false;
+        const vector<Binding*> union_constructors = MemberBindings(
+          field_type, LastComponent(field_type->name));
+        for(size_t j = 0; j < union_constructors.size(); ++j) {
+          FunctionRecord* union_record = RecordForBinding(union_constructors[j]);
+          if(union_record && union_record->constructor &&
+             !union_record->implicit_constructor &&
+             !union_record->aggregate_constructor) {
+            has_user_constructor = true;
+            break;
+          }
+        }
+        if(!has_user_constructor) continue;
+      }
       if(IsBitField(field)) {
         if(arguments.size() != 1) throw logic_error("default member initializer has too many arguments");
         Value value = EmitValue(arguments[0], scope, field->type);
@@ -487,11 +620,19 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
       } else if(IsBitField(field)) {
         StoreBitField(field, address, field->type, value.operand, true);
       } else {
-        value = ConvertValue(value, field->type, false, true);
+        if(value.known_constant && is_integral_type(value.type) &&
+           is_integral_type(field->type) &&
+           type_size(field->type) > type_size(value.type) &&
+           !is_unsigned_type(field->type)) {
+          value.type = field->type;
+          value.operand = integer_text(value.constant);
+        } else value = ConvertValue(value, field->type, false, true);
         emit_store(field->type, value.operand, address);
       }
       initialized_members.insert(member_fact.name);
     }
+
+    if(owner->is_union) return;
 
     // A synthesized or user-defined constructor still has to initialize
     // class subobjects for which no mem-initializer or default member
@@ -537,6 +678,22 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
         continue;
       }
       if(member_type && member_type->kind == TYPE_CLASS) {
+        if(member_type->is_union &&
+           !HasDefaultConstructionEffects(member_type)) {
+          bool has_user_constructor = false;
+          const vector<Binding*> union_constructors = MemberBindings(
+            member_type, LastComponent(member_type->name));
+          for(size_t j = 0; j < union_constructors.size(); ++j) {
+            FunctionRecord* union_record = RecordForBinding(union_constructors[j]);
+            if(union_record && union_record->constructor &&
+               !union_record->implicit_constructor &&
+               !union_record->aggregate_constructor) {
+              has_user_constructor = true;
+              break;
+            }
+          }
+          if(!has_user_constructor) continue;
+        }
         if(member_type->class_members.empty() && !member_type->direct_base &&
            MemberBindings(member_type, LastComponent(member_type->name)).empty())
           continue;

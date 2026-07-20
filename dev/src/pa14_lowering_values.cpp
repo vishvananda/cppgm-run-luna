@@ -144,12 +144,30 @@ bool PA14Lowerer::IsTrivialValueStorage(const TypePtr& raw_type) const
     return true;
   }
 
+bool PA14Lowerer::IsEmptyBaseStorage(const TypePtr& raw_type) const
+{
+    TypePtr type = type_value(raw_type);
+    if(!type || type->kind != TYPE_CLASS) return false;
+    for(size_t i = 0; i < type->class_members.size(); ++i) {
+      const ClassMemberInfo& member = type->class_members[i];
+      if(!member.is_static && member.type) return false;
+    }
+    return !type->direct_base || IsEmptyBaseStorage(type->direct_base);
+  }
+
 bool PA14Lowerer::ClassValueNeedsIndirect(const TypePtr& raw_type) const
 {
     TypePtr type = type_value(raw_type);
     if(!type || type->kind != TYPE_CLASS) return false;
+    if(type->is_union) return true;
     if(type_size(type) > 16) return true;
-    if(!IsTrivialValueStorage(type)) return true;
+    bool base_only = type->direct_base != 0;
+    for(size_t i = 0; i < type->class_members.size(); ++i) {
+      const ClassMemberInfo& member = type->class_members[i];
+      if(!member.is_static && member.type) { base_only = false; break; }
+    }
+    if(!IsTrivialValueStorage(type) &&
+       !(base_only && !ClassHasDeclaredMoveMember(type))) return true;
     if(type->direct_base && ClassValueNeedsIndirect(type->direct_base)) return true;
     for(size_t i = 0; i < type->class_members.size(); ++i) {
       const ClassMemberInfo& member = type->class_members[i];
@@ -416,6 +434,187 @@ PA14Lowerer::FunctionRecord* PA14Lowerer::EnsureImplicitAssignment(
     return record;
   }
 
+vector<Binding*> PA14Lowerer::ConversionBindings(const TypePtr& raw_source) const
+{
+    vector<Binding*> result;
+    set<Binding*> seen;
+    TypePtr source = type_value(raw_source);
+    for(TypePtr current = source; current && current->kind == TYPE_CLASS;
+        current = type_value(current->direct_base)) {
+      if(!current->owned_scope) continue;
+      for(size_t i = 0; i < current->owned_scope->bindings.size(); ++i) {
+        Binding* binding = const_cast<Binding*>(&current->owned_scope->bindings[i]);
+        if(!binding || binding->kind != BIND_FUNCTION || !binding->is_member ||
+           binding->is_static || !seen.insert(binding).second) continue;
+        if(binding->name.compare(0, 8, "operator") != 0) continue;
+        const string suffix = binding->name.substr(8);
+        if(suffix.empty() || string("+-*/%^&|=!<>~[],()").find(suffix[0]) != string::npos)
+          continue;
+      TypePtr function = function_target_type(binding->type);
+      if(!function || !function->parameters.empty()) continue;
+      FunctionRecord* record = RecordForBinding(binding);
+      if(!record || !record->member || record->static_member || record->deleted) continue;
+      if(source->is_const && !function->function_const) continue;
+      if(source->is_volatile && !function->function_volatile) continue;
+        result.push_back(binding);
+      }
+    }
+    return result;
+  }
+
+Binding* PA14Lowerer::FindConversionOperator(const TypePtr& raw_source,
+                                              const TypePtr& raw_target,
+                                              bool allow_explicit, int* rank) const
+{
+    if(rank) *rank = -1;
+    TypePtr source = type_value(raw_source);
+    TypePtr target = type_value(raw_target);
+    if(!source || source->kind != TYPE_CLASS || !target) return 0;
+    Binding* best = 0;
+    int best_rank = 1000000;
+    const vector<Binding*> candidates = ConversionBindings(source);
+    for(size_t i = 0; i < candidates.size(); ++i) {
+      Binding* binding = candidates[i];
+      FunctionRecord* record = RecordForBinding(binding);
+      TypePtr function = function_target_type(binding->type);
+      if(!record || !function || (!allow_explicit && record->explicit_constructor)) continue;
+      if(source->is_const && !function->function_const) continue;
+      if(source->is_volatile && !function->function_volatile) continue;
+      TypePtr result_type = function->child;
+      TypePtr result_value = type_value(result_type);
+      int standard = -1;
+      if(result_value && result_value->kind == TYPE_CLASS && target->kind == TYPE_CLASS) {
+        if(PA12SameType(result_value, target, false)) standard = 0;
+        else if(PA12SameType(result_value, target, true)) standard = 1;
+        else if(IsDerivedFrom(result_value, target)) standard = BaseDistance(result_value, target);
+      } else if(result_value && result_value->kind != TYPE_CLASS && target->kind == TYPE_CLASS) {
+        // A conversion function followed by a converting constructor would
+        // require two user-defined conversions and is not viable here.
+        standard = -1;
+      } else {
+        ExprInfo converted;
+        converted.type = result_type;
+        converted.category = type_is_reference(result_type) ?
+          (result_type->kind == TYPE_LVALUE_REFERENCE ? "lvalue" : "xvalue") : "prvalue";
+        standard = ConversionRank(converted, raw_target);
+      }
+      if(standard < 0) continue;
+      const int object_rank = (function->function_const ? 1 : 0) +
+        (function->function_volatile ? 1 : 0);
+      const int candidate_rank = 3 + standard + object_rank;
+      if(!best || candidate_rank < best_rank) {
+        best = binding;
+        best_rank = candidate_rank;
+      } else if(candidate_rank == best_rank &&
+                !PA12SameType(function, function_target_type(best->type), false)) {
+        throw logic_error("ambiguous conversion function");
+      }
+    }
+    if(rank && best) *rank = best_rank;
+    return best;
+  }
+
+Binding* PA14Lowerer::FindContextConversionOperator(const TypePtr& raw_source,
+                                                     bool allow_explicit,
+                                                     bool boolean_context) const
+{
+    TypePtr source = type_value(raw_source);
+    if(!source || source->kind != TYPE_CLASS) return 0;
+    if(boolean_context) {
+      Binding* direct = FindConversionOperator(source, Fundamental("bool"),
+        allow_explicit);
+      if(direct) return direct;
+    }
+    Binding* best = 0;
+    for(size_t i = 0; i < ConversionBindings(source).size(); ++i) {
+      Binding* binding = ConversionBindings(source)[i];
+      FunctionRecord* record = RecordForBinding(binding);
+      TypePtr function = function_target_type(binding->type);
+      TypePtr result = function ? type_value(function->child) : TypePtr();
+      if(!record || !function || (!allow_explicit && record->explicit_constructor) || !result)
+        continue;
+      if((boolean_context && !is_arithmetic_type(result) && result->kind != TYPE_POINTER) ||
+         (!boolean_context && !is_arithmetic_type(result) && result->kind != TYPE_POINTER) ||
+         (source->is_const && !function->function_const)) continue;
+      if(!best) best = binding;
+    }
+    return best;
+  }
+
+Binding* PA14Lowerer::FindNamedConversionOperator(const TypePtr& raw_source,
+                                                   const string& spelling,
+                                                   Scope* scope) const
+{
+    if(spelling.compare(0, 8, "operator") != 0) return 0;
+    string target_spelling = spelling.substr(8);
+    while(!target_spelling.empty() && target_spelling[0] == ' ')
+      target_spelling.erase(0, 1);
+    while(!target_spelling.empty() && target_spelling[target_spelling.size() - 1] == ' ')
+      target_spelling.erase(target_spelling.size() - 1, 1);
+    while(!target_spelling.empty()) {
+      while(!target_spelling.empty() &&
+            (target_spelling[target_spelling.size() - 1] == '&' ||
+             target_spelling[target_spelling.size() - 1] == '*'))
+        target_spelling.erase(target_spelling.size() - 1, 1);
+      while(!target_spelling.empty() && target_spelling[target_spelling.size() - 1] == ' ')
+        target_spelling.erase(target_spelling.size() - 1, 1);
+      bool removed_cv = false;
+      if(target_spelling.size() >= 5 &&
+         target_spelling.compare(target_spelling.size() - 5, 5, "const") == 0) {
+        target_spelling.erase(target_spelling.size() - 5);
+        removed_cv = true;
+      } else if(target_spelling.size() >= 8 &&
+                target_spelling.compare(target_spelling.size() - 8, 8, "volatile") == 0) {
+        target_spelling.erase(target_spelling.size() - 8);
+        removed_cv = true;
+      }
+      while(!target_spelling.empty() && target_spelling[target_spelling.size() - 1] == ' ')
+        target_spelling.erase(target_spelling.size() - 1, 1);
+      if(!removed_cv) break;
+    }
+    if(target_spelling.empty()) return 0;
+    vector<string> words;
+    string word;
+    for(size_t i = 0; i <= target_spelling.size(); ++i) {
+      const char ch = i < target_spelling.size() ? target_spelling[i] : ' ';
+      if(isspace(static_cast<unsigned char>(ch))) {
+        if(!word.empty()) { words.push_back(word); word.clear(); }
+      } else word += ch;
+    }
+    string resolved_spelling;
+    for(size_t i = 0; i < words.size(); ++i) {
+      if(words[i] == "const" || words[i] == "volatile" ||
+         words[i] == "&" || words[i] == "&&" || words[i] == "*") continue;
+      if(words[i] == "::") {
+        while(!resolved_spelling.empty() && resolved_spelling[resolved_spelling.size() - 1] == ' ')
+          resolved_spelling.erase(resolved_spelling.size() - 1, 1);
+        resolved_spelling += "::";
+      } else {
+        if(!resolved_spelling.empty() && resolved_spelling[resolved_spelling.size() - 1] != ':')
+          resolved_spelling += " ";
+        resolved_spelling += words[i];
+      }
+    }
+    if(resolved_spelling.empty()) return 0;
+    CPPGMAstNodePtr target_node(new CPPGMAstNode("id-expression", resolved_spelling));
+    TypePtr target = BuiltinCastType(target_node, scope);
+    if(!target) {
+      Analyzer::PathTarget resolved = analyzer_.ResolvePath(scope, resolved_spelling);
+      if(resolved.binding && (resolved.binding->kind == BIND_TYPE ||
+                              resolved.binding->kind == BIND_TYPE_ALIAS))
+        target = resolved.binding->type;
+    }
+    if(!target) return 0;
+    const vector<Binding*> candidates = ConversionBindings(raw_source);
+    for(size_t i = 0; i < candidates.size(); ++i) {
+      TypePtr function = function_target_type(candidates[i]->type);
+      if(function && function->child &&
+         PA12SameType(type_value(function->child), type_value(target), true))
+        return candidates[i];
+    }
+    return 0;
+  }
+
 int PA14Lowerer::ConversionRankToClass(const ExprInfo& source,
                                        const TypePtr& target) const
 {
@@ -450,6 +649,11 @@ int PA14Lowerer::ConversionRank(const ExprInfo& source, const TypePtr& target) c
     TypePtr source_value = type_value(source.type);
     TypePtr target_value = type_value(target);
     if(!source_value || !target_value) return -1;
+    if(source_value->kind == TYPE_CLASS) {
+      int conversion_rank = -1;
+      if(FindConversionOperator(source_value, target, false, &conversion_rank))
+        return conversion_rank;
+    }
     if(target->kind == TYPE_LVALUE_REFERENCE || target->kind == TYPE_RVALUE_REFERENCE) {
       if(target->kind == TYPE_LVALUE_REFERENCE) {
         if(source.category == "lvalue") {
@@ -509,6 +713,9 @@ int PA14Lowerer::ConversionRank(const ExprInfo& source, const TypePtr& target) c
         return -1;
       }
       if(PA12SameType(source_value, target_value, true)) return 0;
+      if(source_value->kind == TYPE_CLASS && target_value->kind == TYPE_CLASS &&
+         IsDerivedFrom(source_value, target_value))
+        return BaseDistance(source_value, target_value);
       if(target_value->kind == TYPE_CLASS) {
         const vector<Binding*> constructors =
           MemberBindings(target_value, last_component(target_value->name));

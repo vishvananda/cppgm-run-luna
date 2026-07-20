@@ -168,12 +168,15 @@ class PA14Lowerer
     bool direct;
     bool member;
     bool static_member;
+    bool conversion;
+    int user_defined;
     int worst;
     int total;
 
     CallChoice()
       : binding(), function(), object(), direct(false), member(false),
-        static_member(false), worst(1000000), total(1000000) {}
+        static_member(false), conversion(false), user_defined(1000000),
+        worst(1000000), total(1000000) {}
   };
 
   struct Block
@@ -224,6 +227,7 @@ class PA14Lowerer
     unsigned int next_special;
     vector<map<string, VariablePlan*> > environments;
     VariablePlan* return_slot_plan;
+    string return_object_slot;
     map<string, unsigned int> variable_name_counts;
     set<string> reserved_value_names;
     map<const CPPGMAstNode*, string> case_labels;
@@ -236,7 +240,7 @@ class PA14Lowerer
     FunctionState(PA14Lowerer* lowerer, FunctionRecord* function)
       : owner(lowerer), record(function), variables(), plans(), special_slots(),
         special_slot_types(), slot_order(), temporary_objects(), blocks(), current(), next_temp(1), next_label(1),
-        next_special(1), environments(), return_slot_plan(0),
+        next_special(1), environments(), return_slot_plan(0), return_object_slot(),
         variable_name_counts(),
         reserved_value_names(), case_labels(), emitted_cases(), named_labels(),
         switch_end_targets(), break_targets(), continue_targets() {}
@@ -513,6 +517,26 @@ int ConversionRankToClass(const ExprInfo& source, const TypePtr& target) const
 
 ;
 
+vector<Binding*> ConversionBindings(const TypePtr& source) const
+
+;
+
+Binding* FindConversionOperator(const TypePtr& source, const TypePtr& target,
+                                bool allow_explicit, int* rank = 0) const
+
+;
+
+Binding* FindContextConversionOperator(const TypePtr& source,
+                                       bool allow_explicit,
+                                       bool boolean_context) const
+
+;
+
+Binding* FindNamedConversionOperator(const TypePtr& source,
+                                     const string& spelling, Scope* scope) const
+
+;
+
 bool DirectFunctionName(const CPPGMAstNodePtr& callee, Scope* scope) const
 
 ;
@@ -542,6 +566,10 @@ bool ClassHasDeclaredMoveMember(const TypePtr& type) const
 ;
 
 bool ClassValueNeedsIndirect(const TypePtr& type) const
+
+;
+
+bool IsEmptyBaseStorage(const TypePtr& type) const
 
 ;
 
@@ -606,6 +634,10 @@ bool HasConstructor(const TypePtr& type) const
 ;
 
 bool HasDefaultInitializationEffects(const TypePtr& type) const
+
+;
+
+bool HasDefaultConstructionEffects(const TypePtr& type) const
 
 ;
 
@@ -738,6 +770,16 @@ string StorageForVariable(const VariablePlan& variable) const
 Value ConvertValue(Value value, const TypePtr& target,
                    bool immediate_return = false,
                    bool adjust_derived_pointer = false)
+
+;
+
+Value EmitConversionOperator(const CPPGMAstNodePtr& node, Scope* scope,
+                             const TypePtr& target, bool allow_explicit)
+
+;
+
+Value EmitContextConversion(const CPPGMAstNodePtr& node, Scope* scope,
+                            bool allow_explicit, bool boolean_context)
 
 ;
 
@@ -1015,7 +1057,8 @@ void EmitTemporaryDestructors(size_t mark, Scope* scope)
 
 ;
 
-bool EmitDestructorAt(const TypePtr& object_type, const string& address, Scope* scope)
+bool EmitDestructorAt(const TypePtr& object_type, const string& address, Scope* scope,
+                      bool force_empty = false)
 
 ;
 
@@ -1167,6 +1210,10 @@ ExprInfo InferCall(const CPPGMAstNodePtr& node, Scope* scope)
 ;
 
 TypePtr ConstructorObjectType(const CPPGMAstNodePtr& callee, Scope* scope) const
+
+;
+
+TypePtr BuiltinCastType(const CPPGMAstNodePtr& callee, Scope* scope) const
 
 ;
 

@@ -144,6 +144,7 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
     }
     FunctionRecord* record = RecordForBinding(best_binding);
     if(record && base_entry) {
+      if(!BaseEntryFor(record)) EnsureConstructorBaseEntry(record);
       FunctionRecord* entry = BaseEntryFor(record);
       if(entry) record = entry;
     }
@@ -164,12 +165,29 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
       TypePtr target = i < best_function->parameters.size() ? best_function->parameters[i] : TypePtr();
       if(target && type_is_reference(target))
         operands.push_back(EmitReferenceArgument(arguments[i], scope, target));
+      else if(record && target && type_value(target) &&
+              type_value(target)->kind == TYPE_CLASS &&
+              LowParameterIsByAddress(*record,
+                (record->indirect_result ? 1 : 0) +
+                (record->member && !record->static_member ? 1 : 0) + i)) {
+        const string slot = new_special_slot("arg", low_type(type_value(target)));
+        const string argument_address = new_temp();
+        AddInstruction(argument_address + " = addr $" + slot);
+        if(!EmitObjectTransferAt(type_value(target), argument_address, arguments[i], scope, true))
+          throw logic_error("no viable value argument transfer");
+        operands.push_back(argument_address);
+      }
       else {
         Value value = target && type_value(target) &&
           type_value(target)->kind == TYPE_CLASS ?
           EmitObjectValueArgument(arguments[i], scope, target) :
           EmitValue(arguments[i], scope, target);
-        if(target) value = ConvertValue(value, target, false, true);
+        if(target && value.known_constant && is_integral_type(value.type) &&
+           is_integral_type(target) && type_size(target) > type_size(value.type) &&
+           !is_unsigned_type(target)) {
+          value.type = target;
+          value.operand = integer_text(value.constant);
+        } else if(target) value = ConvertValue(value, target, false, true);
         operands.push_back(value.operand);
       }
     }
@@ -224,8 +242,21 @@ PA14Lowerer::Value PA14Lowerer::EmitObjectValueArgument(
         empty_storage = false;
         break;
       }
-    if(empty_storage && IsTrivialValueStorage(object_type))
-      (void)EmitAddress(node, scope);
+    if(empty_storage && IsTrivialValueStorage(object_type)) {
+      const ExprInfo source_info = Infer(node, scope);
+      const TypePtr source_type = expression_value_type(source_info);
+      const TypePtr constructed = node && node->kind == "call-expression" &&
+        !node->children.empty() ? ConstructorObjectType(node->children[0], scope) : TypePtr();
+      if(constructed && PA12SameType(constructed, object_type, true)) {
+        if(!EmitObjectTransferAt(object_type, address, node, scope, true))
+          return EmitValue(node, scope, target);
+      } else {
+        const string source_address = EmitAddress(node, scope);
+        if(source_type && source_type->kind == TYPE_CLASS &&
+           IsDerivedFrom(source_type, object_type))
+          (void)AdjustBaseAddress(source_address, source_type, object_type);
+      }
+    }
     else if(!EmitObjectTransferAt(object_type, address, node, scope, true))
       return EmitValue(node, scope, target);
     Value result;
@@ -234,7 +265,7 @@ PA14Lowerer::Value PA14Lowerer::EmitObjectValueArgument(
     return result;
   }
 bool PA14Lowerer::EmitDestructorAt(const TypePtr& raw_object_type, const string& address,
-                                   Scope* scope)
+                                   Scope* scope, bool force_empty)
 {
     TypePtr object_type = type_value(raw_object_type);
     if(!object_type || object_type->kind != TYPE_CLASS) return false;
@@ -245,7 +276,8 @@ bool PA14Lowerer::EmitDestructorAt(const TypePtr& raw_object_type, const string&
       if(binding->kind != BIND_FUNCTION || !binding->is_member || binding->is_static) continue;
       FunctionRecord* record = RecordForBinding(binding);
       if(!record || !record->destructor) continue;
-      if(!DestructorHasEffects(object_type)) continue;
+      if(!HasDestructor(object_type)) continue;
+      if(!force_empty && !DestructorHasEffects(object_type)) continue;
       record->needed = true;
       FunctionRecord* base_entry = BaseEntryFor(record);
       if(base_entry) base_entry->needed = true;
@@ -264,15 +296,33 @@ bool PA14Lowerer::EmitObjectConstructor(VariablePlan* variable,
     TypePtr object_type = type_value(raw_object_type);
     if(!object_type || object_type->kind != TYPE_CLASS) return false;
     const vector<Binding*> candidates = MemberBindings(object_type, LastComponent(object_type->name));
+    const bool empty_base_only_default = object_type->direct_base &&
+      IsEmptyBaseStorage(object_type->direct_base) &&
+      !HasDefaultConstructionEffects(object_type);
+    if(empty_base_only_default) {
+      const vector<Binding*> base_constructors = MemberBindings(
+        type_value(object_type->direct_base),
+        LastComponent(type_value(object_type->direct_base)->name));
+      for(size_t i = 0; i < base_constructors.size(); ++i) {
+        FunctionRecord* base_record = RecordForBinding(base_constructors[i]);
+        if(!base_record || !base_record->constructor || base_record->copy_constructor ||
+           base_record->move_constructor || base_record->implicit_constructor) continue;
+        TypePtr base_function = function_target_type(base_constructors[i]->type);
+        if(base_function && base_function->parameters.empty()) {
+          base_record->needed = true;
+        }
+      }
+    }
     bool has_constructor = false;
     for(size_t i = 0; i < candidates.size(); ++i)
       if(candidates[i]->is_member && !candidates[i]->is_static &&
          candidates[i]->kind == BIND_FUNCTION && RecordForBinding(candidates[i]) &&
          RecordForBinding(candidates[i])->constructor &&
          !(raw_arguments.empty() && RecordForBinding(candidates[i])->defaulted &&
-           !HasDefaultInitializationEffects(object_type)) &&
+           (!HasDefaultInitializationEffects(object_type) || empty_base_only_default)) &&
          !(RecordForBinding(candidates[i])->implicit_constructor &&
-           (!raw_arguments.empty() || !HasDefaultInitializationEffects(object_type)))) {
+           (!raw_arguments.empty() ||
+            !HasDefaultInitializationEffects(object_type) || empty_base_only_default))) {
         has_constructor = true;
         break;
       }
@@ -294,8 +344,14 @@ void PA14Lowerer::EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr&
     if(!variable || !initializer) return;
     CPPGMAstNodePtr expression = InitializerExpression(initializer);
     if(type_is_reference(variable->type)) {
-      if(!expression) throw logic_error("reference initializer is empty");
-      const string address = EmitAddress(expression, scope);
+    if(!expression) throw logic_error("reference initializer is empty");
+      const ExprInfo source_info = Infer(expression, scope);
+      const TypePtr source_type = expression_value_type(source_info);
+      string address = EmitAddress(expression, scope);
+      const TypePtr target_type = type_value(variable->type);
+      if(source_type && target_type && source_type->kind == TYPE_CLASS &&
+         target_type->kind == TYPE_CLASS && IsDerivedFrom(source_type, target_type))
+        address = AdjustBaseAddress(address, source_type, target_type);
       emit_store(PointerTo(Fundamental("char")), address, StorageForVariable(*variable));
       return;
     }
@@ -319,7 +375,7 @@ void PA14Lowerer::EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr&
       if(expression->kind != "braced-init-list") return;
       TypePtr element_type = type_value(variable->type->child);
       for(size_t i = 0; i < expression->children.size(); ++i) {
-        Value value = EmitValue(expression->children[i], scope, variable->type->child);
+        Value value;
         string storage = base;
         if(i != 0) {
           const string index = new_temp();
@@ -350,6 +406,7 @@ void PA14Lowerer::EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr&
           EmitAggregateAt(storage, element_type, child, scope);
           continue;
         }
+        value = EmitValue(child, scope, variable->type->child);
         if(type_is_reference(variable->type->child)) {
           emit_store(PointerTo(Fundamental("char")),
             EmitReferenceArgument(child, scope, variable->type->child), storage);
@@ -406,9 +463,47 @@ void PA14Lowerer::EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr&
             destination = EmitAddress(CPPGMAstNodePtr(new CPPGMAstNode(
               "id-expression", variable->source_name)), scope);
           }
+          if(!variable->parameter && expression->kind == "conditional-expression" &&
+             PA12SameType(source_type, aggregate_type, true) &&
+             FindValueMember(aggregate_type, false, false) &&
+             HasDestructor(aggregate_type)) {
+            const string slot = new_special_slot("arg", low_type(aggregate_type));
+            const string argument_address = new_temp();
+            AddInstruction(argument_address + " = addr $" + slot);
+            if(!EmitObjectTransferAt(aggregate_type, argument_address, expression, scope, true))
+              throw logic_error("no viable conditional object initializer");
+            FunctionRecord* copy = FindValueMember(aggregate_type, false, false);
+            if(!copy) copy = EnsureImplicitCopyConstructor(aggregate_type, false);
+            if(!copy || copy->deleted)
+              throw logic_error("no viable conditional object copy initializer");
+            copy->needed = true;
+            FunctionRecord* base_entry = BaseEntryFor(copy);
+            if(base_entry) base_entry->needed = true;
+            AddInstruction("call void @" + copy->symbol + "(" + destination + ", " +
+              argument_address + ")");
+            (void)EmitDestructorAt(aggregate_type, argument_address, scope, true);
+            return;
+          }
           if(EmitObjectTransferAt(aggregate_type, destination, expression, scope,
                                   initializer->initializer_form != AST_INITIALIZER_COPY)) return;
         }
+      }
+      bool has_anonymous_union_member = false;
+      for(size_t i = 0; i < aggregate_type->class_members.size(); ++i) {
+        const ClassMemberInfo& member = aggregate_type->class_members[i];
+        TypePtr member_type = type_value(member.type);
+        if(member.name.empty() && member_type && member_type->kind == TYPE_CLASS &&
+           member_type->is_union) {
+          has_anonymous_union_member = true;
+          break;
+        }
+      }
+      if(has_anonymous_union_member && expression &&
+         expression->kind == "braced-init-list") {
+        variable->initialization_address.clear();
+        CPPGMAstNodePtr object_node(new CPPGMAstNode("id-expression", variable->source_name));
+        EmitAggregateAt(string(), aggregate_type, expression, scope, object_node);
+        return;
       }
       FunctionRecord* aggregate_candidate = EnsureAggregateConstructor(aggregate_type);
       vector<CPPGMAstNodePtr> constructor_arguments;
@@ -458,7 +553,13 @@ void PA14Lowerer::EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr&
        scalar_target->kind != TYPE_CLASS &&
        scalar_target->kind != TYPE_ARRAY && !type_is_reference(variable->type)) {
       ExprInfo source_info = Infer(expression, scope, variable->type);
-      if(ConversionRank(source_info, variable->type) < 0)
+      const bool direct_initializer = initializer->initializer_form == AST_INITIALIZER_DIRECT_PAREN ||
+        initializer->initializer_form == AST_INITIALIZER_DIRECT_LIST;
+      const bool explicit_conversion = direct_initializer &&
+        expression_value_type(source_info) &&
+        expression_value_type(source_info)->kind == TYPE_CLASS &&
+        FindConversionOperator(expression_value_type(source_info), variable->type, true);
+      if(ConversionRank(source_info, variable->type) < 0 && !explicit_conversion)
         throw logic_error("invalid initializer conversion");
     }
     if(initializer->initializer_form == AST_INITIALIZER_DIRECT_LIST && expression &&
@@ -499,10 +600,24 @@ void PA14Lowerer::EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr&
         emit_store(variable->type, "0", StorageForVariable(*variable));
       return;
     }
-    Value value = EmitValue(expression, scope, type_value(variable->type));
+    Value value;
+    ExprInfo source_info = Infer(expression, scope, type_value(variable->type));
+    const bool direct_initializer = initializer->initializer_form == AST_INITIALIZER_DIRECT_PAREN ||
+      initializer->initializer_form == AST_INITIALIZER_DIRECT_LIST;
+    if(direct_initializer && expression_value_type(source_info) &&
+       expression_value_type(source_info)->kind == TYPE_CLASS &&
+       FindConversionOperator(expression_value_type(source_info), variable->type, true)) {
+      value = EmitConversionOperator(expression, scope, variable->type, true);
+      if(value.lvalue && value.type) {
+        value.operand = emit_load(value.operand, value.type);
+        value.lvalue = false;
+      }
+    } else value = EmitValue(expression, scope, type_value(variable->type));
     if(value.known_constant && is_integral_type(value.type) &&
        is_integral_type(variable->type) &&
-       type_size(variable->type) <= type_size(value.type)) {
+       (type_size(variable->type) <= type_size(value.type) ||
+        (!is_unsigned_type(variable->type) &&
+         type_size(variable->type) > type_size(value.type)))) {
       value.type = type_value(variable->type);
       value.operand = integer_text(value.constant);
     } else value = ConvertValue(value, type_value(variable->type));
@@ -557,8 +672,13 @@ void PA14Lowerer::EmitReturn(const CPPGMAstNodePtr& node, Scope* scope)
         Terminate("return void");
         return;
       }
+      const ExprInfo expression_info = Infer(expression, scope);
+      TypePtr move_source_type = type_value(expression_info.type);
+      if(expression_info.type && type_is_reference(expression_info.type))
+        move_source_type = type_value(expression_info.type->child);
       const bool implicit_return_move = expression->kind == "id-expression" &&
-        FindLocalPlan(expression->value);
+        FindLocalPlan(expression->value) && move_source_type &&
+        !move_source_type->is_const;
       if(!EmitObjectTransferAt(type_value(return_type), "%" + names[0],
                                expression, scope, true, implicit_return_move))
         throw logic_error("no viable return value transfer");
@@ -593,11 +713,18 @@ void PA14Lowerer::EmitReturn(const CPPGMAstNodePtr& node, Scope* scope)
     }
     TypePtr return_value_type = type_value(return_type);
     if(return_value_type && return_value_type->kind == TYPE_CLASS) {
-      const string slot = new_special_slot("retobj", low_type(return_value_type));
+      if(state_->return_object_slot.empty())
+        state_->return_object_slot = new_special_slot("retobj", low_type(return_value_type));
+      const string slot = state_->return_object_slot;
       const string destination = new_temp();
       AddInstruction(destination + " = addr $" + slot);
+      const ExprInfo expression_info = Infer(expression, scope);
+      TypePtr move_source_type = type_value(expression_info.type);
+      if(expression_info.type && type_is_reference(expression_info.type))
+        move_source_type = type_value(expression_info.type->child);
       const bool implicit_return_move = expression->kind == "id-expression" &&
-        FindLocalPlan(expression->value);
+        FindLocalPlan(expression->value) && move_source_type &&
+        !move_source_type->is_const;
       if(!EmitObjectTransferAt(return_value_type, destination, expression, scope, true,
                                implicit_return_move))
         throw logic_error("no viable direct class return transfer");
@@ -734,6 +861,19 @@ void PA14Lowerer::EmitFor(const CPPGMAstNodePtr& node, Scope* scope)
     }
     if(!state_->current->terminated) Terminate("jump ^" + condition_label);
     AddBlock(end_label);
+    map<string, VariablePlan*>& environment = state_->environments.back();
+    for(size_t i = state_->variables.size(); i > 0; --i) {
+      VariablePlan& variable = state_->variables[i - 1];
+      bool bound_here = false;
+      for(map<string, VariablePlan*>::const_iterator it = environment.begin();
+          it != environment.end(); ++it)
+        if(it->second == &variable) { bound_here = true; break; }
+      if(!bound_here || type_is_reference(variable.type)) continue;
+      TypePtr object_type = type_value(variable.type);
+      if(object_type && object_type->kind == TYPE_CLASS &&
+         DestructorHasEffects(object_type))
+        (void)EmitDestructorAt(object_type, local_address(&variable), scope);
+    }
     LeaveEnvironment();
   }
 
@@ -824,9 +964,23 @@ void PA14Lowerer::EmitSwitch(const CPPGMAstNodePtr& node, Scope* scope)
       VariablePlan* variable = BindCondition(condition);
       if(!variable || condition->children.size() < 3)
         throw logic_error("invalid switch condition declaration");
+      if(!variable->slot_declared) {
+        variable->slot_declared = true;
+        state_->slot_order.push_back(FunctionState::SlotEntry(
+          false, variable->slot_name, variable));
+      }
       EmitInitializer(variable, condition->children[2], scope);
-      selector = EmitValue(CPPGMAstNodePtr(new CPPGMAstNode(
-        "id-expression", variable->source_name)), scope);
+      CPPGMAstNodePtr selector_id(new CPPGMAstNode("id-expression", variable->source_name));
+      ExprInfo selector_info = Infer(selector_id, scope);
+      TypePtr selector_type = expression_value_type(selector_info);
+      if(selector_type && selector_type->kind == TYPE_CLASS &&
+         FindContextConversionOperator(selector_type, false, false))
+        selector = EmitContextConversion(selector_id, scope, false, false);
+      else selector = EmitValue(selector_id, scope);
+      if(selector.lvalue && selector.type) {
+        selector.operand = emit_load(selector.operand, selector.type);
+        selector.lvalue = false;
+      }
     } else {
       selector = EmitValue(condition, scope);
     }
@@ -893,7 +1047,29 @@ void PA14Lowerer::EmitDiscard(const CPPGMAstNodePtr& node, Scope* scope)
       return;
     }
     if(node->kind == "call-expression") {
-      EmitCall(node, scope);
+      ExprInfo info = Infer(node, scope);
+      TypePtr value_type = expression_value_type(info);
+      if(value_type && value_type->kind == TYPE_CLASS &&
+         !type_is_reference(info.type)) {
+        const string slot = new_special_slot("discard", low_type(value_type));
+        const string destination = new_temp();
+        AddInstruction(destination + " = addr $" + slot);
+        CallChoice choice = ChooseCall(node, scope);
+        const CPPGMAstNodePtr argument_list = node->children.size() > 1 ?
+          node->children[1] : CPPGMAstNodePtr();
+        const vector<CPPGMAstNodePtr> arguments = argument_list ?
+          argument_list->children : vector<CPPGMAstNodePtr>();
+        FunctionRecord* record = choice.binding ? RecordForBinding(choice.binding) : 0;
+        Value result = EmitChosenCall(choice, node->children[0], arguments, scope,
+                                      destination);
+        if(!record || !record->indirect_result)
+          AddInstruction("copyobj " + integer_text(static_cast<long long>(type_size(value_type))) +
+            "x" + integer_text(static_cast<long long>(type_alignment(value_type))) +
+            " " + result.operand + ", " + destination);
+        RegisterTemporaryObject(value_type, destination);
+      } else {
+        EmitCall(node, scope);
+      }
       return;
     }
     if(node->kind == "binary-expression" && PA12Operator(node->value) == ",") {
@@ -946,7 +1122,8 @@ void PA14Lowerer::EmitStatement(const CPPGMAstNodePtr& node, Scope* scope)
           TypePtr object_type = type_value(variable.type);
           if(!object_type) continue;
           if(object_type->kind == TYPE_CLASS) {
-            (void)EmitDestructorAt(object_type, local_address(&variable), scope);
+            if(HasDestructor(object_type))
+              (void)EmitDestructorAt(object_type, local_address(&variable), scope);
             continue;
           }
           TypePtr element_type = object_type->child ? type_value(object_type->child) : TypePtr();
@@ -1011,17 +1188,18 @@ void PA14Lowerer::EmitStatement(const CPPGMAstNodePtr& node, Scope* scope)
             EmitInitializer(found->second, item->children[1], scope);
           else if(found != state_->plans.end() && type_value(found->second->type) &&
                   type_value(found->second->type)->kind == TYPE_CLASS) {
-            (void)EmitObjectConstructor(found->second, type_value(found->second->type),
+            const bool constructed = EmitObjectConstructor(
+              found->second, type_value(found->second->type),
               vector<CPPGMAstNodePtr>(), scope);
-            if(!found->second->initialization_address.empty())
+            if(!constructed && !found->second->initialization_address.empty())
               (void)EmitAddress(CPPGMAstNodePtr(new CPPGMAstNode(
                 "id-expression", found->second->source_name)), scope);
-            else if(HasConstructor(found->second->type) &&
+            else if(!constructed && HasConstructor(found->second->type) &&
                     !HasDefaultInitializationEffects(found->second->type))
               (void)EmitAddress(CPPGMAstNodePtr(new CPPGMAstNode(
                 "id-expression", found->second->source_name)), scope);
-            else if(!HasConstructor(found->second->type) &&
-                    HasDestructor(found->second->type))
+            else if(!constructed && !HasConstructor(found->second->type) &&
+                    DestructorHasEffects(found->second->type))
               (void)EmitAddress(CPPGMAstNodePtr(new CPPGMAstNode(
                 "id-expression", found->second->source_name)), scope);
           }
@@ -1125,7 +1303,6 @@ string PA14Lowerer::EmitFunction(FunctionRecord& function)
         state.slot_order.push_back(FunctionState::SlotEntry(
           false, state.variables[i].slot_name, &state.variables[i]));
       }
-
     const bool entry = function.qualified_name == "main";
     ostringstream header;
     header << "function @" << function.symbol << "(";
@@ -1200,10 +1377,9 @@ string PA14Lowerer::EmitFunction(FunctionRecord& function)
     else if(function.constructor && !function.aggregate_constructor)
       EmitConstructorInitializers(function, scope);
     if(function.aggregate_constructor) EmitAggregateConstructorBody(function, scope);
-    CPPGMAstNodePtr body = function.constructor || function.destructor ?
-      ChildOfKind(function.node, "compound-statement") :
-      (function.node && function.node->children.size() > 2 ? function.node->children[2] :
-       CPPGMAstNodePtr());
+    CPPGMAstNodePtr body = ChildOfKind(function.node, "compound-statement");
+    if(!body && function.node && function.node->children.size() > 2)
+      body = function.node->children[2];
     if(body && !(function.value_special_member &&
                  (function.defaulted || function.implicit_constructor))) EmitStatement(body, scope);
     if(function.destructor) EmitDestructorBody(function, scope);

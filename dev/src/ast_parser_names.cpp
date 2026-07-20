@@ -100,10 +100,26 @@ bool Parser::ParseOperatorName(string* value, bool allow_template)
 	}
 	else if (Peek().kind == AST_IDENTIFIER)
 	{
+		// Conversion-function-ids can name a qualified class type and may carry
+		// cv/ref spelling before the call parentheses.  Keep that complete
+		// type-id together so an explicit conversion call remains one name.
 		string type;
-		ParseIdentifierName(&type);
+		while (!AtEnd() && !Is("("))
+		{
+			if (!type.empty() &&
+			    (isalnum(static_cast<unsigned char>(type[type.size() - 1])) ||
+			     type[type.size() - 1] == '_') &&
+			    (isalnum(static_cast<unsigned char>(Peek().text[0])) ||
+			     Peek().text[0] == '_')) type += " ";
+			type += Peek().text;
+			++position_;
+		}
+		if (type.empty())
+		{
+			Restore(mark);
+			return false;
+		}
 		result += type;
-		if (allow_template) ParseTemplateSuffix(&result);
 	}
 	else if (IsFundamental(Peek().text))
 	{

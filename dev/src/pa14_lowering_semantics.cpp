@@ -1,9 +1,23 @@
 #include "pa14_lowering.h"
 
-
 using namespace std;
 
 namespace cppgm_pa14_lowering {
+
+namespace {
+
+string TypeNameValue(const CPPGMAstNodePtr& node)
+{
+    if(!node) return string();
+    if(node->kind == "type-name") return StripTypeMarker(node->value);
+    for(size_t i = 0; i < node->children.size(); ++i) {
+      const string found = TypeNameValue(node->children[i]);
+      if(!found.empty()) return found;
+    }
+    return string();
+  }
+
+} // namespace
 
 CPPGMAstNodePtr PA14Lowerer::MakeMemberCall(const CPPGMAstNodePtr& object,
                                              const string& name,
@@ -49,9 +63,13 @@ vector<Binding*> PA14Lowerer::LookupUnqualifiedAll(Scope* from, const string& na
 	    if(!all_direct[i]->hidden_friend) direct.push_back(all_direct[i]);
       if(!direct.empty()) return direct;
       vector<Binding*> imported;
-      set<Scope*> visited;
-      for(size_t i = 0; i < scope->using_directives.size(); ++i)
+      // Keep lookup paths from distinct using-directives separate.  The same
+      // declaration reached through two directives is still ambiguous; a
+      // single visited set here incorrectly erased that fact.
+      for(size_t i = 0; i < scope->using_directives.size(); ++i) {
+        set<Scope*> visited;
         AppendBindings(scope->using_directives[i], name, imported, visited);
+      }
       if(!imported.empty()) return imported;
       if(scope->kind == SCOPE_CLASS && scope->owner_type) {
         vector<Binding*> inherited = MemberBindings(scope->owner_type, name);
@@ -161,9 +179,12 @@ void PA14Lowerer::AppendAssociatedOperatorBindings(const TypePtr& raw_type,
       associated = associated->parent;
     if(associated && visited_scopes.insert(associated).second) {
       const vector<Binding*> namespace_bindings = DirectBindings(associated, last_component(name));
+      const string expected_name = associated->qualified_prefix.empty() ?
+        last_component(name) : associated->qualified_prefix + "::" + last_component(name);
       for(size_t i = 0; i < namespace_bindings.size(); ++i)
         if(namespace_bindings[i]->kind == BIND_FUNCTION &&
            !namespace_bindings[i]->is_member && !namespace_bindings[i]->hidden_friend &&
+           namespace_bindings[i]->qualified_name == expected_name &&
            find(result.begin(), result.end(), namespace_bindings[i]) == result.end())
           result.push_back(namespace_bindings[i]);
     }
@@ -295,6 +316,12 @@ Binding* PA14Lowerer::MemberBinding(const CPPGMAstNodePtr& node, Scope* scope,
       object = type_value(object->child);
     }
     vector<Binding*> candidates = MemberBindings(object, node->children[1]->value);
+    if(candidates.empty() && node->children[1] &&
+       node->children[1]->value.compare(0, 8, "operator") == 0) {
+      Binding* conversion = FindNamedConversionOperator(object,
+        node->children[1]->value, scope);
+      if(conversion) candidates.push_back(conversion);
+    }
     if(candidates.empty()) return 0;
     Binding* selected = 0;
     for(size_t i = 0; i < candidates.size(); ++i) {
@@ -407,6 +434,15 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferIdentifier(const CPPGMAstNodePtr& node, 
       return result;
     }
     result.candidates = Lookup(node->value, scope);
+    if(result.candidates.size() > 1) {
+      bool repeated_binding = true;
+      for(size_t i = 1; i < result.candidates.size(); ++i)
+        if(result.candidates[i] != result.candidates[0]) {
+          repeated_binding = false;
+          break;
+        }
+      if(repeated_binding) throw logic_error("ambiguous expression name: " + node->value);
+    }
     if(expected && !result.candidates.empty()) {
       TypePtr target = type_value(expected);
       Binding* selected = 0;
@@ -565,6 +601,12 @@ TypePtr PA14Lowerer::CommonType(const TypePtr& left, const TypePtr& right,
           lp->name == "unsigned long int" || rp->name == "unsigned long int"))
         return Fundamental((lp->name.find("unsigned") != string::npos ||
           rp->name.find("unsigned") != string::npos) ? "unsigned long int" : "long int");
+      if(lp && rp) {
+        if(type_size(lp) > type_size(rp)) return lp;
+        if(type_size(rp) > type_size(lp)) return rp;
+        if(lp->name.find("unsigned") != string::npos) return lp;
+        if(rp->name.find("unsigned") != string::npos) return rp;
+      }
       return Fundamental("int");
     }
     (void)op;
@@ -608,6 +650,13 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferCall(const CPPGMAstNodePtr& node, Scope*
       result.category = "prvalue";
       return result;
     }
+    TypePtr builtin_type = BuiltinCastType(
+      node && !node->children.empty() ? node->children[0] : CPPGMAstNodePtr(), scope);
+    if(builtin_type) {
+      result.type = builtin_type;
+      result.category = "prvalue";
+      return result;
+    }
     CallChoice choice = ChooseCall(node, scope);
     result.type = choice.function->child;
     if(result.type && result.type->kind == TYPE_LVALUE_REFERENCE) result.category = "lvalue";
@@ -634,6 +683,32 @@ TypePtr PA14Lowerer::ConstructorObjectType(const CPPGMAstNodePtr& callee,
     return TypePtr();
   }
 
+TypePtr PA14Lowerer::BuiltinCastType(const CPPGMAstNodePtr& callee,
+                                      Scope* scope) const
+{
+    CPPGMAstNodePtr effective = callee;
+    while(effective && effective->kind == "parenthesized-expression" &&
+          !effective->children.empty()) effective = effective->children[0];
+    if(!effective || effective->kind != "id-expression" ||
+       effective->value.find("::") != string::npos) return TypePtr();
+    const string name = effective->value;
+    if(name == "bool" || name == "char" || name == "signed char" ||
+       name == "unsigned char" || name == "short" || name == "short int" ||
+       name == "unsigned short" || name == "unsigned short int" ||
+       name == "int" || name == "unsigned" || name == "unsigned int" ||
+       name == "long" || name == "long int" || name == "unsigned long" ||
+       name == "unsigned long int" || name == "long long" ||
+       name == "long long int" || name == "unsigned long long" ||
+       name == "unsigned long long int" || name == "float" ||
+       name == "double" || name == "long double" || name == "void" ||
+       name == "nullptr_t") return Fundamental(name);
+    Analyzer::PathTarget target = analyzer_.ResolvePath(scope, name);
+    if(!target.binding || (target.binding->kind != BIND_TYPE &&
+                           target.binding->kind != BIND_TYPE_ALIAS)) return TypePtr();
+    TypePtr alias = target.binding->type;
+    return alias && type_value(alias) && type_value(alias)->kind != TYPE_CLASS ? alias : TypePtr();
+  }
+
 PA14Lowerer::ExprInfo PA14Lowerer::InferUnary(const CPPGMAstNodePtr& node, Scope* scope)
 {
     ExprInfo result;
@@ -651,6 +726,15 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferUnary(const CPPGMAstNodePtr& node, Scope
       return result;
     }
     TypePtr value = expression_value_type(child);
+    if(value && value->kind == TYPE_CLASS && op != "&" && op != "*") {
+      Binding* conversion = FindContextConversionOperator(value, op == "!", op == "!");
+      if(conversion) {
+        TypePtr function = function_target_type(conversion->type);
+        result.type = function ? function->child : Fundamental("int");
+        result.category = "prvalue";
+        return result;
+      }
+    }
     if(op == "&") result.type = PointerTo(value);
     else if(op == "*") {
       if(!value || (value->kind != TYPE_POINTER && value->kind != TYPE_ARRAY))
@@ -677,7 +761,56 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferBinary(const CPPGMAstNodePtr& node, Scop
     operator_arguments.push_back(node->children[1]);
     CallChoice overloaded = ChooseOperatorCall(OperatorFunctionName(op),
       operator_arguments, scope);
-    if(overloaded.binding) {
+    bool prefer_builtin = false;
+    const bool comparison = op == "==" || op == "!=" || op == "not_eq" ||
+      op == "<" || op == ">" || op == "<=" || op == ">=";
+    if(overloaded.binding && comparison) {
+      TypePtr left_type = expression_value_type(left);
+      TypePtr right_type = expression_value_type(right);
+      int builtin_user_defined = 0;
+      if(left_type && left_type->kind == TYPE_CLASS && right_type &&
+         right_type->kind != TYPE_CLASS) {
+        Binding* conversion = FindConversionOperator(left_type, right_type, false);
+        if(conversion) {
+          ++builtin_user_defined;
+          TypePtr function = function_target_type(conversion->type);
+          left_type = function ? type_value(function->child) : left_type;
+        }
+      } else if(right_type && right_type->kind == TYPE_CLASS && left_type &&
+                left_type->kind != TYPE_CLASS) {
+        Binding* conversion = FindConversionOperator(right_type, left_type, false);
+        if(conversion) {
+          ++builtin_user_defined;
+          TypePtr function = function_target_type(conversion->type);
+          right_type = function ? type_value(function->child) : right_type;
+        }
+      } else if(left_type && right_type && left_type->kind == TYPE_CLASS &&
+                right_type->kind == TYPE_CLASS) {
+        const vector<Binding*> conversions = ConversionBindings(left_type);
+        for(size_t i = 0; i < conversions.size(); ++i) {
+          TypePtr function = function_target_type(conversions[i]->type);
+          TypePtr result_type = function ? type_value(function->child) : TypePtr();
+          if(result_type && FindConversionOperator(right_type, result_type, false)) {
+            ++builtin_user_defined;
+            ++builtin_user_defined;
+            left_type = result_type;
+            right_type = result_type;
+            break;
+          }
+        }
+      }
+      TypePtr common = CommonType(left_type, right_type, op);
+      const int left_rank = common ? ConversionRank(left, common) : -1;
+      const int right_rank = common ? ConversionRank(right, common) : -1;
+      const bool builtin_type = common && type_value(common) &&
+        type_value(common)->kind != TYPE_CLASS;
+      if(builtin_type && left_rank >= 0 && right_rank >= 0 &&
+         (builtin_user_defined < overloaded.user_defined ||
+          (builtin_user_defined == overloaded.user_defined &&
+           max(left_rank, right_rank) < overloaded.worst)))
+        prefer_builtin = true;
+    }
+    if(overloaded.binding && !prefer_builtin) {
       result.type = overloaded.function->child;
       result.category = type_is_reference(result.type) ?
         (result.type->kind == TYPE_LVALUE_REFERENCE ? "lvalue" : "xvalue") : "prvalue";
@@ -801,7 +934,18 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferUncached(const CPPGMAstNodePtr& node, Sc
       if(value && value->kind == TYPE_CLASS) {
         vector<CPPGMAstNodePtr> arguments;
         arguments.push_back(node->children[1]);
-        return InferCall(MakeMemberCall(node->children[0], "operator[]", arguments), scope);
+        if(!MemberBindings(value, "operator[]").empty())
+          return InferCall(MakeMemberCall(node->children[0], "operator[]", arguments), scope);
+        Binding* conversion = FindContextConversionOperator(value, false, false);
+        TypePtr function = conversion ? function_target_type(conversion->type) : TypePtr();
+        TypePtr pointer = function ? type_value(function->child) : TypePtr();
+        if(pointer && pointer->kind == TYPE_POINTER) {
+          ExprInfo result;
+          result.type = pointer->child;
+          result.category = "lvalue";
+          return result;
+        }
+        throw logic_error("subscript base has no pointer conversion");
       }
       if((!value || (value->kind != TYPE_ARRAY && value->kind != TYPE_POINTER)) &&
          node->children.size() > 1) {
@@ -829,7 +973,11 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferUncached(const CPPGMAstNodePtr& node, Sc
       result.known_constant = true;
       const CPPGMAstNodePtr child = node->children.empty() ? CPPGMAstNodePtr() : node->children[0];
       TypePtr type;
-      if(child && child->kind == "type-id") type = analyzer_.TypeFromTypeId(child, scope);
+      if(child && child->kind == "type-id") {
+        const string local_name = TypeNameValue(child);
+        VariablePlan* local = local_name.empty() ? 0 : FindLocalPlan(local_name);
+        type = local ? type_value(local->type) : analyzer_.TypeFromTypeId(child, scope);
+      }
       else if(child) type = Infer(child, scope).type;
       result.constant = node->kind == "type-trait-expression" ?
         static_cast<long long>(type_alignment(type)) : static_cast<long long>(type_size(type));

@@ -605,6 +605,31 @@ bool PA14Lowerer::EmitObjectTransferAt(const TypePtr& raw_target,
     const bool move = source_info.category == "xvalue" || implicit_return_move;
     if(source_type && source_type->kind == TYPE_CLASS &&
        IsDerivedFrom(source_type, target)) {
+      FunctionRecord* target_copy = FindValueMember(target, false, false);
+      bool has_single_argument_conversion = false;
+      const vector<Binding*> target_constructors =
+        MemberBindings(target, LastComponent(target->name));
+      for(size_t i = 0; i < target_constructors.size(); ++i) {
+        FunctionRecord* candidate = RecordForBinding(target_constructors[i]);
+        TypePtr candidate_type = function_target_type(target_constructors[i]->type);
+        if(candidate && candidate->constructor && !candidate->copy_constructor &&
+           !candidate->move_constructor && candidate_type &&
+           candidate_type->parameters.size() == 1) {
+          has_single_argument_conversion = true;
+          break;
+        }
+      }
+      if(IsTrivialValueStorage(target) && target_copy && !target_copy->deleted &&
+         (target_copy->defaulted || target_copy->implicit_constructor ||
+          target_copy->synthesized_value_member) && !has_single_argument_conversion &&
+         (source_info.category == "lvalue" || source_info.category == "xvalue")) {
+        string source_address = AdjustBaseAddress(EmitAddress(source, scope),
+          source_type, target);
+        AddInstruction("copyobj " + integer_text(static_cast<long long>(type_size(target))) +
+          "x" + integer_text(static_cast<long long>(type_alignment(target))) + " " +
+          source_address + ", " + destination);
+        return true;
+      }
       vector<CPPGMAstNodePtr> constructor_arguments;
       constructor_arguments.push_back(source);
       if(EmitConstructorAt(target, destination, constructor_arguments, scope,
@@ -793,12 +818,27 @@ void PA14Lowerer::EmitAggregateClassFields(const string& base, const TypePtr& ra
     for(size_t i = 0; i < type->class_members.size() &&
         *child_index < expression->children.size(); ++i) {
       const ClassMemberInfo& member = type->class_members[i];
-      if(member.is_static || member.name.empty() || !member.type) continue;
+      if(member.is_static || !member.type) continue;
       const size_t current_child_index = *child_index;
-      const CPPGMAstNodePtr child = expression->children[(*child_index)++];
+      CPPGMAstNodePtr child = expression->children[(*child_index)++];
       const bool refresh_field_base = refresh_node &&
         (current_child_index > 0 || base.empty());
       TypePtr child_type = type_value(member.type);
+      if(member.name.empty()) {
+        if(child_type && child_type->kind == TYPE_CLASS && child_type->is_union) {
+          const string field_base = refresh_field_base ?
+            EmitAddress(refresh_node, scope) : base;
+          const string field = new_temp();
+          AddInstruction(field + " = index i8 [projection=field] " + field_base + ", " +
+            integer_text(member.offset));
+          // The anonymous union is itself a member projection.  Keep the
+          // nested active-member projection visible in LowIR instead of
+          // collapsing the union's first member onto the outer storage.
+          EmitAggregateAt(field, child_type, child, scope,
+                          CPPGMAstNodePtr(), -1, false);
+        }
+        continue;
+      }
       Value precomputed_value;
       const bool precompute_address_of = child &&
         child->kind == "unary-expression" &&
@@ -819,6 +859,9 @@ void PA14Lowerer::EmitAggregateClassFields(const string& base, const TypePtr& ra
       for(size_t j = 0; j < member_bindings.size(); ++j)
         if(member_bindings[j]->kind == BIND_VARIABLE && member_bindings[j]->is_member &&
            !member_bindings[j]->is_static) { member_binding = member_bindings[j]; break; }
+      if(member_binding && member_binding->injected_member && child &&
+         child->kind == "braced-init-list" && child->children.size() == 1)
+        child = child->children[0];
       if(member_binding && IsBitField(member_binding)) {
         Value value = have_precomputed_value ? precomputed_value :
           EmitValue(child, scope, child_type);
@@ -947,7 +990,18 @@ void PA14Lowerer::EmitAggregateClassDefaults(const string& base, const TypePtr& 
       const ClassMemberInfo& member = type->class_members[i];
       if(member.is_static || member.name.empty() || !member.type) continue;
       const size_t member_position = consumed++;
+      // A union aggregate initializes at most its first active member.  The
+      // other members share the same storage and must not be zeroed or
+      // constructed after that initialization.
+      if(type->is_union && member_position > 0) break;
       if(member_position < child_index) continue;
+      const vector<Binding*> member_bindings =
+        DirectBindings(type->owned_scope, member.name);
+      bool injected_member = false;
+      for(size_t j = 0; j < member_bindings.size(); ++j)
+        if(member_bindings[j]->kind == BIND_VARIABLE &&
+           member_bindings[j]->injected_member) { injected_member = true; break; }
+      if(injected_member) continue;
       TypePtr member_type = type_value(member.type);
       if(!member.initializer && member_type && member_type->kind == TYPE_CLASS &&
          member_type->class_members.empty() && !member_type->direct_base &&
@@ -1030,11 +1084,26 @@ void PA14Lowerer::EmitAggregateConstructorBody(FunctionRecord& function, Scope* 
       const ClassMemberInfo& member = owner->class_members[i];
       if(member.is_static || member.name.empty() || !member.type) continue;
       if(parameter >= names.size()) break;
-      const string value = emit_load("$" + names[parameter], member.type);
+      const bool by_address = LowParameterIsByAddress(function, parameter) &&
+        type_value(member.type) && type_value(member.type)->kind == TYPE_CLASS;
+      string value;
+      if(!by_address) value = emit_load("$" + names[parameter], member.type);
       const string this_address = EmitValue(this_node, scope).operand;
       const string address = new_temp();
       AddInstruction(address + " = index i8 " + this_address + ", " +
         integer_text(member.offset));
+      if(by_address) {
+        FunctionRecord* value_member = EnsureImplicitCopyConstructor(member.type, true);
+        if(!value_member || value_member->deleted)
+          value_member = EnsureImplicitCopyConstructor(member.type, false);
+        if(value_member && !value_member->deleted) {
+          value_member->needed = true;
+          AddInstruction("call void @" + value_member->symbol + "(" + address + ", %" +
+            names[parameter] + ")");
+          ++parameter;
+          continue;
+        }
+      }
       Binding* binding = 0;
       vector<Binding*> candidates = DirectBindings(owner->owned_scope, member.name);
       for(size_t j = 0; j < candidates.size(); ++j)
@@ -1075,6 +1144,7 @@ void PA14Lowerer::EmitDestructorBody(FunctionRecord& function, Scope* scope)
           (void)EmitDestructorAt(element_type, element, scope);
         }
       } else if(member_type->kind == TYPE_CLASS) {
+        if(!HasDestructor(member_type)) continue;
         const string address = EmitMemberAddress(expression, scope);
         (void)EmitDestructorAt(member_type, address, scope);
       }
@@ -1110,14 +1180,17 @@ void PA14Lowerer::EmitLiveDestructors(Scope* scope)
       TypePtr object_type = type_value(variable.type);
       if(!object_type) continue;
       if(object_type->kind == TYPE_CLASS) {
-        if(!DestructorHasEffects(object_type)) continue;
-        (void)EmitDestructorAt(object_type, local_address(&variable), scope);
+        if(variable.parameter ? !HasDestructor(object_type) :
+           (!HasDestructor(object_type) || !DestructorHasEffects(object_type))) continue;
+        (void)EmitDestructorAt(object_type, local_address(&variable), scope,
+          variable.parameter);
         continue;
       }
       TypePtr element_type = object_type->child ? type_value(object_type->child) : TypePtr();
       if(object_type->kind != TYPE_ARRAY || object_type->bound < 0 ||
          !element_type || element_type->kind != TYPE_CLASS ||
-         !DestructorHasEffects(element_type)) continue;
+         (variable.parameter ? !HasDestructor(element_type) :
+          (!HasDestructor(element_type) || !DestructorHasEffects(element_type)))) continue;
       for(size_t element_index = 0;
           element_index < static_cast<size_t>(object_type->bound); ++element_index) {
         const string base = local_address(&variable);
@@ -1126,7 +1199,7 @@ void PA14Lowerer::EmitLiveDestructors(Scope* scope)
         const string element = new_temp();
         AddInstruction(element + " = index i8 " + decay + ", " +
           integer_text(static_cast<long long>(element_index)));
-        (void)EmitDestructorAt(element_type, element, scope);
+        (void)EmitDestructorAt(element_type, element, scope, variable.parameter);
       }
     }
   }

@@ -4,6 +4,21 @@ using namespace std;
 
 namespace cppgm_pa14_lowering {
 
+namespace {
+
+string SpecialMemberName(const string& raw_name)
+{
+    const size_t operator_pos = raw_name.rfind("operator");
+    if(operator_pos != string::npos) {
+      string suffix = raw_name.substr(operator_pos + 8);
+      while(!suffix.empty() && suffix[0] == ' ') suffix.erase(0, 1);
+      return "operator" + suffix;
+    }
+    return LastComponent(raw_name);
+  }
+
+} // namespace
+
 void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, bool definition)
 {
     if(!node || node->children.size() < 2) throw logic_error("invalid function declaration");
@@ -222,7 +237,7 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
     if(!declarator) throw logic_error("special member has no declarator");
     Analyzer::SpecFacts facts;
     TypePtr function;
-    const string declared_name = LastComponent(declarator_name(declarator));
+    const string declared_name = SpecialMemberName(declarator_name(declarator));
     const vector<Binding*> declared_bindings = DirectBindings(scope, declared_name);
     for(size_t i = 0; i < declared_bindings.size(); ++i) {
       if(declared_bindings[i]->kind != BIND_FUNCTION ||
@@ -238,7 +253,7 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
     TypePtr owner = scope->owner_type;
     if(!owner || owner->kind != TYPE_CLASS) throw logic_error("special member has no class owner");
     const string raw_name = declarator_name(declarator);
-    const string name = LastComponent(raw_name);
+    const string name = SpecialMemberName(raw_name);
     const string qname = TypeQualifiedName(owner) + "::" + name;
     const string key = function_key(qname, function);
     vector<Binding*> existing_bindings = DirectBindings(scope, name);
@@ -295,9 +310,8 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
     RememberDefaults(record, declarator);
     ClassifySpecialMember(record);
     const bool out_of_class_definition = definition && node->value.find("::") != string::npos;
-    if(out_of_class_definition && record->defaulted) {
+    if(out_of_class_definition && (record->constructor || record->destructor)) {
       record->needed = true;
-      if(record->destructor) record->unwind_no = true;
     }
     const bool constructor_record = record->constructor;
     if(constructor_record) {
@@ -307,8 +321,11 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
         if(base_entry) base_entry->needed = true;
       }
     }
-    if(!constructor_record && out_of_class_definition &&
-       record->destructor && record->unwind_no &&
+    const TypePtr destructor_owner = type_value(record->member_owner);
+    const bool global_destructor_owner = destructor_owner &&
+      destructor_owner->name.find("::") == string::npos;
+    if(!constructor_record && out_of_class_definition && record->destructor &&
+       (record->unwind_no || global_destructor_owner) &&
        !BaseEntryFor(record)) {
       FunctionRecord base_entry;
       base_entry.node = record->node;

@@ -689,3 +689,164 @@ parameter materialization with the typed copy/move state, repair empty-base and
 leading-trivial-prefix storage copies, and preserve bit-field and enum
 representation facts.  Validate that group with the listed class ABI fixtures
 while keeping the ADL, union, conversion-ranking, and cleanup groups isolated.
+
+## Checkpoint Scope 8
+
+Complete the class ABI/storage seam in one typed lowering increment:
+
+- use the same materialized-object contract for discarded and member-access
+  class results, direct-object parameters, and indirect result destinations;
+- treat empty base subobjects as layout-only storage, so aggregate/value
+  transfers do not invent bytes or constructors for them;
+- lower defaulted value operations field-wise when bit-fields or a trivial
+  prefix precedes a nontrivial member, preserving the field representation and
+  the required base/member order; and
+- preserve enum and narrow-integral value types through pass-by-value and
+  return expressions without introducing unrelated conversion/copy nodes.
+
+Validation covers `200-derived-to-base-by-value-overload`,
+`200-enum-class-pass-by-value`, `200-prvalue-field-access-temporary`,
+`300-direct-object-parameter-passthrough-base-copy`, the discarded-class-call
+fixtures, the empty-base assignment fixtures, `300-bit-field-copy-semantics`,
+the leading-trivial-prefix copy fixtures, and
+`300-trivial-copy-value-transfer-storage-copy`.  ADL, unions, conversion
+ranking, and cleanup remain outside this checkpoint.
+
+## Checkpoint Scope 9
+
+Close the union and anonymous-storage aggregate seam using the existing typed
+class-member facts:
+
+- record anonymous union class-specifiers as real, unnamed storage-bearing
+  members while keeping their injected names available for lookup;
+- resolve local `sizeof` operands through the typed local object plan;
+- initialize only the active first union member for an empty aggregate and
+  avoid constructing inactive class members; and
+- preserve the union's indirect result ABI and direct integral stores through
+  union return, assignment, and copy paths.
+
+Validate `300-anonymous-union-member-id-expression`,
+`300-local-anonymous-union-sizeof`, `300-union-special-member-storage-copy`,
+`300-union-trivial-subobject-dtor-omission`, and
+`300-union-user-default-ctor-inactive-class-member`; the remaining ADL,
+conversion-ranking, class-transfer, and cleanup groups stay separate.
+
+## Checkpoint Scope 10
+
+Repair the remaining class-transfer and special-member ABI shapes that share
+the value-category/address machinery:
+
+- allow derived xvalues to bind to base rvalue-reference parameters;
+- avoid materializing discarded reference-return calls and keep const-reference
+  returns on the copy-constructor path;
+- emit required out-of-class constructor/destructor base-entry definitions;
+- omit no-op union subobject construction from enclosing default constructors;
+- apply the normal class ABI classifier to synthesized aggregate constructors;
+  and
+- recognize constructor calls inside explicit rvalue-reference casts without
+  treating them as callable functor expressions.
+
+Validate `200-derived-to-base-by-value-overload`,
+`200-out-of-class-special-members`, `300-base-rvalue-reference-assignment`,
+`300-const-return-copy-assignment-suppresses-implicit`,
+`300-leading-trivial-prefix-storage-copy`,
+`300-leading-trivial-prefix-storage-copy-enum`,
+`300-move-only-aggregate-brace-member`,
+`300-qualified-base-implicit-copy-assignment`,
+`300-return-const-ref-parameter-copy-not-move`, and
+`300-rvalue-reference-cast-value-init-temporary`.
+
+### Checkpoint Scope 10 result
+
+Complete.  The class-transfer increment raised the PA16 result from 122/164
+to 130/164 before the qualified-base repair, and then to 132/164; all nine
+listed fixtures now pass, including the move-only aggregate and qualified
+base-assignment cases.  The synthesized aggregate constructor now follows
+the typed ABI classifier, derived xvalues reach base rvalue references, and
+out-of-class special-member emission has the required entry points.
+
+## Remaining Work Map
+
+The current PA16 run is 138/164, with 26 failures grouped as follows:
+
+- Conversion selection and built-in lowering: the class-to-scalar and
+  scalar-to-class conversion paths, explicit conversion operators, pointer
+  conversions, condition conversions, and user-defined overload ranking in
+  `300-pointer-bool-local-storage-lowering`, `300-proxy-subscript-assignment`,
+  the `400-*conversion*`/`400-*comparison*`/`400-*operator*` fixtures, and
+  `spec/400-inherited-conversion-operator-parameter-binding`.
+- Class temporaries and cleanup: conditional local prvalues, nullptr/default
+  construction, proxy result materialization, shadowed-local cleanup, loop
+  lifetime extension, and the remaining nontrivial defaulted move fixture.
+  These are the seven `200-return-nullptr-*`, `200-reverse-friend-*`,
+  `300-conditional-*`, `300-shadowed-*`, `400-for-init-*`,
+  `400-shadowed-*`, and `spec/100-defaulted-move-*` cases.
+
+Ordinary ADL, hidden-friend ADL, using-directive ambiguity, and the qualified
+base assignment lookup seam are now closed; later failures in
+`200-reverse-friend-plus-operator` are output-shape/lifetime failures rather
+than unresolved lookup.
+
+## Checkpoint Scope 11
+
+Complete the ordinary-call lookup seam with typed associated-name facts:
+
+- add associated namespaces and hidden friends to ordinary unqualified calls;
+- retain ambiguity when distinct using-directive paths reach the same binding;
+- do not treat using-declaration imports as declarations from the associated
+  namespace during ADL; and
+- keep qualified base-member lookup and operator ADL behavior unchanged.
+
+Validate `200-associated-namespace-adl-function-call`,
+`200-adl-ignores-using-declaration-candidate`,
+`200-hidden-friend-adl-function-call`, `200-hidden-friend-adl`,
+`200-reverse-friend-plus-operator`, and
+`300-using-directive-imported-value-ambiguous` for exit status and LowIR.
+
+### Checkpoint Scope 11 result
+
+Complete.  The ordinary ADL group and the using-directive ambiguity fixture
+now pass; the PA16 result is 138/164.  The remaining reverse-friend failure
+is a class temporary/output-shape issue and stays in the next map.
+
+## Checkpoint Scope 12
+
+Repair the shared conversion-ranking and conversion-operator lowering path:
+
+- collect eligible conversion operators through aliases, inherited members,
+  and out-of-class definitions;
+- distinguish explicit-context conversions from implicit overload viability;
+- rank built-in candidates against rejected or user-defined operator paths by
+  standard conversion sequence quality; and
+- preserve the typed pointer, boolean, cv, and class-value representation
+  while emitting the selected conversion.
+
+Validate the complete remaining conversion group listed in the map, including
+the pointer/bool, explicit-bool, built-in comparison/unary, pointer
+arithmetic/subscript, compound-assignment, condition/switch, and
+user-defined-conversion ranking fixtures.  Class cleanup and temporary
+materialization remain outside this checkpoint.
+
+## Final checkpoint result
+
+Complete.  The final PA16 increment closed the remaining six failures and
+raised the current-PA result from 158/164 to 164/164.  It now covers
+nontrivial conditional local-prvalue materialization with copy/destructor
+lifetime, class-valued proxy member-call temporaries, constructor-success
+cleanup accounting, constructor base-entry ABI generation, source-order
+pointer arithmetic with class conversion operands, and deterministic
+const-qualified conversion-operator emission order.
+
+## Remaining Work Map
+
+No PA16-local work remains: `make test-report ACTIVE_TEST_REPORT_PAS='pa16'`
+passes all 164 tests.  The earlier groups are
+retained above as the implementation history; they are all covered by the
+passing PA16 report.
+
+## Checkpoint Scope
+
+The completed scope was the whole PA16 stage.  Validation included the full
+PA16 local suite, the required root PA16 report, the through-PA15 regression
+report, and the PA16 source file audit.  The next checkpoint group is PA17
+according to the staged assignment sequence.

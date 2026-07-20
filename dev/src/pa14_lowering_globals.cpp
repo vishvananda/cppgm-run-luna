@@ -64,7 +64,7 @@ PA14Lowerer::Value PA14Lowerer::ConvertValue(Value value, const TypePtr& target,
     if(value.type->kind == TYPE_ENUM && target_value->kind == TYPE_ENUM &&
        PA12SameType(value.type, target_value, false)) return value;
     if(value.type->kind == TYPE_ENUM && target_value->kind == TYPE_FUNDAMENTAL &&
-       source_low == target_low) {
+       source_low == target_low && target_low == "i64") {
       Value result = value;
       result.type = target_value;
       if(value.known_constant) {
@@ -100,11 +100,21 @@ PA14Lowerer::Value PA14Lowerer::ConvertValue(Value value, const TypePtr& target,
       Value result;
       result.type = target_value;
       result.operand = EmitTruthValue(value);
+      if(!(value.type->kind == TYPE_FUNDAMENTAL && value.type->name == "bool")) {
+        const string copied = new_temp();
+        AddInstruction(copied + " = copy u8 " + result.operand);
+        result.operand = copied;
+      }
       return result;
     }
     if(source_low == target_low) {
       Value result = value;
       result.type = target_value;
+      if(value.type->kind == TYPE_ENUM && target_value->kind == TYPE_FUNDAMENTAL &&
+         target_low == "i64") {
+        result.operand = new_temp();
+        AddInstruction(result.operand + " = copy " + target_low + " " + value.operand);
+      }
       return result;
     }
     if(target_low == "ptr" || source_low == "ptr") return value;
@@ -138,10 +148,11 @@ string PA14Lowerer::EmitTruthValue(const Value& value)
     TypePtr type = type_value(value.type);
     const string low = low_type(type);
     if(type->kind == TYPE_FUNDAMENTAL && type->name == "bool") return value.operand;
-    string zero = low == "ptr" ? "nullptr" :
+    string zero = low == "ptr" ? "0" :
       (is_floating_type(type) ? (low == "f32" ? "0.0f" : low == "f80" ? "0.0L" : "0.0") : "0");
     string compare_type = low;
-    if(is_integral_type(type) && low != "i64" && low != "u64") compare_type = "i64";
+    if(is_integral_type(type) && low != "i32" && low != "i64" && low != "u64")
+      compare_type = "i64";
     string operand = value.operand;
     if(compare_type != low && low != "ptr" && !is_floating_type(type)) {
       Value widened = ConvertValue(value, Fundamental(is_unsigned_type(type) ? "unsigned long int" : "long int"));
@@ -492,8 +503,11 @@ void PA14Lowerer::EmitDeclarations(vector<string>& entries)
       out << "declare function @" << function.symbol << "(";
       for(size_t p = 0; p < function.type->parameters.size(); ++p) {
         if(p != 0) out << ", ";
-        out << "%arg" << p << " : " << low_type(function.type->parameters[p]);
+        out << "%" << (function.indirect_result && p == 0 ? "ret" :
+          string("arg") + integer_text(static_cast<long long>(p))) << " : " <<
+          low_type(function.type->parameters[p]);
         if(type_is_reference(function.type->parameters[p])) out << " [pass=reference]";
+        else if(function.indirect_result && p == 0) out << " [pass=indirect_result]";
         if(p < function.parameter_metadata.size() &&
            !function.parameter_metadata[p].empty())
           out << " [" << function.parameter_metadata[p] << "]";
@@ -646,16 +660,35 @@ string PA14Lowerer::EmitSubscriptAddress(const CPPGMAstNodePtr& node, Scope* sco
     if(base_type && base_type->kind == TYPE_CLASS) {
       vector<CPPGMAstNodePtr> arguments;
       arguments.push_back(index_node);
-      Value result = EmitCall(MakeMemberCall(base_node, "operator[]", arguments), scope);
-      if(!result.lvalue) throw logic_error("subscript result is not addressable");
-      return result.operand;
+      if(!MemberBindings(base_type, "operator[]").empty()) {
+        Value result = EmitCall(MakeMemberCall(base_node, "operator[]", arguments), scope);
+        if(!result.lvalue) throw logic_error("subscript result is not addressable");
+        return result.operand;
+      }
+      Binding* conversion = FindContextConversionOperator(base_type, false, false);
+      TypePtr function = conversion ? function_target_type(conversion->type) : TypePtr();
+      TypePtr pointer = function ? type_value(function->child) : TypePtr();
+      if(!pointer || pointer->kind != TYPE_POINTER)
+        throw logic_error("subscript base has no pointer conversion");
+      Value converted = EmitContextConversion(base_node, scope, false, false);
+      if(converted.lvalue && converted.type) {
+        converted.operand = emit_load(converted.operand, converted.type);
+        converted.lvalue = false;
+      }
+      Value index = EmitValue(index_node, scope, Fundamental("long int"));
+      const string offset = new_temp();
+      AddInstruction(offset + " = binary mul i64 " + index.operand + ", " +
+        integer_text(static_cast<long long>(type_size(pointer->child))));
+      const string address = new_temp();
+      AddInstruction(address + " = index i8 " + converted.operand + ", " + offset);
+      return address;
     }
     if(!base_type || (base_type->kind != TYPE_ARRAY && base_type->kind != TYPE_POINTER))
       throw logic_error("subscript base is not an array or pointer");
     TypePtr element = base_type->child;
     string base = base_type->kind == TYPE_ARRAY ? EmitArrayDecay(base_node, scope) :
       EmitValue(base_node, scope).operand;
-    Value index = EmitValue(index_node, scope);
+    Value index = EmitValue(index_node, scope, Fundamental("long int"));
     TypePtr element_value = type_value(element);
     if(base_type->kind == TYPE_ARRAY && element_value &&
        (element_value->kind == TYPE_CLASS || element_value->kind == TYPE_ARRAY)) {
@@ -698,7 +731,7 @@ string PA14Lowerer::EmitPointerOffset(const CPPGMAstNodePtr& node, Scope* scope)
     if(pointer_type && pointer_type->kind == TYPE_ARRAY) {
       // The array operand is converted to a pointer before the offset is scaled.
       string base = EmitArrayDecay(pointer_node, scope);
-      Value offset = EmitValue(offset_node, scope);
+      Value offset = EmitValue(offset_node, scope, Fundamental("long int"));
       const size_t element_size = type_size(pointer_type->child);
       const string scale = new_temp();
       if(element_size == 1)
@@ -716,8 +749,27 @@ string PA14Lowerer::EmitPointerOffset(const CPPGMAstNodePtr& node, Scope* scope)
       AddInstruction(result + " = index i8 " + base + ", " + scaled);
       return result;
     }
-    string base = EmitValue(pointer_node, scope).operand;
-    Value offset = EmitValue(offset_node, scope);
+    const ExprInfo offset_info = pointer_node == node->children[0] ? right_info : left_info;
+    const TypePtr offset_value_type = expression_value_type(offset_info);
+    const bool class_offset = offset_value_type && type_value(offset_value_type) &&
+      type_value(offset_value_type)->kind == TYPE_CLASS;
+    Binding* offset_conversion = class_offset ? FindConversionOperator(
+      offset_value_type, Fundamental("long int"), false) : 0;
+    Value offset;
+    string base;
+    if(pointer_node == node->children[0]) {
+      base = EmitValue(pointer_node, scope).operand;
+      offset = offset_conversion ?
+        EmitConversionOperator(offset_node, scope, Fundamental("long int"), false) :
+        EmitValue(offset_node, scope, Fundamental("long int"));
+    } else {
+      offset = offset_conversion ?
+        EmitConversionOperator(offset_node, scope, Fundamental("long int"), false) :
+        EmitValue(offset_node, scope, Fundamental("long int"));
+      base = EmitValue(pointer_node, scope).operand;
+    }
+    if(offset_conversion)
+      offset = ConvertValue(offset, Fundamental("long int"), false, true);
     const long long size = pointer_type && pointer_type->kind == TYPE_POINTER ?
       static_cast<long long>(type_size(pointer_type->child)) : 1;
     string scaled;
@@ -875,7 +927,7 @@ string PA14Lowerer::EmitCallAddress(const CPPGMAstNodePtr& node, Scope* scope)
 {
     TypePtr constructor_type = node->children.empty() ? TypePtr() :
       ConstructorObjectType(node->children[0], scope);
-    if(constructor_type) return EmitTemporaryObjectAddress(node, scope, "arg");
+    if(constructor_type) return EmitTemporaryObjectAddress(node, scope, "tmpobj");
     ExprInfo info = Infer(node, scope);
     if(type_is_reference(info.type)) return EmitCall(node, scope).operand;
     TypePtr value_type = expression_value_type(info);
@@ -931,7 +983,29 @@ string PA14Lowerer::EmitMemberAddress(const CPPGMAstNodePtr& node, Scope* scope)
     if(op == "->") object = object && object->kind == TYPE_POINTER ?
       type_value(object->child) : TypePtr();
     else if(object && object->kind == TYPE_POINTER) object = type_value(object->child);
-    base = AdjustBaseAddress(base, object, member->member_owner);
+    if(member->injected_member && member->injected_owner &&
+       (!object || !PA12SameType(object, member->injected_owner, true))) {
+      bool found_injected_storage = false;
+      if(object && object->kind == TYPE_CLASS) {
+        for(size_t i = 0; i < object->class_members.size(); ++i) {
+          const ClassMemberInfo& outer = object->class_members[i];
+          if(!outer.name.empty() && outer.type) continue;
+          if(outer.type && PA12SameType(type_value(outer.type),
+                                        member->injected_owner, true)) {
+            found_injected_storage = true;
+            if(outer.offset != 0) {
+              const string adjusted = new_temp();
+              AddInstruction(adjusted + " = index i8 [projection=field] " + base + ", " +
+                integer_text(outer.offset));
+              base = adjusted;
+            }
+            break;
+          }
+        }
+      }
+      if(!found_injected_storage)
+        throw logic_error("anonymous member has no storage record");
+    } else base = AdjustBaseAddress(base, object, member->member_owner);
     const string result = new_temp();
     const bool raw_bit_field = IsBitField(member) && op == ".";
     AddInstruction(result + " = index i8 " +

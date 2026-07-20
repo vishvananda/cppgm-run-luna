@@ -285,21 +285,97 @@ CPPGMAstNodePtr Parser::ParseSpecialMember(bool definition, bool member_context)
 					++position_;
 					operator_found = true;
 					break;
-				}
-			if (!operator_found)
-			{
-				string type;
-				if (IsFundamental(Peek().text))
-				{
-					type = Peek().text;
-					++position_;
-				}
-				else if (!ParseName(&type, false))
-				{
-					Restore(mark);
-					return CPPGMAstNodePtr();
-				}
+            }
+            if (!operator_found)
+            {
+                // A conversion-function-id is followed by a complete
+                // conversion-type-id, which may contain cv-qualifiers,
+                // pointers, references, and qualified class names.  Consume
+                // that type spelling up to the function parameter clause;
+                // the semantic analyzer resolves the typed result later.
+                string type;
+                while (!AtEnd() && !Is("("))
+                {
+                    if (!type.empty() &&
+                        (isalnum(static_cast<unsigned char>(type[type.size() - 1])) ||
+                         type[type.size() - 1] == '_') &&
+                        (isalnum(static_cast<unsigned char>(Peek().text[0])) ||
+                         Peek().text[0] == '_')) type += " ";
+                    type += Peek().text;
+                    ++position_;
+                }
+                if (type.empty())
+                {
+                    Restore(mark);
+                    return CPPGMAstNodePtr();
+                }
 				name = "operator" + type;
+			}
+		}
+	}
+	else if (!member_context && Peek().kind == AST_IDENTIFIER)
+	{
+		// Out-of-class conversion-function definitions start with a qualified
+		// class name, so the conversion-function-id is not the first token.
+		// Parse the qualified prefix up to `operator`, then retain the complete
+		// conversion type-id just as for an in-class conversion function.
+		Mark qualified_mark = Save();
+		string prefix;
+		if (!ParseName(&prefix, false) || !Is("operator"))
+		{
+			Restore(qualified_mark);
+			if (!ParseName(&name))
+			{
+				Restore(mark);
+				return CPPGMAstNodePtr();
+			}
+		}
+		else
+		{
+			++position_;
+			if (Take("(") && Take(")")) name = prefix + "operator()";
+			else if (Take("[") && Take("]")) name = prefix + "operator[]";
+			else if (Is("new") || Is("delete"))
+			{
+				name = prefix + "operator" + Peek().text;
+				++position_;
+				if (Take("[") && Take("]")) name += "[]";
+			}
+			else
+			{
+				static const char* const operators[] = {"+", "-", "*", "/", "%", "^", "&", "|",
+					"~", "!", "=", "<", ">", "+=", "-=", "*=", "/=", "%=", "^=", "&=", "|=",
+					"<<", ">>", "<<=", ">>=", "==", "!=", "<=", ">=", "&&", "||", "++", "--",
+					",", "->", "->*", ".*"};
+				bool operator_found = false;
+				for (size_t i = 0; i < sizeof(operators) / sizeof(*operators); ++i)
+					if (Is(operators[i]))
+					{
+						name = prefix + "operator" + Peek().text;
+						++position_;
+						operator_found = true;
+						break;
+					}
+				if (!operator_found)
+				{
+					string type;
+					while (!AtEnd() && !Is("("))
+					{
+						if (!type.empty() &&
+						    (isalnum(static_cast<unsigned char>(type[type.size() - 1])) ||
+						     type[type.size() - 1] == '_') &&
+						    (isalnum(static_cast<unsigned char>(Peek().text[0])) ||
+						     Peek().text[0] == '_')) type += " ";
+						type += Peek().text;
+						++position_;
+					}
+					if (type.empty())
+					{
+						Restore(mark);
+						return CPPGMAstNodePtr();
+					}
+					name = prefix + "operator" + type;
+				}
 			}
 		}
 	}

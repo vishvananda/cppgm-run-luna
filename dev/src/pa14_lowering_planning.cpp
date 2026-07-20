@@ -35,6 +35,7 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
     vector<Binding*> candidates;
     bool direct = false;
     bool explicit_member_object = false;
+    bool ambiguous_best = false;
     ExprInfo object_info;
     CPPGMAstNodePtr lookup_callee = callee_node;
     while(lookup_callee && lookup_callee->kind == "parenthesized-expression" &&
@@ -54,6 +55,12 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
          object && object->kind == TYPE_CLASS)
         CollectImplicitConstructor(object, object->owned_scope, true);
       candidates = MemberBindings(object, lookup_callee->children[1]->value);
+      if(candidates.empty() && lookup_callee->children[1] &&
+         lookup_callee->children[1]->value.compare(0, 8, "operator") == 0) {
+        Binding* conversion = FindNamedConversionOperator(object,
+          lookup_callee->children[1]->value, scope);
+        if(conversion) candidates.push_back(conversion);
+      }
       direct = true;
       bool has_direct_function = false;
       for(size_t i = 0; i < candidates.size(); ++i)
@@ -71,6 +78,35 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
       }
     } else if(lookup_callee && lookup_callee->kind == "id-expression") {
       candidates = Lookup(lookup_callee->value, scope);
+      // Ordinary unqualified calls participate in the same associated
+      // namespace and hidden-friend lookup as overloaded operators.
+      bool suppress_adl = false;
+      for(size_t i = 0; i < candidates.size(); ++i)
+        if(candidates[i]->is_member) { suppress_adl = true; break; }
+      if(lookup_callee->value.find("::") == string::npos && !suppress_adl) {
+        set<const Type*> visited_types;
+        set<Scope*> visited_scopes;
+        for(size_t i = 0; i < arguments.size(); ++i)
+          AppendAssociatedOperatorBindings(expression_value_type(arguments[i]),
+            lookup_callee->value, candidates, visited_types, visited_scopes);
+      }
+      // A qualified member-id names the member set of the qualified class
+      // directly.  Do not let unqualified lookup in the current member
+      // context rebind e.g. Base::operator= to Derived::operator=.
+      const size_t separator = lookup_callee->value.rfind("::");
+      if(separator != string::npos) {
+        const string owner_name = lookup_callee->value.substr(0, separator);
+        const string member_name = lookup_callee->value.substr(separator + 2);
+        Analyzer::PathTarget owner_target = analyzer_.ResolvePath(scope, owner_name);
+        TypePtr owner = owner_target.binding ? type_value(owner_target.binding->type) :
+          TypePtr();
+        if(owner && owner->kind == TYPE_CLASS) {
+          if(member_name == "operator=" &&
+             MemberBindings(owner, member_name).empty())
+            EnsureImplicitAssignment(owner, false);
+          candidates = MemberBindings(owner, member_name);
+        }
+      }
       if(candidates.empty() && state_ && state_->record && state_->record->member_owner)
         candidates = MemberBindings(state_->record->member_owner, lookup_callee->value);
       for(size_t i = 0; i < candidates.size(); ++i)
@@ -95,6 +131,7 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
           best.direct = true;
           best.member = binding->is_member && !binding->is_static;
           best.static_member = binding->is_static;
+          best.user_defined = 0;
           best.worst = 0;
           best.total = 0;
           break;
@@ -125,6 +162,7 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
         }
         int worst = 0;
         int total = 0;
+        int user_defined = 0;
         bool viable = true;
         if(member && !static_member) {
           TypePtr object = expression_value_type(object_info);
@@ -160,12 +198,14 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
           const int rank = a < function->parameters.size() ?
             ConversionRank(arguments[a], function->parameters[a]) : 2;
           if(rank < 0) { viable = false; break; }
+          if(rank >= 3) ++user_defined;
           worst = max(worst, rank);
           total += rank;
         }
         if(!viable) continue;
-        if(!best.binding || worst < best.worst ||
-           (worst == best.worst && total < best.total)) {
+        if(!best.binding || user_defined < best.user_defined ||
+           (user_defined == best.user_defined &&
+            (worst < best.worst || (worst == best.worst && total < best.total)))) {
           best.binding = binding;
           best.function = function;
           best.object = explicit_member_object ? lookup_callee->children[0] :
@@ -173,14 +213,23 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
           best.direct = true;
           best.member = member;
           best.static_member = static_member;
+          best.user_defined = user_defined;
           best.worst = worst;
           best.total = total;
-        } else if(worst == best.worst && total == best.total &&
+          ambiguous_best = false;
+        } else if(user_defined == best.user_defined && worst == best.worst &&
+                  total == best.total &&
                   !PA12SameType(best.function, function, false)) {
-          throw logic_error("ambiguous overload");
+          ambiguous_best = true;
         }
       }
-      if(!best.binding) throw logic_error("no viable function");
+      if(ambiguous_best) throw logic_error("ambiguous overload");
+      if(!best.binding) {
+        string detail = "no viable function";
+        for(size_t i = 0; i < candidates.size(); ++i)
+          detail += " [" + candidates[i]->qualified_name + "]";
+        throw logic_error(detail);
+      }
       FunctionRecord* selected = RecordForBinding(best.binding);
       if(selected) {
         selected->needed = true;
@@ -583,9 +632,9 @@ void PA14Lowerer::PlanFunction(FunctionState& state)
     if(!state.record->node) return;
     Scope* scope = analyzer_.function_scopes_[state.record->node.get()];
     if(!scope) scope = state.record->scope;
-    CPPGMAstNodePtr body = state.record->constructor || state.record->destructor ?
-      ChildOfKind(state.record->node, "compound-statement") :
-      (state.record->node->children.size() > 2 ? state.record->node->children[2] : CPPGMAstNodePtr());
+    CPPGMAstNodePtr body = ChildOfKind(state.record->node, "compound-statement");
+    if(!body && state.record->node->children.size() > 2)
+      body = state.record->node->children[2];
     if(body) PlanStatement(body, scope);
     if(state.record->indirect_result && body) {
       unsigned int return_count = 0;

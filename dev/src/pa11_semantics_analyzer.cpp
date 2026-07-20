@@ -41,6 +41,124 @@ bool SameLayoutType(const TypePtr& left, const TypePtr& right)
 	return false;
 }
 
+string TrimConversionType(string text)
+{
+	while(!text.empty() && isspace(static_cast<unsigned char>(text[0]))) text.erase(0, 1);
+	while(!text.empty() && isspace(static_cast<unsigned char>(text[text.size() - 1]))) text.erase(text.size() - 1);
+	return text;
+}
+
+string SpecialMemberName(const string& raw_name)
+{
+	const size_t operator_pos = raw_name.rfind("operator");
+	if (operator_pos != string::npos)
+	{
+		string suffix = raw_name.substr(operator_pos + 8);
+		while (!suffix.empty() && isspace(static_cast<unsigned char>(suffix[0])))
+			suffix.erase(0, 1);
+		return "operator" + suffix;
+	}
+	const size_t separator = raw_name.rfind("::");
+	return separator == string::npos ? raw_name : raw_name.substr(separator + 2);
+}
+
+string SpecialMemberOwner(const string& raw_name)
+{
+	const size_t operator_pos = raw_name.find("operator");
+	if (operator_pos != string::npos)
+	{
+		string owner = raw_name.substr(0, operator_pos);
+		while (!owner.empty() && isspace(static_cast<unsigned char>(owner[owner.size() - 1])))
+			owner.erase(owner.size() - 1, 1);
+		if (owner.size() >= 2 && owner.substr(owner.size() - 2) == "::")
+			owner.erase(owner.size() - 2);
+		return owner;
+	}
+	const size_t separator = raw_name.rfind("::");
+	return separator == string::npos ? string() : raw_name.substr(0, separator);
+}
+
+TypePtr ConversionTypeFromName(const Analyzer& analyzer, const string& raw_name,
+	Scope* scope)
+{
+	const size_t operator_pos = raw_name.rfind("operator");
+	if(operator_pos == string::npos) return TypePtr();
+	string text = TrimConversionType(raw_name.substr(operator_pos + 8));
+	if(text.empty() || string("+-*/%^&|=!<>~[],()").find(text[0]) != string::npos)
+		return TypePtr();
+	TypeKind reference_kind = TYPE_FUNDAMENTAL;
+	if(text.size() >= 2 && text.substr(text.size() - 2) == "&&") {
+		reference_kind = TYPE_RVALUE_REFERENCE;
+		text = TrimConversionType(text.substr(0, text.size() - 2));
+	} else if(!text.empty() && text[text.size() - 1] == '&') {
+		reference_kind = TYPE_LVALUE_REFERENCE;
+		text = TrimConversionType(text.substr(0, text.size() - 1));
+	}
+	unsigned int pointer_count = 0;
+	while(!text.empty() && text[text.size() - 1] == '*') {
+		++pointer_count;
+		text = TrimConversionType(text.substr(0, text.size() - 1));
+	}
+	vector<string> words;
+	string word;
+	for(size_t i = 0; i <= text.size(); ++i) {
+		const char c = i < text.size() ? text[i] : ' ';
+		if(isspace(static_cast<unsigned char>(c))) {
+			if(!word.empty()) { words.push_back(word); word.clear(); }
+		} else word += c;
+	}
+	bool add_const = false;
+	bool add_volatile = false;
+	vector<string> type_words;
+	for(size_t i = 0; i < words.size(); ++i) {
+		if(words[i] == "const") add_const = true;
+		else if(words[i] == "volatile") add_volatile = true;
+		else type_words.push_back(words[i]);
+	}
+	if(type_words.empty()) return TypePtr();
+	TypePtr result;
+	bool fundamental = true;
+	for(size_t i = 0; i < type_words.size(); ++i)
+		if(!Analyzer::IsFundamentalWord(type_words[i])) fundamental = false;
+	if(fundamental) result = Fundamental(Analyzer::FundamentalName(type_words));
+	else {
+		string base;
+		for(size_t i = 0; i < type_words.size(); ++i) {
+			if(type_words[i] == "::") {
+				while(!base.empty() && base[base.size() - 1] == ' ')
+					base.erase(base.size() - 1, 1);
+				base += "::";
+			} else {
+				if(!base.empty() && base[base.size() - 1] != ':') base += " ";
+				base += type_words[i];
+			}
+		}
+		Analyzer::PathTarget target = analyzer.ResolvePath(scope, base);
+		if(!target.binding || (target.binding->kind != BIND_TYPE &&
+			 target.binding->kind != BIND_TYPE_ALIAS)) return TypePtr();
+		result = target.binding->type;
+	}
+	result = CloneWithCv(result, add_const, add_volatile);
+	for(unsigned int i = 0; i < pointer_count; ++i) result = PointerTo(result);
+	if(reference_kind != TYPE_FUNDAMENTAL) result = ReferenceTo(reference_kind, result);
+	return result;
+}
+
+// An empty class still has a nonzero complete-object size, but an empty base
+// subobject is permitted to occupy no bytes (the empty-base optimization).
+// Keep that distinction in the typed layout facts so derived members begin at
+// offset zero without changing sizeof the empty class itself.
+bool EmptyBaseStorage(const TypePtr& raw_type)
+{
+	if (!raw_type || raw_type->kind != TYPE_CLASS) return false;
+	for (size_t i = 0; i < raw_type->class_members.size(); ++i)
+	{
+		const ClassMemberInfo& member = raw_type->class_members[i];
+		if (!member.is_static && !member.name.empty()) return false;
+	}
+	return !raw_type->direct_base || EmptyBaseStorage(raw_type->direct_base);
+}
+
 bool IsBitFieldType(const TypePtr& type)
 {
 	if (!type) return false;
@@ -96,10 +214,10 @@ void Analyzer::ProcessSpecialMember(const CPPGMAstNodePtr& node, Scope* scope)
 		if (!declarator) throw logic_error("special member has no declarator");
 		Scope* declaration_scope = scope;
 		TypePtr member_owner;
-		const size_t separator = node->value.rfind("::");
-		if (separator != string::npos)
+		const string owner_name = SpecialMemberOwner(node->value);
+		if (!owner_name.empty())
 		{
-			PathTarget owner = ResolvePath(scope, node->value.substr(0, separator));
+			PathTarget owner = ResolvePath(scope, owner_name);
 			if (owner.binding) member_owner = owner.binding->type;
 			else if (owner.scope) member_owner = owner.scope->owner_type;
 			if (member_owner && member_owner->kind == TYPE_CLASS && member_owner->owned_scope)
@@ -108,8 +226,10 @@ void Analyzer::ProcessSpecialMember(const CPPGMAstNodePtr& node, Scope* scope)
 		else if (scope->kind == SCOPE_CLASS)
 			member_owner = scope->owner_type;
 		if (!member_owner || member_owner->kind != TYPE_CLASS) return;
-		const string name = LastComponent(node->value);
-		TypePtr function = BuildDeclarator(declarator, Fundamental("void"), declaration_scope);
+		const string name = SpecialMemberName(node->value);
+		TypePtr conversion_type = ConversionTypeFromName(*this, name, declaration_scope);
+		TypePtr function = BuildDeclarator(declarator,
+			conversion_type ? conversion_type : Fundamental("void"), declaration_scope);
 		for (size_t i = 0; i < declaration_scope->bindings.size(); ++i)
 		{
 			Binding& existing = declaration_scope->bindings[i];
@@ -136,18 +256,20 @@ void Analyzer::ProcessSpecialMember(const CPPGMAstNodePtr& node, Scope* scope)
 	if (!declarator || !body) return;
 	Scope* declaration_scope = scope;
 	TypePtr member_owner;
-	const size_t separator = node->value.rfind("::");
-	if (separator != string::npos)
+	const string owner_name = SpecialMemberOwner(node->value);
+	if (!owner_name.empty())
 	{
-		PathTarget owner = ResolvePath(scope, node->value.substr(0, separator));
+		PathTarget owner = ResolvePath(scope, owner_name);
 		if (owner.binding) member_owner = owner.binding->type;
 		else if (owner.scope) member_owner = owner.scope->owner_type;
 		if (member_owner && member_owner->kind == TYPE_CLASS && member_owner->owned_scope)
 			declaration_scope = member_owner->owned_scope;
 	}
 	else if (scope->kind == SCOPE_CLASS) member_owner = scope->owner_type;
-	const string name = LastComponent(node->value);
-	TypePtr function = BuildDeclarator(declarator, Fundamental("void"), declaration_scope);
+	const string name = SpecialMemberName(node->value);
+	TypePtr conversion_type = ConversionTypeFromName(*this, name, declaration_scope);
+	TypePtr function = BuildDeclarator(declarator,
+		conversion_type ? conversion_type : Fundamental("void"), declaration_scope);
 	Binding* binding = declaration_scope->add(Binding(BIND_FUNCTION, name, function));
 	binding->is_member = static_cast<bool>(member_owner);
 	binding->is_static = false;
@@ -186,8 +308,10 @@ void Analyzer::ComputeClassLayout(const CPPGMAstNodePtr& node, const TypePtr& ty
 	if (type->direct_base && type->direct_base->kind == TYPE_CLASS &&
 		!type->direct_base->complete)
 		throw logic_error("incomplete direct base class");
-	size_t offset = type->direct_base ? TypeSize(type->direct_base) : 0;
-	size_t maximum_alignment = type->direct_base ? TypeAlignment(type->direct_base) : 1;
+	const bool empty_base = type->direct_base && EmptyBaseStorage(type->direct_base);
+	size_t offset = type->direct_base && !empty_base ? TypeSize(type->direct_base) : 0;
+	size_t maximum_alignment = type->direct_base && !empty_base ?
+		TypeAlignment(type->direct_base) : 1;
 	size_t union_size = offset;
 
 	size_t bit_unit_offset = 0;
@@ -380,6 +504,18 @@ void Analyzer::RecordClassMembers(const CPPGMAstNodePtr& node, const TypePtr& ty
 			RecordBitField(*this, child, type, class_scope, access);
 			continue;
 		}
+		if (child->kind == "class-specifier")
+		{
+			TypePtr nested = ProcessClass(child, class_scope);
+			if (nested && nested->is_union &&
+				nested->name.find("__anonymous_union_type__") == 0)
+			{
+				ClassMemberInfo member;
+				member.type = nested;
+				type->class_members.push_back(member);
+			}
+			continue;
+		}
 		if (child->kind == "special-member-definition" ||
 			child->kind == "special-member-declaration") continue;
 		if (child->kind == "simple-declaration" && !child->children.empty())
@@ -403,6 +539,13 @@ void Analyzer::RecordClassMembers(const CPPGMAstNodePtr& node, const TypePtr& ty
 		if (child->kind == "function-definition") list.reset();
 		if (!list)
 		{
+			if (base && base->kind == TYPE_CLASS && base->is_union &&
+				base->name.find("__anonymous_union_type__") == 0)
+			{
+				ClassMemberInfo member;
+				member.type = base;
+				type->class_members.push_back(member);
+			}
 			CPPGMAstNodePtr declarator = child->kind == "function-definition" && child->children.size() > 1 ?
 				child->children[1] : CPPGMAstNodePtr();
 			if (declarator)
