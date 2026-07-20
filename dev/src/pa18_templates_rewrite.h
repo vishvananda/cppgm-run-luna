@@ -1,171 +1,8 @@
 #pragma once
-
-	CPPGMAstNodePtr TransformNamespace(const CPPGMAstNodePtr& input, const string& context,
-		const map<string, string>& substitutions)
-	{
-		const string child_context = IsInlineNamespace(input) || input->value.empty() ?
-			context : JoinPath(context, input->value);
-		CPPGMAstNodePtr result(new CPPGMAstNode(input->kind,
-			RewriteText(input->value, context, substitutions, 0)));
-		result->initializer_form = input->initializer_form;
-		for(size_t i = 0; i < input->children.size(); ++i) {
-			if(input->children[i] && input->children[i]->kind == "inline") {
-				result->children.push_back(CloneNode(input->children[i]));
-				continue;
-			}
-			CPPGMAstNodePtr child = TransformNode(input->children[i], child_context, substitutions);
-			if(child) result->children.push_back(child);
-		}
-		return result;
-	}
-
-	bool TemplateRange(const string& raw, size_t open, string* arguments,
-		size_t* close_out) const
-	{
-		int depth = 0;
-		for(size_t i = open; i < raw.size(); ++i) {
-			if(raw[i] == '<') ++depth;
-			else if(raw[i] == '>') {
-				--depth;
-				if(depth == 0) {
-					if(arguments) *arguments = raw.substr(open + 1, i - open - 1);
-					if(close_out) *close_out = i;
-					return true;
-				}
-			}
-		}
-		return false;
-	}
-
-	bool TemplateBase(const string& raw, size_t open, size_t* begin, string* base) const
-	{
-		size_t end = open;
-		while(end > 0) {
-			const char ch = raw[end - 1];
-			if(IsIdentifierCharacter(ch)) { --end; continue; }
-			if(ch == ':' && end >= 2 && raw[end - 2] == ':') { end -= 2; continue; }
-			break;
-		}
-		if(end == open) return false;
-		if(begin) *begin = end;
-		if(base) *base = raw.substr(end, open - end);
-		return true;
-	}
-
-	const TemplateDefinition* FindDefinition(string raw_name, const string& context) const
-	{
-		raw_name = Trim(raw_name);
-		while(!raw_name.empty() && raw_name[0] == ':') raw_name.erase(0, 1);
-		map<string, TemplateDefinition>::const_iterator direct = definitions_.find(raw_name);
-		if(direct != definitions_.end()) return &direct->second;
-		for(string current = context; ; ) {
-			const string candidate = JoinPath(current, raw_name);
-			map<string, TemplateDefinition>::const_iterator found = definitions_.find(candidate);
-			if(found != definitions_.end()) return &found->second;
-			const size_t separator = current.rfind("::");
-			if(separator == string::npos) break;
-			current.erase(separator);
-		}
-		map<string, vector<string> >::const_iterator by_name = definitions_by_name_.find(LastComponent(raw_name));
-		if(by_name != definitions_by_name_.end() && by_name->second.size() == 1) {
-			map<string, TemplateDefinition>::const_iterator found = definitions_.find(by_name->second[0]);
-			if(found != definitions_.end()) return &found->second;
-		}
-		return 0;
-	}
-
-	vector<const TemplateDefinition*> FindFunctionDefinitions(string raw_name,
-		const string& context) const
-	{
-		vector<const TemplateDefinition*> result;
-		while(!raw_name.empty() && raw_name[0] == ':') raw_name.erase(0, 1);
-		set<string> candidates;
-		for(string current = context; ; ) {
-			candidates.insert(JoinPath(current, raw_name));
-			if(current.empty()) break;
-			const size_t separator = current.rfind("::");
-			if(separator == string::npos) current.clear();
-			else current.erase(separator);
-		}
-		candidates.insert(raw_name);
-		for(map<string, TemplateDefinition>::const_iterator it = definitions_.begin();
-			it != definitions_.end(); ++it) {
-			if(it->second.class_template || candidates.find(it->second.qualified_name) == candidates.end()) continue;
-			bool duplicate = false;
-			for(size_t i = 0; i < result.size(); ++i)
-				if(result[i] == &it->second) duplicate = true;
-			if(!duplicate) result.push_back(&it->second);
-		}
-		if(!result.empty()) return result;
-		const string short_name = LastComponent(raw_name);
-		for(map<string, TemplateDefinition>::const_iterator it = definitions_.begin();
-			it != definitions_.end(); ++it)
-			if(!it->second.class_template && LastComponent(it->second.qualified_name) == short_name)
-				result.push_back(&it->second);
-		return result;
-	}
-
-	string Instantiate(const TemplateDefinition& definition, const vector<string>& raw_args,
-		const string& context)
-	{
-		if(definition.parameters.empty()) throw logic_error("template has no type parameters");
-		vector<string> args;
-		map<string, string> substitutions;
-		for(size_t i = 0; i < definition.parameters.size(); ++i) {
-			const TemplateParameter& parameter = definition.parameters[i];
-			if(!parameter.type) throw logic_error("unsupported non-type template parameter");
-			string argument;
-			if(i < raw_args.size() && !raw_args[i].empty()) argument = raw_args[i];
-			else {
-				map<string, string>::const_iterator substituted = substitutions.find(parameter.name);
-				if(substituted != substitutions.end()) argument = substituted->second;
-			}
-			if(argument.empty()) argument = parameter.default_type;
-			argument = RewriteText(argument, context, substitutions, 0);
-			argument = NormalizeTypeArgument(argument);
-			argument = NormalizeTypeArgument(ReplaceIdentifiers(argument, substitutions));
-			argument = QualifyTypeArgument(argument, context);
-			if(argument.empty()) throw logic_error("missing template argument");
-			args.push_back(argument);
-			substitutions[parameter.name] = argument;
-		}
-		if(raw_args.size() > definition.parameters.size())
-			throw logic_error("too many template arguments");
-		ostringstream definition_key;
-		definition_key << definition.qualified_name << "@" << definition.declaration.get();
-		string key = definition_key.str();
-		for(size_t i = 0; i < args.size(); ++i) key += "|" + CanonicalSpelling(args[i]);
-		map<string, string>::const_iterator cached = specializations_.find(key);
-		if(cached != specializations_.end()) return cached->second;
-		string local_name = definition.name;
-		if(definition.class_template || definition.alias_template) {
-			for(size_t i = 0; i < args.size(); ++i) {
-				local_name += i == 0 ? "_" : "__";
-				local_name += TypeSuffix(args[i]);
-			}
-		}
-		if(definition.class_template) {
-			specialization_bases_[local_name] = definition.qualified_name;
-			specialization_arguments_[local_name] = args;
-		}
-		if(definition.class_template) substitutions[definition.name] = local_name;
-		specializations_[key] = local_name;
-		if(!active_specializations_.insert(key).second) return local_name;
-		CPPGMAstNodePtr generated = TransformNode(definition.declaration, definition.owner, substitutions);
-		if(!generated) throw logic_error("unable to instantiate template");
-		if(definition.class_template || definition.alias_template) generated->value = local_name;
-		EnsureDeclarationDependencies(generated, definition.owner, definition.owner);
-		for(size_t i = 0; i < args.size(); ++i)
-			EnsureForwardClass(args[i], context, definition.owner);
-		if(class_contexts_.find(context) != class_contexts_.end() && context != definition.owner)
-			generated_before_class_[context].push_back(generated);
-		else generated_by_owner_[definition.owner].push_back(generated);
-		active_specializations_.erase(key);
-		(void)context;
-		return local_name;
-	}
-
-	bool MatchTypePattern(string pattern, string actual,
+#include "pa18_templates_rewrite_lookup.h"
+#include "pa18_templates_rewrite_decltype.h"
+#include "pa18_templates_rewrite_instantiate.h"
+bool MatchTypePattern(string pattern, string actual,
 		const set<string>& parameter_names, map<string, string>* inferred,
 		const string& context) const
 	{
@@ -254,13 +91,14 @@
 		}
 		return pattern == actual;
 	}
-
 	CPPGMAstNodePtr FindClassDeclaration(string raw_class, const string& context) const
 	{
 		raw_class = CanonicalSpelling(raw_class);
 		while(!raw_class.empty() && (raw_class[raw_class.size() - 1] == '&' ||
 			raw_class[raw_class.size() - 1] == '*')) raw_class.erase(raw_class.size() - 1);
 		raw_class = CanonicalSpelling(raw_class);
+		map<string, CPPGMAstNodePtr>::const_iterator concrete = class_declarations_.find(raw_class);
+		if(concrete != class_declarations_.end()) return concrete->second;
 		map<string, string>::const_iterator specialization = specialization_bases_.find(
 			LastComponent(raw_class));
 		if(specialization != specialization_bases_.end()) raw_class = specialization->second;
@@ -287,19 +125,27 @@
 		return definition && definition->class_template ? definition->declaration :
 			CPPGMAstNodePtr();
 	}
-
 	bool FindClassMemberType(const string& raw_class, const string& member,
 		const map<string, string>& substitutions, const string& context,
 		string* result, set<string>* active) const
 	{
 		if(!result || !active) return false;
 		string class_key = CanonicalSpelling(raw_class);
+		bool object_const = false;
+		while(class_key.compare(0, 6, "const ") == 0) {
+			object_const = true;
+			class_key = CanonicalSpelling(class_key.substr(6));
+		}
+		while(class_key.compare(0, 9, "volatile ") == 0)
+			class_key = CanonicalSpelling(class_key.substr(9));
 		while(!class_key.empty() && (class_key[class_key.size() - 1] == '&' ||
 			class_key[class_key.size() - 1] == '*')) class_key.erase(class_key.size() - 1);
 		class_key = CanonicalSpelling(class_key);
-		map<string, string>::const_iterator specialization = specialization_bases_.find(
-			LastComponent(class_key));
-		if(specialization != specialization_bases_.end()) class_key = specialization->second;
+		if(class_declarations_.find(class_key) == class_declarations_.end()) {
+			map<string, string>::const_iterator specialization = specialization_bases_.find(
+				LastComponent(class_key));
+			if(specialization != specialization_bases_.end()) class_key = specialization->second;
+		}
 		const string active_key = class_key + "|" + member;
 		if(!active->insert(active_key).second) return false;
 		CPPGMAstNodePtr declaration = FindClassDeclaration(class_key, context);
@@ -309,6 +155,7 @@
 		}
 		const string declaration_context = PrefixComponent(class_key).empty() ?
 			context : PrefixComponent(class_key);
+		string fallback_type;
 		for(size_t i = 0; i < declaration->children.size(); ++i) {
 			const CPPGMAstNodePtr child = declaration->children[i];
 			if(!child) continue;
@@ -316,6 +163,12 @@
 				LastComponent(FirstIdentifierLocal(child->children[1])) == member) {
 				string type = NodeTypeSpelling(child->children[0]) +
 					DeclaratorSuffix(child->children[1]);
+				const bool function_const = DeclaratorSuffix(child->children[1]).find("const") != string::npos;
+				if(function_const != object_const) {
+					if(!object_const && fallback_type.empty())
+						fallback_type = type;
+					continue;
+				}
 				*result = CanonicalSpelling(ReplaceIdentifiers(type, substitutions));
 				active->erase(active_key);
 				return !result->empty();
@@ -333,6 +186,11 @@
 				active->erase(active_key);
 				return !result->empty();
 			}
+		}
+		if(!fallback_type.empty()) {
+			*result = CanonicalSpelling(ReplaceIdentifiers(fallback_type, substitutions));
+			active->erase(active_key);
+			return !result->empty();
 		}
 		for(size_t i = 0; i < declaration->children.size(); ++i) {
 			const CPPGMAstNodePtr child = declaration->children[i];
@@ -372,7 +230,6 @@
 		active->erase(active_key);
 		return false;
 	}
-
 	bool InferArgument(const CPPGMAstNodePtr& expression, string* result,
 		const map<string, string>& substitutions, const string& context) const
 	{
@@ -435,6 +292,14 @@
 		}
 		if(expression->kind == "call-expression" && !expression->children.empty() &&
 			expression->children[0] && expression->children[0]->kind == "id-expression") {
+			const string member = LastComponent(expression->children[0]->value);
+			const string owner = PrefixComponent(context);
+			set<string> active;
+			if(!owner.empty() && !member.empty() && FindClassMemberType(
+				owner, member, substitutions, context, result, &active)) return true;
+		}
+		if(expression->kind == "call-expression" && !expression->children.empty() &&
+			expression->children[0] && expression->children[0]->kind == "id-expression") {
 			const string callee = LastComponent(expression->children[0]->value);
 			const string nested_class = JoinPath(context, callee);
 			if(class_contexts_.find(nested_class) != class_contexts_.end())
@@ -445,6 +310,11 @@
 		}
 		if(expression->kind == "binary-expression" && expression->children.size() >= 2) {
 			const string op = RemoveMarker(expression->value);
+			if(op == "&&" || op == "||" || op == "==" || op == "!=" ||
+				op == "<" || op == ">" || op == "<=" || op == ">=") {
+				*result = "bool";
+				return true;
+			}
 			if(op == "-") {
 				// A free binary difference used as a function-template argument
 				// is commonly the iterator/range reduction shape.  Its result is
@@ -464,7 +334,6 @@
 		}
 		return false;
 	}
-
 	bool InferFunctionArguments(const TemplateDefinition& definition,
 		const CPPGMAstNodePtr& call, vector<string>* result,
 		const map<string, string>& substitutions, const string& context,
@@ -519,7 +388,6 @@
 		}
 		return true;
 	}
-
 	bool SplitFunctionPointerType(string raw, string* result_type,
 		vector<string>* parameters) const
 	{
@@ -535,7 +403,6 @@
 			raw.size() - separator - 3));
 		return result_type == 0 || !result_type->empty();
 	}
-
 	bool InferFunctionFromExpected(const TemplateDefinition& definition,
 		string expected, vector<string>* result, const string& context) const
 	{
@@ -570,7 +437,6 @@
 		}
 		return true;
 	}
-
 	void RewriteOperatorFunctionArgument(const CPPGMAstNodePtr& expression,
 		const string& context, const map<string, string>& substitutions)
 	{
@@ -607,13 +473,36 @@
 			return;
 		}
 	}
-
+	bool IsBuiltinLogicalType(string raw) const
+	{
+		raw = CanonicalSpelling(raw);
+		while(raw.compare(0, 6, "const ") == 0)
+			raw = CanonicalSpelling(raw.substr(6));
+		while(raw.compare(0, 9, "volatile ") == 0)
+			raw = CanonicalSpelling(raw.substr(9));
+		if(raw.find('*') != string::npos) return true;
+		return raw == "bool" || raw == "char" || raw == "signed char" ||
+			raw == "unsigned char" || raw == "short" || raw == "short int" ||
+			raw == "unsigned short" || raw == "unsigned short int" ||
+			raw == "int" || raw == "unsigned" || raw == "unsigned int" ||
+			raw == "long" || raw == "long int" || raw == "unsigned long" ||
+			raw == "unsigned long int" || raw == "long long" ||
+			raw == "long long int" || raw == "unsigned long long" ||
+			raw == "unsigned long long int" || raw == "float" ||
+			raw == "double" || raw == "long double" || raw == "nullptr_t";
+	}
 	void InstantiateOperatorTemplate(const CPPGMAstNodePtr& expression,
 		const string& context, const map<string, string>& substitutions)
 	{
 		if(!expression || expression->children.size() < 2) return;
 		const string operation = RemoveMarker(expression->value);
 		if(operation.empty() || operation == ",") return;
+		if((operation == "&&" || operation == "||") && expression->children.size() >= 2) {
+			string left, right;
+			if(InferArgument(expression->children[0], &left, substitutions, context) &&
+				InferArgument(expression->children[1], &right, substitutions, context) &&
+				IsBuiltinLogicalType(left) && IsBuiltinLogicalType(right)) return;
+		}
 		const vector<const TemplateDefinition*> candidates = FindFunctionDefinitions(
 			"operator" + operation, context);
 		if(candidates.empty()) return;
@@ -632,19 +521,9 @@
 			return;
 		}
 	}
-
-	string RewriteText(string raw, const string& context, const map<string, string>& substitutions,
-		bool* template_replaced)
+	string RewriteDecltypeText(string raw, const string& context,
+		const map<string, string>& substitutions, bool* template_replaced)
 	{
-		if(template_replaced) *template_replaced = false;
-		if(raw.compare(0, 8, "operator") == 0) {
-			const string suffix = raw.substr(8);
-			map<string, string>::const_iterator operator_substitution = substitutions.find(suffix);
-			if(operator_substitution != substitutions.end()) {
-				raw = "operator" + operator_substitution->second;
-				if(template_replaced) *template_replaced = true;
-			}
-		}
 		for(size_t search = 0; search + 9 <= raw.size(); ++search) {
 			const size_t decltype_start = raw.find("decltype(", search);
 			if(decltype_start == string::npos) break;
@@ -661,26 +540,9 @@
 			if(close == string::npos) continue;
 			const string expression = CanonicalSpelling(raw.substr(search + 9,
 				close - search - 9));
-			const size_t open = expression.find('(');
-			if(open == string::npos || expression.empty() || expression[expression.size() - 1] != ')') {
-				search = close;
-				continue;
-			}
-			const string callee = Trim(expression.substr(0, open));
-			const TemplateDefinition* definition = FindDefinition(callee, context);
-			if(!definition || definition->class_template) {
-				search = close;
-				continue;
-			}
-			const CPPGMAstNodePtr declarator = FunctionDeclarator(definition->declaration);
-			if(!declarator || !definition->declaration || definition->declaration->children.empty()) {
-				search = close;
-				continue;
-			}
-			string type = NodeTypeSpelling(definition->declaration->children[0]);
-			type += DeclaratorSuffix(declarator);
-			type = NormalizeTypeArgument(ReplaceIdentifiers(type, substitutions));
-			if(type.empty()) {
+			string type;
+			if(!EvaluateDecltypeExpression(expression, context, substitutions, &type) ||
+				type.empty()) {
 				search = close;
 				continue;
 			}
@@ -688,6 +550,21 @@
 			if(template_replaced) *template_replaced = true;
 			search += type.size();
 		}
+		return raw;
+	}
+	string RewriteText(string raw, const string& context, const map<string, string>& substitutions,
+		bool* template_replaced, bool resolve_alias = true, bool resolve_member = true)
+	{
+		if(template_replaced) *template_replaced = false;
+		if(raw.compare(0, 8, "operator") == 0) {
+			const string suffix = raw.substr(8);
+			map<string, string>::const_iterator operator_substitution = substitutions.find(suffix);
+			if(operator_substitution != substitutions.end()) {
+				raw = "operator" + operator_substitution->second;
+				if(template_replaced) *template_replaced = true;
+			}
+		}
+		raw = RewriteDecltypeText(raw, context, substitutions, template_replaced);
 		for(size_t search = 0; search < raw.size(); ++search) {
 			if(raw[search] != '<') continue;
 			size_t begin = 0;
@@ -702,26 +579,62 @@
 			if(qualified_alias != substitutions.end() &&
 				qualified_alias->second.find("::") != string::npos)
 				lookup_base = qualified_alias->second;
+			if(!definition) {
+				const size_t separator = base.find("::");
+				if(separator != string::npos) {
+					const map<string, string>::const_iterator alias = substitutions.find(
+						base.substr(0, separator));
+					if(alias != substitutions.end()) {
+						lookup_base = alias->second + base.substr(separator);
+						definition = FindDefinition(lookup_base, context);
+					}
+				}
+			}
 			if(lookup_base != base) definition = FindDefinition(lookup_base, context);
 			if(!definition) continue;
 			vector<string> args = SplitTemplateArguments(arguments_text);
 			for(size_t i = 0; i < args.size(); ++i) {
 				args[i] = NormalizeTypeArgument(RewriteText(args[i], context, substitutions, 0));
 				args[i] = NormalizeTypeArgument(ReplaceIdentifiers(args[i], substitutions));
+				args[i] = ResolveAlias(args[i], context);
+				args[i] = NormalizeTypeArgument(RewriteText(args[i], context, substitutions, 0));
+				args[i] = ResolveAlias(args[i], context);
+				args[i] = QualifyTypeArgument(args[i], context, definition->owner);
 			}
-			if(args.size() < definition->parameters.size())
+			if(args.size() < definition->parameters.size()) {
+				map<string, string> default_substitutions = substitutions;
+				for(size_t i = 0; i < args.size() && i < definition->parameters.size(); ++i)
+					default_substitutions[definition->parameters[i].name] = args[i];
 				for(size_t i = args.size(); i < definition->parameters.size(); ++i) {
-					map<string, string>::const_iterator substituted = substitutions.find(
+					string argument;
+					map<string, string>::const_iterator substituted = default_substitutions.find(
 						definition->parameters[i].name);
-					if(substituted == substitutions.end()) break;
-					args.push_back(substituted->second);
+					if(substituted != default_substitutions.end()) argument = substituted->second;
+					else if(!definition->parameters[i].default_type.empty())
+						argument = RewriteText(definition->parameters[i].default_type, context,
+							default_substitutions, 0);
+					if(argument.empty()) break;
+					argument = NormalizeTypeArgument(ReplaceIdentifiers(argument,
+						default_substitutions));
+					argument = ResolveAlias(argument, context);
+					argument = QualifyTypeArgument(argument, context, definition->owner);
+					args.push_back(argument);
+					default_substitutions[definition->parameters[i].name] = argument;
 				}
-			if(definition->class_template && close + 2 < raw.size() &&
+			}
+				if(resolve_member && definition->class_template && close + 2 < raw.size() &&
 				raw.compare(close + 1, 2, "::") == 0) {
 				size_t nested_begin = close + 3;
 				while(nested_begin < raw.size() && IsIdentifierCharacter(raw[nested_begin])) ++nested_begin;
 				const string nested = raw.substr(close + 3, nested_begin - (close + 3));
 				if(!nested.empty()) {
+					const string member_type = TemplateMemberType(*definition, args, nested, context);
+					if(!member_type.empty()) {
+						raw.replace(begin, nested_begin - begin, member_type);
+						if(template_replaced) *template_replaced = true;
+						search = begin + member_type.size();
+						continue;
+					}
 					requested_nested_classes_[definition->qualified_name].insert(nested);
 					requested_nested_classes_[LastComponent(definition->qualified_name)].insert(nested);
 				}
@@ -738,32 +651,54 @@
 			if(template_replaced) *template_replaced = true;
 			search = begin + replacement.size();
 		}
-		return ReplaceIdentifiers(raw, substitutions);
+		raw = ReplaceIdentifiers(raw, substitutions);
+		return !resolve_alias || raw.find("::") == string::npos ? raw : ResolveAlias(raw, context);
 	}
-
 	CPPGMAstNodePtr TransformCallExpression(const CPPGMAstNodePtr& input,
 		const string& context, const map<string, string>& substitutions)
 	{
 		CPPGMAstNodePtr result(new CPPGMAstNode(input->kind, input->value));
 		result->initializer_form = input->initializer_form;
-		if(!input->children.empty() && input->children[0] &&
-			input->children[0]->kind == "id-expression") {
-			const string raw_callee = input->children[0]->value;
-			const size_t open = raw_callee.find('<');
+		CPPGMAstNodePtr input_callee = input->children.empty() ? CPPGMAstNodePtr() :
+			input->children[0];
+		if(input_callee && input_callee->kind == "parenthesized-expression" &&
+			input_callee->children.size() == 1 && input_callee->children[0] &&
+			input_callee->children[0]->kind == "id-expression")
+			input_callee = input_callee->children[0];
+		if(input_callee && input_callee->kind == "id-expression") {
+			const string raw_callee = input_callee->value;
+			string lookup_callee = raw_callee;
+			const size_t qualifier_separator = lookup_callee.find("::");
+			if(qualifier_separator != string::npos) {
+				const map<string, string>::const_iterator alias = substitutions.find(
+					lookup_callee.substr(0, qualifier_separator));
+				if(alias != substitutions.end()) lookup_callee = alias->second +
+					lookup_callee.substr(qualifier_separator);
+			}
+			const size_t open = lookup_callee.find('<');
 			if(open != string::npos) {
 				string base;
 				size_t begin = 0;
 				string argument_text;
 				size_t close = string::npos;
 				const TemplateDefinition* explicit_definition = 0;
-				if(TemplateBase(raw_callee, open, &begin, &base) &&
-					TemplateRange(raw_callee, open, &argument_text, &close))
-					explicit_definition = FindDefinition(base, context);
+					if(TemplateBase(lookup_callee, open, &begin, &base) &&
+						TemplateRange(lookup_callee, open, &argument_text, &close))
+						explicit_definition = FindDefinition(base, context);
 				if(explicit_definition && !explicit_definition->class_template) {
 					vector<string> explicit_args = SplitTemplateArguments(argument_text);
-					for(size_t i = 0; i < explicit_args.size(); ++i)
+					for(size_t i = 0; i < explicit_args.size(); ++i) {
 						explicit_args[i] = NormalizeTypeArgument(RewriteText(
 							explicit_args[i], context, substitutions, 0));
+						explicit_args[i] = NormalizeTypeArgument(ReplaceIdentifiers(
+							explicit_args[i], substitutions));
+						explicit_args[i] = ResolveAlias(explicit_args[i], context);
+						explicit_args[i] = NormalizeTypeArgument(RewriteText(
+							explicit_args[i], context, substitutions, 0));
+						explicit_args[i] = ResolveAlias(explicit_args[i], context);
+						explicit_args[i] = QualifyTypeArgument(explicit_args[i], context,
+							explicit_definition->owner);
+					}
 					vector<string> complete_args;
 					bool complete = explicit_args.size() == explicit_definition->parameters.size();
 					if(complete) complete_args = explicit_args;
@@ -772,7 +707,7 @@
 							&complete_args, substitutions, context, &explicit_args);
 					if(complete) {
 						const string local_name = Instantiate(*explicit_definition, complete_args, context);
-						const string qualifier = PrefixComponent(base);
+							const string qualifier = PrefixComponent(base);
 						CPPGMAstNodePtr callee(new CPPGMAstNode("id-expression",
 							qualifier.empty() ? local_name : qualifier + "::" + local_name));
 						result->children.push_back(callee);
@@ -789,10 +724,17 @@
 			CPPGMAstNodePtr child = TransformNode(input->children[i], context, substitutions);
 			if(child) result->children.push_back(child);
 		}
-		if(!result->children.empty() && result->children[0] &&
-			result->children[0]->kind == "id-expression" &&
-			result->children[0]->value.find('<') == string::npos) {
-			const string callee_name = result->children[0]->value;
+		CPPGMAstNodePtr result_callee = result->children.empty() ? CPPGMAstNodePtr() :
+			result->children[0];
+		if(result_callee && result_callee->kind == "parenthesized-expression" &&
+			result_callee->children.size() == 1 && result_callee->children[0] &&
+			result_callee->children[0]->kind == "id-expression") {
+			result_callee = result_callee->children[0];
+			result->children[0] = result_callee;
+		}
+		if(result_callee && result_callee->kind == "id-expression" &&
+			result_callee->value.find('<') == string::npos) {
+			const string callee_name = result_callee->value;
 			const vector<const TemplateDefinition*> definitions =
 				FindFunctionDefinitions(callee_name, context);
 			for(size_t candidate = 0; candidate < definitions.size(); ++candidate) {
@@ -802,16 +744,19 @@
 					substitutions, context)) {
 					const string local_name = Instantiate(*definition, inferred, context);
 					const string qualifier = PrefixComponent(callee_name);
-					result->children[0]->value = qualifier.empty() ? local_name : qualifier + "::" + local_name;
+					result_callee->value = qualifier.empty() ? local_name : qualifier + "::" + local_name;
 					break;
 				}
 			}
 			if(definitions.empty()) {
 				const FunctionSignature* signature = FindFunctionSignature(callee_name, context);
-				if(signature && callee_name.find("::") == string::npos) {
+					if(signature && callee_name.find("::") == string::npos &&
+						class_contexts_.find(context) == class_contexts_.end() && substitutions.empty()) {
 					for(map<string, FunctionSignature>::const_iterator found = function_signatures_.begin();
 						found != function_signatures_.end(); ++found)
-						if(&found->second == signature) {
+						if(&found->second == signature &&
+						class_contexts_.find(PrefixComponent(found->first)) == class_contexts_.end() &&
+							function_contexts_.find(PrefixComponent(found->first)) == function_contexts_.end()) {
 							result->children[0]->value = found->first;
 							break;
 						}
@@ -819,9 +764,18 @@
 				ResolveFunctionArguments(result, signature, context);
 			}
 		}
+		if(!result->children.empty() && result->children[0] &&
+			result->children[0]->kind == "id-expression") {
+			string& callee = result->children[0]->value;
+			const size_t separator = callee.find("::");
+			if(separator != string::npos) {
+				const string owner = callee.substr(0, separator);
+				if(callee.compare(separator + 2, owner.size() + 2, owner + "::") == 0)
+					callee.erase(separator + 2, owner.size() + 2);
+			}
+		}
 		return result;
 	}
-
 	void ResolveFunctionArguments(const CPPGMAstNodePtr& result,
 		const FunctionSignature* signature, const string& context)
 	{
@@ -854,7 +808,32 @@
 			++argument;
 		}
 	}
-
+	bool SkipUnusedNestedClass(const CPPGMAstNodePtr& input,
+		const CPPGMAstNodePtr& original_child, const string& child_context,
+		const map<string, string>& substitutions, size_t index) const
+	{
+		if(!input || !original_child ||
+			(input->kind != "class-specifier" && input->kind != "class-forward-declaration") ||
+			(PrefixComponent(input->value).find('<') == string::npos && substitutions.empty()) ||
+			(original_child->kind != "class-specifier" &&
+				original_child->kind != "class-forward-declaration")) return false;
+		const string nested_name = LastComponent(original_child->value);
+		const string class_key = JoinPath(child_context, LastComponent(input->value));
+		map<string, set<string> >::const_iterator requested = requested_nested_classes_.find(class_key);
+		if(requested == requested_nested_classes_.end())
+			requested = requested_nested_classes_.find(LastComponent(input->value));
+		if(requested != requested_nested_classes_.end() &&
+			requested->second.find(nested_name) != requested->second.end()) return false;
+		for(size_t sibling = 0; sibling < input->children.size(); ++sibling)
+			if(sibling != index && input->children[sibling] &&
+				input->children[sibling]->kind != "class-key" &&
+				ContainsName(input->children[sibling], nested_name)) return false;
+		bool has_sibling = false;
+		for(size_t sibling = 0; sibling < input->children.size(); ++sibling)
+			if(sibling != index && input->children[sibling] &&
+				input->children[sibling]->kind != "class-key") has_sibling = true;
+		return has_sibling;
+	}
 	void TransformRegularChildren(const CPPGMAstNodePtr& input,
 		const string& child_context, const string& function_context,
 		const map<string, string>& substitutions,
@@ -863,61 +842,121 @@
 	{
 		for(size_t i = 0; i < input->children.size(); ++i) {
 			const CPPGMAstNodePtr original_child = input->children[i];
-			if((input->kind == "class-specifier" || input->kind == "class-forward-declaration") &&
-				original_child && (original_child->kind == "class-specifier" ||
-					original_child->kind == "class-forward-declaration")) {
-				const string nested_name = LastComponent(original_child->value);
-				bool used = false;
-				const string class_key = JoinPath(child_context, LastComponent(input->value));
-				map<string, set<string> >::const_iterator requested =
-					requested_nested_classes_.find(class_key);
-				if(requested == requested_nested_classes_.end())
-					requested = requested_nested_classes_.find(LastComponent(input->value));
-				if(requested != requested_nested_classes_.end() &&
-					requested->second.find(nested_name) != requested->second.end()) used = true;
-				bool has_sibling = false;
-				for(size_t sibling = 0; sibling < input->children.size(); ++sibling)
-					if(sibling != i && input->children[sibling] &&
-						input->children[sibling]->kind != "class-key") {
-						has_sibling = true;
-						if(ContainsName(input->children[sibling], nested_name)) {
-							used = true;
-							break;
-						}
-					}
-				if(has_sibling && !used) continue;
+			// Once a dependent decltype has been reduced to a concrete typed
+			// spelling, its preserved expression subtree is only syntax history.
+			// Re-transforming that subtree would instantiate helper calls such as
+			// `declval<F>()` as ordinary declarations and lose function-pointer
+			// declarator structure.
+			if(input->kind == "decl-specifier" &&
+				input->value.find("decltype(") != string::npos &&
+				original_child && (original_child->kind == "call-expression" ||
+					original_child->kind == "binary-expression")) continue;
+				if(SkipUnusedNestedClass(input, original_child, child_context, substitutions, i)) continue;
+			if(original_child && original_child->kind == "namespace-alias-definition") {
+				const CPPGMAstNodePtr target = ChildOfKindLocal(original_child, "target");
+				if(target && !target->value.empty() && local_substitutions)
+					(*local_substitutions)[original_child->value] = RewriteText(
+						target->value, child_context, *local_substitutions, 0, false);
+				continue;
 			}
 			const string node_context = input->kind == "function-definition" &&
 				original_child && original_child->kind == "compound-statement" ?
 				function_context : child_context;
-			CPPGMAstNodePtr child = TransformNode(original_child, node_context, *local_substitutions);
-			if(child && !(input->kind == "compound-statement" &&
+			CPPGMAstNodePtr child;
+			if(input->kind == "using-declaration" && original_child &&
+				original_child->kind == "target") {
+				child = CloneNode(original_child);
+				const string raw_target = original_child->value;
+				const size_t separator = raw_target.rfind("::");
+				if(separator != string::npos &&
+					raw_target.substr(0, separator) == raw_target.substr(separator + 2)) {
+					map<string, string>::const_iterator alias = local_substitutions->find(
+						raw_target.substr(0, separator));
+					if(alias != local_substitutions->end() && !alias->second.empty())
+						child->value = alias->second + "::" + LastComponent(alias->second);
+					else child->value = RewriteText(raw_target, node_context,
+						*local_substitutions, 0, false, false);
+				} else child->value = RewriteText(raw_target, node_context,
+					*local_substitutions, 0, false, false);
+				} else child = TransformNode(original_child, node_context, *local_substitutions);
+				if(!child && input->kind == "decl-specifier-seq" && original_child &&
+					(original_child->kind == "class-specifier" ||
+						original_child->kind == "class-forward-declaration")) {
+					map<string, string>::const_iterator promoted = local_class_names_.find(
+						JoinPath(child_context, LastComponent(original_child->value)));
+					if(promoted != local_class_names_.end())
+						result->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
+							"decl-specifier", "TT_IDENTIFIER:" + LastComponent(promoted->second))));
+				}
+				if(child && !(input->kind == "compound-statement" && !substitutions.empty() &&
 				(original_child->kind == "alias-declaration" ||
 					(original_child->kind == "simple-declaration" &&
 					 SpellNode(original_child->children.empty() ? CPPGMAstNodePtr() :
 						original_child->children[0]).find("typedef") != string::npos))))
 				result->children.push_back(child);
 			if(original_child && original_child->kind == "alias-declaration" &&
-				!original_child->value.empty() && !original_child->children.empty())
+				!original_child->value.empty() && !original_child->children.empty() &&
+				(!substitutions.empty() || input->value.find('<') != string::npos))
 				(*local_substitutions)[original_child->value] = RewriteText(
-					SpellNode(original_child->children[0]), child_context, *local_substitutions, 0);
+					TypeIdSpelling(original_child->children[0]), child_context,
+					*local_substitutions, 0);
 			if(original_child && original_child->kind == "using-declaration") {
 				const CPPGMAstNodePtr target = ChildOfKindLocal(original_child, "target");
 				if(target && !target->value.empty()) {
 					const string target_name = LastComponent(target->value);
 					const string owner = PrefixComponent(target->value);
-					if(!owner.empty()) (*local_substitutions)[target_name] = target->value;
+					const CPPGMAstNodePtr rewritten = child ?
+						ChildOfKindLocal(child, "target") : CPPGMAstNodePtr();
+					bool function_target = false;
+					if(!owner.empty()) {
+						const string target_suffix = "::" + target->value;
+						for(map<string, TemplateDefinition>::const_iterator candidate = definitions_.begin();
+							candidate != definitions_.end(); ++candidate)
+							if(!candidate->second.class_template &&
+								(candidate->second.qualified_name == target->value ||
+									(candidate->second.qualified_name.size() > target_suffix.size() &&
+									 candidate->second.qualified_name.compare(
+										candidate->second.qualified_name.size() - target_suffix.size(),
+										target_suffix.size(), target_suffix) == 0))) {
+								function_target = true;
+								break;
+							}
+						const string signature_suffix = "::" + target->value;
+						for(map<string, FunctionSignature>::const_iterator candidate = function_signatures_.begin();
+							candidate != function_signatures_.end(); ++candidate)
+							if(candidate->first == target->value ||
+								(candidate->first.size() > signature_suffix.size() &&
+								 candidate->first.compare(candidate->first.size() - signature_suffix.size(),
+									signature_suffix.size(), signature_suffix) == 0)) {
+								function_target = true;
+								break;
+							}
+						const CPPGMAstNodePtr owner_declaration = FindClassDeclaration(owner, child_context);
+						if(owner_declaration) for(size_t member = 0;
+							member < owner_declaration->children.size(); ++member) {
+								const CPPGMAstNodePtr declaration = owner_declaration->children[member];
+								if(declaration && declaration->kind == "function-definition" &&
+									declaration->children.size() > 1 &&
+									LastComponent(FirstIdentifierLocal(declaration->children[1])) == target_name) {
+									function_target = true;
+									break;
+								}
+							}
+					}
+					if(!owner.empty() && !function_target)
+						(*local_substitutions)[target_name] = rewritten &&
+							!rewritten->value.empty() ? rewritten->value : target->value;
 				}
-			}
+				}
 			if(original_child && original_child->kind == "using-directive")
 				RecordUsingDirective(original_child, local_substitutions);
 			if(original_child && original_child->kind == "simple-declaration" &&
 				!original_child->children.empty() &&
-				SpellNode(original_child->children[0]).find("typedef") != string::npos)
+				SpellNode(original_child->children[0]).find("typedef") != string::npos &&
+				(!substitutions.empty() || input->value.find('<') != string::npos))
 				RecordTypedefSubstitutions(original_child, child_context, local_substitutions);
 		}
 	}
-
 	void RecordUsingDirective(const CPPGMAstNodePtr& original_child,
 		map<string, string>* local_substitutions)
 	{
@@ -943,7 +982,6 @@
 				(*local_substitutions)[visible] = target->value + "::" + visible;
 		}
 	}
-
 	void RecordTypedefSubstitutions(const CPPGMAstNodePtr& original_child,
 		const string& child_context, map<string, string>* local_substitutions)
 	{
@@ -958,22 +996,114 @@
 				DeclaratorSuffix(item->children[0]), child_context, *local_substitutions, 0);
 		}
 	}
-
+	void RewriteTemplateInitializer(const CPPGMAstNodePtr& input,
+		const string& context, const map<string, string>& substitutions,
+		const CPPGMAstNodePtr& result)
+	{
+		if(!input || !result || input->kind != "simple-declaration") return;
+		const CPPGMAstNodePtr original_list = ChildOfKindLocal(input, "init-declarator-list");
+		const CPPGMAstNodePtr transformed_list = ChildOfKindLocal(result, "init-declarator-list");
+		if(!original_list || !transformed_list || original_list->children.size() != 1 ||
+			transformed_list->children.size() != 1) return;
+		const CPPGMAstNodePtr original_item = original_list->children[0];
+		const CPPGMAstNodePtr transformed_item = transformed_list->children[0];
+		if(!original_item || !transformed_item || original_item->children.empty() ||
+			transformed_item->children.empty()) return;
+		const CPPGMAstNodePtr original_declarator = original_item->children[0];
+		const CPPGMAstNodePtr transformed_declarator = transformed_item->children[0];
+		const CPPGMAstNodePtr parameter_clause = ChildOfKindLocal(
+			original_declarator, "parameter-clause");
+		if(!parameter_clause || parameter_clause->children.size() != 1 ||
+			!parameter_clause->children[0]) return;
+		const CPPGMAstNodePtr parameter = parameter_clause->children[0];
+		const CPPGMAstNodePtr parameter_specs = parameter->children.empty() ?
+			CPPGMAstNodePtr() : parameter->children[0];
+		if(!parameter_specs || parameter_specs->children.empty()) return;
+		const string raw_type = RemoveMarker(parameter_specs->children[0]->value);
+		const size_t open = raw_type.find('<');
+		if(open == string::npos) return;
+		string arguments;
+		size_t close = string::npos;
+		string base;
+		size_t begin = 0;
+		if(!TemplateBase(raw_type, open, &begin, &base) ||
+			!TemplateRange(raw_type, open, &arguments, &close) ||
+			!FindDefinition(base, context)) return;
+		const string callee = RewriteText(raw_type, context, substitutions, 0);
+		if(callee.empty() || callee == raw_type) return;
+		string argument_name = FirstIdentifierLocal(parameter->children.size() > 1 ?
+			parameter->children[1] : CPPGMAstNodePtr());
+		if(argument_name.empty()) return;
+		CPPGMAstNodePtr call(new CPPGMAstNode("call-expression"));
+		call->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
+			"id-expression", callee)));
+		CPPGMAstNodePtr call_arguments(new CPPGMAstNode("argument-list"));
+		call_arguments->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
+			"id-expression", argument_name)));
+		call->children.push_back(call_arguments);
+		for(size_t i = 0; i < transformed_declarator->children.size();) {
+			if(transformed_declarator->children[i] &&
+				transformed_declarator->children[i]->kind == "parameter-clause")
+				transformed_declarator->children.erase(
+					transformed_declarator->children.begin() + i);
+			else ++i;
+		}
+		transformed_item->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("initializer")));
+		transformed_item->children.back()->children.push_back(call);
+	}
 	CPPGMAstNodePtr TransformRegularNode(const CPPGMAstNodePtr& input,
 		const string& context, const map<string, string>& substitutions)
 	{
+		CPPGMAstNodePtr template_call = RewriteTemplateCastCall(input, context, substitutions);
+		if(template_call) return template_call;
 		CPPGMAstNodePtr result(new CPPGMAstNode(input->kind, input->value));
 		result->initializer_form = input->initializer_form;
 		bool template_replaced = false;
-		result->value = RewriteText(input->value, context, substitutions, &template_replaced);
+		const bool type_spelling = input->kind == "decl-specifier" ||
+			input->kind == "type-name" || input->kind == "type-specifier";
+		result->value = RewriteText(input->value, context, substitutions,
+			&template_replaced, !type_spelling, true);
+		if((type_spelling || input->kind == "id-expression") &&
+			result->value.find('<') != string::npos)
+			result->value = RewriteText(result->value, context, substitutions, &template_replaced);
+		if(input->kind == "target") {
+			const string raw_target = RemoveMarker(input->value);
+			const size_t separator = raw_target.rfind("::");
+			if(separator != string::npos && raw_target.substr(0, separator) ==
+				raw_target.substr(separator + 2)) {
+				map<string, string>::const_iterator alias = substitutions.find(
+					raw_target.substr(0, separator));
+				if(alias != substitutions.end() && !alias->second.empty())
+					result->value = alias->second + "::" + LastComponent(alias->second);
+			}
+		}
 		if(input->kind == "decl-specifier" || input->kind == "type-name" ||
 			input->kind == "type-specifier") {
 			const size_t marker_colon = result->value.find(':');
-			const string marker = marker_colon == string::npos ? string() :
-				result->value.substr(0, marker_colon + 1);
+			string marker;
+			if(marker_colon != string::npos) {
+				const string prefix = result->value.substr(0, marker_colon);
+				if(prefix == "TT_IDENTIFIER" || prefix.compare(0, 3, "KW_") == 0 ||
+					prefix.compare(0, 3, "OP_") == 0)
+					marker = result->value.substr(0, marker_colon + 1);
+			}
 			const string spelling = RemoveMarker(result->value);
-			const string qualified = QualifyTypeArgument(spelling, context);
+			string qualified = QualifyTypeArgument(spelling, context);
+			string resolved = ResolveAlias(qualified, context);
+			if(substitutions.empty() && input->value.find('<') == string::npos)
+				resolved = qualified;
+			if(resolved.find('<') != string::npos)
+				resolved = RewriteText(resolved, context, substitutions, 0);
+			if(resolved.find('(') != string::npos && resolved.find(')') != string::npos)
+				resolved = qualified;
+			if(resolved != qualified) qualified = resolved;
 			if(qualified != spelling) result->value = marker + qualified;
+			if(input->kind == "decl-specifier" && marker.empty() &&
+				qualified != spelling && result->value.find(':') == string::npos)
+				result->value = "TT_IDENTIFIER:" + qualified;
+			if(input->kind == "decl-specifier" && marker.empty() &&
+				qualified.find(' ') != string::npos)
+				result->value = "TT_IDENTIFIER:" + qualified;
 		}
 		string promoted_local_class;
 		if((input->kind == "class-specifier" || input->kind == "class-forward-declaration") &&
@@ -994,13 +1124,23 @@
 		string function_context = context;
 		if(input->kind == "function-definition") {
 			const string function_name = DeclarationName(input);
-			function_context = JoinPath(context, function_name);
+			string function_owner;
+			if(input->children.size() > 1 && input->children[1]) {
+				const string qualified_name = FirstIdentifierLocal(input->children[1]);
+				function_owner = PrefixComponent(qualified_name);
+				if(class_contexts_.find(function_owner) != class_contexts_.end())
+					child_context = function_owner;
+			}
+			function_context = JoinPath(function_owner.empty() ? context : function_owner,
+				function_name);
 			if(!function_name.empty() && LastComponent(context) == function_name)
 				function_context = context;
 		}
 		map<string, string> local_substitutions = substitutions;
 		TransformRegularChildren(input, child_context, function_context, substitutions,
 			&local_substitutions, result);
+		RewriteTemplateInitializer(input, context, substitutions, result);
+		if(input->kind == "simple-declaration") ReifyReferenceType(result);
 		if(input->kind == "binary-expression") {
 			InstantiateOperatorTemplate(result, context, substitutions);
 			RewriteOperatorFunctionArgument(result, context, substitutions);
@@ -1013,7 +1153,6 @@
 		}
 		return result;
 	}
-
 	CPPGMAstNodePtr TransformNode(const CPPGMAstNodePtr& input, const string& context,
 		const map<string, string>& substitutions)
 	{
@@ -1022,7 +1161,9 @@
 			if(input->children.size() > 1 && input->children[1] &&
 				(input->children[1]->kind == "class-specifier" ||
 					input->children[1]->kind == "class-forward-declaration"))
-				return MakeClassShell(LastComponent(input->children[1]->value));
+				return PrefixComponent(input->children[1]->value).find('<') == string::npos ?
+					MakeClassShell(LastComponent(input->children[1]->value)) :
+					CPPGMAstNodePtr();
 			return CPPGMAstNodePtr();
 		}
 		if(input->kind == "parameter-declaration" && !input->children.empty() &&
@@ -1047,5 +1188,4 @@
 		return TransformRegularNode(input, context, substitutions);
 	}
 };
-
 } // namespace

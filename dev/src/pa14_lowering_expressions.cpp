@@ -721,8 +721,12 @@ PA14Lowerer::Value PA14Lowerer::EmitCompare(const CPPGMAstNodePtr& node, Scope* 
         left.type = common;
       } else left = ConvertValue(left, common);
     } else left = ConvertValue(left, common);
+    const bool right_scalar_integral = right.type &&
+      (is_integral_type(right.type) ||
+       (type_value(right.type)->kind == TYPE_FUNDAMENTAL &&
+        type_value(right.type)->name == "bool"));
     if(!left.known_constant && right.known_constant &&
-       is_integral_type(right.type) &&
+       right_scalar_integral &&
        is_integral_type(common) &&
        type_size(common) > type_size(right.type) && !is_unsigned_type(common)) {
       right.type = common;
@@ -766,7 +770,25 @@ PA14Lowerer::Value PA14Lowerer::EmitBinary(const CPPGMAstNodePtr& node, Scope* s
     operator_arguments.push_back(node->children[1]);
     if(op == "==" || op == "!=" || op == "not_eq" || op == "<" ||
        op == ">" || op == "<=" || op == ">=") return EmitCompare(node, scope);
-    if(ChooseOperatorCall(OperatorFunctionName(op), operator_arguments, scope).binding)
+    bool mixed_bitwise = false;
+    bool class_operand = false;
+    if(op == "&" || op == "bitand" || op == "|" || op == "bitor" ||
+       op == "^" || op == "xor") {
+      const TypePtr left_operator_type = expression_value_type(Infer(node->children[0], scope));
+      const TypePtr right_operator_type = expression_value_type(Infer(node->children[1], scope));
+      class_operand = (left_operator_type && left_operator_type->kind == TYPE_CLASS) ||
+        (right_operator_type && right_operator_type->kind == TYPE_CLASS);
+      const bool same_enum_operands = left_operator_type && right_operator_type &&
+        left_operator_type->kind == TYPE_ENUM && right_operator_type->kind == TYPE_ENUM &&
+        PA12SameType(left_operator_type, right_operator_type, true);
+      mixed_bitwise = !class_operand && !same_enum_operands;
+    }
+    CallChoice operator_choice;
+    if(!mixed_bitwise)
+      operator_choice = ChooseOperatorCall(OperatorFunctionName(op),
+        operator_arguments, scope);
+    if(operator_choice.binding && !mixed_bitwise &&
+       (operator_choice.user_defined == 0 || class_operand))
       return EmitOperatorCall(OperatorFunctionName(op), operator_arguments, scope);
     if(op == "&&" || op == "||" || op == "and" || op == "or") return EmitLogicalValue(node, scope);
     if(op == ",") {
@@ -1201,7 +1223,7 @@ PA14Lowerer::Value PA14Lowerer::EmitValue(const CPPGMAstNodePtr& node, Scope* sc
           // fundamental type; it is not a one-argument cast.
           Value result;
           result.type = builtin_type;
-          result.operand = "0";
+          result.operand = builtin_type->kind == TYPE_POINTER ? "nullptr" : "0";
           result.known_constant = true;
           result.constant = 0;
           return result;

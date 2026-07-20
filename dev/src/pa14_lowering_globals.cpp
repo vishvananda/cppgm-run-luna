@@ -908,6 +908,9 @@ string PA14Lowerer::EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
         if(target_value && target_value->kind == TYPE_CLASS && source_value &&
            source_value->kind == TYPE_CLASS &&
            !PA12SameType(target_value, source_value, true)) {
+          if(IsDerivedFrom(source_value, target_value))
+            return AdjustBaseAddress(EmitAddress(node->children[1], scope),
+                                     source_value, target_value);
           const string slot = new_special_slot("tmpobj", low_type(target_value));
           const string address = new_temp();
           AddInstruction(address + " = addr $" + slot);

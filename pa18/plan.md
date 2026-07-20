@@ -267,47 +267,43 @@ fixtures remain explicit cleanup targets.
 
 ## Checkpoint result
 
-The checkpoint is complete.  The current report is 129/222, up from the
-turn-start baseline of 16/222.  The implementation now materializes supported
-type-only class and function specializations as ordinary AST declarations,
-preserves template definitions and defaults, qualifies compact/elaborated and
-cross-namespace arguments, promotes local classes, and publishes the forwards
-needed by generated declarations.  Function-template deduction now covers
-ordinary calls, expected function-pointer/reference parameters, template-backed
-binary operators, and the first associated-namespace call cases.  PA11 type
-spelling recovery and PA14 lowering fixes cover nested declarator parameters,
-scalar functional casts, class-valued operator lvalues, static member-function
-addresses, and the unsafe synthetic-expression inference cache.
+The completed checkpoint raises PA18 from 16/222 to 160/222. It preserves lexical
+and logical namespace ownership, materializes qualified/reopened/inline namespace
+specializations, resolves aliases/defaults/qualified arrays, and orders generated
+nested/current-specialization classes before their users. It also preserves
+function-type aliases and parameter names, handles explicit function-template
+arguments and signatures, keeps local declaration scopes available during lowering,
+and lowers derived-to-base class reference casts without recursively constructing a
+new base object.
 
-The current failure set is 93 tests: 45 exit-status failures and 48
-process-success LowIR mismatches.  The remaining work is grouped as follows:
+### Remaining Work Map
 
-1. **Dependent lookup and current specialization.**  Resolve deferred
-   `typename`/dependent-base using, current-specialization aliases and nested
-   members, dependent `decltype`, ADL, lazy-header lookup, explicit class
-   instantiation, and qualified/inline/unnamed-namespace lookup.  The principal
-   witnesses are the remaining `300-dependent-*`, `300-current-*`,
-   `300-qualified-*`, `300-inline-*`, and `300-lazy-header-*` tests.
-2. **Deferred member, alias, static, and nested definitions.**  Preserve
-   out-of-class template member bodies and static storage/initializers, recover
-   nested aliases/enums and qualified array arguments, and isolate defaults and
-   reentrant layout collection.  The witnesses include the remaining
-   `300-out-of-class-*`, `300-template-static-*`, `300-reference-member-*`,
-   `300-class-template-static-*`, and alias-forward tests.
-3. **Overload, operator, conversion, and semantic-negative edges.**  Complete
-   forward-only member operators, inherited friend/conversion participation,
-   overload-set/default argument selection, function-pointer `decltype`, and
-   the three expected-failure checks
-   (`100-local-alias-shadows-template-parameter-bad`,
-   `100-nondependent-template-member-body-lookup-bad`, and
-   `300-out-of-class-special-member-noexcept-mismatch-bad`).
-4. **LowIR normalization.**  Reconcile the 48 successful-process fixtures
-   whose emitted constructor/member/static/namespace/operator/ADL LowIR still
-   differs after semantic materialization.
+The final PA18 report has 62 failures: 3 exit-status mismatches, 58 LowIR
+canonicalization mismatches, and 1 LowIR sanity failure.
 
-The next checkpoint group is dependent/current-specialization lookup bundled
-with deferred out-of-class aliases and static/nested member definitions.  It
-will be validated with the affected `300-*` witnesses, the full PA18 report,
-the through-PA17 report, and the file audit.  This turn's validation reached a
-clean build, a passing prior-through report, and a passing PA18 file audit with
-only the repository's existing/header-body warnings.
+- Exit-status cleanup: the three expected-negative fixtures for local alias
+  shadowing, nondependent template-member lookup, and out-of-class special-member
+  `noexcept` mismatch still return success.
+- LowIR normalization and demand collection: 58 fixtures still differ in
+  generated-member/static storage and constructor emission, function/operator/
+  conversion overload selection, dependent `decltype`/array/reference lowering,
+  namespace-qualified ordering, and ADL/using-declaration lowering.
+- LowIR sanity: the inherited-typedef hidden-friend operator fixture still emits
+  an unresolved `ns__operator` call target.
+
+The remaining cases are grouped by shared compiler behavior rather than fixture
+order; process-status validation and LowIR canonicalization are tracked separately.
+
+### Checkpoint Scope
+
+This turn completed the namespace/alias/current-instantiation and function-signature
+increment: typed owner paths are collected before rewriting, source namespace
+forwards are emitted before generated dependent classes, nested dependencies are
+materialized in order, alias/`decltype`/function-type spellings are canonicalized
+without losing declarator structure, ordinary local aliases are retained for
+lowering, and function bodies use their compound-statement scope. Validation covers
+the focused semantic witnesses, the full PA18 report (160/222), the PA18 file audit,
+and the through-PA17 report (1206/1208; the two PA15 shift-stress cases still time
+out at the repository's 10-second baseline). The next checkpoint group is the
+operator/ADL and generated-member LowIR groups, followed by deferred dependent
+lookup/current-instantiation and the three negative semantic diagnostics.

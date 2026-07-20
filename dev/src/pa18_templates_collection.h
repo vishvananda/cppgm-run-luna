@@ -1,6 +1,5 @@
 #pragma once
 #include "pa18_templates.h"
-
 #include <algorithm>
 #include <cctype>
 #include <map>
@@ -9,16 +8,12 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
-
 using namespace std;
-
 namespace {
-
 bool IsIdentifierCharacter(char ch)
 {
 	return isalnum(static_cast<unsigned char>(ch)) || ch == '_';
 }
-
 string Trim(const string& raw)
 {
 	size_t begin = 0;
@@ -27,7 +22,6 @@ string Trim(const string& raw)
 	while(end > begin && isspace(static_cast<unsigned char>(raw[end - 1]))) --end;
 	return raw.substr(begin, end - begin);
 }
-
 string RemoveMarker(const string& raw)
 {
 	const size_t colon = raw.find(':');
@@ -38,7 +32,6 @@ string RemoveMarker(const string& raw)
 		return raw.substr(colon + 1);
 	return raw;
 }
-
 string CanonicalSpelling(string raw)
 {
 	raw = Trim(raw);
@@ -76,7 +69,6 @@ string CanonicalSpelling(string raw)
 	}
 	return result;
 }
-
 string NormalizeTypeArgument(string raw)
 {
 	raw = CanonicalSpelling(raw);
@@ -129,26 +121,22 @@ string NormalizeTypeArgument(string raw)
 		raw = "volatile " + raw.substr(0, raw.size() - 8);
 	return CanonicalSpelling(raw);
 }
-
 string JoinPath(const string& prefix, const string& name)
 {
 	if(prefix.empty()) return name;
 	if(name.empty()) return prefix;
 	return prefix + "::" + name;
 }
-
 string LastComponent(const string& raw)
 {
 	const size_t separator = raw.rfind("::");
 	return separator == string::npos ? raw : raw.substr(separator + 2);
 }
-
 string PrefixComponent(const string& raw)
 {
 	const size_t separator = raw.rfind("::");
 	return separator == string::npos ? string() : raw.substr(0, separator);
 }
-
 bool IsInlineNamespace(const CPPGMAstNodePtr& node)
 {
 	if(!node || node->kind != "namespace-definition") return false;
@@ -156,7 +144,6 @@ bool IsInlineNamespace(const CPPGMAstNodePtr& node)
 		if(node->children[i] && node->children[i]->kind == "inline") return true;
 	return false;
 }
-
 string FirstIdentifierLocal(const CPPGMAstNodePtr& node)
 {
 	if(!node) return string();
@@ -167,7 +154,6 @@ string FirstIdentifierLocal(const CPPGMAstNodePtr& node)
 	}
 	return string();
 }
-
 CPPGMAstNodePtr ChildOfKindLocal(const CPPGMAstNodePtr& node, const string& kind)
 {
 	if(!node) return CPPGMAstNodePtr();
@@ -175,7 +161,6 @@ CPPGMAstNodePtr ChildOfKindLocal(const CPPGMAstNodePtr& node, const string& kind
 		if(node->children[i] && node->children[i]->kind == kind) return node->children[i];
 	return CPPGMAstNodePtr();
 }
-
 CPPGMAstNodePtr DescendantOfKind(const CPPGMAstNodePtr& node, const string& kind)
 {
 	if(!node) return CPPGMAstNodePtr();
@@ -186,7 +171,6 @@ CPPGMAstNodePtr DescendantOfKind(const CPPGMAstNodePtr& node, const string& kind
 	}
 	return CPPGMAstNodePtr();
 }
-
 CPPGMAstNodePtr CloneNode(const CPPGMAstNodePtr& node)
 {
 	if(!node) return CPPGMAstNodePtr();
@@ -196,7 +180,6 @@ CPPGMAstNodePtr CloneNode(const CPPGMAstNodePtr& node)
 		result->children.push_back(CloneNode(node->children[i]));
 	return result;
 }
-
 string SpellNode(const CPPGMAstNodePtr& node)
 {
 	if(!node) return string();
@@ -213,14 +196,12 @@ string SpellNode(const CPPGMAstNodePtr& node)
 	}
 	return CanonicalSpelling(result);
 }
-
 string DefaultTypeSpelling(const CPPGMAstNodePtr& parameter)
 {
 	const CPPGMAstNodePtr argument = ChildOfKindLocal(parameter, "default-template-argument");
 	if(!argument || argument->children.empty()) return string();
 	return CanonicalSpelling(SpellNode(argument->children[0]));
 }
-
 string ReplaceIdentifiers(const string& raw, const map<string, string>& substitutions)
 {
 	string result;
@@ -240,7 +221,6 @@ string ReplaceIdentifiers(const string& raw, const map<string, string>& substitu
 	}
 	return result;
 }
-
 string TypeSuffix(string raw)
 {
 	raw = CanonicalSpelling(raw);
@@ -262,7 +242,6 @@ string TypeSuffix(string raw)
 	while(result.size() > 1 && result[result.size() - 1] == '_') result.erase(result.size() - 1);
 	return result.empty() ? "arg" : result;
 }
-
 vector<string> SplitTemplateArguments(const string& raw)
 {
 	vector<string> result;
@@ -287,41 +266,38 @@ vector<string> SplitTemplateArguments(const string& raw)
 	if(result.size() == 1 && result[0].empty()) result.clear();
 	return result;
 }
-
 struct TemplateParameter
 {
 	string name;
 	string default_type;
 	bool type;
-
 	TemplateParameter() : name(), default_type(), type(false) {}
 };
-
 struct TemplateDefinition
 {
 	string qualified_name;
 	string name;
 	string owner;
+	string lexical_owner;
 	CPPGMAstNodePtr declaration;
 	vector<TemplateParameter> parameters;
 	bool class_template;
 	bool alias_template;
-
-	TemplateDefinition() : qualified_name(), name(), owner(), declaration(), parameters(),
+	TemplateDefinition() : qualified_name(), name(), owner(), lexical_owner(), declaration(), parameters(),
 		class_template(false), alias_template(false) {}
 };
-
 struct FunctionSignature
 {
 	CPPGMAstNodePtr result_specifiers;
 	CPPGMAstNodePtr parameters;
 };
-
 class PA18TemplateExpander
 {
 public:
 	vector<CPPGMAstNodePtr> Run(const vector<CPPGMAstNodePtr>& input)
 	{
+		for(size_t i = 0; i < input.size(); ++i)
+			CollectLexical(input[i], string(), string());
 		for(size_t i = 0; i < input.size(); ++i) Collect(input[i], string());
 		vector<CPPGMAstNodePtr> result;
 		for(size_t i = 0; i < input.size(); ++i) {
@@ -330,21 +306,27 @@ public:
 		}
 		return result;
 	}
-
 private:
 	map<string, TemplateDefinition> definitions_;
 	map<string, vector<string> > definitions_by_name_;
+	map<const CPPGMAstNode*, string> lexical_contexts_;
+	set<string> lexical_namespace_paths_;
+	map<string, string> lexical_namespace_logical_;
 	map<string, string> specializations_;
 	set<string> active_specializations_;
 	map<string, vector<CPPGMAstNodePtr> > generated_by_owner_;
 	map<string, vector<CPPGMAstNodePtr> > generated_before_class_;
 	map<string, vector<CPPGMAstNodePtr> > generated_namespace_forwards_;
+	set<string> early_namespace_forwards_;
+	set<const CPPGMAstNode*> synthetic_namespace_forwards_;
+	map<string, size_t> namespace_occurrences_;
 	set<string> generated_forward_classes_;
 	set<string> class_contexts_;
 	set<string> function_contexts_;
 	map<string, string> function_owners_;
 	map<string, string> local_class_names_;
 	map<string, CPPGMAstNodePtr> class_declarations_;
+	set<string> named_type_contexts_;
 	map<string, string> variable_types_;
 	map<string, string> type_aliases_;
 	map<string, vector<string> > type_aliases_by_name_;
@@ -352,9 +334,10 @@ private:
 	map<string, string> specialization_bases_;
 	map<string, vector<string> > specialization_arguments_;
 	map<string, set<string> > requested_nested_classes_;
+	set<string> materialized_nested_classes_;
+	set<string> materialized_member_definitions_;
 	mutable map<string, string> function_markers_;
 	mutable map<string, string> function_marker_names_;
-
 	string NodeTypeSpelling(const CPPGMAstNodePtr& sequence) const
 	{
 		if(!sequence) return string();
@@ -372,158 +355,32 @@ private:
 		}
 		return CanonicalSpelling(result);
 	}
-
-	string QualifyTypeArgument(string spelling, const string& context) const
-	{
-		spelling = CanonicalSpelling(spelling);
-		while(spelling.compare(0, 8, "typename") == 0 &&
-			(spelling.size() == 8 || isspace(static_cast<unsigned char>(spelling[8]))))
-			spelling = CanonicalSpelling(spelling.substr(8));
-		const char* const elaborated_keys[] = {"struct", "class", "union"};
-		for(size_t key = 0; key < sizeof(elaborated_keys) / sizeof(elaborated_keys[0]); ++key) {
-			const string prefix_key = elaborated_keys[key];
-			if(spelling.compare(0, prefix_key.size(), prefix_key) == 0 &&
-				spelling.size() > prefix_key.size()) {
-				const string candidate = spelling.substr(prefix_key.size());
-				if(class_contexts_.find(candidate) != class_contexts_.end()) {
-					spelling = candidate;
-					break;
-				}
-			}
-		}
-		while(spelling.compare(0, 7, "struct ") == 0 ||
-			spelling.compare(0, 6, "class ") == 0 ||
-			spelling.compare(0, 6, "union ") == 0) {
-			const size_t space = spelling.find(' ');
-			spelling = CanonicalSpelling(spelling.substr(space + 1));
-		}
-		string prefix;
-		if(spelling.compare(0, 6, "const ") == 0) {
-			prefix = "const ";
-			spelling = CanonicalSpelling(spelling.substr(6));
-		} else if(spelling.compare(0, 9, "volatile ") == 0) {
-			prefix = "volatile ";
-			spelling = CanonicalSpelling(spelling.substr(9));
-		}
-		size_t suffix_begin = spelling.find_first_of("*&");
-		string suffix;
-		if(suffix_begin != string::npos) {
-			suffix = spelling.substr(suffix_begin);
-			spelling = CanonicalSpelling(spelling.substr(0, suffix_begin));
-		}
-		map<string, string>::const_iterator local = local_class_names_.find(
-			JoinPath(context, spelling));
-		if(local != local_class_names_.end()) spelling = local->second;
-		// A cv-qualified pointee can arrive as `Localconst*` after the PA10
-		// compact spelling pass.  Treat that suffix as part of the prefix while
-		// locating the actual class name.
-		if(spelling.size() > 5 && spelling.compare(spelling.size() - 5, 5, "const") == 0 &&
-			spelling.find("::") == string::npos) {
-			spelling = CanonicalSpelling(spelling.substr(0, spelling.size() - 5));
-			prefix = "const ";
-		}
-		if(spelling.find("::") == string::npos && spelling.find('<') == string::npos) {
-			string current = context;
-			for(;;) {
-				const string candidate = JoinPath(current, spelling);
-				if(class_contexts_.find(candidate) != class_contexts_.end()) {
-					spelling = candidate;
-					break;
-				}
-				if(current.empty()) break;
-				const size_t separator = current.rfind("::");
-				if(separator == string::npos) current.clear();
-				else current.erase(separator);
-			}
-			if(class_contexts_.find(spelling) != class_contexts_.end()) {
-				// Already a globally visible class name; retain its spelling.
-			}
-		}
-		return CanonicalSpelling(prefix + spelling + suffix);
-	}
-
-	string DeclaratorSuffix(const CPPGMAstNodePtr& declarator) const
-	{
-		if(!declarator) return string();
-		string result;
-		for(size_t i = 0; i < declarator->children.size(); ++i) {
-			const CPPGMAstNodePtr child = declarator->children[i];
-			if(!child) continue;
-			if(child->kind == "ptr-operator") {
-				if(child->value.find("&&") != string::npos) result += "&&";
-				else if(child->value.find('&') != string::npos) result += '&';
-				else result += '*';
-			} else if(child->kind == "cv-qualifier") result += RemoveMarker(child->value);
-		}
-		return result;
-	}
-
-	string ParameterTypeSpelling(const CPPGMAstNodePtr& parameter) const
-	{
-		if(!parameter || parameter->children.empty()) return string();
-		string result = NodeTypeSpelling(parameter->children[0]);
-		if(parameter->children.size() > 1) result += DeclaratorSuffix(parameter->children[1]);
-		return CanonicalSpelling(result);
-	}
-
-	string FunctionTypeSpelling(const CPPGMAstNodePtr& parameter) const
-	{
-		if(!parameter || parameter->children.size() < 2 || !parameter->children[1])
-			return ParameterTypeSpelling(parameter);
-		const CPPGMAstNodePtr declarator = parameter->children[1];
-		const string base = NodeTypeSpelling(parameter->children[0]);
-		const CPPGMAstNodePtr nested = ChildOfKindLocal(declarator, "nested-declarator");
-		const CPPGMAstNodePtr clause = ChildOfKindLocal(declarator, "parameter-clause");
-		if(!nested || !clause) return ParameterTypeSpelling(parameter);
-		const CPPGMAstNodePtr inner = nested->children.empty() ? CPPGMAstNodePtr() : nested->children[0];
-		string result = base + DeclaratorSuffix(declarator);
-		result += inner && DeclaratorSuffix(inner).find('&') != string::npos ? "(&)(" : "(*)(";
-		for(size_t i = 0; i < clause->children.size(); ++i) {
-			const CPPGMAstNodePtr item = clause->children[i];
-			if(!item || item->kind != "parameter-declaration") continue;
-			if(result[result.size() - 1] != '(') result += ',';
-			result += ParameterTypeSpelling(item);
-		}
-		result += ')';
-		return CanonicalSpelling(result);
-	}
-
+	string InheritedTypeName(const string& scope, const string& name,
+		set<string>* active) const;
+	string QualifyTypeArgument(string spelling, const string& context,
+		const string& template_owner = string()) const;
+	string DeclaratorSuffix(const CPPGMAstNodePtr& declarator) const;
+	string DeclaratorArraySuffix(const CPPGMAstNodePtr& declarator) const;
+	string MemberAliasType(const string& class_key, const string& member) const;
+	string QualifyNestedMembers(string spelling, const string& class_key,
+		const CPPGMAstNodePtr& declaration) const;
+	string ParameterTypeSpelling(const CPPGMAstNodePtr& parameter) const;
+	string FunctionTypeSpelling(const CPPGMAstNodePtr& parameter) const;
 	string DeclaratorTypeSpelling(const string& base,
-		const CPPGMAstNodePtr& declarator) const
-	{
-		if(!declarator) return base;
-		const CPPGMAstNodePtr nested = ChildOfKindLocal(declarator, "nested-declarator");
-		const CPPGMAstNodePtr clause = ChildOfKindLocal(declarator, "parameter-clause");
-		if(!nested || !clause) return CanonicalSpelling(base + DeclaratorSuffix(declarator));
-		const CPPGMAstNodePtr inner = nested->children.empty() ? CPPGMAstNodePtr() : nested->children[0];
-		string result = base + DeclaratorSuffix(declarator);
-		result += inner && DeclaratorSuffix(inner).find('&') != string::npos ? "(&)(" : "(*)(";
-		for(size_t i = 0; i < clause->children.size(); ++i) {
-			const CPPGMAstNodePtr item = clause->children[i];
-			if(!item || item->kind != "parameter-declaration") continue;
-			if(result[result.size() - 1] != '(') result += ',';
-			result += ParameterTypeSpelling(item);
-		}
-		result += ')';
-		return CanonicalSpelling(result);
-	}
-
-	CPPGMAstNodePtr FunctionDeclarator(const CPPGMAstNodePtr& declaration) const
-	{
-		if(!declaration) return CPPGMAstNodePtr();
-		if(declaration->kind == "function-definition" && declaration->children.size() > 1)
-			return declaration->children[1];
-		if(declaration->kind == "simple-declaration") {
-			const CPPGMAstNodePtr list = ChildOfKindLocal(declaration, "init-declarator-list");
-			if(list && !list->children.empty() && list->children[0] &&
-				!list->children[0]->children.empty()) return list->children[0]->children[0];
-		}
-		return CPPGMAstNodePtr();
-	}
-
+		const CPPGMAstNodePtr& declarator) const;
+	string TypeIdSpelling(const CPPGMAstNodePtr& type_id) const;
+	CPPGMAstNodePtr FunctionDeclarator(const CPPGMAstNodePtr& declaration) const;
 	string ResolveAlias(string spelling, const string& context) const
 	{
 		spelling = CanonicalSpelling(spelling);
+		string cv_prefix;
+		if(spelling.compare(0, 6, "const ") == 0) {
+			cv_prefix = "const ";
+			spelling = CanonicalSpelling(spelling.substr(6));
+		} else if(spelling.compare(0, 9, "volatile ") == 0) {
+			cv_prefix = "volatile ";
+			spelling = CanonicalSpelling(spelling.substr(9));
+		}
 		string suffix;
 		while(!spelling.empty() && (spelling[spelling.size() - 1] == '*' ||
 			spelling[spelling.size() - 1] == '&')) {
@@ -547,25 +404,71 @@ private:
 			if(direct == type_aliases_.end()) {
 				const string short_name = LastComponent(spelling);
 				map<string, vector<string> >::const_iterator candidates = type_aliases_by_name_.find(short_name);
-				if(candidates != type_aliases_by_name_.end() && candidates->second.size() == 1)
+				if(spelling.find("::") == string::npos &&
+					candidates != type_aliases_by_name_.end() && candidates->second.size() == 1)
 					direct = type_aliases_.find(candidates->second[0]);
 			}
-			if(direct == type_aliases_.end()) break;
-			spelling = CanonicalSpelling(direct->second);
+			if(direct != type_aliases_.end()) {
+				string target = direct->second;
+				const size_t owner_separator = spelling.rfind("::");
+				if(owner_separator != string::npos) {
+					const string owner = spelling.substr(0, owner_separator);
+					const size_t target_open = target.find('<');
+					if(target_open != string::npos && target.find("::") == string::npos) {
+						const string target_base = target.substr(0, target_open);
+						const TemplateDefinition* target_definition =
+							FindDefinition(target_base, owner);
+						if(target_definition)
+							target = target_definition->qualified_name + target.substr(target_open);
+					}
+					map<string, CPPGMAstNodePtr>::const_iterator declaration =
+						class_declarations_.find(owner);
+					if(declaration != class_declarations_.end())
+						target = QualifyNestedMembers(target, owner, declaration->second);
+				}
+				spelling = CanonicalSpelling(target);
+				continue;
+			}
+			const size_t separator = spelling.rfind("::");
+			if(separator == string::npos) break;
+			string class_key = spelling.substr(0, separator);
+			const string member = spelling.substr(separator + 2);
+			string member_type = MemberAliasType(class_key, member);
+			if(member_type.empty()) {
+				for(string current = context; member_type.empty() && !current.empty(); ) {
+					member_type = MemberAliasType(JoinPath(current, class_key), member);
+					const size_t parent = current.rfind("::");
+					if(parent == string::npos) current.clear();
+					else current.erase(parent);
+				}
+			}
+			if(member_type.empty()) {
+				const size_t owner_separator = class_key.rfind("::");
+				if(owner_separator != string::npos) {
+					const string owner_key = class_key.substr(0, owner_separator);
+					const string owner_member = class_key.substr(owner_separator + 2);
+					const string owner_type = MemberAliasType(owner_key, owner_member);
+					if(!owner_type.empty()) {
+						spelling = owner_type + "::" + member;
+						continue;
+					}
+				}
+			}
+			if(member_type.empty()) break;
+			spelling = CanonicalSpelling(member_type);
 		}
-		return CanonicalSpelling(spelling + suffix);
+		return CanonicalSpelling(cv_prefix + spelling + suffix);
 	}
-
 	bool ContainsName(const CPPGMAstNodePtr& node, const string& name) const
 	{
 		if(!node || name.empty()) return false;
 		const string value = RemoveMarker(node->value);
-		if(value == name || LastComponent(value) == name) return true;
+		if(value == name || LastComponent(value) == name ||
+			value.find(name + "::") != string::npos) return true;
 		for(size_t i = 0; i < node->children.size(); ++i)
 			if(ContainsName(node->children[i], name)) return true;
 		return false;
 	}
-
 	string DeclarationName(const CPPGMAstNodePtr& declaration) const
 	{
 		if(!declaration) return string();
@@ -583,7 +486,6 @@ private:
 		if(declaration->kind == "alias-declaration") return LastComponent(declaration->value);
 		return string();
 	}
-
 	void RecordFunctionSignature(const CPPGMAstNodePtr& declaration,
 		const string& context)
 	{
@@ -608,7 +510,6 @@ private:
 		const string qualified = JoinPath(context, name);
 		function_signatures_[qualified] = signature;
 	}
-
 	const FunctionSignature* FindFunctionSignature(const string& raw_name,
 		const string& context) const
 	{
@@ -633,7 +534,6 @@ private:
 			}
 		return result;
 	}
-
 	string FunctionMarker(const string& raw_name, const string& context) const
 	{
 		const FunctionSignature* signature = FindFunctionSignature(raw_name, context);
@@ -657,7 +557,6 @@ private:
 		function_marker_names_[marker] = qualified;
 		return marker;
 	}
-
 	CPPGMAstNodePtr FunctionParameter(const CPPGMAstNodePtr& original,
 		const FunctionSignature& signature, const string& marker) const
 	{
@@ -693,7 +592,6 @@ private:
 		(void)marker;
 		return result;
 	}
-
 	CPPGMAstNodePtr MakeForwardClass(const string& name) const
 	{
 		CPPGMAstNodePtr result(new CPPGMAstNode("class-forward-declaration", name));
@@ -701,7 +599,6 @@ private:
 			new CPPGMAstNode("class-key", "KW_STRUCT:struct")));
 		return result;
 	}
-
 	CPPGMAstNodePtr MakeClassShell(const string& name) const
 	{
 		CPPGMAstNodePtr result(new CPPGMAstNode("class-specifier", name));
@@ -709,7 +606,6 @@ private:
 			new CPPGMAstNode("class-key", "KW_STRUCT:struct")));
 		return result;
 	}
-
 	CPPGMAstNodePtr MakeNamespaceForward(const string& owner,
 		const vector<CPPGMAstNodePtr>& forwards) const
 	{
@@ -734,7 +630,6 @@ private:
 		current->children.insert(current->children.end(), forwards.begin(), forwards.end());
 		return root;
 	}
-
 	void EnsureForwardClass(const string& spelling, const string& context,
 		const string& owner)
 	{
@@ -749,6 +644,16 @@ private:
 		const size_t separator = type.find("::");
 		if(class_contexts_.find(type) == class_contexts_.end())
 			return;
+		if(separator != string::npos && class_declarations_.find(type) !=
+			class_declarations_.end() && class_contexts_.find(type.substr(0, separator)) !=
+			class_contexts_.end()) return;
+		if(class_declarations_.find(type) != class_declarations_.end() &&
+			class_contexts_.find(context) == class_contexts_.end()) {
+			string logical_owner = owner;
+			map<string, string>::const_iterator logical = lexical_namespace_logical_.find(owner);
+			if(logical != lexical_namespace_logical_.end()) logical_owner = logical->second;
+			if(logical_owner == PrefixComponent(type) || owner == PrefixComponent(type)) return;
+		}
 		if(separator == string::npos) {
 			vector<CPPGMAstNodePtr>& forwards = generated_namespace_forwards_[string()];
 			for(size_t i = 0; i < forwards.size(); ++i)
@@ -760,11 +665,17 @@ private:
 		if(class_contexts_.find(top) == class_contexts_.end()) {
 			const string owner_name = PrefixComponent(type);
 			vector<CPPGMAstNodePtr>& forwards = generated_namespace_forwards_[owner_name];
+			if(owner != owner_name) early_namespace_forwards_.insert(owner_name);
 			for(size_t i = 0; i < forwards.size(); ++i)
 				if(LastComponent(forwards[i]->value) == LastComponent(type)) return;
 			forwards.push_back(MakeForwardClass(LastComponent(type)));
 			return;
 		}
+		// A dependency which names a nested class of the specialization being
+		// materialized is already supplied by that specialization's class shell.
+		// Building another shell for the top component here would create a
+		// duplicate member class (for example `ptree_int`) beside the real one.
+		if(!context.empty() && top == PrefixComponent(context)) return;
 		if(!generated_forward_classes_.insert(top).second) return;
 		CPPGMAstNodePtr forward = MakeClassShell(top);
 		string remainder = type.substr(separator + 2);
@@ -788,14 +699,12 @@ private:
 		else
 			generated_by_owner_[owner].push_back(forward);
 	}
-
 	void EnsureTypeDependency(const string& spelling, const string& context,
 		const string& owner)
 	{
 		const string qualified = QualifyTypeArgument(spelling, context);
 		if(!qualified.empty()) EnsureForwardClass(qualified, context, owner);
 	}
-
 	void EnsureDeclarationDependencies(const CPPGMAstNodePtr& node,
 		const string& context, const string& owner)
 	{
@@ -818,7 +727,6 @@ private:
 		for(size_t i = 0; i < node->children.size(); ++i)
 			EnsureDeclarationDependencies(node->children[i], child_context, owner);
 	}
-
 	vector<TemplateParameter> Parameters(const CPPGMAstNodePtr& clause) const
 	{
 		vector<TemplateParameter> result;
@@ -836,7 +744,29 @@ private:
 		}
 		return result;
 	}
-
+	void CollectLexical(const CPPGMAstNodePtr& node, const string& context,
+		const string& logical_context)
+	{
+		if(!node) return;
+		lexical_contexts_[node.get()] = context;
+		string child_context = context;
+		string child_logical_context = logical_context;
+		if(node->kind == "namespace-definition") {
+			child_context = node->value.empty() ? context : JoinPath(context, node->value);
+			child_logical_context = IsInlineNamespace(node) || node->value.empty() ?
+				logical_context : JoinPath(logical_context, node->value);
+			lexical_namespace_paths_.insert(child_context);
+			lexical_namespace_logical_[child_context] = child_logical_context;
+			for(size_t i = 0; i < node->children.size(); ++i)
+				if(node->children[i] && node->children[i]->kind != "inline")
+					CollectLexical(node->children[i], child_context, child_logical_context);
+			return;
+		}
+		if(node->kind == "class-specifier" || node->kind == "class-forward-declaration")
+			child_context = JoinPath(context, LastComponent(node->value));
+		for(size_t i = 0; i < node->children.size(); ++i)
+			CollectLexical(node->children[i], child_context, child_logical_context);
+	}
 	void RegisterTemplate(const CPPGMAstNodePtr& node, const string& context)
 	{
 		if(!node || node->kind != "template-declaration" || node->children.size() < 2) return;
@@ -851,7 +781,17 @@ private:
 			declared_prefix = PrefixComponent(declaration->value);
 		else if(declaration->kind == "function-definition" && declaration->children.size() > 1)
 			declared_prefix = PrefixComponent(FirstIdentifierLocal(declaration->children[1]));
+		else if(declaration->kind == "simple-declaration") {
+			const CPPGMAstNodePtr list = ChildOfKindLocal(declaration, "init-declarator-list");
+			if(list && !list->children.empty() && list->children[0] &&
+				!list->children[0]->children.empty())
+				declared_prefix = PrefixComponent(FirstIdentifierLocal(
+					list->children[0]->children[0]));
+		}
 		item.owner = JoinPath(context, declared_prefix);
+		map<const CPPGMAstNode*, string>::const_iterator lexical = lexical_contexts_.find(node.get());
+		item.lexical_owner = lexical == lexical_contexts_.end() ? item.owner :
+			JoinPath(lexical->second, declared_prefix);
 		item.qualified_name = JoinPath(item.owner, name);
 		item.declaration = declaration;
 		item.parameters = Parameters(node->children[0]);
@@ -881,6 +821,7 @@ private:
 			else if(!item_is_definition && prior->second.declaration) item.declaration = prior->second.declaration;
 			prior->second.parameters = item.parameters;
 			prior->second.declaration = item.declaration;
+			prior->second.lexical_owner = item.lexical_owner;
 			prior->second.class_template = item.class_template || prior->second.class_template;
 			prior->second.alias_template = item.alias_template || prior->second.alias_template;
 		} else {
@@ -891,7 +832,6 @@ private:
 		// is still useful to register its lexical spelling now.
 		Collect(declaration, item.class_template ? JoinPath(item.owner, name) : item.owner);
 	}
-
 	void Collect(const CPPGMAstNodePtr& node, const string& context)
 	{
 		if(!node) return;
@@ -932,14 +872,14 @@ private:
 			RecordFunctionSignature(node, context);
 		if(node->kind == "alias-declaration" && !node->value.empty() && !node->children.empty()) {
 			const string alias = JoinPath(context, node->value);
-			const string target = SpellNode(node->children[0]);
+			const string target = TypeIdSpelling(node->children[0]);
 			if(!target.empty()) {
 				type_aliases_[alias] = target;
 				type_aliases_by_name_[node->value].push_back(alias);
 			}
 		}
 		if(node->kind == "simple-declaration" && !node->children.empty() &&
-			NodeTypeSpelling(node->children[0]).find("typedef") == string::npos) {
+			SpellNode(node->children[0]).find("typedef") != string::npos) {
 			const CPPGMAstNodePtr list = ChildOfKindLocal(node, "init-declarator-list");
 			if(list) for(size_t i = 0; i < list->children.size(); ++i) {
 				const CPPGMAstNodePtr item = list->children[i];
@@ -948,12 +888,9 @@ private:
 				const string name = FirstIdentifierLocal(declarator);
 				const string base = NodeTypeSpelling(node->children[0]);
 				if(name.empty() || base.empty()) continue;
-				if(node->children[0]->kind == "decl-specifier-seq" &&
-					SpellNode(node->children[0]).find("typedef") != string::npos) {
-					const string alias = JoinPath(context, name);
-					type_aliases_[alias] = DeclaratorTypeSpelling(base, declarator);
-					type_aliases_by_name_[name].push_back(alias);
-				}
+				const string alias = JoinPath(context, name);
+				type_aliases_[alias] = DeclaratorTypeSpelling(base, declarator);
+				type_aliases_by_name_[name].push_back(alias);
 			}
 		}
 		string next_context = context;
@@ -971,9 +908,10 @@ private:
 				class_contexts_.insert(promoted);
 			} else class_contexts_.insert(next_context);
 		}
+		if(node->kind == "enum-specifier" && !node->value.empty())
+			named_type_contexts_.insert(JoinPath(context, LastComponent(node->value)));
 		for(size_t i = 0; i < node->children.size(); ++i) Collect(node->children[i], next_context);
 	}
-
 	void CollectVariables(const CPPGMAstNodePtr& node)
 	{
 		if(!node) return;
@@ -985,6 +923,23 @@ private:
 					continue;
 				const string name = FirstIdentifierLocal(parameter->children[1]);
 				if(!name.empty()) variable_types_[name] = ParameterTypeSpelling(parameter);
+			}
+		}
+		if(node->kind == "simple-declaration") {
+			const CPPGMAstNodePtr list = ChildOfKindLocal(node, "init-declarator-list");
+			if(list) for(size_t i = 0; i < list->children.size(); ++i) {
+				const CPPGMAstNodePtr item = list->children[i];
+				if(!item || item->children.empty()) continue;
+				const CPPGMAstNodePtr clause = DescendantOfKind(item->children[0],
+					"parameter-clause");
+				if(!clause) continue;
+				for(size_t j = 0; j < clause->children.size(); ++j) {
+					const CPPGMAstNodePtr parameter = clause->children[j];
+					if(!parameter || parameter->kind != "parameter-declaration" ||
+						parameter->children.size() < 2) continue;
+					const string name = FirstIdentifierLocal(parameter->children[1]);
+					if(!name.empty()) variable_types_[name] = ParameterTypeSpelling(parameter);
+				}
 			}
 		}
 		if(node->kind == "simple-declaration" && !node->children.empty()) {
@@ -1009,157 +964,43 @@ private:
 		}
 		for(size_t i = 0; i < node->children.size(); ++i) CollectVariables(node->children[i]);
 	}
-
+	void CountNamespaceOccurrences(const CPPGMAstNodePtr& node, const string& context)
+	{
+		if(!node) return;
+		if(node->kind == "namespace-definition") {
+			const string child_context = node->value.empty() ? context :
+				JoinPath(context, node->value);
+			++namespace_occurrences_[child_context];
+			for(size_t i = 0; i < node->children.size(); ++i)
+				if(node->children[i] && node->children[i]->kind != "inline")
+					CountNamespaceOccurrences(node->children[i], child_context);
+			return;
+		}
+		for(size_t i = 0; i < node->children.size(); ++i)
+			CountNamespaceOccurrences(node->children[i], context);
+	}
 	CPPGMAstNodePtr TransformTranslationUnit(const CPPGMAstNodePtr& input)
 	{
 		if(!input || input->kind != "translation-unit") return CPPGMAstNodePtr();
+		namespace_occurrences_.clear();
+		CountNamespaceOccurrences(input, string());
 		CollectVariables(input);
 		CPPGMAstNodePtr result(new CPPGMAstNode("translation-unit"));
 		for(size_t i = 0; i < input->children.size(); ++i) {
 			CPPGMAstNodePtr child = TransformNode(input->children[i], string(), map<string, string>());
 			if(child) result->children.push_back(child);
 		}
-		InjectGenerated(result, string());
+		InjectGenerated(result, string(), string());
 		return result;
 	}
-
-	bool TypeOnlyNode(const CPPGMAstNodePtr& node) const
-	{
-		if(!node || node->kind == "class-specifier" ||
-			node->kind == "class-forward-declaration" || node->kind == "enum-specifier" ||
-			node->kind == "template-declaration" || node->kind == "empty-declaration") return true;
-		if(node->kind == "namespace-definition") {
-			for(size_t i = 0; i < node->children.size(); ++i)
-				if(node->children[i] && node->children[i]->kind != "inline" &&
-					(node->children[i]->kind == "simple-declaration" ||
-					 node->children[i]->kind == "function-definition" ||
-					 node->children[i]->kind == "alias-declaration" ||
-					 !TypeOnlyNode(node->children[i]))) return false;
-			return true;
-		}
-		if(node->kind == "simple-declaration") {
-			const CPPGMAstNodePtr list = ChildOfKindLocal(node, "init-declarator-list");
-			return list && !list->children.empty() && !list->children[0]->children.empty() &&
-				ChildOfKindLocal(list->children[0]->children[0], "parameter-clause");
-		}
-		return false;
-	}
-
-	void InsertGenerated(vector<CPPGMAstNodePtr>* children, const string& owner)
-	{
-		map<string, vector<CPPGMAstNodePtr> >::iterator found = generated_by_owner_.find(owner);
-		if(found == generated_by_owner_.end() || found->second.empty()) return;
-		vector<CPPGMAstNodePtr> generated_classes;
-		vector<CPPGMAstNodePtr> generated_functions;
-		for(size_t i = 0; i < found->second.size(); ++i) {
-			if(found->second[i]->kind == "class-specifier" ||
-				found->second[i]->kind == "class-forward-declaration" ||
-				found->second[i]->kind == "alias-declaration") generated_classes.push_back(found->second[i]);
-			else generated_functions.push_back(found->second[i]);
-		}
-		// A specialization generated in a namespace can be visited before a
-		// sibling specialization in the enclosing scope.  Publish lightweight
-		// class forwards first, then place the complete generated declarations
-		// at the normal type position.  This preserves source declaration order
-		// for dependencies such as a generated class containing an earlier
-		// ordinary class, while making cross-namespace generated types visible.
-		vector<CPPGMAstNodePtr> generated_forwards;
-		for(size_t i = 0; i < generated_classes.size(); ++i)
-			if(generated_classes[i]->kind == "class-specifier" ||
-				generated_classes[i]->kind == "class-forward-declaration")
-				generated_forwards.push_back(MakeForwardClass(generated_classes[i]->value));
-		if(!generated_forwards.empty())
-			children->insert(children->begin(), generated_forwards.begin(), generated_forwards.end());
-		size_t type_position = children->size();
-		for(size_t i = 0; i < children->size(); ++i) {
-			if(!TypeOnlyNode((*children)[i])) {
-				type_position = i;
-				break;
-			}
-		}
-		if(!generated_classes.empty())
-			children->insert(children->begin() + type_position,
-				generated_classes.begin(), generated_classes.end());
-		size_t function_position = children->size();
-		for(size_t i = 0; i < children->size(); ++i) {
-			const string& kind = (*children)[i]->kind;
-			if(kind == "function-definition" || kind == "special-member-definition") {
-				function_position = i;
-				break;
-			}
-		}
-		if(!generated_functions.empty())
-			children->insert(children->begin() + function_position,
-				generated_functions.begin(), generated_functions.end());
-	}
-
-	void InjectGenerated(const CPPGMAstNodePtr& node, const string& context)
-	{
-		if(!node) return;
-		if(node->kind == "translation-unit") {
-			vector<CPPGMAstNodePtr> namespace_forwards;
-			for(map<string, vector<CPPGMAstNodePtr> >::const_iterator it =
-				generated_namespace_forwards_.begin(); it != generated_namespace_forwards_.end(); ++it) {
-				CPPGMAstNodePtr wrapper = MakeNamespaceForward(it->first, it->second);
-				if(wrapper) namespace_forwards.push_back(wrapper);
-				else node->children.insert(node->children.begin(), it->second.begin(), it->second.end());
-			}
-			if(!namespace_forwards.empty())
-				node->children.insert(node->children.begin(), namespace_forwards.begin(), namespace_forwards.end());
-			InsertGenerated(&node->children, context);
-			for(size_t i = 0; i < node->children.size(); ++i) {
-				if(node->children[i] && (node->children[i]->kind == "class-specifier" ||
-					node->children[i]->kind == "class-forward-declaration")) {
-					const string class_path = JoinPath(context, LastComponent(node->children[i]->value));
-					map<string, vector<CPPGMAstNodePtr> >::iterator before =
-						generated_before_class_.find(class_path);
-					if(before != generated_before_class_.end())
-						node->children.insert(node->children.begin() + i,
-							before->second.begin(), before->second.end()), i += before->second.size();
-				}
-				InjectGenerated(node->children[i], context);
-			}
-			return;
-		}
-		if(node->kind == "namespace-definition") {
-			const string child_context = IsInlineNamespace(node) || node->value.empty() ?
-				context : JoinPath(context, node->value);
-			// Inline and unnamed namespaces share their semantic lookup context
-			// with the enclosing namespace.  The generated declarations therefore
-			// belong to the enclosing node; injecting them again into the inline
-			// child creates duplicate scopes and corrupts member lookup.
-			if(child_context != context) InsertGenerated(&node->children, child_context);
-			for(size_t i = 0; i < node->children.size(); ++i) {
-				if(node->children[i] && (node->children[i]->kind == "class-specifier" ||
-					node->children[i]->kind == "class-forward-declaration")) {
-					const string class_path = JoinPath(child_context, LastComponent(node->children[i]->value));
-					map<string, vector<CPPGMAstNodePtr> >::iterator before =
-						generated_before_class_.find(class_path);
-					if(before != generated_before_class_.end())
-						node->children.insert(node->children.begin() + i,
-							before->second.begin(), before->second.end()), i += before->second.size();
-				}
-				InjectGenerated(node->children[i], child_context);
-			}
-			return;
-		}
-		if(node->kind == "class-specifier" || node->kind == "class-forward-declaration") {
-			const string class_context = JoinPath(context, LastComponent(node->value));
-			for(size_t i = 0; i < node->children.size(); ++i)
-				InjectGenerated(node->children[i], class_context);
-			map<string, vector<CPPGMAstNodePtr> >::iterator found = generated_by_owner_.find(class_context);
-			if(found != generated_by_owner_.end() && !found->second.empty()) {
-				size_t position = node->children.size();
-				for(size_t i = 0; i < node->children.size(); ++i)
-					if(node->children[i] && node->children[i]->kind == "class-key") {
-						position = i + 1;
-						break;
-					}
-				node->children.insert(node->children.begin() + position,
-					found->second.begin(), found->second.end());
-			}
-			return;
-		}
-		for(size_t i = 0; i < node->children.size(); ++i)
-			InjectGenerated(node->children[i], context);
-	}
+	bool TypeOnlyNode(const CPPGMAstNodePtr& node) const;
+	void InsertGenerated(vector<CPPGMAstNodePtr>* children, const string& owner);
+	void InjectGenerated(const CPPGMAstNodePtr& node, const string& context,
+		const string& lexical_context);
+	bool MentionsGeneratedType(const CPPGMAstNodePtr& node,
+		const string& type_name) const;
+	bool MentionsGeneratedClass(const CPPGMAstNodePtr& node,
+		const vector<CPPGMAstNodePtr>& generated) const;
+	bool MentionsTemplateId(const CPPGMAstNodePtr& node) const;
+	vector<CPPGMAstNodePtr> OrderGeneratedClasses(
+		const vector<CPPGMAstNodePtr>& input) const;

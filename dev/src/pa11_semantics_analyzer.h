@@ -212,6 +212,18 @@ public:
 		PathTarget target = ResolvePath(from, raw);
 		return target.binding;
 	}
+	bool AccessibleType(const Binding& binding, Scope* from) const
+	{
+		if(!binding.is_member || binding.access.empty() || binding.access == "public") return true;
+		for(Scope* current = from; current; current = current->parent)
+			if(current->kind == SCOPE_CLASS && current->owner_type) {
+				if(current->owner_type == binding.member_owner) return true;
+				if(binding.access == "protected")
+					for(TypePtr base = current->owner_type->direct_base; base; base = base->direct_base)
+						if(base == binding.member_owner) return true;
+			}
+		return false;
+	}
 	TypePtr ResolveType(Scope* from, const string& raw) const
 	{
 		const string name = StripTypeMarker(raw);
@@ -221,8 +233,8 @@ public:
 				for (size_t i = current->bindings.size(); i > 0; --i)
 				{
 					const Binding& candidate = current->bindings[i - 1];
-					if (candidate.name == name && (candidate.kind == BIND_TYPE ||
-						candidate.kind == BIND_TYPE_ALIAS)) return candidate.type;
+						if (candidate.name == name && (candidate.kind == BIND_TYPE ||
+							candidate.kind == BIND_TYPE_ALIAS) && AccessibleType(candidate, from)) return candidate.type;
 				}
 			for (Scope* current = from; current; current = current->parent)
 				if (current->kind == SCOPE_CLASS && current->owner_type)
@@ -235,13 +247,13 @@ public:
 						{
 							const Binding& candidate = base->owned_scope->bindings[i - 1];
 							if (candidate.name == name && (candidate.kind == BIND_TYPE ||
-								candidate.kind == BIND_TYPE_ALIAS)) return candidate.type;
+								candidate.kind == BIND_TYPE_ALIAS) && AccessibleType(candidate, from)) return candidate.type;
 						}
 					}
 		}
 		Binding* binding = ResolveBinding(from, name);
 		if (!binding || (binding->kind != BIND_TYPE &&
-			binding->kind != BIND_TYPE_ALIAS))
+			binding->kind != BIND_TYPE_ALIAS) || !AccessibleType(*binding, from))
 			throw logic_error("unknown type: " + raw);
 		return binding->type;
 	}
@@ -351,7 +363,17 @@ public:
 		while (!spelling.empty() && isspace(static_cast<unsigned char>(spelling[spelling.size() - 1])))
 			spelling.erase(spelling.size() - 1, 1);
 		if (spelling.compare(0, 8, "typename ") == 0) spelling = spelling.substr(8);
+		bool leading_const = false;
+		bool leading_volatile = false;
+		if (spelling.compare(0, 6, "const ") == 0) {
+			leading_const = true;
+			spelling = spelling.substr(6);
+		} else if (spelling.compare(0, 9, "volatile ") == 0) {
+			leading_volatile = true;
+			spelling = spelling.substr(9);
+		}
 		vector<char> suffixes;
+		vector<long long> array_bounds;
 		for (;;) {
 			while (!spelling.empty() && isspace(static_cast<unsigned char>(spelling[spelling.size() - 1])))
 				spelling.erase(spelling.size() - 1, 1);
@@ -374,6 +396,22 @@ public:
 				spelling.erase(spelling.size() - 1);
 				continue;
 			}
+			if (!spelling.empty() && spelling[spelling.size() - 1] == ']') {
+				const size_t open = spelling.rfind('[');
+				if (open == string::npos) break;
+				string bound_text = spelling.substr(open + 1,
+					spelling.size() - open - 2);
+				long long bound = -1;
+				if (!bound_text.empty()) {
+					char* end = 0;
+					const long long parsed = strtoll(bound_text.c_str(), &end, 10);
+					if (!end || *end != '\0') break;
+					bound = parsed;
+				}
+				array_bounds.push_back(bound);
+				spelling.erase(open);
+				continue;
+			}
 			break;
 		}
 		while (!spelling.empty() && isspace(static_cast<unsigned char>(spelling[0]))) spelling.erase(0, 1);
@@ -390,10 +428,14 @@ public:
 			if (!IsFundamentalWord(words[i])) all_fundamental = false;
 		if (all_fundamental) base = Fundamental(FundamentalName(words));
 		else base = ResolveType(scope, spelling);
+		if (leading_const) base = CloneWithCv(base, true, false);
+		if (leading_volatile) base = CloneWithCv(base, false, true);
 		for (size_t i = suffixes.size(); i > 0; --i) {
 			if (suffixes[i - 1] == '*') base = PointerTo(base);
 			else base = ReferenceTo(TYPE_LVALUE_REFERENCE, base);
 		}
+		for (size_t i = array_bounds.size(); i > 0; --i)
+			base = ArrayOf(array_bounds[i - 1], base);
 		return base;
 	}
 	TypePtr TypeFromSpecSeq(const CPPGMAstNodePtr& sequence, Scope* scope,
@@ -463,7 +505,17 @@ public:
 					word.erase(0, 1);
 				while (!word.empty() && isspace(static_cast<unsigned char>(word[word.size() - 1])))
 					word.erase(word.size() - 1, 1);
-				if (word.compare(0, 6, "const ") == 0) {
+				const bool compound_leading_cv =
+					(value.find("TT_IDENTIFIER:") == 0 &&
+					 ((word.compare(0, 6, "const ") == 0 && word.size() > 6) ||
+					  (word.compare(0, 9, "volatile ") == 0 && word.size() > 9)) &&
+					 (word.find('*') != string::npos || word.find('&') != string::npos ||
+					  word.find("::") != string::npos || word.find(' ') != string::npos));
+				if (compound_leading_cv) {
+					info.named_type = ResolveSpelledType(word, scope, info);
+					continue;
+				}
+			if (word.compare(0, 6, "const ") == 0) {
 					info.is_const = true;
 					word = word.substr(6);
 					while (!word.empty() && isspace(static_cast<unsigned char>(word[0]))) word.erase(0, 1);
@@ -1003,65 +1055,8 @@ public:
 		enum_types_[node.get()] = type;
 		return type;
 	}
-	void ProcessUsingDeclaration(const CPPGMAstNodePtr& node, Scope* scope)
-	{
-		CPPGMAstNodePtr target_node = ChildOfKind(node, "target");
-		if (!target_node) throw logic_error("invalid using declaration");
-		const string target_name = target_node->value;
-		if (target_name.find('<') != string::npos)
-			throw logic_error("using declaration cannot name template-id");
-		Binding* target = ResolveBinding(scope, target_name);
-		if (!target && scope && scope->kind == SCOPE_CLASS)
-		{
-			const size_t separator = target_name.rfind("::");
-			if (separator != string::npos)
-			{
-				PathTarget owner = ResolvePath(scope, target_name.substr(0, separator));
-				TypePtr owner_type = owner.binding ? owner.binding->type :
-					(owner.scope ? owner.scope->owner_type : TypePtr());
-				Scope* owner_scope = ScopeForType(owner_type);
-				if (owner_scope)
-					target = owner_scope->local(LastComponent(target_name));
-			}
-		}
-		if (!target) throw logic_error("using target is not a declaration");
-		Binding imported = *target;
-		const size_t target_separator = target_name.rfind("::");
-		const string target_owner_name = target_separator == string::npos ? string() :
-			LastComponent(target_name.substr(0, target_separator));
-		const bool constructor_target = target->kind == BIND_FUNCTION &&
-			scope && scope->kind == SCOPE_CLASS && scope->owner_type &&
-			!target_owner_name.empty() && LastComponent(target_name) == target_owner_name;
-		imported.name = constructor_target ? LastComponent(scope->owner_type->name) :
-			LastComponent(target_name);
-		// Scope::add preserves an already-qualified binding name.  An imported
-		// constructor is a declaration in the derived class for PA11 lookup,
-		// so let the destination scope form its qualified identity.  Ordinary
-		// using-declarations retain the source identity for overload lowering.
-		if (constructor_target) imported.qualified_name.clear();
-		scope->add(imported);
-	}
-	void ProcessNamespace(const CPPGMAstNodePtr& node, Scope* scope)
-	{
-		const string name = node->value;
-		if (name != "<unnamed>" && (scope->local(name) ||
-			scope->namespace_aliases.find(name) != scope->namespace_aliases.end()))
-			throw logic_error("namespace conflicts with declaration");
-		Scope* namespace_scope = 0;
-		map<string, Scope*>::iterator found = scope->namespace_children.find(name);
-		if (name != "<unnamed>" && found != scope->namespace_children.end())
-			namespace_scope = found->second;
-		else
-		{
-			namespace_scope = NewChild(scope, SCOPE_NAMESPACE, name);
-			if (name != "<unnamed>") scope->namespace_children[name] = namespace_scope;
-		}
-		if (name == "<unnamed>") scope->using_directives.push_back(namespace_scope);
-		namespace_scopes_[node.get()] = namespace_scope;
-		namespace_scope->inline_namespace = HasKind(node, "inline");
-		for (size_t i = 0; i < node->children.size(); ++i)
-			if (node->children[i]->kind != "inline") Process(node->children[i], namespace_scope);
-	}
+	void ProcessUsingDeclaration(const CPPGMAstNodePtr& node, Scope* scope);
+	void ProcessNamespace(const CPPGMAstNodePtr& node, Scope* scope);
 	void ProcessNamespaceAlias(const CPPGMAstNodePtr& node, Scope* scope)
 	{
 		const CPPGMAstNodePtr target_node = ChildOfKind(node, "target");

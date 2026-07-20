@@ -460,8 +460,8 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferIdentifier(const CPPGMAstNodePtr& node, 
       if(selected) result.binding = selected;
     }
     if(result.binding) result.candidates.clear();
-    if(!result.binding && result.candidates.empty())
-      throw logic_error("unknown expression name: " + node->value);
+	if(!result.binding && result.candidates.empty())
+	  throw logic_error("unknown expression name: " + node->value);
     if(!result.binding && result.candidates.size() == 1)
       result.binding = result.candidates[0];
     if(result.binding && !IsAccessible(result.binding, scope))
@@ -702,6 +702,29 @@ TypePtr PA14Lowerer::BuiltinCastType(const CPPGMAstNodePtr& callee,
        name == "unsigned long long int" || name == "float" ||
        name == "double" || name == "long double" || name == "void" ||
        name == "nullptr_t") return Fundamental(name);
+    string pointer_base = name;
+    size_t pointer_depth = 0;
+    while(!pointer_base.empty() && pointer_base[pointer_base.size() - 1] == '*') {
+      pointer_base.erase(pointer_base.size() - 1);
+      ++pointer_depth;
+    }
+    if(pointer_depth && (pointer_base == "void" || pointer_base == "bool" ||
+        pointer_base == "char" || pointer_base == "signed char" ||
+        pointer_base == "unsigned char" || pointer_base == "short" ||
+        pointer_base == "short int" || pointer_base == "unsigned short" ||
+        pointer_base == "unsigned short int" || pointer_base == "int" ||
+        pointer_base == "unsigned" || pointer_base == "unsigned int" ||
+        pointer_base == "long" || pointer_base == "long int" ||
+        pointer_base == "unsigned long" || pointer_base == "unsigned long int" ||
+        pointer_base == "long long" || pointer_base == "long long int" ||
+        pointer_base == "unsigned long long" ||
+        pointer_base == "unsigned long long int" || pointer_base == "float" ||
+        pointer_base == "double" || pointer_base == "long double" ||
+        pointer_base == "nullptr_t")) {
+      TypePtr result = Fundamental(pointer_base);
+      while(pointer_depth--) result = PointerTo(result);
+      return result;
+    }
     Analyzer::PathTarget target = analyzer_.ResolvePath(scope, name);
     if(!target.binding || (target.binding->kind != BIND_TYPE &&
                            target.binding->kind != BIND_TYPE_ALIAS)) return TypePtr();
@@ -759,8 +782,22 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferBinary(const CPPGMAstNodePtr& node, Scop
     vector<CPPGMAstNodePtr> operator_arguments;
     operator_arguments.push_back(node->children[0]);
     operator_arguments.push_back(node->children[1]);
-    CallChoice overloaded = ChooseOperatorCall(OperatorFunctionName(op),
-      operator_arguments, scope);
+    bool mixed_bitwise = false;
+    if(op == "&" || op == "bitand" || op == "|" || op == "bitor" ||
+       op == "^" || op == "xor") {
+      const TypePtr left_type = expression_value_type(left);
+      const TypePtr right_type = expression_value_type(right);
+      const bool class_operand = (left_type && left_type->kind == TYPE_CLASS) ||
+        (right_type && right_type->kind == TYPE_CLASS);
+      const bool same_enum_operands = left_type && right_type &&
+        left_type->kind == TYPE_ENUM && right_type->kind == TYPE_ENUM &&
+        PA12SameType(left_type, right_type, true);
+      mixed_bitwise = !class_operand && !same_enum_operands;
+    }
+    CallChoice overloaded;
+    if(!mixed_bitwise)
+      overloaded = ChooseOperatorCall(OperatorFunctionName(op),
+        operator_arguments, scope);
     bool prefer_builtin = false;
     const bool comparison = op == "==" || op == "!=" || op == "not_eq" ||
       op == "<" || op == ">" || op == "<=" || op == ">=";

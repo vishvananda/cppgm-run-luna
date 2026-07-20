@@ -30,7 +30,7 @@ CPPGMAstNodePtr Parser::ParseClassSpecifier(bool declaration_context,
 	vector<CPPGMAstNodePtr> attributes = leading_attributes;
 	SkipAttributes(&attributes);
 	string name;
-	if (Peek().kind == AST_IDENTIFIER || Is("~"))
+	if (Peek().kind == AST_IDENTIFIER || Is("~") || Is("::"))
 	{
 		if (!ParseName(&name, false))
 		{
@@ -392,6 +392,16 @@ CPPGMAstNodePtr Parser::ParseSpecialMember(bool definition, bool member_context)
 			name.insert(operator_pos + 8, " ");
 	}
 	string class_name = current_class_;
+	int class_angle_depth = 0;
+	size_t qualified_class = string::npos;
+	for(size_t i = 0; i + 1 < class_name.size(); ++i) {
+		if(class_name[i] == '<') ++class_angle_depth;
+		else if(class_name[i] == '>' && class_angle_depth > 0) --class_angle_depth;
+		else if(class_angle_depth == 0 && class_name.compare(i, 2, "::") == 0)
+			qualified_class = i;
+	}
+	if (qualified_class != string::npos)
+		class_name.erase(0, qualified_class + 2);
 	const size_t class_template = class_name.find('<');
 	if (class_template != string::npos) class_name.erase(class_template);
 	if (name.empty() || (member_context && !current_class_.empty() &&

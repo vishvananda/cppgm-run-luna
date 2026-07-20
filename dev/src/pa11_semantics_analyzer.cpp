@@ -1,5 +1,76 @@
 #include "pa11_semantics_analyzer.h"
 
+
+void Analyzer::ProcessUsingDeclaration(const CPPGMAstNodePtr& node, Scope* scope)
+	{
+		CPPGMAstNodePtr target_node = ChildOfKind(node, "target");
+		if (!target_node) throw logic_error("invalid using declaration");
+		const string target_name = target_node->value;
+		if (target_name.find('<') != string::npos)
+			throw logic_error("using declaration cannot name template-id");
+		const size_t target_separator = target_name.rfind("::");
+		const string target_owner_name = target_separator == string::npos ? string() :
+			LastComponent(target_name.substr(0, target_separator));
+		vector<Binding*> targets;
+		if (target_separator != string::npos)
+		{
+			PathTarget owner = ResolvePath(scope, target_name.substr(0, target_separator));
+			Scope* owner_scope = owner.scope;
+			if (!owner_scope && owner.binding) owner_scope = ScopeForType(owner.binding->type);
+			if (owner_scope)
+				for (size_t i = 0; i < owner_scope->bindings.size(); ++i)
+					if (owner_scope->bindings[i].name == LastComponent(target_name))
+						targets.push_back(&owner_scope->bindings[i]);
+		}
+		if (targets.empty()) {
+			Binding* target = ResolveBinding(scope, target_name);
+			if (target) targets.push_back(target);
+		}
+		if (targets.empty()) throw logic_error("using target is not a declaration");
+		for (size_t target_index = 0; target_index < targets.size(); ++target_index)
+		{
+			Binding imported = *targets[target_index];
+			const bool constructor_target = imported.kind == BIND_FUNCTION &&
+				scope && scope->kind == SCOPE_CLASS && scope->owner_type &&
+				!target_owner_name.empty() && LastComponent(target_name) == target_owner_name;
+			imported.name = constructor_target ? LastComponent(scope->owner_type->name) :
+				LastComponent(target_name);
+			// Scope::add preserves an already-qualified binding name.  An imported
+			// constructor is a declaration in the derived class for PA11 lookup,
+			// so let the destination scope form its qualified identity.  Ordinary
+			// using-declarations retain the source identity for overload lowering.
+			if (constructor_target) imported.qualified_name.clear();
+			scope->add(imported);
+		}
+	}
+void Analyzer::ProcessNamespace(const CPPGMAstNodePtr& node, Scope* scope)
+	{
+		const string name = node->value;
+		if (name != "<unnamed>" && (scope->local(name) ||
+			scope->namespace_aliases.find(name) != scope->namespace_aliases.end()))
+			throw logic_error("namespace conflicts with declaration");
+		Scope* namespace_scope = 0;
+		map<string, Scope*>::iterator found = scope->namespace_children.find(name);
+		if (name != "<unnamed>" && found != scope->namespace_children.end())
+			namespace_scope = found->second;
+		else
+		{
+			namespace_scope = NewChild(scope, SCOPE_NAMESPACE, name);
+			if (name != "<unnamed>") scope->namespace_children[name] = namespace_scope;
+		}
+		if (name == "<unnamed>") scope->using_directives.push_back(namespace_scope);
+		namespace_scopes_[node.get()] = namespace_scope;
+			namespace_scope->inline_namespace = HasKind(node, "inline");
+			if (namespace_scope->inline_namespace) {
+				bool already_visible = false;
+				for (size_t i = 0; i < scope->using_directives.size(); ++i)
+					if (scope->using_directives[i] == namespace_scope) already_visible = true;
+				if (!already_visible) scope->using_directives.push_back(namespace_scope);
+			}
+		for (size_t i = 0; i < node->children.size(); ++i)
+			if (node->children[i]->kind != "inline") Process(node->children[i], namespace_scope);
+	}
+
 namespace {
 
 bool SameLayoutType(const TypePtr& left, const TypePtr& right)
@@ -799,8 +870,8 @@ void Analyzer::RecordClassDeclaration(const CPPGMAstNodePtr& child, const TypePt
 		for (size_t k = 0; k < class_scope->bindings.size(); ++k)
 		{
 			Binding& binding = class_scope->bindings[k];
-			if (binding.name != name ||
-				TypeText(binding.type, true) != TypeText(field_type, true)) continue;
+				if (binding.name != name ||
+					TypeText(binding.type, true) != TypeText(field_type, true)) continue;
 			binding.type = field_type;
 			binding.access = access;
 			binding.declaration = child;

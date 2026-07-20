@@ -54,6 +54,13 @@ CPPGMAstNodePtr Parser::ParseDeclaration(bool member_context)
 		return ParseLinkageSpecification();
 	if (Is("extern") && Peek(1).text == "template")
 		return ParseExplicitInstantiation();
+	if (Is("template") && Peek(1).text != "<")
+	{
+		Mark mark = Save();
+		CPPGMAstNodePtr explicit_instantiation = ParseExplicitInstantiation();
+		if (explicit_instantiation) return explicit_instantiation;
+		Restore(mark);
+	}
 	if (Is("template")) return ParseTemplateDeclaration(member_context);
 	if (Is("class") || Is("struct") || Is("union"))
 	{
@@ -200,6 +207,7 @@ CPPGMAstNodePtr Parser::ParseUsingDeclaration(bool directive)
 	}
 	Restore(mark);
 	if (!Take("using")) return CPPGMAstNodePtr();
+	Take("typename");
 	string target;
 	if (!ParseName(&target) || !Take(";"))
 	{
@@ -281,7 +289,8 @@ CPPGMAstNodePtr Parser::ParseTemplateDeclaration(bool member_context)
 CPPGMAstNodePtr Parser::ParseExplicitInstantiation()
 {
 	Mark mark = Save();
-	if (!Take("extern") || !Take("template"))
+	Take("extern");
+	if (!Take("template"))
 	{
 		Restore(mark);
 		return CPPGMAstNodePtr();

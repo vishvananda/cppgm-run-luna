@@ -346,23 +346,27 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseOperatorCall(
         }
       }
       bool viable = true;
+      int user_defined = 0;
       for(size_t a = argument_offset; a < arguments.size(); ++a) {
         const size_t parameter = a - argument_offset;
         const int rank = parameter < function->parameters.size() ?
           ConversionRank(arguments[a], function->parameters[parameter]) : 2;
         if(rank < 0) { viable = false; break; }
+        if(rank >= 3) ++user_defined;
         worst = max(worst, rank);
         total += rank;
       }
       if(!viable) continue;
-      if(!best.binding || worst < best.worst ||
-         (worst == best.worst && total < best.total)) {
+      if(!best.binding || user_defined < best.user_defined ||
+         (user_defined == best.user_defined &&
+          (worst < best.worst || (worst == best.worst && total < best.total)))) {
         best.binding = binding;
         best.function = function;
         best.object = member ? argument_nodes[0] : CPPGMAstNodePtr();
         best.direct = true;
         best.member = member;
         best.static_member = binding->is_static;
+        best.user_defined = user_defined;
         best.worst = worst;
         best.total = total;
       } else if(worst == best.worst && total == best.total &&
@@ -657,12 +661,17 @@ void PA14Lowerer::PlanFunction(FunctionState& state)
       }
     }
     if(!state.record->node) return;
-    Scope* scope = analyzer_.function_scopes_[state.record->node.get()];
-    if(!scope) scope = state.record->scope;
-    CPPGMAstNodePtr body = ChildOfKind(state.record->node, "compound-statement");
-    if(!body && state.record->node->children.size() > 2)
-      body = state.record->node->children[2];
-    if(body) PlanStatement(body, scope);
+		Scope* scope = analyzer_.function_scopes_[state.record->node.get()];
+		if(!scope) scope = state.record->scope;
+		CPPGMAstNodePtr body = ChildOfKind(state.record->node, "compound-statement");
+		if(!body && state.record->node->children.size() > 2)
+			body = state.record->node->children[2];
+		if(body) {
+			map<const CPPGMAstNode*, Scope*>::const_iterator compound =
+				analyzer_.compound_scopes_.find(body.get());
+			if(compound != analyzer_.compound_scopes_.end()) scope = compound->second;
+		}
+		if(body) PlanStatement(body, scope);
     if(state.record->indirect_result && body) {
       unsigned int return_count = 0;
       CPPGMAstNodePtr expression = FindDirectReturnExpression(body, return_count);

@@ -703,8 +703,19 @@ void PA14Lowerer::EmitReturn(const CPPGMAstNodePtr& node, Scope* scope)
     if(type_is_reference(return_type)) {
       const ExprInfo expression_info = Infer(expression, scope);
       const TypePtr source_type = expression_value_type(expression_info);
-      string address = EmitAddress(expression, scope);
       const TypePtr target_type = type_value(return_type);
+      string address;
+      if(expression->kind == "literal" && target_type &&
+         target_type->kind == TYPE_FUNDAMENTAL) {
+        const string slot = new_special_slot("retref", low_type(target_type));
+        Value value = EmitValue(expression, scope, target_type);
+        value = ConvertValue(value, target_type, false, true);
+        emit_store(target_type, value.operand, "$" + slot);
+        address = new_temp();
+        AddInstruction(address + " = addr $" + slot);
+      } else {
+        address = EmitAddress(expression, scope);
+      }
       if(source_type && target_type && source_type->kind == TYPE_CLASS &&
          target_type->kind == TYPE_CLASS &&
          IsDerivedFrom(source_type, target_type))
@@ -1284,7 +1295,7 @@ void PA14Lowerer::EmitStatement(const CPPGMAstNodePtr& node, Scope* scope)
     if(node->kind == "null-statement") return;
     // PA14 has no class/object lifetime lowering.  Parsed declaration-like
     // nodes which do not contribute procedural code are harmless here.
-    if(node->kind == "using-declaration" || node->kind == "using-directive" ||
+    if(node->kind == "alias-declaration" || node->kind == "using-declaration" || node->kind == "using-directive" ||
        node->kind == "asm-declaration") return;
     throw logic_error("unsupported statement in LowIR lowering: " + node->kind);
   }
@@ -1398,7 +1409,6 @@ void PA14Lowerer::EmitGlobalInitializer(GlobalRecord& global, Scope* scope)
     value = ConvertValue(value, type);
     emit_store(type, value.operand, "@" + global.symbol);
   }
-
 void PA14Lowerer::EmitGlobalFinalizer(GlobalRecord& global, Scope* scope)
 {
     TypePtr type = type_value(global.type);
@@ -1424,7 +1434,6 @@ void PA14Lowerer::EmitGlobalFinalizer(GlobalRecord& global, Scope* scope)
     if(type->kind == TYPE_CLASS)
       (void)EmitDestructorAt(type, global_address(&global), scope);
   }
-
 void PA14Lowerer::EmitDynamicInitializers(vector<string>& entries)
 {
     vector<GlobalRecord*> initializers;
@@ -1452,7 +1461,6 @@ void PA14Lowerer::EmitDynamicInitializers(vector<string>& entries)
       out << "}";
       return out.str();
     };
-
     if(!initializers.empty()) {
       FunctionRecord helper;
       helper.scope = analyzer_.global_.get();
