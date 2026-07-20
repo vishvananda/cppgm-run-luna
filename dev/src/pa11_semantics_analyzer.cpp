@@ -477,6 +477,92 @@ void RecordMemberIndices(const TypePtr& type, Scope* class_scope)
 
 } // namespace
 
+void Analyzer::RecordClassDeclaration(const CPPGMAstNodePtr& child, const TypePtr& type,
+	Scope* class_scope, const string& access)
+{
+	if (!child || !type || !class_scope || child->children.empty()) return;
+	Analyzer::SpecFacts facts;
+	TypePtr base = TypeFromSpecSeq(child->children[0], class_scope, &facts);
+	CPPGMAstNodePtr list = ChildOfKind(child, "init-declarator-list");
+	if (child->kind == "function-definition") list.reset();
+	if (!list)
+	{
+		if (base && base->kind == TYPE_CLASS && base->is_union &&
+			base->name.find("__anonymous_union_type__") == 0)
+		{
+			ClassMemberInfo member;
+			member.type = base;
+			type->class_members.push_back(member);
+		}
+		CPPGMAstNodePtr declarator = child->kind == "function-definition" && child->children.size() > 1 ?
+			child->children[1] : CPPGMAstNodePtr();
+		if (declarator)
+		{
+			const string name = FirstIdentifier(declarator);
+			const TypePtr function_type = BuildDeclarator(declarator, base, class_scope);
+			for (size_t k = 0; k < class_scope->bindings.size(); ++k)
+			{
+				Binding& binding = class_scope->bindings[k];
+				if (binding.name != name || binding.kind != BIND_FUNCTION ||
+					TypeText(binding.type, true) != TypeText(function_type, true)) continue;
+				binding.access = access;
+				binding.declaration = child;
+				binding.hidden_friend = facts.is_friend;
+				binding.friend_owner = facts.is_friend ? type : TypePtr();
+				binding.is_member = !facts.is_friend;
+				binding.is_static = facts.is_static;
+				binding.member_owner = type;
+			}
+		}
+		return;
+	}
+	for (size_t j = 0; j < list->children.size(); ++j)
+	{
+		const CPPGMAstNodePtr item = list->children[j];
+		if (!item || item->children.empty()) continue;
+		const CPPGMAstNodePtr declarator = item->children[0];
+		const string name = FirstIdentifier(declarator);
+		TypePtr field_type = BuildDeclarator(declarator, base, class_scope);
+		if (facts.is_friend)
+		{
+			if (!name.empty()) type->friend_names.push_back(name);
+			for (size_t k = 0; k < class_scope->bindings.size(); ++k)
+			{
+				Binding& binding = class_scope->bindings[k];
+				if (binding.name != name || binding.kind != BIND_FUNCTION ||
+					TypeText(binding.type, true) != TypeText(field_type, true)) continue;
+				binding.is_member = false;
+				binding.is_static = false;
+				binding.member_owner.reset();
+				binding.hidden_friend = true;
+				binding.friend_owner = type;
+				binding.access.clear();
+			}
+			continue;
+		}
+		for (size_t k = 0; k < class_scope->bindings.size(); ++k)
+		{
+			Binding& binding = class_scope->bindings[k];
+			if (binding.name != name ||
+				TypeText(binding.type, true) != TypeText(field_type, true)) continue;
+			binding.type = field_type;
+			binding.access = access;
+			binding.declaration = child;
+			binding.is_member = true;
+			binding.is_static = facts.is_static;
+			binding.member_owner = type;
+		}
+		if (facts.is_typedef || field_type->kind == TYPE_FUNCTION || name.empty()) continue;
+		ClassMemberInfo member;
+		member.name = name;
+		member.type = field_type;
+		member.is_static = facts.is_static;
+		member.is_mutable = facts.is_mutable;
+		member.initializer = item->children.size() > 1 ? item->children[1] : CPPGMAstNodePtr();
+		type->class_members.push_back(member);
+	}
+}
+
 void Analyzer::RecordClassMembers(const CPPGMAstNodePtr& node, const TypePtr& type,
 	Scope* scope, Scope* class_scope)
 {
@@ -532,87 +618,7 @@ void Analyzer::RecordClassMembers(const CPPGMAstNodePtr& node, const TypePtr& ty
 			}
 		}
 		if (child->kind != "simple-declaration" && child->kind != "function-definition") continue;
-		if (child->children.empty()) continue;
-		Analyzer::SpecFacts facts;
-		TypePtr base = TypeFromSpecSeq(child->children[0], class_scope, &facts);
-		CPPGMAstNodePtr list = ChildOfKind(child, "init-declarator-list");
-		if (child->kind == "function-definition") list.reset();
-		if (!list)
-		{
-			if (base && base->kind == TYPE_CLASS && base->is_union &&
-				base->name.find("__anonymous_union_type__") == 0)
-			{
-				ClassMemberInfo member;
-				member.type = base;
-				type->class_members.push_back(member);
-			}
-			CPPGMAstNodePtr declarator = child->kind == "function-definition" && child->children.size() > 1 ?
-				child->children[1] : CPPGMAstNodePtr();
-			if (declarator)
-			{
-				const string name = FirstIdentifier(declarator);
-				const TypePtr function_type = BuildDeclarator(declarator, base, class_scope);
-				for (size_t k = 0; k < class_scope->bindings.size(); ++k)
-				{
-					Binding& binding = class_scope->bindings[k];
-					if (binding.name != name || binding.kind != BIND_FUNCTION ||
-						TypeText(binding.type, true) != TypeText(function_type, true)) continue;
-						binding.access = access;
-						binding.declaration = child;
-						binding.hidden_friend = facts.is_friend;
-						binding.friend_owner = facts.is_friend ? type : TypePtr();
-						binding.is_member = !facts.is_friend;
-						binding.is_static = facts.is_static;
-						binding.member_owner = type;
-				}
-			}
-			continue;
-		}
-		for (size_t j = 0; j < list->children.size(); ++j)
-		{
-			const CPPGMAstNodePtr item = list->children[j];
-			if (!item || item->children.empty()) continue;
-			const CPPGMAstNodePtr declarator = item->children[0];
-			const string name = FirstIdentifier(declarator);
-			TypePtr field_type = BuildDeclarator(declarator, base, class_scope);
-				if (facts.is_friend)
-				{
-					if (!name.empty()) type->friend_names.push_back(name);
-				for (size_t k = 0; k < class_scope->bindings.size(); ++k)
-				{
-					Binding& binding = class_scope->bindings[k];
-					if (binding.name != name || binding.kind != BIND_FUNCTION ||
-						TypeText(binding.type, true) != TypeText(field_type, true)) continue;
-						binding.is_member = false;
-						binding.is_static = false;
-						binding.member_owner.reset();
-						binding.hidden_friend = true;
-						binding.friend_owner = type;
-						binding.access.clear();
-				}
-				continue;
-			}
-			for (size_t k = 0; k < class_scope->bindings.size(); ++k)
-			{
-				Binding& binding = class_scope->bindings[k];
-				if (binding.name != name ||
-					TypeText(binding.type, true) != TypeText(field_type, true)) continue;
-				binding.type = field_type;
-				binding.access = access;
-				binding.declaration = child;
-				binding.is_member = true;
-				binding.is_static = facts.is_static;
-				binding.member_owner = type;
-			}
-			if (facts.is_typedef || field_type->kind == TYPE_FUNCTION || name.empty()) continue;
-			ClassMemberInfo member;
-			member.name = name;
-			member.type = field_type;
-			member.is_static = facts.is_static;
-			member.is_mutable = facts.is_mutable;
-			member.initializer = item->children.size() > 1 ? item->children[1] : CPPGMAstNodePtr();
-			type->class_members.push_back(member);
-		}
+		RecordClassDeclaration(child, type, class_scope, access);
 	}
 	RecordMemberIndices(type, class_scope);
 	(void)scope;

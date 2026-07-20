@@ -845,6 +845,39 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferBinary(const CPPGMAstNodePtr& node, Scop
     return result;
   }
 
+PA14Lowerer::ExprInfo PA14Lowerer::InferSubscript(const CPPGMAstNodePtr& node, Scope* scope)
+{
+    ExprInfo base = Infer(node->children[0], scope);
+    TypePtr value = expression_value_type(base);
+    if(value && value->kind == TYPE_CLASS) {
+      vector<CPPGMAstNodePtr> arguments;
+      arguments.push_back(node->children[1]);
+      if(!MemberBindings(value, "operator[]").empty())
+        return InferCall(MakeMemberCall(node->children[0], "operator[]", arguments), scope);
+      Binding* conversion = FindContextConversionOperator(value, false, false);
+      TypePtr function = conversion ? function_target_type(conversion->type) : TypePtr();
+      TypePtr pointer = function ? type_value(function->child) : TypePtr();
+      if(pointer && pointer->kind == TYPE_POINTER) {
+        ExprInfo result;
+        result.type = pointer->child;
+        result.category = "lvalue";
+        return result;
+      }
+      throw logic_error("subscript base has no pointer conversion");
+    }
+    if((!value || (value->kind != TYPE_ARRAY && value->kind != TYPE_POINTER)) &&
+       node->children.size() > 1) {
+      ExprInfo index = Infer(node->children[1], scope);
+      value = expression_value_type(index);
+    }
+    if(!value || (value->kind != TYPE_ARRAY && value->kind != TYPE_POINTER))
+      throw logic_error("subscript requires array or pointer");
+    ExprInfo result;
+    result.type = value->child;
+    result.category = "lvalue";
+    return result;
+  }
+
 PA14Lowerer::ExprInfo PA14Lowerer::Infer(const CPPGMAstNodePtr& node, Scope* scope,
                 const TypePtr& expected)
 {
@@ -928,37 +961,7 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferUncached(const CPPGMAstNodePtr& node, Sc
         when_true.category == "lvalue" && when_false.category == "lvalue" ? "lvalue" : "prvalue";
       return result;
     }
-    if(node->kind == "subscript-expression") {
-      ExprInfo base = Infer(node->children[0], scope);
-      TypePtr value = expression_value_type(base);
-      if(value && value->kind == TYPE_CLASS) {
-        vector<CPPGMAstNodePtr> arguments;
-        arguments.push_back(node->children[1]);
-        if(!MemberBindings(value, "operator[]").empty())
-          return InferCall(MakeMemberCall(node->children[0], "operator[]", arguments), scope);
-        Binding* conversion = FindContextConversionOperator(value, false, false);
-        TypePtr function = conversion ? function_target_type(conversion->type) : TypePtr();
-        TypePtr pointer = function ? type_value(function->child) : TypePtr();
-        if(pointer && pointer->kind == TYPE_POINTER) {
-          ExprInfo result;
-          result.type = pointer->child;
-          result.category = "lvalue";
-          return result;
-        }
-        throw logic_error("subscript base has no pointer conversion");
-      }
-      if((!value || (value->kind != TYPE_ARRAY && value->kind != TYPE_POINTER)) &&
-         node->children.size() > 1) {
-        ExprInfo index = Infer(node->children[1], scope);
-        value = expression_value_type(index);
-      }
-      if(!value || (value->kind != TYPE_ARRAY && value->kind != TYPE_POINTER))
-        throw logic_error("subscript requires array or pointer");
-      ExprInfo result;
-      result.type = value->child;
-      result.category = "lvalue";
-      return result;
-    }
+    if(node->kind == "subscript-expression") return InferSubscript(node, scope);
     if(node->kind == "member-expression") return InferMember(node, scope);
     if(node->kind == "cast-expression") {
       ExprInfo result;

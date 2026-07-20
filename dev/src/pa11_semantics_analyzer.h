@@ -1,15 +1,13 @@
 #pragma once
 #include "pa11_semantics_model.h"
-class Analyzer
-{
+class Analyzer {
 public:
 	Analyzer()
 		: global_(new Scope(SCOPE_NAMESPACE, "<global>", 0)),
 		  anonymous_type_count_(0) {}
 	void Analyze(const CPPGMAstNodePtr& tree)
 	{
-		if (!tree || tree->kind != "translation-unit")
-			throw logic_error("invalid translation unit");
+		if (!tree || tree->kind != "translation-unit") throw logic_error("invalid translation unit");
 		for (size_t i = 0; i < tree->children.size(); ++i)
 			Process(tree->children[i], global_.get());
 	}
@@ -805,6 +803,9 @@ public:
 	;
 	void RecordClassMembers(const CPPGMAstNodePtr& node, const TypePtr& type,
 		Scope* scope, Scope* class_scope)
+	;
+	void RecordClassDeclaration(const CPPGMAstNodePtr& child, const TypePtr& type,
+		Scope* class_scope, const string& access)
 	;
 	TypePtr ProcessClass(const CPPGMAstNodePtr& node, Scope* scope);
 	TypePtr ProcessForwardClass(const CPPGMAstNodePtr& node, Scope* scope);

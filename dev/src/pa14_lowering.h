@@ -271,530 +271,286 @@ public:
 explicit PA14Lowerer(const vector<CPPGMAstNodePtr>& trees)
 ;
 
-void Lower(ostream& out)
-
-;
+void Lower(ostream& out);
 
 private:
-static string function_key(const string& name, const TypePtr& type)
+static string function_key(const string& name, const TypePtr& type);
 
-;
+static string global_key(const string& name);
 
-static string global_key(const string& name)
+string low_type(const TypePtr& raw) const;
 
-;
+size_t type_size(const TypePtr& type) const;
 
-string low_type(const TypePtr& raw) const
+size_t type_alignment(const TypePtr& type) const;
 
-;
+string storage_type(const TypePtr& type) const;
 
-size_t type_size(const TypePtr& type) const
+string qualified_name(Scope* scope, const string& raw) const;
 
-;
+string TypeQualifiedName(const TypePtr& type) const;
 
-size_t type_alignment(const TypePtr& type) const
-
-;
-
-string storage_type(const TypePtr& type) const
-
-;
-
-string qualified_name(Scope* scope, const string& raw) const
-
-;
-
-string TypeQualifiedName(const TypePtr& type) const
-
-;
-
-string declarator_name(const CPPGMAstNodePtr& node) const
-
-;
+string declarator_name(const CPPGMAstNodePtr& node) const;
 
 TypePtr declared_type(const CPPGMAstNodePtr& node, Scope* scope,
-                     Analyzer::SpecFacts* facts = 0)
+                     Analyzer::SpecFacts* facts = 0);
 
-;
+TypePtr function_type(const TypePtr& raw) const;
 
-TypePtr function_type(const TypePtr& raw) const
+  void CollectTopLevel(const CPPGMAstNodePtr& node, Scope* scope);
 
-;
+void InstallBuiltins();
 
-  void CollectTopLevel(const CPPGMAstNodePtr& node, Scope* scope)
+bool HasNoexcept(const CPPGMAstNodePtr& node) const;
 
-;
+void CollectClassMembers(const CPPGMAstNodePtr& node, Scope* scope);
 
-void InstallBuiltins()
+  void CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, bool definition);
 
-;
+  void CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope, bool definition);
 
-bool HasNoexcept(const CPPGMAstNodePtr& node) const
+void MarkHiddenFriendDependencies();
 
-;
+void MarkHiddenFriendDependencyNodes(const CPPGMAstNodePtr& node, Scope* scope);
 
-void CollectClassMembers(const CPPGMAstNodePtr& node, Scope* scope)
+void CollectInheritedConstructors(const TypePtr& owner, Scope* scope);
 
-;
-
-  void CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, bool definition)
-
-;
-
-  void CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope, bool definition)
-
-;
-
-void MarkHiddenFriendDependencies()
-
-;
-
-void MarkHiddenFriendDependencyNodes(const CPPGMAstNodePtr& node, Scope* scope)
-
-;
-
-void CollectInheritedConstructors(const TypePtr& owner, Scope* scope)
-
-;
-
-void EnsureConstructorBaseEntry(FunctionRecord* function)
-
-;
+void EnsureConstructorBaseEntry(FunctionRecord* function);
 
 void CollectImplicitConstructor(const TypePtr& owner, Scope* scope,
-                                bool force = false)
+                                bool force = false);
 
-;
+void CollectImplicitDestructor(const TypePtr& owner, Scope* scope);
 
-void CollectImplicitDestructor(const TypePtr& owner, Scope* scope)
+void RememberDefaults(FunctionRecord* record, const CPPGMAstNodePtr& declarator);
 
-;
+void CollectSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* scope);
 
-void RememberDefaults(FunctionRecord* record, const CPPGMAstNodePtr& declarator)
+bool HasStorageSpecifier(const CPPGMAstNodePtr& node, const string& word) const;
 
-;
+void FinalizeSymbols();
 
-void CollectSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* scope)
+void CollectStringLiterals(const CPPGMAstNodePtr& node, unsigned int braced_depth = 0);
 
-;
+FunctionRecord* FindFunction(const string& qname, const TypePtr& type) const;
 
-bool HasStorageSpecifier(const CPPGMAstNodePtr& node, const string& word) const
-
-;
-
-void FinalizeSymbols()
-
-;
-
-void CollectStringLiterals(const CPPGMAstNodePtr& node, unsigned int braced_depth = 0)
-
-;
-
-FunctionRecord* FindFunction(const string& qname, const TypePtr& type) const
-
-;
-
-GlobalRecord* FindGlobal(const string& qname) const
-
-;
+GlobalRecord* FindGlobal(const string& qname) const;
 
 void AppendBindings(Scope* scope, const string& name,
-                    vector<Binding*>& result, set<Scope*>& visited) const
+                    vector<Binding*>& result, set<Scope*>& visited) const;
 
-;
+vector<Binding*> DirectBindings(Scope* scope, const string& name) const;
 
-vector<Binding*> DirectBindings(Scope* scope, const string& name) const
-
-;
-
-vector<Binding*> LookupUnqualifiedAll(Scope* from, const string& name) const
-
-;
+vector<Binding*> LookupUnqualifiedAll(Scope* from, const string& name) const;
 
 Scope* ScopeComponent(Scope* current, const string& component,
-                      bool first, bool absolute) const
+                      bool first, bool absolute) const;
 
-;
-
-vector<Binding*> Lookup(const string& raw, Scope* from) const
-
-;
+vector<Binding*> Lookup(const string& raw, Scope* from) const;
 
 vector<Binding*> OperatorCandidates(const string& name,
                                     const vector<ExprInfo>& arguments,
-                                    Scope* scope) const
-
-;
+                                    Scope* scope) const;
 
 void AppendAssociatedOperatorBindings(const TypePtr& type, const string& name,
                                       vector<Binding*>& result,
                                       set<const Type*>& visited_types,
-                                      set<Scope*>& visited_scopes) const
+                                      set<Scope*>& visited_scopes) const;
 
-;
+Scope* FindTypeOwnerScope(Scope* scope, const TypePtr& type) const;
 
-Scope* FindTypeOwnerScope(Scope* scope, const TypePtr& type) const
+vector<Binding*> MemberBindings(const TypePtr& object, const string& name) const;
 
-;
+bool IsAccessible(Binding* binding, Scope* scope) const;
 
-vector<Binding*> MemberBindings(const TypePtr& object, const string& name) const
-
-;
-
-bool IsAccessible(Binding* binding, Scope* scope) const
-
-;
-
-void CheckTypeAccess(const CPPGMAstNodePtr& declaration, Scope* scope) const
-
-;
+void CheckTypeAccess(const CPPGMAstNodePtr& declaration, Scope* scope) const;
 
 Binding* MemberBinding(const CPPGMAstNodePtr& node, Scope* scope,
-                       ExprInfo* object_info = 0)
+                       ExprInfo* object_info = 0);
 
-;
+TypePtr expression_value_type(const ExprInfo& info) const;
 
-TypePtr expression_value_type(const ExprInfo& info) const
-
-;
-
-TypePtr function_target_type(const TypePtr& type) const
-
-;
+TypePtr function_target_type(const TypePtr& type) const;
 
 ExprInfo InferLiteral(const CPPGMAstNodePtr& node, const TypePtr& expected,
-                      Scope* scope)
+                      Scope* scope);
 
-;
+ExprInfo InferKeyword(const CPPGMAstNodePtr& node) const;
 
-ExprInfo InferKeyword(const CPPGMAstNodePtr& node) const
-
-;
-
-VariablePlan* FindLocalPlan(const string& name) const
-
-;
+VariablePlan* FindLocalPlan(const string& name) const;
 
 ExprInfo InferIdentifier(const CPPGMAstNodePtr& node, Scope* scope,
-                         const TypePtr& expected) const
+                         const TypePtr& expected) const;
 
-;
+ExprInfo InferMember(const CPPGMAstNodePtr& node, Scope* scope) const;
 
-ExprInfo InferMember(const CPPGMAstNodePtr& node, Scope* scope) const
+TypePtr IntegralPromotion(const TypePtr& raw) const;
 
-;
+bool PointerCompatible(const TypePtr& source, const TypePtr& target) const;
 
-TypePtr IntegralPromotion(const TypePtr& raw) const
+bool IsDerivedFrom(const TypePtr& derived, const TypePtr& base) const;
 
-;
-
-bool PointerCompatible(const TypePtr& source, const TypePtr& target) const
-
-;
-
-bool IsDerivedFrom(const TypePtr& derived, const TypePtr& base) const
-
-;
-
-int BaseDistance(const TypePtr& derived, const TypePtr& base) const
-
-;
+int BaseDistance(const TypePtr& derived, const TypePtr& base) const;
 
 TypePtr CommonType(const TypePtr& left, const TypePtr& right,
-                  const string& op = string()) const
+                  const string& op = string()) const;
 
-;
+string OperatorFunctionName(const string& op) const;
 
-string OperatorFunctionName(const string& op) const
+int ConversionRank(const ExprInfo& source, const TypePtr& target) const;
 
-;
+int ConversionRankToClass(const ExprInfo& source, const TypePtr& target) const;
 
-int ConversionRank(const ExprInfo& source, const TypePtr& target) const
-
-;
-
-int ConversionRankToClass(const ExprInfo& source, const TypePtr& target) const
-
-;
-
-vector<Binding*> ConversionBindings(const TypePtr& source) const
-
-;
+vector<Binding*> ConversionBindings(const TypePtr& source) const;
 
 Binding* FindConversionOperator(const TypePtr& source, const TypePtr& target,
-                                bool allow_explicit, int* rank = 0) const
-
-;
+                                bool allow_explicit, int* rank = 0) const;
 
 Binding* FindContextConversionOperator(const TypePtr& source,
                                        bool allow_explicit,
-                                       bool boolean_context) const
-
-;
+                                       bool boolean_context) const;
 
 Binding* FindNamedConversionOperator(const TypePtr& source,
-                                     const string& spelling, Scope* scope) const
+                                     const string& spelling, Scope* scope) const;
 
-;
+bool DirectFunctionName(const CPPGMAstNodePtr& callee, Scope* scope) const;
 
-bool DirectFunctionName(const CPPGMAstNodePtr& callee, Scope* scope) const
+FunctionRecord* RecordForBinding(Binding* binding) const;
 
-;
+FunctionRecord* BaseEntryFor(FunctionRecord* function) const;
 
-FunctionRecord* RecordForBinding(Binding* binding) const
+FunctionRecord* EnsureAggregateConstructor(const TypePtr& type);
 
-;
+void ClassifySpecialMember(FunctionRecord* record);
 
-FunctionRecord* BaseEntryFor(FunctionRecord* function) const
+bool ClassHasDeclaredValueMember(const TypePtr& type) const;
 
-;
+bool ClassHasDeclaredMoveMember(const TypePtr& type) const;
 
-FunctionRecord* EnsureAggregateConstructor(const TypePtr& type)
+bool ClassValueNeedsIndirect(const TypePtr& type) const;
 
-;
+bool IsEmptyBaseStorage(const TypePtr& type) const;
 
-void ClassifySpecialMember(FunctionRecord* record)
+bool IsTrivialValueStorage(const TypePtr& type) const;
 
-;
+FunctionRecord* EnsureImplicitCopyConstructor(const TypePtr& type, bool move);
 
-bool ClassHasDeclaredValueMember(const TypePtr& type) const
+FunctionRecord* EnsureImplicitAssignment(const TypePtr& type, bool move);
 
-;
-
-bool ClassHasDeclaredMoveMember(const TypePtr& type) const
-
-;
-
-bool ClassValueNeedsIndirect(const TypePtr& type) const
-
-;
-
-bool IsEmptyBaseStorage(const TypePtr& type) const
-
-;
-
-bool IsTrivialValueStorage(const TypePtr& type) const
-
-;
-
-FunctionRecord* EnsureImplicitCopyConstructor(const TypePtr& type, bool move)
-
-;
-
-FunctionRecord* EnsureImplicitAssignment(const TypePtr& type, bool move)
-
-;
-
-FunctionRecord* FindValueMember(const TypePtr& type, bool move, bool assignment) const
-
-;
+FunctionRecord* FindValueMember(const TypePtr& type, bool move, bool assignment) const;
 
 bool ValueOperationDeleted(const TypePtr& type, bool move, bool assignment,
-                           FunctionRecord* ignored = 0) const
+                           FunctionRecord* ignored = 0) const;
 
-;
-
-void MarkValueMemberDeleted(FunctionRecord* record)
-
-;
+void MarkValueMemberDeleted(FunctionRecord* record);
 
 bool EmitObjectTransferAt(const TypePtr& target, const string& destination,
                           const CPPGMAstNodePtr& source, Scope* scope,
                           bool allow_explicit = true,
-                          bool implicit_return_move = false)
+                          bool implicit_return_move = false);
 
-;
+bool EmitValueSpecialMemberBody(FunctionRecord& function, Scope* scope);
 
-bool EmitValueSpecialMemberBody(FunctionRecord& function, Scope* scope)
+TypePtr SourceReturnType(const FunctionRecord& function) const;
 
-;
+bool LowParameterIsByAddress(const FunctionRecord& function, size_t index) const;
 
-TypePtr SourceReturnType(const FunctionRecord& function) const
+TypePtr LowParameterSourceType(const FunctionRecord& function, size_t index) const;
 
-;
+void BuildFunctionABI(FunctionRecord& function);
 
-bool LowParameterIsByAddress(const FunctionRecord& function, size_t index) const
+bool HasDefaultArgument(Binding* binding, size_t index) const;
 
-;
+bool HasConstructor(const TypePtr& type) const;
 
-TypePtr LowParameterSourceType(const FunctionRecord& function, size_t index) const
+bool HasDefaultInitializationEffects(const TypePtr& type) const;
 
-;
+bool HasDefaultConstructionEffects(const TypePtr& type) const;
 
-void BuildFunctionABI(FunctionRecord& function)
+bool HasDestructor(const TypePtr& type) const;
 
-;
-
-bool HasDefaultArgument(Binding* binding, size_t index) const
-
-;
-
-bool HasConstructor(const TypePtr& type) const
-
-;
-
-bool HasDefaultInitializationEffects(const TypePtr& type) const
-
-;
-
-bool HasDefaultConstructionEffects(const TypePtr& type) const
-
-;
-
-bool HasDestructor(const TypePtr& type) const
-
-;
-
-bool DestructorHasEffects(const TypePtr& type) const
-
-;
+bool DestructorHasEffects(const TypePtr& type) const;
 
 bool IsBitField(Binding* binding, long long* bit_offset = 0,
-                long long* bit_width = 0) const
+                long long* bit_width = 0) const;
 
-;
-
-CallChoice ChooseCall(const CPPGMAstNodePtr& expression, Scope* scope)
-
-;
+CallChoice ChooseCall(const CPPGMAstNodePtr& expression, Scope* scope);
 
 CallChoice ChooseOperatorCall(const string& name,
                               const vector<CPPGMAstNodePtr>& arguments,
-                              Scope* scope)
-
-;
+                              Scope* scope);
 
 CPPGMAstNodePtr MakeMemberCall(const CPPGMAstNodePtr& object,
                                const string& name,
-                               const vector<CPPGMAstNodePtr>& arguments) const
+                               const vector<CPPGMAstNodePtr>& arguments) const;
 
-;
+string new_temp();
 
-string new_temp()
+string new_label(const string& prefix);
 
-;
+string new_special_slot(const string& prefix, const string& type);
 
-string new_label(const string& prefix)
+void AddInstruction(const string& text);
 
-;
+void Terminate(const string& text);
 
-string new_special_slot(const string& prefix, const string& type)
+Block* AddBlock(const string& label);
 
-;
+static bool block_is_terminated(const Block* block);
 
-void AddInstruction(const string& text)
+string parameter_name(const CPPGMAstNodePtr& declarator, size_t index) const;
 
-;
+vector<string> ParameterNames(const FunctionRecord& function) const;
 
-void Terminate(const string& text)
+CPPGMAstNodePtr InitializerExpression(const CPPGMAstNodePtr& initializer) const;
 
-;
-
-Block* AddBlock(const string& label)
-
-;
-
-static bool block_is_terminated(const Block* block)
-
-;
-
-string parameter_name(const CPPGMAstNodePtr& declarator, size_t index) const
-
-;
-
-vector<string> ParameterNames(const FunctionRecord& function) const
-
-;
-
-CPPGMAstNodePtr InitializerExpression(const CPPGMAstNodePtr& initializer) const
-
-;
-
-long long BracedElementCount(const CPPGMAstNodePtr& initializer) const
-
-;
+long long BracedElementCount(const CPPGMAstNodePtr& initializer) const;
 
 TypePtr PlannedType(const CPPGMAstNodePtr& declaration,
                     const CPPGMAstNodePtr& declarator,
-                    Scope* scope, const CPPGMAstNodePtr& initializer)
-
-;
+                    Scope* scope, const CPPGMAstNodePtr& initializer);
 
 VariablePlan* AddVariablePlan(const string& name, const TypePtr& type,
                               const CPPGMAstNodePtr& declarator,
-                              const CPPGMAstNodePtr& initializer)
+                              const CPPGMAstNodePtr& initializer);
 
-;
+void PlanSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* scope);
 
-void PlanSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* scope)
+void PlanCondition(const CPPGMAstNodePtr& condition, Scope* scope);
 
-;
+CPPGMAstNodePtr ChildNamed(const CPPGMAstNodePtr& node, const string& name) const;
 
-void PlanCondition(const CPPGMAstNodePtr& condition, Scope* scope)
+void PlanStatement(const CPPGMAstNodePtr& node, Scope* scope);
 
-;
-
-CPPGMAstNodePtr ChildNamed(const CPPGMAstNodePtr& node, const string& name) const
-
-;
-
-void PlanStatement(const CPPGMAstNodePtr& node, Scope* scope)
-
-;
-
-void PlanFunction(FunctionState& state)
-
-;
+void PlanFunction(FunctionState& state);
 
 CPPGMAstNodePtr FindDirectReturnExpression(const CPPGMAstNodePtr& node,
-                                          unsigned int& count) const
+                                          unsigned int& count) const;
 
-;
+string FunctionSymbolForBinding(Binding* binding, const TypePtr& fallback = TypePtr()) const;
 
-string FunctionSymbolForBinding(Binding* binding, const TypePtr& fallback = TypePtr()) const
+string GlobalSymbolForBinding(Binding* binding) const;
 
-;
+VariablePlan* LocalForName(const string& name) const;
 
-string GlobalSymbolForBinding(Binding* binding) const
-
-;
-
-VariablePlan* LocalForName(const string& name) const
-
-;
-
-string StorageForVariable(const VariablePlan& variable) const
-
-;
+string StorageForVariable(const VariablePlan& variable) const;
 
 Value ConvertValue(Value value, const TypePtr& target,
                    bool immediate_return = false,
-                   bool adjust_derived_pointer = false)
-
-;
+                   bool adjust_derived_pointer = false);
 
 Value EmitConversionOperator(const CPPGMAstNodePtr& node, Scope* scope,
-                             const TypePtr& target, bool allow_explicit)
-
-;
+                             const TypePtr& target, bool allow_explicit);
 
 Value EmitContextConversion(const CPPGMAstNodePtr& node, Scope* scope,
-                            bool allow_explicit, bool boolean_context)
+                            bool allow_explicit, bool boolean_context);
 
-;
+string EmitTruthValue(const Value& value);
 
-string EmitTruthValue(const Value& value)
-
-;
-
-string InternString(const string& raw)
-
-;
+string InternString(const string& raw);
 
 bool FoldInteger(const CPPGMAstNodePtr& node, Scope* scope,
-                long long* result, TypePtr* type = 0)
-
-;
+                long long* result, TypePtr* type = 0);
 
   struct AddressInit
   {
@@ -805,441 +561,250 @@ bool FoldInteger(const CPPGMAstNodePtr& node, Scope* scope,
     AddressInit() : valid(false), function(false), symbol(), addend(0) {}
   };
 
-AddressInit StaticAddress(const CPPGMAstNodePtr& expression, Scope* scope)
+AddressInit StaticAddress(const CPPGMAstNodePtr& expression, Scope* scope);
 
-;
+string GlobalMetadata(bool internal) const;
 
-string GlobalMetadata(bool internal) const
+string GlobalMetadata(const GlobalRecord& global) const;
 
-;
+string RenderStringGlobal(const string& symbol, const vector<unsigned char>& bytes) const;
 
-string GlobalMetadata(const GlobalRecord& global) const
+string RenderGlobal(GlobalRecord& global);
 
-;
+void EmitGlobals(vector<string>& entries);
 
-string RenderStringGlobal(const string& symbol, const vector<unsigned char>& bytes) const
+void EmitDeclarations(vector<string>& entries);
 
-;
+Scope* FunctionScope() const;
 
-string RenderGlobal(GlobalRecord& global)
+VariablePlan* BindPlan(const CPPGMAstNodePtr& declarator);
 
-;
+void BindSimpleDeclaration(const CPPGMAstNodePtr& node);
 
-void EmitGlobals(vector<string>& entries)
-
-;
-
-void EmitDeclarations(vector<string>& entries)
-
-;
-
-Scope* FunctionScope() const
-
-;
-
-VariablePlan* BindPlan(const CPPGMAstNodePtr& declarator)
-
-;
-
-void BindSimpleDeclaration(const CPPGMAstNodePtr& node)
-
-;
-
-VariablePlan* BindCondition(const CPPGMAstNodePtr& condition)
-
-;
+VariablePlan* BindCondition(const CPPGMAstNodePtr& condition);
 
 void EnterEnvironment()
 ;
 void LeaveEnvironment()
 ;
 
-string emit_load(const string& address, const TypePtr& type)
+string emit_load(const string& address, const TypePtr& type);
 
-;
+void emit_store(const TypePtr& type, const string& value, const string& storage);
 
-void emit_store(const TypePtr& type, const string& value, const string& storage)
+string local_address(VariablePlan* variable);
 
-;
+string global_address(GlobalRecord* global);
 
-string local_address(VariablePlan* variable)
+string function_address(FunctionRecord* function);
 
-;
+string EmitArrayDecay(const CPPGMAstNodePtr& node, Scope* scope);
 
-string global_address(GlobalRecord* global)
+string EmitSubscriptAddress(const CPPGMAstNodePtr& node, Scope* scope);
 
-;
+string EmitPointerOffset(const CPPGMAstNodePtr& node, Scope* scope);
 
-string function_address(FunctionRecord* function)
+string EmitAddress(const CPPGMAstNodePtr& node, Scope* scope);
 
-;
+string EmitCallAddress(const CPPGMAstNodePtr& node, Scope* scope);
 
-string EmitArrayDecay(const CPPGMAstNodePtr& node, Scope* scope)
+string EmitLiteralAddress(const CPPGMAstNodePtr& node);
 
-;
-
-string EmitSubscriptAddress(const CPPGMAstNodePtr& node, Scope* scope)
-
-;
-
-string EmitPointerOffset(const CPPGMAstNodePtr& node, Scope* scope)
-
-;
-
-string EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
-
-;
-
-string EmitCallAddress(const CPPGMAstNodePtr& node, Scope* scope)
-
-;
-
-string EmitLiteralAddress(const CPPGMAstNodePtr& node)
-
-;
-
-string EmitMemberAddress(const CPPGMAstNodePtr& node, Scope* scope)
-
-;
+string EmitMemberAddress(const CPPGMAstNodePtr& node, Scope* scope);
 
 string AdjustBaseAddress(const string& base, const TypePtr& derived,
-                         const TypePtr& target)
-
-;
+                         const TypePtr& target);
 
 Value EmitIdentifier(const CPPGMAstNodePtr& node, Scope* scope,
-                     const TypePtr& expected)
-
-;
+                     const TypePtr& expected);
 
 Value EmitUnary(const CPPGMAstNodePtr& node, Scope* scope,
-                const TypePtr& expected)
-
-;
+                const TypePtr& expected);
 
 void StoreLValue(const CPPGMAstNodePtr& node, Scope* scope,
-                 const TypePtr& type, const string& value)
-
-;
+                 const TypePtr& type, const string& value);
 
 Value EmitBitFieldLoad(Binding* binding, const string& address,
-                       const TypePtr& type, bool copy_result)
-
-;
+                       const TypePtr& type, bool copy_result);
 
 string PrepareBitFieldValue(Binding* binding, const TypePtr& type,
-                            const string& value)
-
-;
+                            const string& value);
 
 string MergeBitFieldValue(Binding* binding, const string& address,
                           const TypePtr& type, const string& value,
-                          bool preserve)
-
-;
+                          bool preserve);
 
 void StoreBitField(Binding* binding, const string& address,
                    const TypePtr& type, const string& value,
-                   bool initializing = false)
+                   bool initializing = false);
 
-;
+Value EmitAssignment(const CPPGMAstNodePtr& node, Scope* scope);
 
-Value EmitAssignment(const CPPGMAstNodePtr& node, Scope* scope)
+Value EmitUpdate(const CPPGMAstNodePtr& node, Scope* scope, bool address_only);
 
-;
+Value EmitCompare(const CPPGMAstNodePtr& node, Scope* scope);
 
-Value EmitUpdate(const CPPGMAstNodePtr& node, Scope* scope, bool address_only)
-
-;
-
-Value EmitCompare(const CPPGMAstNodePtr& node, Scope* scope)
-
-;
-
-Value EmitBinary(const CPPGMAstNodePtr& node, Scope* scope)
-
-;
+Value EmitBinary(const CPPGMAstNodePtr& node, Scope* scope);
 
 string EmitReferenceArgument(const CPPGMAstNodePtr& node, Scope* scope,
-                             const TypePtr& target)
-
-;
+                             const TypePtr& target);
 
 Value EmitObjectValueArgument(const CPPGMAstNodePtr& node, Scope* scope,
-                              const TypePtr& target)
+                              const TypePtr& target);
 
-;
-
-Value EmitCall(const CPPGMAstNodePtr& node, Scope* scope)
-
-;
+Value EmitCall(const CPPGMAstNodePtr& node, Scope* scope);
 
 Value EmitChosenCall(const CallChoice& choice,
                      const CPPGMAstNodePtr& callee,
                      const vector<CPPGMAstNodePtr>& arguments,
                      Scope* scope,
-                     const string& indirect_destination = string())
-
-;
+                     const string& indirect_destination = string());
 
 Value EmitOperatorCall(const string& name,
                        const vector<CPPGMAstNodePtr>& arguments,
-                       Scope* scope)
-
-;
+                       Scope* scope);
 
 Value EmitConditionalValue(const CPPGMAstNodePtr& node, Scope* scope,
-                            const TypePtr& expected)
+                            const TypePtr& expected);
 
-;
+string EmitConditionalAddress(const CPPGMAstNodePtr& node, Scope* scope);
 
-string EmitConditionalAddress(const CPPGMAstNodePtr& node, Scope* scope)
+string EmitLogicalRightTruth(const CPPGMAstNodePtr& node, Scope* scope);
 
-;
-
-string EmitLogicalRightTruth(const CPPGMAstNodePtr& node, Scope* scope)
-
-;
-
-Value EmitLogicalValue(const CPPGMAstNodePtr& node, Scope* scope)
-
-;
+Value EmitLogicalValue(const CPPGMAstNodePtr& node, Scope* scope);
 
 void EmitCondition(const CPPGMAstNodePtr& node, Scope* scope,
-                   const string& true_label, const string& false_label)
-
-;
+                   const string& true_label, const string& false_label);
 
 Value EmitValue(const CPPGMAstNodePtr& node, Scope* scope,
-                const TypePtr& expected = TypePtr())
-
-;
+                const TypePtr& expected = TypePtr());
 
 Value EmitNewExpression(const CPPGMAstNodePtr& node, Scope* scope, const TypePtr& expected = TypePtr());
 Value EmitDeleteExpression(const CPPGMAstNodePtr& node, Scope* scope);
 
-Value ValueFromInfo(const ExprInfo& info) const
+Value ValueFromInfo(const ExprInfo& info) const;
 
-;
-
-Value ValueWithNullptr() const
-
-;
+Value ValueWithNullptr() const;
 
 void EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr& initializer,
-                     Scope* scope)
-
-;
+                     Scope* scope);
 
 bool EmitObjectConstructor(VariablePlan* variable, const TypePtr& object_type,
                            const vector<CPPGMAstNodePtr>& arguments, Scope* scope,
-                           bool allow_explicit = true)
-
-;
+                           bool allow_explicit = true);
 
 bool EmitConstructorAt(const TypePtr& object_type, const string& address,
                        const vector<CPPGMAstNodePtr>& arguments, Scope* scope,
                        bool allow_explicit = true, bool base_entry = false,
-                       bool allow_aggregate = false, bool force_move = false)
-
-;
+                       bool allow_aggregate = false, bool force_move = false);
 
 string EmitTemporaryObjectAddress(const CPPGMAstNodePtr& node, Scope* scope,
-                                  const string& prefix)
+                                  const string& prefix);
 
-;
+void RegisterTemporaryObject(const TypePtr& type, const string& address);
 
-void RegisterTemporaryObject(const TypePtr& type, const string& address)
-
-;
-
-void EmitTemporaryDestructors(size_t mark, Scope* scope)
-
-;
+void EmitTemporaryDestructors(size_t mark, Scope* scope);
 
 bool EmitDestructorAt(const TypePtr& object_type, const string& address, Scope* scope,
-                      bool force_empty = false)
+                      bool force_empty = false);
 
-;
+void EmitConstructorInitializers(FunctionRecord& function, Scope* scope);
 
-void EmitConstructorInitializers(FunctionRecord& function, Scope* scope)
+void EmitDestructorBody(FunctionRecord& function, Scope* scope);
 
-;
+void EmitLiveDestructors(Scope* scope);
 
-void EmitDestructorBody(FunctionRecord& function, Scope* scope)
-
-;
-
-void EmitLiveDestructors(Scope* scope)
-
-;
-
-void EmitAggregateConstructorBody(FunctionRecord& function, Scope* scope)
-
-;
+void EmitAggregateConstructorBody(FunctionRecord& function, Scope* scope);
 
 void EmitAggregateAt(const string& base, const TypePtr& type,
                      const CPPGMAstNodePtr& expression, Scope* scope,
                      const CPPGMAstNodePtr& refresh_node = CPPGMAstNodePtr(),
                      long long refresh_offset = -1,
-                     bool direct_first_field = false)
-
-;
+                     bool direct_first_field = false);
 
 void EmitAggregateArrayAt(const string& base, const TypePtr& type,
                           const CPPGMAstNodePtr& expression, Scope* scope,
                           const CPPGMAstNodePtr& refresh_node = CPPGMAstNodePtr(),
-                          long long refresh_offset = -1)
-
-;
+                          long long refresh_offset = -1);
 
 void EmitAggregateClassFields(const string& base, const TypePtr& type,
                               const CPPGMAstNodePtr& expression, Scope* scope,
                               const CPPGMAstNodePtr& refresh_node,
                               size_t* child_index,
-                              bool direct_first_field = false)
-
-;
+                              bool direct_first_field = false);
 
 bool EmitAggregateClassArrayField(const string& base, const TypePtr& type,
                                   const CPPGMAstNodePtr& child, Scope* scope,
                                   const CPPGMAstNodePtr& refresh_node,
-                                  bool refresh_field_base, long long offset)
-
-;
+                                  bool refresh_field_base, long long offset);
 
 void EmitAggregateClassDefaults(const string& base, const TypePtr& type,
                                 const CPPGMAstNodePtr& expression, Scope* scope,
                                 const CPPGMAstNodePtr& refresh_node,
                                 size_t child_index,
-                                bool direct_first_field = false)
-
-;
+                                bool direct_first_field = false);
 
 bool HasNonSizeofReference(const CPPGMAstNodePtr& node,
-                           const string& name, bool inside_sizeof = false) const
+                           const string& name, bool inside_sizeof = false) const;
 
-;
+bool StatementTerminates(const CPPGMAstNodePtr& node) const;
 
-bool StatementTerminates(const CPPGMAstNodePtr& node) const
+void EmitReturn(const CPPGMAstNodePtr& node, Scope* scope);
 
-;
+void EmitIf(const CPPGMAstNodePtr& node, Scope* scope);
 
-void EmitReturn(const CPPGMAstNodePtr& node, Scope* scope)
+void EmitWhile(const CPPGMAstNodePtr& node, Scope* scope);
 
-;
+void EmitDo(const CPPGMAstNodePtr& node, Scope* scope);
 
-void EmitIf(const CPPGMAstNodePtr& node, Scope* scope)
-
-;
-
-void EmitWhile(const CPPGMAstNodePtr& node, Scope* scope)
-
-;
-
-void EmitDo(const CPPGMAstNodePtr& node, Scope* scope)
-
-;
-
-void EmitFor(const CPPGMAstNodePtr& node, Scope* scope)
-
-;
+void EmitFor(const CPPGMAstNodePtr& node, Scope* scope);
 
 void CollectCaseNodes(const CPPGMAstNodePtr& node,
-                      vector<CPPGMAstNodePtr>& cases) const
-
-;
+                      vector<CPPGMAstNodePtr>& cases) const;
 
 void CollectNamedLabels(const CPPGMAstNodePtr& node,
-                        vector<string>& labels) const
+                        vector<string>& labels) const;
 
-;
+bool HasBlockLabel(const string& label) const;
 
-bool HasBlockLabel(const string& label) const
+void EmitCaseLabelAndBody(const CPPGMAstNodePtr& node, Scope* scope);
 
-;
+void EmitSwitchBody(const CPPGMAstNodePtr& node, Scope* scope);
 
-void EmitCaseLabelAndBody(const CPPGMAstNodePtr& node, Scope* scope)
+void EmitSwitch(const CPPGMAstNodePtr& node, Scope* scope);
 
-;
+void EmitDiscard(const CPPGMAstNodePtr& node, Scope* scope);
 
-void EmitSwitchBody(const CPPGMAstNodePtr& node, Scope* scope)
+void EmitStatement(const CPPGMAstNodePtr& node, Scope* scope);
 
-;
+string EmitFunction(FunctionRecord& function);
 
-void EmitSwitch(const CPPGMAstNodePtr& node, Scope* scope)
+void EmitDynamicInitializers(vector<string>& entries);
 
-;
+void EmitGlobalInitializer(GlobalRecord& global, Scope* scope);
 
-void EmitDiscard(const CPPGMAstNodePtr& node, Scope* scope)
+void EmitGlobalFinalizer(GlobalRecord& global, Scope* scope);
 
-;
+ExprInfo InferCall(const CPPGMAstNodePtr& node, Scope* scope);
 
-void EmitStatement(const CPPGMAstNodePtr& node, Scope* scope)
+TypePtr ConstructorObjectType(const CPPGMAstNodePtr& callee, Scope* scope) const;
 
-;
+TypePtr BuiltinCastType(const CPPGMAstNodePtr& callee, Scope* scope) const;
 
-string EmitFunction(FunctionRecord& function)
+ExprInfo InferUnary(const CPPGMAstNodePtr& node, Scope* scope);
 
-;
+ExprInfo InferBinary(const CPPGMAstNodePtr& node, Scope* scope);
 
-void EmitDynamicInitializers(vector<string>& entries)
-
-;
-
-void EmitGlobalInitializer(GlobalRecord& global, Scope* scope)
-
-;
-
-void EmitGlobalFinalizer(GlobalRecord& global, Scope* scope)
-
-;
-
-
-
-
-
-
-
-
-
-
-
-ExprInfo InferCall(const CPPGMAstNodePtr& node, Scope* scope)
-
-;
-
-TypePtr ConstructorObjectType(const CPPGMAstNodePtr& callee, Scope* scope) const
-
-;
-
-TypePtr BuiltinCastType(const CPPGMAstNodePtr& callee, Scope* scope) const
-
-;
-
-ExprInfo InferUnary(const CPPGMAstNodePtr& node, Scope* scope)
-
-;
-
-ExprInfo InferBinary(const CPPGMAstNodePtr& node, Scope* scope)
-
-;
+ExprInfo InferSubscript(const CPPGMAstNodePtr& node, Scope* scope);
 
 ExprInfo Infer(const CPPGMAstNodePtr& node, Scope* scope,
-              const TypePtr& expected = TypePtr())
-
-;
+              const TypePtr& expected = TypePtr());
 
 ExprInfo InferUncached(const CPPGMAstNodePtr& node, Scope* scope,
-                       const TypePtr& expected)
+                       const TypePtr& expected);
 
-;
-
-ExprInfo InferAllocation(const CPPGMAstNodePtr& node, Scope* scope)
-
-;
+ExprInfo InferAllocation(const CPPGMAstNodePtr& node, Scope* scope);
 };
-
 
 } // namespace cppgm_pa14_lowering
 

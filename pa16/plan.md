@@ -850,3 +850,22 @@ The completed scope was the whole PA16 stage.  Validation included the full
 PA16 local suite, the required root PA16 report, the through-PA15 regression
 report, and the PA16 source file audit.  The next checkpoint group is PA17
 according to the staged assignment sequence.
+
+## Audit-structure checkpoint result
+
+Complete.  The green PA16 implementation was reorganized into responsibility-
+named lowering modules for driver orchestration, call lowering, and function
+emission; class-member declaration recording and subscript inference were also
+given focused helpers.  The source set was updated accordingly, all 164 PA16
+tests and all 1,019 through-PA15 tests still pass, and the file audit passes
+with only its existing nonfatal header-division warnings.
+
+## Remaining Work Map
+
+No PA16-local implementation or audit work remains.  Continue with PA17 in the
+staged assignment sequence.
+
+## Next Checkpoint Group
+
+PA17 implementation and its assignment-specific tests, preserving the
+through-PA16 green baseline.
