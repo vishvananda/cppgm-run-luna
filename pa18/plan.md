@@ -2,32 +2,45 @@
 
 ## Baseline and checkpoint result
 
-The turn-start PA18 baseline was 16/222.  The current full report is
-169/222.  This checkpoint extends template specialization identity, generated
-class/member ownership, ordinary-member lookup, operator-template naming,
-namespace using/ADL lookup, hidden-friend demand emission, dependent signature
-guards, and nested-enum qualification.
+The turn-start PA18 baseline was **169/222**.  This checkpoint raises the
+current report to **174/222** and keeps all earlier assignments green.
 
-Validation for this checkpoint:
+The implementation scope was typed function-template candidate viability and
+lookup: reject candidates whose function-argument arity is impossible; do not
+mistake a template signature for an ordinary member match; infer constructor
+arguments through enclosing class scopes; use inherited member/cv facts while
+deducing references; and make function-scope `using` declarations contribute a
+visible template target without leaving an unsupported `using-declaration` in
+the PA14 AST.  The same lookup path now handles dependent functional
+template-ids and inline-namespace function templates.  A shared PA14 fix adds
+an owning inference cache entry so nested overloaded-operator expressions are
+memoized without synthetic-node pointer aliasing.
+
+Validation for the checkpoint:
 
 ```text
-full PA18 report: 169/222
-focused operator/signature witnesses: 5/8 pass; 3 LowIR compare-only diffs
-through-PA17: 1206/1208; only the two existing PA15 shift-stress timeouts
+focused PA18 candidate/using witnesses: 5/6 exact; the member-cv witness has
+  the expected successful semantic path but remains a LowIR-only constructor
+  layout diff
+focused PA15 shift stress pair: 2/2 pass
+full PA18 report: 174/222
+through-PA17: 1208/1208 pass
 file audit: pass with 7 pre-existing header-division warnings
 ```
 
 ## Remaining Work Map
 
-The exact current-PA failure set is 53 tests, grouped by shared behavior.
+The complete current-PA failure set is **48 tests**, grouped by shared
+compiler behavior.
 
-### A — generated records, signatures, layout, and LowIR value/lifetime shape
+### A — generated records, signatures, initialization, layout, and LowIR shape
 
 `general/100-class-template-alias-array-member`,
 `general/100-class-template-member-plus-calls-later-plus-assign`,
 `general/100-defaulted-copy-constructor-reference-member`,
 `general/100-defaulted-move-constructor-reference-member`,
 `general/100-function-template-parameter-decltype-ref-array`,
+`general/100-member-cv-overload-deduction-argument`,
 `general/100-namespace-template-function-before-tls-object`,
 `general/100-nested-class-template-local-class-argument`,
 `general/100-qualified-function-template-member-overload-argument`,
@@ -51,19 +64,13 @@ The exact current-PA failure set is 53 tests, grouped by shared behavior.
 `spec/300-out-of-class-template-member-nested-enum-param`,
 `spec/300-qualified-explicit-class-instantiation`.
 
-### B — overload candidates, using, operators, and ADL
+### B — remaining overload sets, using, ADL, and required diagnostics
 
-`general/100-function-template-pair-vs-range-predicate`,
-`general/100-functional-cast-argument-nested-type-hides-function`,
 `general/100-inherited-typedef-hidden-friend-overload`,
 `general/100-local-call-prefers-member-over-template-type-declaration`,
 `general/100-local-using-directive-qualified-template-argument`,
-`general/100-member-cv-overload-deduction-argument`,
 `general/100-qualified-using-directive-function-template-call`,
-`general/100-using-base-cv-overload-deduces-mutable-ref`,
 `general/100-using-namespace-ambiguous-less-than-or`,
-`general/300-dependent-functional-template-id-hides-outer-function`,
-`general/300-local-using-inline-namespace-function-template`,
 `general/300-template-body-enum-adl-call`,
 `spec/100-inherited-class-template-conversion-operator`,
 `spec/100-local-constref-converting-iterator`,
@@ -80,7 +87,7 @@ The exact current-PA failure set is 53 tests, grouped by shared behavior.
 `general/300-dependent-typename-template-argument-return`,
 `spec/300-unnamed-namespace-qualified-class-template-id`.
 
-### D — required diagnostics
+### D — required negative diagnostics
 
 `general/100-local-alias-shadows-template-parameter-bad`,
 `general/100-nondependent-template-member-body-lookup-bad`, and
@@ -89,21 +96,21 @@ success instead of the required failure status.
 
 ## Completed checkpoint scope
 
-The selected scope was the shared operator/ADL and dependent-signature group.
-Concrete function-template operator specializations retain their source
-operator names, namespace using-declarations participate in associated lookup,
-hidden friends are emitted after the demand fixed point, and class-member calls
-do not get redirected to an out-of-class template merely because the source
-signature is dependent.  Raw dependent signatures are guarded from premature
-ordinary matching, and generated out-of-class member signatures can name a
-specialized nested enum.  The focused witnesses and the full report above
-validate the scope; remaining failures in this group are recorded as exact
-LowIR-shape or candidate-lookup work.
+The selected candidate/using group is complete at the semantic/status level:
+the pair-vs-range, nested-type functional-cast, base-cv reference, inline
+namespace using, and dependent functional-template-id witnesses pass; the
+member-cv witness reaches the correct instantiated `join_alloc` call and only
+differs in an existing constructor-layout presentation.  Arity filtering and
+direct member-signature lookup preserve ordinary overloads while allowing
+template deduction, and the PA15 operator-chain regression is fixed by typed
+owning memoization rather than a test-specific timeout change.
 
 ## Next checkpoint scope
 
-The next coherent group is function-template candidate viability and using/cv
-deduction: pair-vs-range selection, functional-cast calls, member cv overloads,
-base using-reference deduction, and inline-namespace using lookup.  Validate it
-with those focused witnesses, the full PA18 report, the through-PA17 report,
-and the file audit.
+Take group A's generated declaration and LowIR shape work: preserve typed
+specialization identity through class/member initialization, nested/out-of-
+class signatures, reference/array layout, and explicit instantiation.  Start
+with the member-cv constructor-layout witness and the defaulted
+copy/move/reference-member pair, then bundle adjacent signature/layout cases
+that share the same generated-record behavior.  Validate with the focused
+group, the full PA18 report, through-PA17, and the file audit.

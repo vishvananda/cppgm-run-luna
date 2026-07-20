@@ -51,6 +51,17 @@ class PA14Lowerer
         null_pointer_constant(false), known_constant(false), constant(0) {}
   };
 
+  struct InferCacheEntry
+  {
+    CPPGMAstNodePtr node;
+    Scope* scope;
+    ExprInfo info;
+
+    InferCacheEntry(const CPPGMAstNodePtr& cached_node = CPPGMAstNodePtr(),
+                    Scope* cached_scope = 0, const ExprInfo& cached_info = ExprInfo())
+      : node(cached_node), scope(cached_scope), info(cached_info) {}
+  };
+
   struct FunctionRecord
   {
     CPPGMAstNodePtr node;
@@ -284,7 +295,7 @@ class PA14Lowerer
 	set<const Type*> external_vtables_;
 	set<const Type*> emitted_rtti_;
 	FunctionState* state_;
-  map<const CPPGMAstNode*, pair<Scope*, ExprInfo> > infer_cache_;
+	  map<const CPPGMAstNode*, InferCacheEntry> infer_cache_;
 
 public:
 explicit PA14Lowerer(const vector<CPPGMAstNodePtr>& trees)

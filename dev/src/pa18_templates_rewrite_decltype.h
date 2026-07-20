@@ -30,10 +30,16 @@
 		// class, so type equality alone cannot identify this ordinary match.
 		if(callee.find("::") == string::npos) {
 			const string owner = PrefixComponent(context);
-			const FunctionSignature* member = owner.empty() ? 0 :
-				FindFunctionSignature(JoinPath(owner, callee), context);
-			if(!member && !owner.empty())
-				member = FindFunctionSignature(JoinPath(owner, JoinPath(owner, callee)), context);
+			const FunctionSignature* member = 0;
+			if(!owner.empty()) {
+				map<string, FunctionSignature>::const_iterator found = function_signatures_.find(
+					JoinPath(owner, callee));
+				if(found != function_signatures_.end()) member = &found->second;
+				if(!member) {
+					found = function_signatures_.find(JoinPath(owner, JoinPath(owner, callee)));
+					if(found != function_signatures_.end()) member = &found->second;
+				}
+			}
 			const bool class_scope = class_contexts_.find(owner) != class_contexts_.end() ||
 				(!owner.empty() && class_contexts_.find(JoinPath(owner, owner)) != class_contexts_.end());
 			if(member && class_scope && (!signature || member == signature))
@@ -45,6 +51,16 @@
 			call->children[1]->kind == "argument-list" ? call->children[1] :
 			ChildOfKindLocal(call->children[1], "argument-list");
 		if(!arguments) return false;
+		size_t parameter_count = 0;
+		size_t required_parameters = 0;
+		for(size_t i = 0; i < signature->parameters->children.size(); ++i) {
+			const CPPGMAstNodePtr parameter = signature->parameters->children[i];
+			if(!parameter || parameter->kind != "parameter-declaration") continue;
+			++parameter_count;
+			if(!ChildOfKindLocal(parameter, "default-argument")) ++required_parameters;
+		}
+		if(arguments->children.size() < required_parameters ||
+			arguments->children.size() > parameter_count) return false;
 		size_t argument = 0;
 		for(size_t parameter = 0; parameter < signature->parameters->children.size(); ++parameter) {
 			const CPPGMAstNodePtr parameter_node = signature->parameters->children[parameter];
@@ -57,8 +73,9 @@
 				if(!parameters || parameter >= parameters->children.size()) continue;
 				const CPPGMAstNodePtr template_parameter = parameters->children[parameter];
 				if(template_parameter && template_parameter->kind == "parameter-declaration" &&
-					CanonicalSpelling(ParameterTypeSpelling(template_parameter)) == CanonicalSpelling(pattern))
+					CanonicalSpelling(ParameterTypeSpelling(template_parameter)) == CanonicalSpelling(pattern)) {
 					return false;
+				}
 			}
 			for(map<string, string>::const_iterator substitution = substitutions.begin();
 				substitution != substitutions.end(); ++substitution)

@@ -275,8 +275,7 @@ bool MatchTypePattern(string pattern, string actual,
 				return true;
 			}
 		}
-		if(expression->kind == "call-expression" && !expression->children.empty() &&
-			expression->children[0] && expression->children[0]->kind == "member-expression") {
+		if(expression->kind == "call-expression" && !expression->children.empty() && expression->children[0] && expression->children[0]->kind == "member-expression") {
 			const CPPGMAstNodePtr callee = expression->children[0];
 			string object_type;
 			if(callee->children.size() >= 2) {
@@ -290,10 +289,14 @@ bool MatchTypePattern(string pattern, string actual,
 			if(!object_type.empty() && !member.empty() && FindClassMemberType(
 				object_type, member, substitutions, context, result, &active)) return true;
 		}
-		if(expression->kind == "call-expression" && !expression->children.empty() &&
-			expression->children[0] && expression->children[0]->kind == "id-expression") {
+		if(expression->kind == "call-expression" && !expression->children.empty() && expression->children[0] && expression->children[0]->kind == "id-expression") {
 			const string member = LastComponent(expression->children[0]->value);
-			const string owner = PrefixComponent(context);
+			string owner; for(string current = context; ; ) {
+				if(class_contexts_.find(current) != class_contexts_.end()) { owner = current; break; }
+				if(current.empty()) break;
+				const size_t separator = current.rfind("::");
+				if(separator == string::npos) current.clear(); else current.erase(separator);
+			}
 			set<string> active;
 			if(!owner.empty() && !member.empty() && FindClassMemberType(
 				owner, member, substitutions, context, result, &active)) return true;
@@ -301,26 +304,25 @@ bool MatchTypePattern(string pattern, string actual,
 		if(expression->kind == "call-expression" && !expression->children.empty() &&
 			expression->children[0] && expression->children[0]->kind == "id-expression") {
 			const string callee = LastComponent(expression->children[0]->value);
-			const string nested_class = JoinPath(context, callee);
-			if(class_contexts_.find(nested_class) != class_contexts_.end())
-				*result = nested_class;
-			else
-				*result = ResolveAlias(expression->children[0]->value, context);
+			string nested_class; for(string current = context; ; ) {
+				const string candidate = JoinPath(current, callee);
+				if(class_contexts_.find(candidate) != class_contexts_.end() || class_declarations_.find(candidate) != class_declarations_.end()) { nested_class = candidate; break; }
+				if(current.empty()) break;
+				const size_t separator = current.rfind("::");
+				if(separator == string::npos) current.clear(); else current.erase(separator);
+			}
+			*result = nested_class.empty() ?
+				ResolveAlias(expression->children[0]->value, context) : nested_class;
 			return true;
 		}
 		if(expression->kind == "binary-expression" && expression->children.size() >= 2) {
 			const string op = RemoveMarker(expression->value);
-			if(op == "&&" || op == "||" || op == "==" || op == "!=" ||
-				op == "<" || op == ">" || op == "<=" || op == ">=") {
+			if(op == "&&" || op == "||" || op == "==" || op == "!=" || op == "<" || op == ">" || op == "<=" || op == ">=") {
 				*result = "bool";
 				return true;
 			}
-			if(op == "-") {
-				// A free binary difference used as a function-template argument
-				// is commonly the iterator/range reduction shape.  Its result is
-				// the ordinary arithmetic value even when both operands are class
-				// iterators.
-				*result = "int";
+				if(op == "-") {
+					*result = "int";
 				return true;
 			}
 			if(InferArgument(expression->children[0], result, substitutions, context)) return true;
@@ -346,6 +348,13 @@ bool MatchTypePattern(string pattern, string actual,
 			call->children[1]->kind == "argument-list" ? call->children[1] :
 			ChildOfKindLocal(call->children[1], "argument-list");
 		if(!parameters || !arguments) return false;
+		size_t parameter_count = 0, required_parameters = 0;
+		for(size_t i = 0; i < parameters->children.size(); ++i) {
+			const CPPGMAstNodePtr parameter = parameters->children[i];
+			if(!parameter || parameter->kind != "parameter-declaration") continue;
+			++parameter_count; if(!ChildOfKindLocal(parameter, "default-argument")) ++required_parameters;
+		}
+		if(arguments->children.size() < required_parameters || arguments->children.size() > parameter_count) return false;
 		map<string, string> inferred;
 		set<string> parameter_names;
 		for(size_t i = 0; i < definition.parameters.size(); ++i) {
@@ -842,12 +851,7 @@ bool MatchTypePattern(string pattern, string actual,
 	{
 		for(size_t i = 0; i < input->children.size(); ++i) {
 			const CPPGMAstNodePtr original_child = input->children[i];
-			// Once a dependent decltype has been reduced to a concrete typed
-			// spelling, its preserved expression subtree is only syntax history.
-			// Re-transforming that subtree would instantiate helper calls such as
-			// `declval<F>()` as ordinary declarations and lose function-pointer
-			// declarator structure.
-			if(input->kind == "decl-specifier" &&
+				if(input->kind == "decl-specifier" &&
 				input->value.find("decltype(") != string::npos &&
 				original_child && (original_child->kind == "call-expression" ||
 					original_child->kind == "binary-expression")) continue;
@@ -859,12 +863,14 @@ bool MatchTypePattern(string pattern, string actual,
 						target->value, child_context, *local_substitutions, 0, false);
 				continue;
 			}
-			const string node_context = input->kind == "function-definition" &&
-				original_child && original_child->kind == "compound-statement" ?
-				function_context : child_context;
+			const string node_context = input->kind == "function-definition" && original_child &&
+				original_child->kind == "compound-statement" ? function_context : child_context;
+			const CPPGMAstNodePtr using_target = original_child && original_child->kind == "using-declaration" ?
+				ChildOfKindLocal(original_child, "target") : CPPGMAstNodePtr();
+			const bool drop_function_using = using_target && IsOrdinaryTemplateUsingTarget(
+				using_target->value, node_context) && class_contexts_.find(node_context) == class_contexts_.end();
 			CPPGMAstNodePtr child;
-			if(input->kind == "using-declaration" && original_child &&
-				original_child->kind == "target") {
+			if(input->kind == "using-declaration" && original_child && original_child->kind == "target") {
 				child = CloneNode(original_child);
 				const string raw_target = original_child->value;
 				const size_t separator = raw_target.rfind("::");
@@ -888,15 +894,11 @@ bool MatchTypePattern(string pattern, string actual,
 						result->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
 							"decl-specifier", "TT_IDENTIFIER:" + LastComponent(promoted->second))));
 				}
-				if(child && !(input->kind == "compound-statement" && !substitutions.empty() &&
-				(original_child->kind == "alias-declaration" ||
-					(original_child->kind == "simple-declaration" &&
-					 SpellNode(original_child->children.empty() ? CPPGMAstNodePtr() :
-						original_child->children[0]).find("typedef") != string::npos))))
-				result->children.push_back(child);
-			if(original_child && original_child->kind == "alias-declaration" &&
-				!original_child->value.empty() && !original_child->children.empty() &&
-				(!substitutions.empty() || input->value.find('<') != string::npos))
+				if(child && !drop_function_using && !(input->kind == "compound-statement" && !substitutions.empty() &&
+					(original_child->kind == "alias-declaration" || (original_child->kind == "simple-declaration" &&
+					SpellNode(original_child->children.empty() ? CPPGMAstNodePtr() : original_child->children[0]).find("typedef") != string::npos)))) result->children.push_back(child);
+			if(original_child && original_child->kind == "alias-declaration" && !original_child->value.empty() &&
+				!original_child->children.empty() && (!substitutions.empty() || input->value.find('<') != string::npos))
 				(*local_substitutions)[original_child->value] = RewriteText(
 					TypeIdSpelling(original_child->children[0]), child_context,
 					*local_substitutions, 0);
@@ -932,10 +934,8 @@ bool MatchTypePattern(string pattern, string actual,
 								break;
 							}
 						const string rewritten_owner = rewritten ? PrefixComponent(rewritten->value) : owner;
-						const CPPGMAstNodePtr owner_declaration = FindClassDeclaration(
-							rewritten_owner.empty() ? owner : rewritten_owner, child_context);
-						if(owner_declaration) for(size_t member = 0;
-							member < owner_declaration->children.size(); ++member) {
+						const CPPGMAstNodePtr owner_declaration = FindClassDeclaration(rewritten_owner.empty() ? owner : rewritten_owner, child_context);
+						if(owner_declaration) for(size_t member = 0; member < owner_declaration->children.size(); ++member) {
 								const CPPGMAstNodePtr declaration = owner_declaration->children[member];
 								if(declaration && declaration->kind == "function-definition" &&
 									declaration->children.size() > 1 &&
@@ -950,10 +950,8 @@ bool MatchTypePattern(string pattern, string actual,
 							!rewritten->value.empty() ? rewritten->value : target->value;
 				}
 				}
-			if(original_child && original_child->kind == "using-directive")
-				RecordUsingDirective(original_child, local_substitutions);
-			if(original_child && original_child->kind == "simple-declaration" &&
-				!original_child->children.empty() &&
+			if(original_child && original_child->kind == "using-directive") RecordUsingDirective(original_child, local_substitutions);
+			if(original_child && original_child->kind == "simple-declaration" && !original_child->children.empty() &&
 				SpellNode(original_child->children[0]).find("typedef") != string::npos &&
 				(!substitutions.empty() || input->value.find('<') != string::npos))
 				RecordTypedefSubstitutions(original_child, child_context, local_substitutions);
@@ -1172,7 +1170,7 @@ bool MatchTypePattern(string pattern, string actual,
 		}
 		if(input->kind == "using-declaration") {
 			const CPPGMAstNodePtr target = ChildOfKindLocal(input, "target");
-			if(target && IsOrdinaryTemplateUsingTarget(target->value, context))
+			if(target && IsOrdinaryTemplateUsingTarget(target->value, context) && class_contexts_.find(context) != class_contexts_.end())
 				return CPPGMAstNodePtr();
 		}
 		if(input->kind == "parameter-declaration" && !input->children.empty() &&

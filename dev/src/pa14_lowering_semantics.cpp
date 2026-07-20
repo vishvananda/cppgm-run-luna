@@ -920,11 +920,21 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferSubscript(const CPPGMAstNodePtr& node, S
 PA14Lowerer::ExprInfo PA14Lowerer::Infer(const CPPGMAstNodePtr& node, Scope* scope,
                 const TypePtr& expected)
 {
-    // Synthetic AST nodes are created during address/call lowering and are
-    // short-lived.  A raw-pointer cache can reuse their addresses within one
-    // function and return a type inferred for an unrelated temporary.  The
-    // uncached path keeps expression facts tied to the actual node/state.
-    return InferUncached(node, scope, expected);
+    if(!node) throw logic_error("missing expression during LowIR lowering");
+    // Cache only context-free inference.  Expected-type inference is used for
+    // initialization/conversion planning and must retain its caller's type.
+    // The owning node in each entry prevents a short-lived synthetic AST node
+    // from being mistaken for a later allocation at the same raw address.
+    if(!expected) {
+      map<const CPPGMAstNode*, InferCacheEntry>::const_iterator cached =
+        infer_cache_.find(node.get());
+      if(cached != infer_cache_.end() && cached->second.node == node &&
+         cached->second.scope == scope)
+        return cached->second.info;
+    }
+    const ExprInfo result = InferUncached(node, scope, expected);
+    if(!expected) infer_cache_[node.get()] = InferCacheEntry(node, scope, result);
+    return result;
 }
 
 PA14Lowerer::ExprInfo PA14Lowerer::InferUncached(const CPPGMAstNodePtr& node, Scope* scope,
