@@ -297,12 +297,12 @@ void PA14Lowerer::Lower(ostream& out)
         program_->children.push_back(trees_[i]->children[j]);
     }
     analyzer_.Analyze(program_);
+    InstallBuiltins();
     CollectTopLevel(program_, analyzer_.global_.get());
     FinalizeSymbols();
     CollectStringLiterals(program_);
 
     vector<string> entries;
-    EmitDeclarations(entries);
     EmitGlobals(entries);
     // Emit ordinary functions first so their calls establish the roots of
     // the demand-driven member-function set.  Member bodies can in turn
@@ -337,6 +337,10 @@ void PA14Lowerer::Lower(ostream& out)
         added_member = true;
       }
     }
+
+    vector<string> declarations;
+    EmitDeclarations(declarations);
+    entries.insert(entries.begin(), declarations.begin(), declarations.end());
 
     for(size_t i = 0; i < entries.size(); ++i) {
       if(i != 0) out << "\n";
@@ -426,6 +430,92 @@ string PA14Lowerer::qualified_name(Scope* scope, const string& raw) const
     return raw;
   }
 
+string PA14Lowerer::TypeQualifiedName(const TypePtr& type) const
+{
+    if(type && type->owned_scope && !type->owned_scope->qualified_prefix.empty())
+      return type->owned_scope->qualified_prefix;
+    return type ? type->name : string();
+  }
+
+void PA14Lowerer::InstallBuiltins()
+{
+    const TypePtr character = Fundamental("char");
+    const TypePtr const_character = CloneWithCv(character, true, false);
+    const TypePtr size_type = Fundamental("unsigned long int");
+
+    struct BuiltinSpec
+    {
+      const char* name;
+      TypePtr type;
+      const char* effects;
+      const char* object_name;
+      bool noreturn;
+      const char* first_parameter;
+      const char* second_parameter;
+    };
+
+    vector<TypePtr> strlen_parameters;
+    strlen_parameters.push_back(PointerTo(const_character));
+    vector<TypePtr> byte_copy_parameters;
+    byte_copy_parameters.push_back(PointerTo(character));
+    byte_copy_parameters.push_back(PointerTo(const_character));
+    byte_copy_parameters.push_back(size_type);
+    vector<TypePtr> no_parameters;
+
+    vector<BuiltinSpec> specs;
+    specs.push_back(BuiltinSpec{"__builtin_strlen",
+      FunctionOf(strlen_parameters, false, size_type, false), "readonly",
+      "cppgm_builtin_strlen", false,
+      "capture=nocapture, access=read", 0});
+    specs.push_back(BuiltinSpec{"__builtin_unreachable",
+      FunctionOf(no_parameters, false, Fundamental("void"), false), "readnone",
+      "cppgm_builtin_unreachable", true, 0, 0});
+    specs.push_back(BuiltinSpec{"__builtin_memcpy",
+      FunctionOf(byte_copy_parameters, false, PointerTo(Fundamental("void")), false),
+      "readwrite", "cppgm_builtin_memcpy", false,
+      "capture=nocapture, access=write, alias=noalias",
+      "capture=nocapture, access=read, alias=noalias"});
+    specs.push_back(BuiltinSpec{"__builtin_memmove",
+      FunctionOf(byte_copy_parameters, false, PointerTo(Fundamental("void")), false),
+      "readwrite", "cppgm_builtin_memmove", false,
+      "capture=nocapture, access=readwrite", "capture=nocapture, access=read"});
+
+    for(size_t i = 0; i < specs.size(); ++i) {
+      const BuiltinSpec& spec = specs[i];
+      Binding binding(BIND_FUNCTION, spec.name, spec.type);
+      binding.qualified_name = spec.name;
+      binding.declaration = CPPGMAstNodePtr();
+      analyzer_.global_->add(binding);
+
+      functions_.push_back(FunctionRecord());
+      FunctionRecord* record = &functions_.back();
+      function_by_key_[function_key(spec.name, spec.type)] = record;
+      record->scope = analyzer_.global_.get();
+      record->source_type = spec.type;
+      record->type = spec.type;
+      record->qualified_name = spec.name;
+      record->symbol = spec.name;
+      record->builtin = true;
+      record->unwind_no = true;
+      record->noreturn = spec.noreturn;
+      record->effects = spec.effects;
+      record->object_name = spec.object_name;
+      if(spec.first_parameter) record->parameter_metadata.push_back(spec.first_parameter);
+      if(spec.second_parameter) record->parameter_metadata.push_back(spec.second_parameter);
+      if(spec.first_parameter && spec.type->parameters.size() > 2)
+        record->parameter_metadata.push_back(string());
+    }
+  }
+
+bool PA14Lowerer::HasNoexcept(const CPPGMAstNodePtr& node) const
+{
+    if(!node) return false;
+    if(node->kind == "function-qualifier" && node->value == "noexcept") return true;
+    for(size_t i = 0; i < node->children.size(); ++i)
+      if(HasNoexcept(node->children[i])) return true;
+    return false;
+  }
+
 string PA14Lowerer::declarator_name(const CPPGMAstNodePtr& node) const
 {
     return FirstIdentifier(node);
@@ -488,6 +578,19 @@ void PA14Lowerer::CollectTopLevel(const CPPGMAstNodePtr& node, Scope* scope)
       CollectFunction(node, scope, true);
       return;
     }
+    if(node->kind == "special-member-definition") {
+      const size_t separator = node->value.rfind("::");
+      Scope* owner_scope = scope;
+      if(separator != string::npos) {
+        Analyzer::PathTarget owner = analyzer_.ResolvePath(scope, node->value.substr(0, separator));
+        TypePtr owner_type = owner.binding ? owner.binding->type :
+          (owner.scope ? owner.scope->owner_type : TypePtr());
+        if(owner_type && owner_type->kind == TYPE_CLASS && owner_type->owned_scope)
+          owner_scope = owner_type->owned_scope;
+      }
+      CollectSpecialMember(node, owner_scope, true);
+      return;
+    }
     if(node->kind == "simple-declaration" || node->kind == "bit-field-declaration") {
       CollectSimpleDeclaration(node, scope);
       return;
@@ -527,6 +630,7 @@ void PA14Lowerer::CollectClassMembers(const CPPGMAstNodePtr& node, Scope* scope)
       if(child->children.empty()) continue;
       Analyzer::SpecFacts facts;
       TypePtr base = analyzer_.TypeFromSpecSeq(child->children[0], class_scope, &facts);
+      if(facts.is_friend) continue;
       CPPGMAstNodePtr list = ChildOfKind(child, "init-declarator-list");
       if(!list) continue;
       for(size_t j = 0; j < list->children.size(); ++j) {
@@ -534,7 +638,33 @@ void PA14Lowerer::CollectClassMembers(const CPPGMAstNodePtr& node, Scope* scope)
         if(!item || item->children.empty()) continue;
         const CPPGMAstNodePtr declarator = item->children[0];
         TypePtr member_type = analyzer_.BuildDeclarator(declarator, base, class_scope);
-        if(!function_type(member_type)) continue;
+        if(!function_type(member_type)) {
+          const string name = declarator_name(declarator);
+          if(!facts.is_static || name.empty()) continue;
+          GlobalRecord record;
+          record.node = child;
+          record.scope = class_scope;
+          record.type = member_type;
+          record.qualified_name = TypeQualifiedName(type_found->second) + "::" + name;
+          record.initializer = item->children.size() > 1 ? item->children[1] :
+            CPPGMAstNodePtr();
+          record.declaration = true;
+          record.internal = false;
+          record.thread_local_storage = HasStorageSpecifier(child, "thread_local");
+          const string key = global_key(record.qualified_name);
+          map<string, GlobalRecord*>::iterator global_found = global_by_key_.find(key);
+          if(global_found == global_by_key_.end()) {
+            globals_.push_back(record);
+            global_by_key_[key] = &globals_.back();
+          } else {
+            GlobalRecord* prior = global_found->second;
+            prior->type = record.type;
+            prior->thread_local_storage = prior->thread_local_storage ||
+              record.thread_local_storage;
+            if(record.initializer) prior->initializer = record.initializer;
+          }
+          continue;
+        }
         CPPGMAstNodePtr wrapper(new CPPGMAstNode("function-declaration"));
         wrapper->children.push_back(child->children[0]);
         wrapper->children.push_back(declarator);
@@ -564,10 +694,6 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
     if(!node || node->children.size() < 2) throw logic_error("invalid function declaration");
     Analyzer::SpecFacts facts;
     TypePtr base = analyzer_.TypeFromSpecSeq(node->children[0], scope, &facts);
-    TypePtr type = analyzer_.BuildDeclarator(node->children[1], base, scope);
-    type = PA12AdjustedType(type);
-    TypePtr function = function_type(type);
-    if(!function) throw logic_error("LowIR function declaration has no function type");
     const string raw_name = declarator_name(node->children[1]);
     if(raw_name.empty()) throw logic_error("function has no name");
     TypePtr member_owner;
@@ -579,11 +705,43 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
       else if(owner.scope) member_owner = owner.scope->owner_type;
     }
     if(member_owner && member_owner->kind != TYPE_CLASS) member_owner.reset();
+    Scope* type_scope = member_owner && member_owner->owned_scope ?
+      member_owner->owned_scope : scope;
+    TypePtr type = analyzer_.BuildDeclarator(node->children[1], base, type_scope);
+    type = PA12AdjustedType(type);
+    TypePtr function = function_type(type);
+    if(!function) throw logic_error("LowIR function declaration has no function type");
+    CPPGMAstNodePtr trailing = ChildOfKind(node->children[1], "trailing-return-type");
+    if(trailing && !trailing->children.empty()) {
+      TypePtr trailing_type = analyzer_.TypeFromTypeId(trailing->children[0], type_scope);
+      TypePtr adjusted(new Type(*function));
+      adjusted->child = trailing_type;
+      function = adjusted;
+    }
     const bool is_member = static_cast<bool>(member_owner);
     const bool is_static = facts.is_static;
+    if(is_member && member_owner->owned_scope) {
+      const string member_name = LastComponent(raw_name);
+      vector<Binding*> bindings = DirectBindings(member_owner->owned_scope, member_name);
+      for(size_t i = 0; i < bindings.size(); ++i) {
+        TypePtr existing = function_target_type(bindings[i]->type);
+        if(bindings[i]->kind != BIND_FUNCTION || !bindings[i]->is_member || !existing ||
+           existing->variadic != function->variadic ||
+           existing->function_const != function->function_const ||
+           existing->function_volatile != function->function_volatile ||
+           existing->parameters.size() != function->parameters.size()) continue;
+        bool same_signature = true;
+        for(size_t parameter = 0; parameter < function->parameters.size(); ++parameter)
+          if(!PA12SameType(existing->parameters[parameter], function->parameters[parameter], false)) {
+            same_signature = false;
+            break;
+          }
+        if(same_signature) bindings[i]->type = function;
+      }
+    }
     string qname;
     if(is_member && raw_name.find("::") == string::npos)
-      qname = member_owner->name + "::" + raw_name;
+      qname = TypeQualifiedName(member_owner) + "::" + raw_name;
     else qname = qualified_name(scope, raw_name);
     const string key = function_key(qname, function);
     map<string, FunctionRecord*>::const_iterator found = function_by_key_.find(key);
@@ -599,8 +757,8 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
     record->member = is_member;
     record->static_member = is_static;
     if(is_member && !is_static) {
-      TypePtr this_type = function->function_const ?
-        CloneWithCv(member_owner, true, false) : member_owner;
+      TypePtr this_type = CloneWithCv(member_owner, function->function_const,
+        function->function_volatile);
       vector<TypePtr> parameters;
       parameters.push_back(PointerTo(this_type));
       parameters.insert(parameters.end(), function->parameters.begin(), function->parameters.end());
@@ -610,6 +768,7 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
     record->definition = record->definition || definition;
     if(definition) record->node = node;
     record->variadic = function->variadic;
+    if(definition) record->unwind_no = record->unwind_no || HasNoexcept(node->children[1]);
     RememberDefaults(record, node->children[1]);
   }
 
@@ -627,9 +786,10 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
     TypePtr owner = scope->owner_type;
     if(!owner || owner->kind != TYPE_CLASS) throw logic_error("special member has no class owner");
     const string raw_name = declarator_name(declarator);
-    const string qname = owner->name + "::" + raw_name;
+    const string name = LastComponent(raw_name);
+    const string qname = TypeQualifiedName(owner) + "::" + name;
     const string key = function_key(qname, function);
-    vector<Binding*> existing_bindings = DirectBindings(scope, raw_name);
+    vector<Binding*> existing_bindings = DirectBindings(scope, name);
     bool has_binding = false;
     for(size_t i = 0; i < existing_bindings.size(); ++i)
       if(existing_bindings[i]->kind == BIND_FUNCTION &&
@@ -639,7 +799,7 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
         break;
       }
     if(!has_binding) {
-      Binding binding(BIND_FUNCTION, raw_name, function);
+      Binding binding(BIND_FUNCTION, name, function);
       binding.is_member = true;
       binding.is_static = false;
       binding.member_owner = owner;
@@ -663,12 +823,23 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
     record->qualified_name = qname;
     record->member = true;
     record->static_member = false;
-    record->constructor = raw_name == LastComponent(owner->name);
-    record->destructor = raw_name.size() > 1 && raw_name[0] == '~';
+    record->constructor = name == LastComponent(owner->name);
+    record->destructor = name.size() > 1 && name[0] == '~';
+    CPPGMAstNodePtr member_specs = ChildOfKind(node, "member-specifiers");
+    if(member_specs) for(size_t i = 0; i < member_specs->children.size(); ++i)
+      if(member_specs->children[i] && member_specs->children[i]->value == "explicit")
+        record->explicit_constructor = true;
+    record->special_initializer = ChildOfKind(node, "ctor-initializer");
+    if(!record->special_initializer)
+      record->special_initializer = ChildOfKind(declarator, "special-initializer");
+    record->defaulted = record->special_initializer &&
+      record->special_initializer->value == "default";
+    record->deleted = record->special_initializer &&
+      record->special_initializer->value == "delete";
     record->definition = record->definition || definition;
     if(definition) record->node = node;
     record->variadic = function->variadic;
-    record->special_initializer = ChildOfKind(node, "ctor-initializer");
+    if(definition) record->unwind_no = record->unwind_no || HasNoexcept(declarator);
     RememberDefaults(record, declarator);
     (void)facts;
   }
@@ -710,7 +881,7 @@ void PA14Lowerer::CollectImplicitConstructor(const TypePtr& owner, Scope* scope)
     special->children.push_back(declarator);
     special->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("compound-statement")));
     TypePtr source = FunctionOf(vector<TypePtr>(), false, Fundamental("void"), false);
-    const string qname = owner->name + "::" + name;
+    const string qname = TypeQualifiedName(owner) + "::" + name;
     const string key = function_key(qname, source);
     map<string, FunctionRecord*>::const_iterator found = function_by_key_.find(key);
     if(found != function_by_key_.end()) return;
@@ -772,7 +943,7 @@ void PA14Lowerer::CollectImplicitDestructor(const TypePtr& owner, Scope* scope)
     special->children.push_back(declarator);
     special->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("compound-statement")));
     TypePtr source = FunctionOf(vector<TypePtr>(), false, Fundamental("void"), false);
-    const string qname = owner->name + "::" + name;
+    const string qname = TypeQualifiedName(owner) + "::" + name;
     const string key = function_key(qname, source);
     if(function_by_key_.find(key) != function_by_key_.end()) return;
     Binding binding(BIND_FUNCTION, name, source);
@@ -806,11 +977,12 @@ void PA14Lowerer::RememberDefaults(FunctionRecord* record, const CPPGMAstNodePtr
     for(size_t i = 0; i < clause->children.size(); ++i) {
       CPPGMAstNodePtr item = clause->children[i];
       if(!item || item->kind != "parameter-declaration") continue;
-      if(item->children.size() > 2 && item->children[2]) {
-        CPPGMAstNodePtr default_node = item->children[2];
-        if(default_node->kind == "default-argument" && !default_node->children.empty())
-          default_node = default_node->children[0];
+      for(size_t j = 1; j < item->children.size(); ++j) {
+        CPPGMAstNodePtr default_node = item->children[j];
+        if(!default_node || default_node->kind != "default-argument") continue;
+        if(!default_node->children.empty()) default_node = default_node->children[0];
         record->default_arguments[parameter] = default_node;
+        break;
       }
       ++parameter;
     }
@@ -819,6 +991,7 @@ void PA14Lowerer::RememberDefaults(FunctionRecord* record, const CPPGMAstNodePtr
 void PA14Lowerer::CollectSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* scope)
 {
     if(!node || node->children.empty()) return;
+    CheckTypeAccess(node->children[0], scope);
     Analyzer::SpecFacts facts;
     analyzer_.TypeFromSpecSeq(node->children[0], scope, &facts);
     CPPGMAstNodePtr list = ChildOfKind(node, "init-declarator-list");
@@ -855,7 +1028,9 @@ void PA14Lowerer::CollectSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* s
       record.type = type;
       record.qualified_name = qualified_name(scope, name);
       record.initializer = initializer;
+      record.declaration = false;
       record.internal = facts.is_const || facts.is_constexpr || HasStorageSpecifier(node, "static");
+      record.thread_local_storage = HasStorageSpecifier(node, "thread_local");
       record.dynamic_initializer = false;
       record.dynamic_finalizer = false;
       TypePtr value_type = type_value(type);
@@ -882,7 +1057,9 @@ void PA14Lowerer::CollectSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* s
         GlobalRecord* prior = found->second;
         if(record.initializer) prior->initializer = record.initializer;
         prior->type = record.type;
+        prior->declaration = false;
         prior->internal = prior->internal || record.internal;
+        prior->thread_local_storage = prior->thread_local_storage || record.thread_local_storage;
         prior->dynamic_initializer = prior->dynamic_initializer || record.dynamic_initializer;
         prior->dynamic_finalizer = prior->dynamic_finalizer || record.dynamic_finalizer;
       }
@@ -928,276 +1105,6 @@ PA14Lowerer::GlobalRecord* PA14Lowerer::FindGlobal(const string& qname) const
     return found == global_by_key_.end() ? 0 : found->second;
   }
 
-void PA14Lowerer::AppendBindings(Scope* scope, const string& name,
-                      vector<Binding*>& result, set<Scope*>& visited) const
-{
-    if(!scope || !visited.insert(scope).second) return;
-    for(size_t i = 0; i < scope->bindings.size(); ++i)
-      if(scope->bindings[i].name == name) result.push_back(&scope->bindings[i]);
-    for(size_t i = 0; i < scope->using_directives.size(); ++i)
-      AppendBindings(scope->using_directives[i], name, result, visited);
-  }
-
-vector<Binding*> PA14Lowerer::DirectBindings(Scope* scope, const string& name) const
-{
-    vector<Binding*> result;
-    if(!scope) return result;
-    for(size_t i = 0; i < scope->bindings.size(); ++i)
-      if(scope->bindings[i].name == name) result.push_back(&scope->bindings[i]);
-    return result;
-  }
-
-vector<Binding*> PA14Lowerer::LookupUnqualifiedAll(Scope* from, const string& name) const
-{
-    for(Scope* scope = from; scope != 0; scope = scope->parent) {
-      vector<Binding*> direct = DirectBindings(scope, name);
-      if(!direct.empty()) return direct;
-      vector<Binding*> imported;
-      set<Scope*> visited;
-      for(size_t i = 0; i < scope->using_directives.size(); ++i)
-        AppendBindings(scope->using_directives[i], name, imported, visited);
-      if(!imported.empty()) return imported;
-    }
-    return vector<Binding*>();
-  }
-
-Scope* PA14Lowerer::ScopeComponent(Scope* current, const string& component,
-                        bool first, bool absolute) const
-{
-    Scope* scope = (first && !absolute) ? analyzer_.FindNamespace(current, component) :
-      analyzer_.FindNamespaceDirect(current, component);
-    if(scope) return scope;
-    vector<Binding*> bindings = (first && !absolute) ?
-      LookupUnqualifiedAll(current, component) : DirectBindings(current, component);
-    for(size_t i = 0; i < bindings.size(); ++i)
-      if(bindings[i]->kind == BIND_TYPE || bindings[i]->kind == BIND_TYPE_ALIAS)
-        return analyzer_.ScopeForType(bindings[i]->type);
-    return 0;
-  }
-
-vector<Binding*> PA14Lowerer::Lookup(const string& raw, Scope* from) const
-{
-    bool absolute = false;
-    const vector<string> parts = analyzer_.SplitPath(raw, &absolute);
-    if(parts.empty()) return vector<Binding*>();
-    if(parts.size() == 1 && !absolute) return LookupUnqualifiedAll(from, parts[0]);
-    Scope* current = absolute ? analyzer_.global_.get() : from;
-    for(size_t i = 0; i + 1 < parts.size(); ++i) {
-      current = ScopeComponent(current, parts[i], i == 0, absolute);
-      if(!current) return vector<Binding*>();
-    }
-    vector<Binding*> result;
-    set<Scope*> visited;
-    AppendBindings(current, parts.back(), result, visited);
-    return result;
-  }
-
-vector<Binding*> PA14Lowerer::MemberBindings(const TypePtr& raw_object,
-                                             const string& name) const
-{
-    TypePtr object = type_value(raw_object);
-    if(object && object->kind == TYPE_POINTER) object = type_value(object->child);
-    if(!object || object->kind != TYPE_CLASS || !object->owned_scope)
-      return vector<Binding*>();
-    vector<Binding*> direct = DirectBindings(object->owned_scope, last_component(name));
-    if(!direct.empty()) return direct;
-    if(object->direct_base) return MemberBindings(object->direct_base, name);
-    return vector<Binding*>();
-  }
-
-Binding* PA14Lowerer::MemberBinding(const CPPGMAstNodePtr& node, Scope* scope,
-                                    ExprInfo* object_info)
-{
-    if(!node || node->kind != "member-expression" || node->children.size() < 2)
-      return 0;
-    ExprInfo local_object = Infer(node->children[0], scope);
-    if(object_info) *object_info = local_object;
-    TypePtr object = expression_value_type(local_object);
-    const string op = PA12Operator(node->value);
-    if(op == "->") {
-      if(!object || object->kind != TYPE_POINTER) return 0;
-      object = type_value(object->child);
-    }
-    vector<Binding*> candidates = MemberBindings(object, node->children[1]->value);
-    if(candidates.empty()) return 0;
-    Binding* selected = 0;
-    for(size_t i = 0; i < candidates.size(); ++i) {
-      if(candidates[i]->kind != BIND_FUNCTION) return candidates[i];
-      if(!selected) selected = candidates[i];
-    }
-    return selected;
-  }
-
-TypePtr PA14Lowerer::expression_value_type(const ExprInfo& info) const
-{
-    return type_value(info.type);
-  }
-
-TypePtr PA14Lowerer::function_target_type(const TypePtr& type) const
-{
-    TypePtr value = type_value(type);
-    if(value && value->kind == TYPE_FUNCTION) return value;
-    if(value && value->kind == TYPE_POINTER && value->child &&
-       value->child->kind == TYPE_FUNCTION) return value->child;
-    return TypePtr();
-  }
-
-PA14Lowerer::ExprInfo PA14Lowerer::InferLiteral(const CPPGMAstNodePtr& node, const TypePtr& expected) const
-{
-    ExprInfo result;
-    long long value = 0;
-    bool known = false;
-    result.operand = canonical_literal(node->value, &result.type, &value, &known);
-    result.category = result.type && result.type->kind == TYPE_ARRAY ? "lvalue" : "prvalue";
-    result.null_pointer_constant = known && value == 0 && is_integral_type(result.type);
-    result.known_constant = known;
-    result.constant = value;
-    if(expected && result.null_pointer_constant &&
-       (type_value(expected)->kind == TYPE_POINTER ||
-        (type_value(expected)->kind == TYPE_FUNDAMENTAL &&
-         type_value(expected)->name == "nullptr_t"))) {
-      result.type = type_value(expected)->kind == TYPE_FUNDAMENTAL &&
-        type_value(expected)->name == "nullptr_t" ? Fundamental("nullptr_t") : expected;
-    }
-    return result;
-  }
-
-PA14Lowerer::ExprInfo PA14Lowerer::InferKeyword(const CPPGMAstNodePtr& node) const
-{
-    ExprInfo result;
-    const string op = PA12Operator(node->value);
-    if(op == "nullptr") {
-      result.type = Fundamental("nullptr_t");
-      result.operand = "nullptr";
-    } else if(op == "this") {
-      VariablePlan* local = FindLocalPlan("this");
-      if(!local) throw logic_error("this used outside a member function");
-      result.type = local->type;
-      result.category = "prvalue";
-    } else {
-      result.type = Fundamental("bool");
-      result.operand = op == "true" ? "1" : "0";
-      result.known_constant = true;
-      result.constant = op == "true" ? 1 : 0;
-    }
-    return result;
-  }
-
-PA14Lowerer::VariablePlan* PA14Lowerer::FindLocalPlan(const string& name) const
-{
-    if(!state_) return 0;
-    for(vector<map<string, VariablePlan*> >::const_reverse_iterator env =
-          state_->environments.rbegin(); env != state_->environments.rend(); ++env) {
-      map<string, VariablePlan*>::const_iterator found = env->find(name);
-      if(found != env->end()) return found->second;
-    }
-    return 0;
-  }
-
-PA14Lowerer::ExprInfo PA14Lowerer::InferIdentifier(const CPPGMAstNodePtr& node, Scope* scope,
-                           const TypePtr& expected) const
-{
-    ExprInfo result;
-    VariablePlan* local = FindLocalPlan(node->value);
-    if(local) {
-      result.type = type_is_reference(local->type) ? local->type->child : local->type;
-      result.category = "lvalue";
-      result.binding = 0;
-      return result;
-    }
-    result.candidates = Lookup(node->value, scope);
-    if(expected && !result.candidates.empty()) {
-      TypePtr target = type_value(expected);
-      Binding* selected = 0;
-      int best = 1000000;
-      for(size_t i = 0; i < result.candidates.size(); ++i) {
-        TypePtr candidate = function_target_type(result.candidates[i]->type);
-        if(!candidate) continue;
-        ExprInfo source;
-        source.type = candidate;
-        source.category = "lvalue";
-        const int rank = ConversionRank(source, target);
-        if(rank >= 0 && rank < best) { best = rank; selected = result.candidates[i]; }
-        else if(rank >= 0 && rank == best) throw logic_error("ambiguous function target");
-      }
-      if(selected) result.binding = selected;
-    }
-    if(result.binding) result.candidates.clear();
-    if(!result.binding && result.candidates.empty())
-      throw logic_error("unknown expression name: " + node->value);
-    if(!result.binding && result.candidates.size() == 1)
-      result.binding = result.candidates[0];
-    if(result.binding && result.binding->kind == BIND_ENUMERATOR) {
-      result.type = result.binding->type;
-      result.category = "prvalue";
-      result.known_constant = result.binding->has_value;
-      result.constant = result.binding->value;
-      result.operand = integer_text(result.constant);
-      return result;
-    }
-    if(result.binding) {
-      result.type = PA12AdjustedType(result.binding->type);
-      if(type_is_reference(result.type)) result.type = result.type->child;
-      VariablePlan* this_plan = FindLocalPlan("this");
-      TypePtr this_type = this_plan ? type_value(this_plan->type) : TypePtr();
-      if(this_type && this_type->kind == TYPE_POINTER) this_type = type_value(this_type->child);
-      if(result.binding->is_member && !result.binding->is_static &&
-         result.binding->kind != BIND_FUNCTION && this_type && this_type->is_const &&
-         result.binding->member_owner &&
-         result.binding->member_index != static_cast<size_t>(-1) &&
-         result.binding->member_index < result.binding->member_owner->class_members.size() &&
-         !result.binding->member_owner->class_members[result.binding->member_index].is_mutable)
-        result.type = CloneWithCv(result.type, true, result.type->is_volatile);
-      result.category = result.type && result.type->kind == TYPE_FUNCTION ? "lvalue" : "lvalue";
-      if(result.binding->is_member && result.binding->is_static &&
-         result.binding->has_value) {
-        result.known_constant = true;
-        result.constant = result.binding->value;
-        result.operand = integer_text(result.constant);
-        result.category = "prvalue";
-      }
-      return result;
-    }
-    result.type = function_target_type(result.candidates[0]->type);
-    if(!result.type) result.type = result.candidates[0]->type;
-    result.category = "lvalue";
-    return result;
-  }
-
-PA14Lowerer::ExprInfo PA14Lowerer::InferMember(const CPPGMAstNodePtr& node,
-                                                Scope* scope) const
-{
-    ExprInfo result;
-    if(!node || node->children.size() < 2) throw logic_error("invalid member expression");
-    ExprInfo object_info = const_cast<PA14Lowerer*>(this)->Infer(node->children[0], scope);
-    TypePtr object = expression_value_type(object_info);
-    const string op = PA12Operator(node->value);
-    if(op == "->") {
-      if(!object || object->kind != TYPE_POINTER)
-        throw logic_error("arrow requires a pointer to class");
-      object = type_value(object->child);
-    }
-    vector<Binding*> candidates = MemberBindings(object, node->children[1]->value);
-    if(candidates.empty()) throw logic_error("unknown member");
-    result.candidates = candidates;
-    Binding* selected = 0;
-    for(size_t i = 0; i < candidates.size(); ++i) {
-      if(candidates[i]->kind != BIND_FUNCTION) { selected = candidates[i]; break; }
-      if(!selected) selected = candidates[i];
-    }
-    result.binding = selected;
-    result.type = selected ? PA12AdjustedType(selected->type) : Fundamental("int");
-    if(type_is_reference(result.type)) result.type = result.type->child;
-    if(selected && selected->kind != BIND_FUNCTION && object && object->is_const &&
-       !selected->is_static && selected->member_owner &&
-       selected->member_index != static_cast<size_t>(-1) &&
-       selected->member_index < selected->member_owner->class_members.size() &&
-       !selected->member_owner->class_members[selected->member_index].is_mutable)
-      result.type = CloneWithCv(result.type, true, result.type->is_volatile);
-    result.category = "lvalue";
-    return result;
-  }
-
 TypePtr PA14Lowerer::IntegralPromotion(const TypePtr& raw) const
 {
     TypePtr type = type_value(raw);
@@ -1215,59 +1122,25 @@ bool PA14Lowerer::PointerCompatible(const TypePtr& source, const TypePtr& target
       return false;
     return PA12SameType(source->child, target->child, true) ||
       (target->child && target->child->kind == TYPE_FUNDAMENTAL &&
-       target->child->name == "void");
+      target->child->name == "void");
   }
 
-TypePtr PA14Lowerer::CommonType(const TypePtr& left, const TypePtr& right,
-                    const string& op) const
+bool PA14Lowerer::IsDerivedFrom(const TypePtr& raw_derived, const TypePtr& raw_base) const
 {
-    TypePtr l = type_value(left);
-    TypePtr r = type_value(right);
-    if(!l || !r) return Fundamental("int");
-    if(PA12SameType(l, r, true)) {
-      if(l->kind == TYPE_FUNDAMENTAL && r->kind == TYPE_FUNDAMENTAL &&
-         is_arithmetic_type(l) && is_arithmetic_type(r) &&
-         !is_floating_type(l) && !is_floating_type(r)) {
-        TypePtr promoted = IntegralPromotion(l);
-        TypePtr right_promoted = IntegralPromotion(r);
-        if(promoted && right_promoted && promoted->name == right_promoted->name)
-          return promoted;
-      }
-      if(l->kind == TYPE_POINTER && (l->child->is_const || r->child->is_const)) {
-        TypePtr result(new Type(*l));
-        result->child = CloneWithCv(l->child, l->child->is_const || r->child->is_const,
-          l->child->is_volatile || r->child->is_volatile);
-        return result;
-      }
-      if(l->is_const || l->is_volatile) {
-        TypePtr result(new Type(*l));
-        result->is_const = false;
-        result->is_volatile = false;
-        return result;
-      }
-      return l;
-    }
-    if(l->kind == TYPE_POINTER && r->kind == TYPE_POINTER) {
-      if(PointerCompatible(l, r)) return r;
-      if(PointerCompatible(r, l)) return l;
-    }
-    if(l->kind == TYPE_POINTER && r->kind == TYPE_FUNDAMENTAL && r->name == "nullptr_t") return l;
-    if(r->kind == TYPE_POINTER && l->kind == TYPE_FUNDAMENTAL && l->name == "nullptr_t") return r;
-    if(is_arithmetic_type(l) && is_arithmetic_type(r)) {
-      if(l->name == "long double" || r->name == "long double") return Fundamental("long double");
-      if(l->name == "double" || r->name == "double") return Fundamental("double");
-      if(l->name == "float" || r->name == "float") return Fundamental("float");
-      TypePtr lp = IntegralPromotion(l), rp = IntegralPromotion(r);
-      if(lp && rp && lp->name == "unsigned int" && rp->name == "int") return lp;
-      if(lp && rp && rp->name == "unsigned int" && lp->name == "int") return rp;
-      if(lp && rp && (lp->name == "long int" || rp->name == "long int" ||
-          lp->name == "unsigned long int" || rp->name == "unsigned long int"))
-        return Fundamental((lp->name.find("unsigned") != string::npos ||
-          rp->name.find("unsigned") != string::npos) ? "unsigned long int" : "long int");
-      return Fundamental("int");
-    }
-    (void)op;
-    return l;
+    return BaseDistance(raw_derived, raw_base) >= 1;
+  }
+
+int PA14Lowerer::BaseDistance(const TypePtr& raw_derived, const TypePtr& raw_base) const
+{
+    TypePtr derived = type_value(raw_derived);
+    TypePtr base = type_value(raw_base);
+    if(!derived || !base || derived->kind != TYPE_CLASS || base->kind != TYPE_CLASS)
+      return -1;
+    int distance = 1;
+    for(TypePtr current = type_value(derived->direct_base); current;
+        current = type_value(current->direct_base), ++distance)
+      if(PA12SameType(current, base, true)) return distance;
+    return -1;
   }
 
 int PA14Lowerer::ConversionRank(const ExprInfo& source, const TypePtr& target) const
@@ -1282,13 +1155,17 @@ int PA14Lowerer::ConversionRank(const ExprInfo& source, const TypePtr& target) c
           if(!target_value->is_const && source_value->is_const) return -1;
           if(PA12SameType(source_value, target_value, true)) return
             PA12SameType(source_value, target_value, false) ? 0 : 1;
+          if(IsDerivedFrom(source_value, target_value))
+            return BaseDistance(source_value, target_value);
           if(is_arithmetic_type(source_value) && is_arithmetic_type(target_value) &&
              target_value->is_const) return 2;
           return -1;
         }
         if(target_value->is_const &&
            (PA12SameType(source_value, target_value, true) ||
-            (is_arithmetic_type(source_value) && is_arithmetic_type(target_value)))) return 2;
+            (is_arithmetic_type(source_value) && is_arithmetic_type(target_value)) ||
+            (source_value->kind == TYPE_POINTER && target_value->kind == TYPE_POINTER &&
+             IsDerivedFrom(source_value->child, target_value->child)))) return 2;
         return -1;
       }
       if(source.category == "lvalue") return -1;
@@ -1305,7 +1182,17 @@ int PA14Lowerer::ConversionRank(const ExprInfo& source, const TypePtr& target) c
          PA12SameType(source_value, target_value->child, true)) return 0;
       if(source_value->kind == TYPE_POINTER) {
         if(PA12SameType(source_value, target_value, false)) return 0;
+        if(source_value->child && target_value->child &&
+           source_value->child->kind == TYPE_POINTER &&
+           target_value->child->kind == TYPE_POINTER &&
+           !PA12SameType(source_value->child, target_value->child, false) &&
+           PA12SameType(source_value->child, target_value->child, true)) return -1;
         if(PA12SameType(source_value, target_value, true)) return 1;
+        if(source_value->child && target_value->child &&
+           IsDerivedFrom(source_value->child, target_value->child))
+          return BaseDistance(source_value->child, target_value->child);
+        if(target_value->child && target_value->child->kind == TYPE_FUNDAMENTAL &&
+           target_value->child->name == "void") return 2;
       }
       return -1;
     }
@@ -1350,19 +1237,21 @@ PA14Lowerer::FunctionRecord* PA14Lowerer::EnsureAggregateConstructor(const TypeP
     vector<Binding*> existing_constructors = MemberBindings(owner, LastComponent(owner->name));
     for(size_t i = 0; i < existing_constructors.size(); ++i) {
       FunctionRecord* existing = RecordForBinding(existing_constructors[i]);
-      if(existing && existing->constructor && !existing->implicit_constructor) return 0;
+      if(existing && existing->constructor && !existing->implicit_constructor &&
+         !existing->defaulted && !existing->deleted) return 0;
     }
     vector<TypePtr> member_parameters;
     vector<string> member_names;
     for(size_t i = 0; i < owner->class_members.size(); ++i) {
       const ClassMemberInfo& member = owner->class_members[i];
       if(member.is_static || member.name.empty() || !member.type) continue;
+      if(member.initializer) return 0;
       member_parameters.push_back(member.type);
       member_names.push_back(member.name);
     }
     if(member_parameters.empty()) return 0;
     const string name = LastComponent(owner->name);
-    const string qname = owner->name + "::" + name;
+    const string qname = TypeQualifiedName(owner) + "::" + name;
     TypePtr source = FunctionOf(member_parameters, false, Fundamental("void"), false);
     const string key = function_key(qname, source);
     map<string, FunctionRecord*>::const_iterator found = function_by_key_.find(key);

@@ -38,7 +38,7 @@ PA14Lowerer::Value PA14Lowerer::ValueWithNullptr() const
 
 bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string& address,
                                     const vector<CPPGMAstNodePtr>& raw_arguments,
-                                    Scope* scope)
+                                    Scope* scope, bool allow_explicit)
 {
     TypePtr object_type = type_value(raw_object_type);
     if(!object_type || object_type->kind != TYPE_CLASS) return false;
@@ -58,6 +58,8 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
         continue;
       FunctionRecord* record = RecordForBinding(binding);
       if(!record || !record->constructor) continue;
+      if(record->deleted) continue;
+      if(!allow_explicit && record->explicit_constructor) continue;
       if(record->implicit_constructor && !raw_arguments.empty()) continue;
       TypePtr function = function_target_type(binding->type);
       if(!function) continue;
@@ -91,15 +93,39 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
       }
     }
     if(!best_binding) {
+      bool has_nonstatic_data = false;
+      for(size_t i = 0; i < object_type->class_members.size(); ++i)
+        if(!object_type->class_members[i].is_static &&
+           !object_type->class_members[i].name.empty()) {
+          has_nonstatic_data = true;
+          break;
+        }
+      // An empty class with no user-declared constructor is default
+      // constructible without an emitted action.  This matters for a
+      // temporary functor such as F()(arg): its storage only needs an
+      // address for the hidden operator() object.
+      if(raw_arguments.empty() && !has_nonstatic_data && candidates.empty())
+        return true;
+      bool aggregate_candidate = false;
       for(size_t i = 0; i < candidates.size(); ++i)
         if(candidates[i]->is_member && !candidates[i]->is_static &&
            candidates[i]->kind == BIND_FUNCTION && RecordForBinding(candidates[i]) &&
            RecordForBinding(candidates[i])->constructor &&
-           !(RecordForBinding(candidates[i])->implicit_constructor && !raw_arguments.empty()))
-          throw logic_error("no viable constructor");
+           !(RecordForBinding(candidates[i])->implicit_constructor && !raw_arguments.empty()) &&
+           !RecordForBinding(candidates[i])->deleted) {
+          if(!allow_explicit && RecordForBinding(candidates[i])->explicit_constructor) continue;
+          if(RecordForBinding(candidates[i])->aggregate_constructor) aggregate_candidate = true;
+          else throw logic_error("no viable constructor");
+        }
+      if(aggregate_candidate) return false;
       return false;
     }
     FunctionRecord* record = RecordForBinding(best_binding);
+    // The synthesized aggregate candidate is only a lookup aid.  Aggregate
+    // initialization must be lowered at the object storage so that it does
+    // not manufacture a callable constructor body for a class whose only
+    // user-declared constructor is defaulted or deleted.
+    if(record && record->aggregate_constructor) return false;
     if(record) record->needed = true;
     vector<CPPGMAstNodePtr> arguments = raw_arguments;
     if(record) {
@@ -155,7 +181,7 @@ bool PA14Lowerer::EmitDestructorAt(const TypePtr& raw_object_type, const string&
 bool PA14Lowerer::EmitObjectConstructor(VariablePlan* variable,
                                         const TypePtr& raw_object_type,
                                         const vector<CPPGMAstNodePtr>& raw_arguments,
-                                        Scope* scope)
+                                        Scope* scope, bool allow_explicit)
 {
     if(!variable) return false;
     TypePtr object_type = type_value(raw_object_type);
@@ -179,7 +205,8 @@ bool PA14Lowerer::EmitObjectConstructor(VariablePlan* variable,
       address = EmitAddress(CPPGMAstNodePtr(new CPPGMAstNode(
         "id-expression", variable->source_name)), scope);
     }
-    return EmitConstructorAt(raw_object_type, address, raw_arguments, scope);
+    return EmitConstructorAt(raw_object_type, address, raw_arguments, scope,
+      allow_explicit);
   }
 
 void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* scope)
@@ -189,7 +216,27 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
     CPPGMAstNodePtr this_node(new CPPGMAstNode("keyword-literal", "KW_THIS:this"));
     set<string> initialized_members;
     TypePtr base = type_value(owner->direct_base);
-    if(base) {
+    bool explicitly_initialized_base = false;
+    if(base && function.special_initializer) {
+      for(size_t i = 0; i < function.special_initializer->children.size(); ++i) {
+        CPPGMAstNodePtr initializer = function.special_initializer->children[i];
+        if(!initializer || initializer->kind != "mem-initializer") continue;
+        CPPGMAstNodePtr name_node = ChildOfKind(initializer, "mem-initializer-id");
+        bool matches_base = name_node &&
+          (LastComponent(name_node->value) == LastComponent(base->name) ||
+           name_node->value == base->name);
+        if(name_node && !matches_base) {
+          Analyzer::PathTarget alias = analyzer_.ResolvePath(scope, LastComponent(name_node->value));
+          TypePtr alias_type = alias.binding ? type_value(alias.binding->type) : TypePtr();
+          matches_base = alias_type && alias_type == base;
+        }
+        if(matches_base) {
+          explicitly_initialized_base = true;
+          break;
+        }
+      }
+    }
+    if(base && !explicitly_initialized_base) {
       const string this_address = EmitValue(this_node, scope).operand;
       const string base_address = AdjustBaseAddress(this_address, owner, base);
       (void)EmitConstructorAt(base, base_address, vector<CPPGMAstNodePtr>(), scope);
@@ -206,6 +253,11 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
         vector<CPPGMAstNodePtr>();
       TypePtr named_base;
       if(base && (name == LastComponent(base->name) || name == base->name)) named_base = base;
+      if(base && !named_base) {
+        Analyzer::PathTarget alias = analyzer_.ResolvePath(scope, name);
+        TypePtr alias_type = alias.binding ? type_value(alias.binding->type) : TypePtr();
+        if(alias_type && alias_type == base) named_base = base;
+      }
       if(named_base) {
         const string this_address = EmitValue(this_node, scope).operand;
         const string base_address = AdjustBaseAddress(this_address, owner, named_base);
@@ -225,8 +277,10 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
       TypePtr field_type = type_value(field->type);
       Value value;
       string reference_source;
-      if(!(field_type && field_type->kind == TYPE_CLASS && !arguments.empty()) &&
-         !arguments.empty()) {
+      if(!arguments.empty() && type_is_reference(field->type)) {
+        reference_source = EmitReferenceArgument(arguments[0], scope, field->type);
+      } else if(!(field_type && field_type->kind == TYPE_CLASS && !arguments.empty()) &&
+                !arguments.empty()) {
         if(arguments.size() != 1) throw logic_error("member mem-initializer has too many arguments");
         if(type_is_reference(field->type))
           reference_source = EmitReferenceArgument(arguments[0], scope, field->type);
@@ -285,8 +339,17 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
       }
       if(field_type && field_type->kind == TYPE_CLASS && arguments.empty())
         emit_store(Fundamental("long int"), "0", address);
-      if(field_type && field_type->kind == TYPE_CLASS &&
-         EmitConstructorAt(field_type, address, arguments, scope)) continue;
+      if(field_type && field_type->kind == TYPE_CLASS && !arguments.empty()) {
+        if(EmitConstructorAt(field_type, address, arguments, scope)) continue;
+        if(argument_node && argument_node->kind == "braced-init-list") {
+          CPPGMAstNodePtr aggregate(new CPPGMAstNode("braced-init-list"));
+          aggregate->children = arguments;
+          EmitAggregateAt(address, field_type, aggregate, scope);
+          continue;
+        }
+      }
+      if(field_type && field_type->kind == TYPE_CLASS && arguments.empty())
+        if(EmitConstructorAt(field_type, address, arguments, scope)) continue;
       if(arguments.empty()) {
         if(!field_type || field_type->kind != TYPE_CLASS)
           emit_store(field->type, "0", address);
@@ -499,19 +562,75 @@ void PA14Lowerer::EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr&
     }
     TypePtr aggregate_type = type_value(variable->type);
     if(aggregate_type && aggregate_type->kind == TYPE_CLASS) {
+      FunctionRecord* aggregate_candidate = EnsureAggregateConstructor(aggregate_type);
       vector<CPPGMAstNodePtr> constructor_arguments;
       if(expression && expression->kind == "braced-init-list")
         constructor_arguments = expression->children;
       else if(!initializer->children.empty() && initializer->children[0] &&
               initializer->children[0]->kind == "paren-initializer")
         constructor_arguments = initializer->children[0]->children;
-      if(EmitObjectConstructor(variable, aggregate_type, constructor_arguments, scope)) return;
-      if(expression && expression->kind == "braced-init-list") {
+      else if(expression && expression->kind == "call-expression" &&
+              !expression->children.empty() && expression->children[0] &&
+              expression->children[0]->kind == "id-expression" &&
+              LastComponent(aggregate_type->name) == expression->children[0]->value) {
+        CPPGMAstNodePtr arguments = expression->children.size() > 1 ?
+          expression->children[1] : CPPGMAstNodePtr();
+        if(arguments) constructor_arguments = arguments->children;
+      } else if(expression) constructor_arguments.push_back(expression);
+      const bool allow_explicit = !initializer ||
+        initializer->initializer_form != AST_INITIALIZER_COPY;
+      if(EmitObjectConstructor(variable, aggregate_type, constructor_arguments, scope,
+                               allow_explicit)) return;
+      if(aggregate_candidate && expression && expression->kind == "braced-init-list") {
         if(expression->children.empty()) return;
         CPPGMAstNodePtr object_node(new CPPGMAstNode("id-expression", variable->source_name));
         EmitAggregateAt(string(), aggregate_type, expression, scope, object_node);
         return;
       }
+      if(expression && expression->kind == "braced-init-list" &&
+         !expression->children.empty())
+        throw logic_error("class is not an aggregate and has no viable constructor");
+      if(expression)
+        throw logic_error("class has no viable constructor for initializer");
+    }
+    TypePtr scalar_target = type_value(variable->type);
+    if(expression && expression->kind != "new-expression" && scalar_target &&
+       scalar_target->kind != TYPE_CLASS &&
+       scalar_target->kind != TYPE_ARRAY && !type_is_reference(variable->type)) {
+      ExprInfo source_info = Infer(expression, scope, variable->type);
+      if(ConversionRank(source_info, variable->type) < 0)
+        throw logic_error("invalid initializer conversion");
+    }
+    if(initializer->initializer_form == AST_INITIALIZER_DIRECT_LIST && expression &&
+       expression->kind == "braced-init-list") {
+      if(expression->children.size() != 1)
+        throw logic_error("scalar list-initializer has multiple elements");
+      const CPPGMAstNodePtr element = expression->children[0];
+      Value source = EmitValue(element, scope, type_value(variable->type));
+      TypePtr source_type = type_value(source.type);
+      TypePtr target_type = type_value(variable->type);
+      if(source_type && target_type && is_floating_type(source_type) &&
+         is_integral_type(target_type))
+        throw logic_error("narrowing conversion in list-initialization");
+      if(source_type && target_type && is_integral_type(source_type) &&
+         is_integral_type(target_type) && type_size(source_type) > type_size(target_type)) {
+        const unsigned int bits = static_cast<unsigned int>(type_size(target_type) * 8);
+        bool fits = source.known_constant;
+        if(fits && bits < 64) {
+          const long long minimum = is_unsigned_type(target_type) ? 0 :
+            -(1LL << (bits - 1));
+          const unsigned long long maximum_unsigned = is_unsigned_type(target_type) ?
+            ((1ULL << bits) - 1ULL) : static_cast<unsigned long long>((1LL << (bits - 1)) - 1);
+          if(is_unsigned_type(source_type))
+            fits = source.constant >= 0 &&
+              static_cast<unsigned long long>(source.constant) <= maximum_unsigned;
+          else
+            fits = source.constant >= minimum &&
+              static_cast<unsigned long long>(source.constant) <= maximum_unsigned;
+        }
+        if(!fits) throw logic_error("narrowing conversion in list-initialization");
+      }
+      expression = element;
     }
     if(!expression) {
       TypePtr object_type = type_value(variable->type);
@@ -1078,8 +1197,28 @@ string PA14Lowerer::EmitFunction(FunctionRecord& function)
       if(type_is_reference(function.type->parameters[i])) header << " [pass=reference]";
     }
     header << ") -> " << low_type(function.type->child);
-    if(entry) header << " [role=entry]";
-    else if(function.variadic) header << " [arity=variadic]";
+    vector<string> metadata;
+    if(entry) {
+      metadata.push_back("role=entry");
+      metadata.push_back("binding=strong");
+      metadata.push_back("keep_alias=yes");
+    } else {
+      if(function.variadic) metadata.push_back("arity=variadic");
+      if(function.effects.empty() == false) metadata.push_back("effects=" + function.effects);
+      if(function.unwind_no) metadata.push_back("unwind=no");
+      if(function.noreturn) metadata.push_back("return=noreturn");
+      metadata.push_back("binding=strong");
+      const string object = function.object_name.empty() ? function.symbol : function.object_name;
+      if(!object.empty()) metadata.push_back("object=" + object);
+    }
+    if(!metadata.empty()) {
+      header << " [";
+      for(size_t i = 0; i < metadata.size(); ++i) {
+        if(i != 0) header << ", ";
+        header << metadata[i];
+      }
+      header << "]";
+    }
     header << " {";
 
     AddBlock("entry");
@@ -1306,156 +1445,4 @@ void PA14Lowerer::EmitDynamicInitializers(vector<string>& entries)
       state_ = 0;
     }
   }
-
-PA14Lowerer::ExprInfo PA14Lowerer::InferCall(const CPPGMAstNodePtr& node, Scope* scope)
-{
-    ExprInfo result;
-    CallChoice choice = ChooseCall(node, scope);
-    result.type = choice.function->child;
-    if(result.type && result.type->kind == TYPE_LVALUE_REFERENCE) result.category = "lvalue";
-    else if(result.type && result.type->kind == TYPE_RVALUE_REFERENCE) result.category = "xvalue";
-    else result.category = "prvalue";
-    result.binding = choice.binding;
-    return result;
-  }
-
-PA14Lowerer::ExprInfo PA14Lowerer::InferUnary(const CPPGMAstNodePtr& node, Scope* scope)
-{
-    ExprInfo result;
-    const string op = PA12Operator(node->value);
-    ExprInfo child = Infer(node->children[0], scope);
-    TypePtr value = expression_value_type(child);
-    if(op == "&") result.type = PointerTo(value);
-    else if(op == "*") {
-      if(!value || (value->kind != TYPE_POINTER && value->kind != TYPE_ARRAY))
-        throw logic_error("cannot dereference expression");
-      result.type = value->child;
-      result.category = "lvalue";
-    } else if(op == "!") result.type = Fundamental("bool");
-    else if(op == "++" || op == "--") result.type = value;
-    else if(op == "+" && value && value->kind == TYPE_ARRAY)
-      result.type = PointerTo(value->child);
-    else result.type = IntegralPromotion(value);
-    if(op != "*") result.category = op == "++" || op == "--" ? "lvalue" : "prvalue";
-    return result;
-  }
-
-PA14Lowerer::ExprInfo PA14Lowerer::InferBinary(const CPPGMAstNodePtr& node, Scope* scope)
-{
-    ExprInfo result;
-    const string op = PA12Operator(node->value);
-    ExprInfo left = Infer(node->children[0], scope);
-    ExprInfo right = Infer(node->children[1], scope);
-    if(op == ",") {
-      result.type = right.type;
-      result.category = right.category;
-      return result;
-    }
-    if(op == "&&" || op == "||" || op == "and" || op == "or" ||
-       op == "==" || op == "!=" || op == "not_eq" || op == "<" ||
-       op == ">" || op == "<=" || op == ">=") result.type = Fundamental("bool");
-    else if(op == "-" && expression_value_type(left) && expression_value_type(right) &&
-            expression_value_type(left)->kind == TYPE_POINTER &&
-            expression_value_type(right)->kind == TYPE_POINTER)
-      result.type = Fundamental("long int");
-    else if((op == "+" || op == "-") && expression_value_type(left) &&
-            expression_value_type(left)->kind == TYPE_ARRAY)
-      result.type = PointerTo(expression_value_type(left)->child);
-    else if((op == "+" || op == "-") && expression_value_type(left) &&
-            expression_value_type(left)->kind == TYPE_POINTER)
-      result.type = expression_value_type(left);
-    else if(op == "+" && expression_value_type(right) &&
-            (expression_value_type(right)->kind == TYPE_POINTER ||
-             expression_value_type(right)->kind == TYPE_ARRAY))
-      result.type = expression_value_type(right)->kind == TYPE_ARRAY ?
-        PointerTo(expression_value_type(right)->child) : expression_value_type(right);
-    else result.type = CommonType(left.type, right.type, op);
-    result.category = "prvalue";
-    return result;
-  }
-
-PA14Lowerer::ExprInfo PA14Lowerer::Infer(const CPPGMAstNodePtr& node, Scope* scope,
-                const TypePtr& expected)
-{
-    if(!node) throw logic_error("missing expression during LowIR lowering");
-    if(node->kind == "literal") return InferLiteral(node, expected);
-    if(node->kind == "keyword-literal") return InferKeyword(node);
-    if(node->kind == "id-expression") return InferIdentifier(node, scope, expected);
-    if(node->kind == "parenthesized-expression")
-      return node->children.empty() ? ExprInfo() : Infer(node->children[0], scope, expected);
-    if(node->kind == "call-expression") return InferCall(node, scope);
-    if(node->kind == "unary-expression") return InferUnary(node, scope);
-    if(node->kind == "postfix-expression") {
-      ExprInfo result;
-      ExprInfo child = Infer(node->children[0], scope);
-      result.type = expression_value_type(child);
-      result.category = "prvalue";
-      return result;
-    }
-    if(node->kind == "binary-expression") return InferBinary(node, scope);
-    if(node->kind == "assignment-expression") {
-      ExprInfo left = Infer(node->children[0], scope);
-      if(left.category != "lvalue") throw logic_error("assignment requires lvalue");
-      ExprInfo result;
-      result.type = expression_value_type(left);
-      result.category = "lvalue";
-      return result;
-    }
-    if(node->kind == "conditional-expression") {
-      ExprInfo result;
-      ExprInfo when_true = Infer(node->children[1], scope);
-      ExprInfo when_false = Infer(node->children[2], scope);
-      if(when_true.null_pointer_constant && expression_value_type(when_false) &&
-         expression_value_type(when_false)->kind == TYPE_POINTER) result.type = expression_value_type(when_false);
-      else if(when_false.null_pointer_constant && expression_value_type(when_true) &&
-              expression_value_type(when_true)->kind == TYPE_POINTER) result.type = expression_value_type(when_true);
-      else result.type = CommonType(when_true.type, when_false.type);
-      result.category = PA12SameType(when_true.type, when_false.type, false) &&
-        when_true.category == "lvalue" && when_false.category == "lvalue" ? "lvalue" : "prvalue";
-      return result;
-    }
-    if(node->kind == "subscript-expression") {
-      ExprInfo base = Infer(node->children[0], scope);
-      TypePtr value = expression_value_type(base);
-      if((!value || (value->kind != TYPE_ARRAY && value->kind != TYPE_POINTER)) &&
-         node->children.size() > 1) {
-        ExprInfo index = Infer(node->children[1], scope);
-        value = expression_value_type(index);
-      }
-      if(!value || (value->kind != TYPE_ARRAY && value->kind != TYPE_POINTER))
-        throw logic_error("subscript requires array or pointer");
-      ExprInfo result;
-      result.type = value->child;
-      result.category = "lvalue";
-      return result;
-    }
-    if(node->kind == "member-expression") return InferMember(node, scope);
-    if(node->kind == "cast-expression") {
-      ExprInfo result;
-      result.type = analyzer_.TypeFromTypeId(node->children[0], scope);
-      result.category = type_is_reference(result.type) ?
-        result.type->kind == TYPE_LVALUE_REFERENCE ? "lvalue" : "xvalue" : "prvalue";
-      return result;
-    }
-    if(node->kind == "sizeof-expression" || node->kind == "type-trait-expression") {
-      ExprInfo result;
-      result.type = Fundamental("long int");
-      result.known_constant = true;
-      const CPPGMAstNodePtr child = node->children.empty() ? CPPGMAstNodePtr() : node->children[0];
-      TypePtr type;
-      if(child && child->kind == "type-id") type = analyzer_.TypeFromTypeId(child, scope);
-      else if(child) type = Infer(child, scope).type;
-      result.constant = node->kind == "type-trait-expression" ?
-        static_cast<long long>(type_alignment(type)) : static_cast<long long>(type_size(type));
-      return result;
-    }
-    if(node->kind == "braced-init-list") {
-      ExprInfo result;
-      result.type = expected ? expected : Fundamental("int");
-      result.category = "lvalue";
-      return result;
-    }
-    throw logic_error("unsupported expression in LowIR lowering: " + node->kind);
-  }
-
 } // namespace cppgm_pa14_lowering

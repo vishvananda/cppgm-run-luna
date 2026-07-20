@@ -12,10 +12,19 @@
 struct CPPGMAstNode;
 typedef std::shared_ptr<CPPGMAstNode> CPPGMAstNodePtr;
 
+enum CPPGMAstInitializerForm
+{
+	AST_INITIALIZER_NONE,
+	AST_INITIALIZER_COPY,
+	AST_INITIALIZER_DIRECT_LIST,
+	AST_INITIALIZER_DIRECT_PAREN
+};
+
 struct CPPGMAstNode
 {
 	std::string kind;
 	std::string value;
+	CPPGMAstInitializerForm initializer_form;
 	std::vector<CPPGMAstNodePtr> children;
 
 	CPPGMAstNode(const std::string& kind = std::string(),

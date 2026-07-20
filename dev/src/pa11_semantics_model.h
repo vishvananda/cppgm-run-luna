@@ -72,6 +72,7 @@ struct Type
 	vector<TypePtr> parameters;
 	bool variadic;
 	bool function_const;
+	bool function_volatile;
 	TypePtr member_owner;
 	Scope* owned_scope;
 	TypePtr underlying;
@@ -83,6 +84,8 @@ struct Type
 	bool layout_complete;
 	bool layout_in_progress;
 	bool is_union;
+	TypePtr enclosing_type;
+	vector<string> friend_names;
 
 	Type(TypeKind type_kind = TYPE_FUNDAMENTAL,
 		const string& type_name = string());
@@ -174,7 +177,8 @@ TypePtr PointerTo(const TypePtr& pointee);
 TypePtr ReferenceTo(TypeKind reference_kind, const TypePtr& referred);
 TypePtr ArrayOf(long long bound, const TypePtr& element);
 TypePtr FunctionOf(const vector<TypePtr>& parameters, bool variadic,
-	const TypePtr& result_type, bool function_const = false);
+	const TypePtr& result_type, bool function_const = false,
+	bool function_volatile = false);
 TypePtr MemberPointerTo(const TypePtr& owner, const TypePtr& target);
 string CvPrefix(const TypePtr& type);
 string ScopeKindText(ScopeKind kind);

@@ -235,7 +235,6 @@ void PA14Lowerer::EmitAggregateAt(const string& base, const TypePtr& raw_type,
       EmitAggregateAt(base, type, expression->children[0], scope, refresh_node);
       return;
     }
-    if(refresh_node && base.empty()) (void)EmitAddress(refresh_node, scope);
     if(type->kind == TYPE_ARRAY && expression->kind == "braced-init-list") {
       EmitAggregateArrayAt(base, type, expression, scope);
       return;

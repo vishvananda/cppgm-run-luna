@@ -36,20 +36,39 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
     bool direct = false;
     bool explicit_member_object = false;
     ExprInfo object_info;
-    if(callee_node->kind == "member-expression" && callee_node->children.size() >= 2) {
+    CPPGMAstNodePtr lookup_callee = callee_node;
+    while(lookup_callee && lookup_callee->kind == "parenthesized-expression" &&
+          !lookup_callee->children.empty())
+      lookup_callee = lookup_callee->children[0];
+    if(lookup_callee && lookup_callee->kind == "member-expression" &&
+       lookup_callee->children.size() >= 2) {
       explicit_member_object = true;
-      object_info = Infer(callee_node->children[0], scope);
+      object_info = Infer(lookup_callee->children[0], scope);
       TypePtr object = expression_value_type(object_info);
-      if(PA12Operator(callee_node->value) == "->") {
+      if(PA12Operator(lookup_callee->value) == "->") {
         if(!object || object->kind != TYPE_POINTER) throw logic_error("arrow requires a pointer to class");
         object = type_value(object->child);
       }
-      candidates = MemberBindings(object, callee_node->children[1]->value);
+      candidates = MemberBindings(object, lookup_callee->children[1]->value);
       direct = true;
-    } else if(callee_node->kind == "id-expression") {
-      candidates = Lookup(callee_node->value, scope);
+      bool has_direct_function = false;
+      for(size_t i = 0; i < candidates.size(); ++i)
+        if(candidates[i]->kind == BIND_FUNCTION && function_target_type(candidates[i]->type)) {
+          has_direct_function = true;
+          break;
+        }
+      if(!has_direct_function) {
+        ExprInfo field = Infer(callee_node, scope);
+        TypePtr callable = expression_value_type(field);
+        if(callable && callable->kind == TYPE_CLASS) {
+          return ChooseCall(MakeMemberCall(callee_node, "operator()", argument_nodes), scope);
+        }
+        direct = false;
+      }
+    } else if(lookup_callee && lookup_callee->kind == "id-expression") {
+      candidates = Lookup(lookup_callee->value, scope);
       if(candidates.empty() && state_ && state_->record && state_->record->member_owner)
-        candidates = MemberBindings(state_->record->member_owner, callee_node->value);
+        candidates = MemberBindings(state_->record->member_owner, lookup_callee->value);
       for(size_t i = 0; i < candidates.size(); ++i)
         if(candidates[i]->kind == BIND_FUNCTION && function_target_type(candidates[i]->type)) {
           direct = true;
@@ -61,12 +80,15 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
         Binding* binding = candidates[i];
         TypePtr function = function_target_type(binding->type);
         if(!function) continue;
+        if(!IsAccessible(binding, scope)) continue;
         const bool member = binding->is_member && binding->member_owner &&
           binding->kind == BIND_FUNCTION;
         const bool static_member = member && binding->is_static;
         if(member && !static_member && !explicit_member_object) {
           bool implicit_object = callee_node->kind == "id-expression" &&
-            callee_node->value.find("::") == string::npos;
+            callee_node->value.find("::") == string::npos && state_ &&
+            state_->record && state_->record->member &&
+            !state_->record->static_member;
           if(!implicit_object && state_ && state_->record && state_->record->member_owner) {
             TypePtr current = state_->record->member_owner;
             while(current) {
@@ -95,8 +117,12 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
           }
           if(object && object->kind == TYPE_POINTER) object = type_value(object->child);
           if(object && object->is_const && !function->function_const) viable = false;
-          const int object_rank = object && object->is_const ? 0 :
-            (function->function_const ? 1 : 0);
+          if(object && object->is_volatile && !function->function_volatile) viable = false;
+          const int object_rank =
+            (object && object->is_const && function->function_const ? 0 :
+             (function->function_const ? 1 : 0)) +
+            (object && object->is_volatile && function->function_volatile ? 0 :
+             (function->function_volatile ? 1 : 0));
           worst = max(worst, object_rank);
           total += object_rank;
         }
@@ -112,7 +138,7 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
            (worst == best.worst && total < best.total)) {
           best.binding = binding;
           best.function = function;
-          best.object = explicit_member_object ? callee_node->children[0] :
+          best.object = explicit_member_object ? lookup_callee->children[0] :
             CPPGMAstNodePtr(new CPPGMAstNode("keyword-literal", "KW_THIS:this"));
           best.direct = true;
           best.member = member;
@@ -126,12 +152,17 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
       }
       if(!best.binding) throw logic_error("no viable function");
       FunctionRecord* selected = RecordForBinding(best.binding);
-      if(selected && selected->member) selected->needed = true;
+      if(selected) selected->needed = true;
       return best;
     }
 
     ExprInfo callee = Infer(callee_node, scope);
     best.function = function_target_type(callee.type);
+    if(!best.function) {
+      TypePtr callable = expression_value_type(callee);
+      if(callable && callable->kind == TYPE_CLASS)
+        return ChooseCall(MakeMemberCall(callee_node, "operator()", argument_nodes), scope);
+    }
     if(!best.function) throw logic_error("expression is not callable");
     best.direct = false;
     return best;

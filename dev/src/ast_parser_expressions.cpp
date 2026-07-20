@@ -322,7 +322,9 @@ CPPGMAstNodePtr Parser::ParsePrimaryExpression()
 		const bool cast_type_start = IsFundamental(Peek().text) || IsCv(Peek().text) ||
 			Is("class") || Is("struct") || Is("union") || Is("enum") ||
 			Is("decltype") || Is("typename") ||
-			(Peek().kind == AST_IDENTIFIER && LooksLikeTypeName(Peek()));
+			(Peek().kind == AST_IDENTIFIER &&
+			 value_names_.find(Peek().text) == value_names_.end() &&
+			 LooksLikeTypeName(Peek()));
 		if (cast_type_start)
 		{
 			CPPGMAstNodePtr type = ParseTypeId();

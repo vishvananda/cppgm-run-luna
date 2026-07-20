@@ -386,3 +386,63 @@ member binding and lookup for ordinary/static methods and fields, then cover
 `this`/`.`/`->` calls, access checks, and cv-qualified overload selection.
 Validate with the direct-member and method subset, the full PA15 report,
 through-PA14, and the source audit.
+
+## Turn 34 Checkpoint Scope
+
+This increment targets the member-collection group. Preserve typed class
+ownership, access, static-storage, and cv-qualified function facts for ordinary
+and out-of-class member declarations; merge direct and inherited member lookup
+where required; and lower `this`, dot, and arrow member calls with the correct
+overload set. Validate with the focused member-call/lookup tests, the complete
+PA15 report, all tests through PA14, and the PA15 source audit.
+
+## Turn 34 Checkpoint Result
+
+Completed the overload and callable portion of the member-collection slice.
+Member function declarations now merge by parameter signature, variadicness,
+and function cv-qualifiers while preserving trailing-return replacement of the
+placeholder return type.  Static member calls no longer create an implicit
+`this`, and cv-qualified object overloads, default arguments, return-type
+arity, and static/non-static same-signature cases select the correct typed
+binding.  Member function-pointer fields lower as indirect calls; class
+functors dispatch through `operator()`, and class subscripts dispatch through
+`operator[]` with reference-return lvalues preserved for chained assignment.
+Using-declarations re-expose the selected base binding at the using
+declaration's access while retaining the canonical base owner and layout index.
+
+The focused overload set passed **8 / 8**.  The callable/subscript set passed
+**5 / 6**: the remaining temporary-functor case has the correct callable
+behavior but a LowIR-only shape mismatch because the implicit empty-class
+constructor call is not emitted.  The full required PA15 report is now
+**133 / 200**, up from the turn-start **86 / 200**; through-PA14 remains clean,
+and no tests or reference fixtures were changed.
+
+## Turn 34 Remaining Work Map and Next Checkpoint
+
+The complete current report has **67 failures**, grouped as follows.
+
+- **Aggregate/member initialization and object lifetime LowIR**: `100-default-member-initializer-aggregate-member`, `100-static-member-object-access`, `200-aliased-base-mem-initializer-match`, `200-comma-class-lvalue-reference-init`, `200-global-class-array-enum-trivial-dtor`, `200-in-class-member-initializer`, `200-local-struct-array-init`, `200-member-initializer-aggregate-member`, `200-return-preserves-value`, `200-static-thread-local-member`, `spec/200-aggregate-brace-elision`.
+- **Inheritance, references, access, and member-shape LowIR**: `200-const-subobject-member-call`, `200-derived-pointer-member-init`, `200-derived-pointer-overload-prefers-base-over-void`, `200-friend-intermediate-derived-protected-base-method`, `200-function-reference-return-expression-type`, `200-inherited-injected-class-name-qualified-type`, `200-member-pointer-const-typedef-return`, `200-mutable-member-const-method`, `200-nested-out-of-class-constructor-enclosing-type`, `200-out-of-class-member-default-argument`, `200-pointer-subscript-class-reference-return`, `200-reference-member-conditional-lvalue`, `300-lazy-nested-class-enclosing-alias-lookup`, `spec/200-conditional-derived-base-lvalue-reference`, `spec/200-const-reference-binds-derived-pointer-prvalue`, `spec/200-nested-class-enclosing-access` (status), and `300-reference-member-same-name-as-class` (status).
+- **Operator/ADL and expression lowering LowIR**: `300-compound-assignment-adl-nonmember-after-member-reject`, `300-derived-shift-prefers-free-char-pointer`, `300-discarded-comma-reference-result-no-copy`, `300-enum-class-nonmember-operator-bitand`, `300-enum-operator-adl-selects-matching-overload`, `300-friend-function-definition-skip`, `300-hidden-friend-definition-adl-call`, `300-hidden-friend-operator-nullptr-compare`, `300-member-binary-operator-eq`, `300-member-binary-operator-ne-wrapper`, `300-member-operator-bang-out-of-class`, `300-member-prefix-decrement`, `300-operator-nullptr-t-from-zero`, `300-overloaded-unary-deref-base-ref-return`, `300-prvalue-derived-base-friend-operator`, `300-stream-shift-selection-chain`, `300-synthesized-array-member-lifecycle`, `spec/300-logical-operator-overload`, `spec/300-operator-lookup-ordinary-adl-union`, `spec/300-overloaded-comma-nonviable-falls-back-builtin`.
+- **Operator/callable/parser status behavior**: `300-adl-associated-namespace-does-not-climb-parents`, `300-basic-operator-overloads`, `300-const-pointer-explicit-destructor-call`, `300-explicit-destructor-call-enclosing-namespace-type`, `300-header-static-class-init`, `300-member-deref-after-prefix-decrement`, `300-member-postfix-increment-operator`, `300-mixed-member-free-shift-stress-chain`, `300-operator-shift-stress-chain`, `300-operator-token-result-typing`, `300-overloaded-arrow-star-operator`, `300-overloaded-deref-user-assignment`, `300-postfix-ref-return-deref-member-call`, `300-scalar-pseudo-destructor-call`, `300-subobject-member-deref-after-prefix-decrement`, `300-user-defined-string-literal-operator`, `500-inheriting-constructors`, `500-inheriting-external-transitive-constructor`.
+- **Constructor/functor shape**: `300-temporary-functor-call` remains a LowIR-only mismatch; its exit status now passes.
+
+The next checkpoint should consolidate ordinary operator lookup and ADL:
+represent member/free operator candidates as typed callable records, select
+the viable member or associated-namespace overload, and lower the resulting
+hidden object/reference arguments.  Constructor/destructor pseudo-calls and
+the remaining aggregate/global LowIR shape mismatches remain queued after that
+operator group.  Validation should use the affected `general/300` operator
+subset, the full PA15 report, through-PA14, and the source audit.
+
+## Turn 34 Validation and Handoff
+
+The parser now stores copy/direct-list/direct-paren initializer form as a
+typed, non-printing AST fact, preserving earlier PA10 output while allowing
+constructor policy to distinguish the forms.  The overload/lookup helpers
+were moved into `pa14_lowering_semantics.cpp` so all audited implementation
+units remain within their size limits.  Final validation passed: PA15 is
+**133 / 200**, through-PA14 is **819 / 819**, `git diff --check` is clean, and
+the PA15 file audit passes with only the three existing header-division
+warnings.  The remaining 67 PA15 failures and the next operator/ADL scope
+above are unchanged; no tests or reference fixtures were modified.

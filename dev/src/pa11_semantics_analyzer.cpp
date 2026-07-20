@@ -28,6 +28,7 @@ bool SameLayoutType(const TypePtr& left, const TypePtr& right)
 	case TYPE_FUNCTION:
 		if (left->variadic != right->variadic ||
 			left->function_const != right->function_const ||
+			left->function_volatile != right->function_volatile ||
 			!SameLayoutType(left->child, right->child) ||
 			left->parameters.size() != right->parameters.size()) return false;
 		for (size_t i = 0; i < left->parameters.size(); ++i)
@@ -211,6 +212,75 @@ void Analyzer::ComputeClassLayout(const CPPGMAstNodePtr& node, const TypePtr& ty
 	(void)class_scope;
 }
 
+namespace {
+
+void RecordUsingAccess(const CPPGMAstNodePtr& node, Scope* class_scope,
+	const string& access)
+{
+	CPPGMAstNodePtr target = ChildOfKind(node, "target");
+	const string name = target ? LastComponent(target->value) : string();
+	if (name.empty()) return;
+	for (size_t i = 0; i < class_scope->bindings.size(); ++i)
+	{
+		Binding& binding = class_scope->bindings[i];
+		if (binding.name != name || !binding.is_member) continue;
+		binding.access = access;
+		binding.declaration = node;
+	}
+}
+
+void RecordBitField(Analyzer& analyzer, const CPPGMAstNodePtr& node,
+	const TypePtr& type, Scope* class_scope, const string& access)
+{
+	if (node->children.size() < 2) return;
+	Analyzer::SpecFacts facts;
+	TypePtr field_type = analyzer.TypeFromSpecSeq(node->children[0], class_scope, &facts);
+	const CPPGMAstNodePtr field = node->children[1];
+	const CPPGMAstNodePtr declarator = field && !field->children.empty() ?
+		field->children[0] : CPPGMAstNodePtr();
+	const string name = FirstIdentifier(declarator);
+	long long width = 0;
+	if (field && field->children.size() > 1)
+	{
+		ConstantValue value = analyzer.Evaluate(field->children[1], class_scope);
+		if (!value.known) throw logic_error("bit-field width is not constant");
+		width = value.value;
+	}
+	if (!name.empty())
+	{
+		Binding* binding = class_scope->local(name);
+		if (!binding) binding = class_scope->add(Binding(BIND_VARIABLE, name, field_type));
+		binding->type = field_type;
+		binding->access = access;
+		binding->declaration = node;
+	}
+	ClassMemberInfo member;
+	member.name = name;
+	member.type = field_type;
+	member.bit_field = true;
+	member.bit_width = width;
+	type->class_members.push_back(member);
+}
+
+void RecordMemberIndices(const TypePtr& type, Scope* class_scope)
+{
+	for (size_t i = 0; i < type->class_members.size(); ++i)
+	{
+		ClassMemberInfo& member = type->class_members[i];
+		if (member.name.empty()) continue;
+		for (size_t j = 0; j < class_scope->bindings.size(); ++j)
+		{
+			Binding& binding = class_scope->bindings[j];
+			if (binding.name != member.name || binding.kind != BIND_VARIABLE) continue;
+			binding.is_member = true;
+			binding.member_owner = type;
+			binding.member_index = i;
+		}
+	}
+}
+
+} // namespace
+
 void Analyzer::RecordClassMembers(const CPPGMAstNodePtr& node, const TypePtr& type,
 	Scope* scope, Scope* class_scope)
 {
@@ -228,39 +298,31 @@ void Analyzer::RecordClassMembers(const CPPGMAstNodePtr& node, const TypePtr& ty
 		}
 		if (child->kind == "base-clause" || child->kind == "class-key" ||
 			child->kind == "attribute" || child->kind == "empty-declaration") continue;
+		if (child->kind == "using-declaration")
+		{
+			RecordUsingAccess(child, class_scope, access);
+			continue;
+		}
 		if (child->kind == "bit-field-declaration")
 		{
-			if (child->children.size() < 2) continue;
-			Analyzer::SpecFacts facts;
-			TypePtr field_type = TypeFromSpecSeq(child->children[0], class_scope, &facts);
-			const CPPGMAstNodePtr field = child->children[1];
-			const CPPGMAstNodePtr declarator = field && !field->children.empty() ? field->children[0] : CPPGMAstNodePtr();
-			const string name = FirstIdentifier(declarator);
-			long long width = 0;
-			if (field && field->children.size() > 1)
-			{
-				ConstantValue value = Evaluate(field->children[1], class_scope);
-				if (!value.known) throw logic_error("bit-field width is not constant");
-				width = value.value;
-			}
-			if (!name.empty())
-			{
-				Binding* binding = class_scope->local(name);
-				if (!binding) binding = class_scope->add(Binding(BIND_VARIABLE, name, field_type));
-				binding->type = field_type;
-				binding->access = access;
-				binding->declaration = child;
-			}
-			ClassMemberInfo member;
-			member.name = name;
-			member.type = field_type;
-			member.bit_field = true;
-			member.bit_width = width;
-			type->class_members.push_back(member);
+			RecordBitField(*this, child, type, class_scope, access);
 			continue;
 		}
 		if (child->kind == "special-member-definition" ||
 			child->kind == "special-member-declaration") continue;
+		if (child->kind == "simple-declaration" && !child->children.empty())
+		{
+			SpecFacts friend_facts;
+			TypePtr friend_type = TypeFromSpecSeq(child->children[0], class_scope,
+				&friend_facts);
+			if (friend_facts.is_friend && friend_type &&
+				friend_type->kind == TYPE_CLASS)
+			{
+				const string friend_name = LastComponent(friend_type->name);
+				if (!friend_name.empty()) type->friend_names.push_back(friend_name);
+				continue;
+			}
+		}
 		if (child->kind != "simple-declaration" && child->kind != "function-definition") continue;
 		if (child->children.empty()) continue;
 		Analyzer::SpecFacts facts;
@@ -274,10 +336,12 @@ void Analyzer::RecordClassMembers(const CPPGMAstNodePtr& node, const TypePtr& ty
 			if (declarator)
 			{
 				const string name = FirstIdentifier(declarator);
+				const TypePtr function_type = BuildDeclarator(declarator, base, class_scope);
 				for (size_t k = 0; k < class_scope->bindings.size(); ++k)
 				{
 					Binding& binding = class_scope->bindings[k];
-					if (binding.name != name || binding.kind != BIND_FUNCTION) continue;
+					if (binding.name != name || binding.kind != BIND_FUNCTION ||
+						TypeText(binding.type, true) != TypeText(function_type, true)) continue;
 					binding.access = access;
 					binding.declaration = child;
 					binding.is_member = true;
@@ -294,15 +358,32 @@ void Analyzer::RecordClassMembers(const CPPGMAstNodePtr& node, const TypePtr& ty
 			const CPPGMAstNodePtr declarator = item->children[0];
 			const string name = FirstIdentifier(declarator);
 			TypePtr field_type = BuildDeclarator(declarator, base, class_scope);
-			Binding* binding = class_scope->local(name);
-			if (binding)
+			if (facts.is_friend)
 			{
-				binding->type = field_type;
-				binding->access = access;
-				binding->declaration = child;
-				binding->is_member = true;
-				binding->is_static = facts.is_static;
-				binding->member_owner = type;
+				if (!name.empty()) type->friend_names.push_back(name);
+				for (size_t k = 0; k < class_scope->bindings.size(); ++k)
+				{
+					Binding& binding = class_scope->bindings[k];
+					if (binding.name != name || binding.kind != BIND_FUNCTION ||
+						TypeText(binding.type, true) != TypeText(field_type, true)) continue;
+					binding.is_member = false;
+					binding.is_static = false;
+					binding.member_owner.reset();
+					binding.access.clear();
+				}
+				continue;
+			}
+			for (size_t k = 0; k < class_scope->bindings.size(); ++k)
+			{
+				Binding& binding = class_scope->bindings[k];
+				if (binding.name != name ||
+					TypeText(binding.type, true) != TypeText(field_type, true)) continue;
+				binding.type = field_type;
+				binding.access = access;
+				binding.declaration = child;
+				binding.is_member = true;
+				binding.is_static = facts.is_static;
+				binding.member_owner = type;
 			}
 			if (facts.is_typedef || field_type->kind == TYPE_FUNCTION || name.empty()) continue;
 			ClassMemberInfo member;
@@ -314,19 +395,7 @@ void Analyzer::RecordClassMembers(const CPPGMAstNodePtr& node, const TypePtr& ty
 			type->class_members.push_back(member);
 		}
 	}
-	for (size_t i = 0; i < type->class_members.size(); ++i)
-	{
-		ClassMemberInfo& member = type->class_members[i];
-		if (member.name.empty()) continue;
-		for (size_t j = 0; j < class_scope->bindings.size(); ++j)
-		{
-			Binding& binding = class_scope->bindings[j];
-			if (binding.name != member.name || binding.kind != BIND_VARIABLE) continue;
-			binding.is_member = true;
-			binding.member_owner = type;
-			binding.member_index = i;
-		}
-	}
+	RecordMemberIndices(type, class_scope);
 	(void)scope;
 }
 
@@ -361,8 +430,20 @@ TypePtr Analyzer::ProcessClass(const CPPGMAstNodePtr& node, Scope* scope)
 				}
 		return type;
 	}
+	const bool qualified_definition = raw_name.find("::") != string::npos;
+	Scope* owner = scope;
+	if (qualified_definition)
+	{
+		const size_t separator = raw_name.rfind("::");
+		PathTarget prefix = ResolvePath(scope, raw_name.substr(0, separator));
+		owner = prefix.binding ? ScopeForType(prefix.binding->type) : prefix.scope;
+		if (!owner) throw logic_error("unknown class owner");
+	}
 	TypePtr type;
-	Binding* existing = scope->local(name);
+	Binding* existing = owner->local(name);
+	if (qualified_definition && (!existing || existing->kind != BIND_TYPE ||
+		!existing->type || existing->type->kind != TYPE_CLASS))
+		throw logic_error("qualified class has no declaration");
 	if (existing && existing->kind == BIND_TYPE && existing->type &&
 		existing->type->kind == TYPE_CLASS)
 		type = existing->type;
@@ -370,14 +451,29 @@ TypePtr Analyzer::ProcessClass(const CPPGMAstNodePtr& node, Scope* scope)
 	{
 		type.reset(new Type(TYPE_CLASS, name));
 		type->tag = tag;
-		if (!scope->qualified_prefix.empty()) type->name = scope->qualified_prefix + "::" + name;
-		AddTypeBinding(scope, name, type);
+		if (!owner->qualified_prefix.empty()) type->name = owner->qualified_prefix + "::" + name;
+		AddTypeBinding(owner, name, type);
 	}
 	type->tag = tag;
 	type->complete = true;
 	type->layout_complete = false;
 	type->direct_base.reset();
-	Scope* class_scope = ClassScope(type, scope, name);
+	Scope* class_scope = ClassScope(type, owner, name);
+	for (size_t i = 0; i < node->children.size(); ++i)
+	{
+		const CPPGMAstNodePtr child = node->children[i];
+		if (!child || child->kind != "base-clause") continue;
+		for (size_t j = 0; j < child->children.size(); ++j)
+		{
+			const CPPGMAstNodePtr base = child->children[j];
+			if (!base) continue;
+			const CPPGMAstNodePtr base_name = ChildOfKind(base, "base-name");
+			if (!base_name) continue;
+			type->direct_base = ResolveType(owner, base_name->value);
+			break;
+		}
+		break;
+	}
 	for (size_t i = 0; i < node->children.size(); ++i)
 		if (node->children[i]->kind != "class-key") Process(node->children[i], class_scope);
 	for (size_t i = 0; i < node->children.size(); ++i)
@@ -390,13 +486,13 @@ TypePtr Analyzer::ProcessClass(const CPPGMAstNodePtr& node, Scope* scope)
 			if (!base) continue;
 			const CPPGMAstNodePtr base_name = ChildOfKind(base, "base-name");
 			if (!base_name) continue;
-			type->direct_base = ResolveType(scope, base_name->value);
+			type->direct_base = ResolveType(owner, base_name->value);
 			break;
 		}
 		break;
 	}
 	type->class_members.clear();
-	RecordClassMembers(node, type, scope, class_scope);
+	RecordClassMembers(node, type, owner, class_scope);
 	ComputeClassLayout(node, type, class_scope);
 	class_types_[node.get()] = type;
 	return type;
@@ -404,9 +500,18 @@ TypePtr Analyzer::ProcessClass(const CPPGMAstNodePtr& node, Scope* scope)
 
 TypePtr Analyzer::ProcessForwardClass(const CPPGMAstNodePtr& node, Scope* scope)
 {
-	const string name = LastComponent(node->value);
+	const string raw_name = node->value;
+	const string name = LastComponent(raw_name);
 	if (name.empty()) throw logic_error("anonymous class forward declaration");
-	Binding* existing = scope->local(name);
+	Scope* owner = scope;
+	if (raw_name.find("::") != string::npos)
+	{
+		const size_t separator = raw_name.rfind("::");
+		PathTarget prefix = ResolvePath(scope, raw_name.substr(0, separator));
+		owner = prefix.binding ? ScopeForType(prefix.binding->type) : prefix.scope;
+		if (!owner) throw logic_error("unknown forward class owner");
+	}
+	Binding* existing = owner->local(name);
 	if (existing && existing->kind == BIND_TYPE)
 	{
 		if (existing->type && existing->type->kind == TYPE_CLASS)
@@ -424,6 +529,7 @@ TypePtr Analyzer::ProcessForwardClass(const CPPGMAstNodePtr& node, Scope* scope)
 	type->tag = ClassKey(node);
 	type->complete = false;
 	ApplyClassAttributes(node, type, scope);
-	AddTypeBinding(scope, name, type);
+	if (!owner->qualified_prefix.empty()) type->name = owner->qualified_prefix + "::" + name;
+	AddTypeBinding(owner, name, type);
 	return type;
 }

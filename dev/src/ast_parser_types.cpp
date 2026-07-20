@@ -647,6 +647,7 @@ CPPGMAstNodePtr Parser::ParseInitializer()
 			return CPPGMAstNodePtr();
 		}
 		CPPGMAstNodePtr result = Node("initializer");
+		result->initializer_form = AST_INITIALIZER_COPY;
 		Add(result, clause);
 		return result;
 	}
@@ -655,6 +656,7 @@ CPPGMAstNodePtr Parser::ParseInitializer()
 		CPPGMAstNodePtr list = ParseBracedInitList();
 		if (!list) return CPPGMAstNodePtr();
 		CPPGMAstNodePtr result = Node("initializer");
+		result->initializer_form = AST_INITIALIZER_DIRECT_LIST;
 		Add(result, list);
 		return result;
 	}
@@ -662,6 +664,7 @@ CPPGMAstNodePtr Parser::ParseInitializer()
 	{
 		++ordinary_depth_;
 		CPPGMAstNodePtr result = Node("initializer");
+		result->initializer_form = AST_INITIALIZER_DIRECT_PAREN;
 		CPPGMAstNodePtr paren = Node("paren-initializer");
 		if (!Is(")"))
 		{

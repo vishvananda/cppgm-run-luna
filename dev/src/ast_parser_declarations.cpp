@@ -346,6 +346,7 @@ CPPGMAstNodePtr Parser::ParseStaticAssertDeclaration()
 CPPGMAstNodePtr Parser::ParseSimpleOrFunctionDeclaration(bool member_context)
 {
 	Mark mark = Save();
+	const std::set<std::string> saved_value_names = value_names_;
 	CPPGMAstNodePtr specifiers = ParseDeclSpecifierSeq(false);
 	if (!specifiers)
 	{
@@ -396,9 +397,11 @@ CPPGMAstNodePtr Parser::ParseSimpleOrFunctionDeclaration(bool member_context)
 		CPPGMAstNodePtr body = ParseCompoundStatement();
 		if (!body)
 		{
+			value_names_ = saved_value_names;
 			Restore(mark);
 			return CPPGMAstNodePtr();
 		}
+		value_names_ = saved_value_names;
 		Add(result, body);
 	}
 	else
@@ -430,6 +433,7 @@ CPPGMAstNodePtr Parser::ParseSimpleOrFunctionDeclaration(bool member_context)
 		for (size_t i = 0; i < declarators.size(); ++i)
 			RegisterType(FirstIdentifier(declarators[i]));
 	}
+	value_names_ = saved_value_names;
 	(void)member_context;
 	return result;
 }

@@ -63,10 +63,19 @@ class PA14Lowerer
     bool constructor;
     bool implicit_constructor;
     bool aggregate_constructor;
+    bool explicit_constructor;
+    bool builtin;
+    bool defaulted;
+    bool deleted;
     bool destructor;
     bool needed;
     bool emitted;
     bool variadic;
+    bool unwind_no;
+    bool noreturn;
+    string effects;
+    string object_name;
+    vector<string> parameter_metadata;
     CPPGMAstNodePtr special_initializer;
     vector<CPPGMAstNodePtr> default_arguments;
 
@@ -74,8 +83,12 @@ class PA14Lowerer
       : node(), scope(), type(), source_type(), member_owner(), qualified_name(),
         symbol(), definition(false), member(false), static_member(false),
         constructor(false), implicit_constructor(false), aggregate_constructor(false),
+        explicit_constructor(false),
+        builtin(false),
+        defaulted(false), deleted(false),
         destructor(false), needed(false),
-        emitted(false), variadic(false),
+        emitted(false), variadic(false), unwind_no(false), noreturn(false), effects(),
+        object_name(), parameter_metadata(),
         special_initializer(), default_arguments() {}
   };
 
@@ -87,13 +100,16 @@ class PA14Lowerer
     string qualified_name;
     string symbol;
     CPPGMAstNodePtr initializer;
+    bool declaration;
     bool internal;
+    bool thread_local_storage;
     bool dynamic_initializer;
     bool dynamic_finalizer;
 
     GlobalRecord()
       : node(), scope(), type(), qualified_name(), symbol(), initializer(),
-        internal(false), dynamic_initializer(false), dynamic_finalizer(false) {}
+        declaration(false), internal(false), thread_local_storage(false),
+        dynamic_initializer(false), dynamic_finalizer(false) {}
   };
 
   struct VariablePlan
@@ -236,6 +252,10 @@ string qualified_name(Scope* scope, const string& raw) const
 
 ;
 
+string TypeQualifiedName(const TypePtr& type) const
+
+;
+
 string declarator_name(const CPPGMAstNodePtr& node) const
 
 ;
@@ -250,6 +270,14 @@ TypePtr function_type(const TypePtr& raw) const
 ;
 
 void CollectTopLevel(const CPPGMAstNodePtr& node, Scope* scope)
+
+;
+
+void InstallBuiltins()
+
+;
+
+bool HasNoexcept(const CPPGMAstNodePtr& node) const
 
 ;
 
@@ -327,6 +355,14 @@ vector<Binding*> MemberBindings(const TypePtr& object, const string& name) const
 
 ;
 
+bool IsAccessible(Binding* binding, Scope* scope) const
+
+;
+
+void CheckTypeAccess(const CPPGMAstNodePtr& declaration, Scope* scope) const
+
+;
+
 Binding* MemberBinding(const CPPGMAstNodePtr& node, Scope* scope,
                        ExprInfo* object_info = 0)
 
@@ -369,6 +405,14 @@ bool PointerCompatible(const TypePtr& source, const TypePtr& target) const
 
 ;
 
+bool IsDerivedFrom(const TypePtr& derived, const TypePtr& base) const
+
+;
+
+int BaseDistance(const TypePtr& derived, const TypePtr& base) const
+
+;
+
 TypePtr CommonType(const TypePtr& left, const TypePtr& right,
                   const string& op = string()) const
 
@@ -408,6 +452,12 @@ bool IsBitField(Binding* binding, long long* bit_offset = 0,
 ;
 
 CallChoice ChooseCall(const CPPGMAstNodePtr& expression, Scope* scope)
+
+;
+
+CPPGMAstNodePtr MakeMemberCall(const CPPGMAstNodePtr& object,
+                               const string& name,
+                               const vector<CPPGMAstNodePtr>& arguments) const
 
 ;
 
@@ -535,6 +585,10 @@ AddressInit StaticAddress(const CPPGMAstNodePtr& expression, Scope* scope)
 ;
 
 string GlobalMetadata(bool internal) const
+
+;
+
+string GlobalMetadata(const GlobalRecord& global) const
 
 ;
 
@@ -723,12 +777,14 @@ void EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr& initializer,
 ;
 
 bool EmitObjectConstructor(VariablePlan* variable, const TypePtr& object_type,
-                           const vector<CPPGMAstNodePtr>& arguments, Scope* scope)
+                           const vector<CPPGMAstNodePtr>& arguments, Scope* scope,
+                           bool allow_explicit = true)
 
 ;
 
 bool EmitConstructorAt(const TypePtr& object_type, const string& address,
-                       const vector<CPPGMAstNodePtr>& arguments, Scope* scope)
+                       const vector<CPPGMAstNodePtr>& arguments, Scope* scope,
+                       bool allow_explicit = true)
 
 ;
 
@@ -867,6 +923,10 @@ void EmitGlobalFinalizer(GlobalRecord& global, Scope* scope)
 
 
 ExprInfo InferCall(const CPPGMAstNodePtr& node, Scope* scope)
+
+;
+
+TypePtr ConstructorObjectType(const CPPGMAstNodePtr& callee, Scope* scope) const
 
 ;
 

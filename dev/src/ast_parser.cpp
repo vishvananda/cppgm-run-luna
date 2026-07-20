@@ -20,7 +20,7 @@ bool Contains(const char* const* begin, const char* const* end,
 } // namespace
 
 CPPGMAstNode::CPPGMAstNode(const string& kind, const string& value)
-	: kind(kind), value(value), children() {}
+	: kind(kind), value(value), initializer_form(AST_INITIALIZER_NONE), children() {}
 
 namespace cppgm_pa10 {
 

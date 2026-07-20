@@ -311,6 +311,14 @@ string PA14Lowerer::GlobalMetadata(bool internal) const
     return internal ? " [binding=internal]" : " [binding=strong]";
   }
 
+string PA14Lowerer::GlobalMetadata(const GlobalRecord& global) const
+{
+    if(global.thread_local_storage)
+      return " [storage=thread_local, binding=" +
+        string(global.internal ? "internal" : "strong") + "]";
+    return GlobalMetadata(global.internal);
+  }
+
 string PA14Lowerer::RenderStringGlobal(const string& symbol, const vector<unsigned char>& bytes) const
 {
     ostringstream out;
@@ -326,14 +334,14 @@ string PA14Lowerer::RenderGlobal(GlobalRecord& global)
     CPPGMAstNodePtr expression = InitializerExpression(global.initializer);
     ostringstream out;
     TypePtr value_type = type_value(type);
-    if(value_type && value_type->kind == TYPE_CLASS) {
-      out << "global @" << global.symbol << GlobalMetadata(global.internal) << " = {\n";
+    if(!type_is_reference(type) && value_type && value_type->kind == TYPE_CLASS) {
+      out << "global @" << global.symbol << GlobalMetadata(global) << " = {\n";
       out << "  zero " << integer_text(static_cast<long long>(type_size(type))) << "\n";
       out << "}";
       return out.str();
     }
     if(type->kind == TYPE_ARRAY) {
-      out << "global @" << global.symbol << GlobalMetadata(global.internal) << " = {\n";
+      out << "global @" << global.symbol << GlobalMetadata(global) << " = {\n";
       TypePtr element = type->child;
       TypePtr element_value = type_value(element);
       if(element_value && element_value->kind == TYPE_CLASS) {
@@ -389,7 +397,7 @@ string PA14Lowerer::RenderGlobal(GlobalRecord& global)
     }
 
     const string low = storage_type(type);
-    out << "global @" << global.symbol << " : " << low << GlobalMetadata(global.internal) << " = ";
+    out << "global @" << global.symbol << " : " << low << GlobalMetadata(global) << " = ";
     AddressInit address = StaticAddress(expression, global.scope);
     if(type_value(type)->kind == TYPE_POINTER && address.valid && !address.function) {
       out << "addr @" << address.symbol;
@@ -413,8 +421,31 @@ string PA14Lowerer::RenderGlobal(GlobalRecord& global)
 
 void PA14Lowerer::EmitGlobals(vector<string>& entries)
 {
+    for(size_t i = 0; i < globals_.size(); ++i) {
+      GlobalRecord& global = globals_[i];
+      if(!global.declaration) continue;
+      ostringstream declaration;
+      declaration << "declare global @" << global.symbol;
+      TypePtr value_type = type_value(global.type);
+      if(!value_type || value_type->kind != TYPE_CLASS)
+        declaration << " : " << low_type(global.type);
+      declaration << " [";
+      if(global.thread_local_storage) declaration << "storage=thread_local, ";
+      declaration << "binding=" << (global.internal ? "internal" : "strong") <<
+        ", object=" << global.symbol << "]";
+      entries.push_back(declaration.str());
+      if(global.thread_local_storage) {
+        const string wrapper = global.symbol + "__tls_wrapper";
+        ostringstream wrapper_declaration;
+        wrapper_declaration << "declare function @" << wrapper <<
+          "() -> ptr [binding=strong, object=" << wrapper <<
+          ", tls_for=@" << global.symbol << "]";
+        entries.push_back(wrapper_declaration.str());
+      }
+    }
     vector<string> rendered;
-    for(size_t i = 0; i < globals_.size(); ++i) rendered.push_back(RenderGlobal(globals_[i]));
+    for(size_t i = 0; i < globals_.size(); ++i)
+      if(!globals_[i].declaration) rendered.push_back(RenderGlobal(globals_[i]));
     for(size_t i = 0; i < string_order_.size(); ++i) {
       const string symbol = "__strlit__" + integer_text(static_cast<long long>(i + 1));
       entries.push_back(RenderStringGlobal(symbol, string_data_[string_order_[i]]));
@@ -426,16 +457,34 @@ void PA14Lowerer::EmitDeclarations(vector<string>& entries)
 {
     for(size_t i = 0; i < functions_.size(); ++i) {
       FunctionRecord& function = functions_[i];
-      if(function.definition) continue;
+      if(function.definition || !function.needed) continue;
       ostringstream out;
       out << "declare function @" << function.symbol << "(";
       for(size_t p = 0; p < function.type->parameters.size(); ++p) {
         if(p != 0) out << ", ";
         out << "%arg" << p << " : " << low_type(function.type->parameters[p]);
         if(type_is_reference(function.type->parameters[p])) out << " [pass=reference]";
+        if(p < function.parameter_metadata.size() &&
+           !function.parameter_metadata[p].empty())
+          out << " [" << function.parameter_metadata[p] << "]";
       }
       out << ") -> " << low_type(function.type->child);
-      if(function.variadic) out << " [arity=variadic]";
+      vector<string> metadata;
+      if(function.variadic) metadata.push_back("arity=variadic");
+      if(!function.effects.empty()) metadata.push_back("effects=" + function.effects);
+      if(function.unwind_no) metadata.push_back("unwind=no");
+      if(function.noreturn) metadata.push_back("return=noreturn");
+      metadata.push_back("binding=strong");
+      const string object = function.object_name.empty() ? function.symbol : function.object_name;
+      if(!object.empty()) metadata.push_back("object=" + object);
+      if(!metadata.empty()) {
+        out << " [";
+        for(size_t m = 0; m < metadata.size(); ++m) {
+          if(m != 0) out << ", ";
+          out << metadata[m];
+        }
+        out << "]";
+      }
       entries.push_back(out.str());
     }
   }
@@ -511,6 +560,7 @@ string PA14Lowerer::global_address(GlobalRecord* global)
 string PA14Lowerer::function_address(FunctionRecord* function)
 {
     if(!function) throw logic_error("missing function symbol");
+    function->needed = true;
     const string temp = new_temp();
     AddInstruction(temp + " = addr @" + function->symbol);
     return temp;
@@ -540,10 +590,18 @@ string PA14Lowerer::EmitSubscriptAddress(const CPPGMAstNodePtr& node, Scope* sco
     CPPGMAstNodePtr base_node = node->children[0];
     CPPGMAstNodePtr index_node = node->children[1];
     TypePtr base_type = expression_value_type(first);
-    if(!base_type || (base_type->kind != TYPE_ARRAY && base_type->kind != TYPE_POINTER)) {
+    if(!base_type || (base_type->kind != TYPE_ARRAY && base_type->kind != TYPE_POINTER &&
+                      base_type->kind != TYPE_CLASS)) {
       base_node = node->children[1];
       index_node = node->children[0];
       base_type = expression_value_type(second);
+    }
+    if(base_type && base_type->kind == TYPE_CLASS) {
+      vector<CPPGMAstNodePtr> arguments;
+      arguments.push_back(index_node);
+      Value result = EmitCall(MakeMemberCall(base_node, "operator[]", arguments), scope);
+      if(!result.lvalue) throw logic_error("subscript result is not addressable");
+      return result.operand;
     }
     if(!base_type || (base_type->kind != TYPE_ARRAY && base_type->kind != TYPE_POINTER))
       throw logic_error("subscript base is not an array or pointer");
@@ -650,7 +708,12 @@ string PA14Lowerer::EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
         return function_address(function);
       }
       GlobalRecord* global = FindGlobal(binding->qualified_name);
-      if(global) return global_address(global);
+      if(global) {
+        const string address = global_address(global);
+        if(type_is_reference(global->type))
+          return emit_load(address, PointerTo(Fundamental("char")));
+        return address;
+      }
       if(binding->is_member && !binding->is_static) {
         CPPGMAstNodePtr this_node(new CPPGMAstNode("keyword-literal", "KW_THIS:this"));
         CPPGMAstNodePtr member(new CPPGMAstNode("member-expression", "OP_ARROW:->"));
@@ -696,6 +759,20 @@ string PA14Lowerer::EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
       if(type_is_reference(target)) return EmitAddress(node->children[1], scope);
     }
     if(node->kind == "call-expression") {
+      TypePtr constructor_type = node->children.empty() ? TypePtr() :
+        ConstructorObjectType(node->children[0], scope);
+      if(constructor_type) {
+        const string slot = new_special_slot("arg", low_type(constructor_type));
+        const string address = new_temp();
+        AddInstruction(address + " = addr $" + slot);
+        const CPPGMAstNodePtr argument_list = node->children.size() > 1 ?
+          node->children[1] : CPPGMAstNodePtr();
+        const vector<CPPGMAstNodePtr> arguments = argument_list ?
+          argument_list->children : vector<CPPGMAstNodePtr>();
+        if(!EmitConstructorAt(constructor_type, address, arguments, scope))
+          throw logic_error("no viable functional construction");
+        return address;
+      }
       ExprInfo info = Infer(node, scope);
       if(type_is_reference(info.type)) return EmitCall(node, scope).operand;
     }

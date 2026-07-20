@@ -220,6 +220,7 @@ CPPGMAstNodePtr Parser::ParseBaseClause()
 CPPGMAstNodePtr Parser::ParseSpecialMember(bool definition, bool member_context)
 {
 	Mark mark = Save();
+	const std::set<std::string> saved_value_names = value_names_;
 	CPPGMAstNodePtr member_specs;
 	while (Is("inline") || Is("virtual") || Is("explicit") || Is("constexpr") ||
 		Is("friend") || Is("static"))
@@ -368,15 +369,18 @@ CPPGMAstNodePtr Parser::ParseSpecialMember(bool definition, bool member_context)
 		CPPGMAstNodePtr result = Node("special-member-declaration", name);
 		Add(result, member_specs);
 		Add(result, declarator);
+		value_names_ = saved_value_names;
 		return result;
 	}
 	CPPGMAstNodePtr ctor = ParseCtorInitializer();
 	CPPGMAstNodePtr body = ParseCompoundStatement();
 	if (!body)
 	{
+		value_names_ = saved_value_names;
 		Restore(mark);
 		return CPPGMAstNodePtr();
 	}
+	value_names_ = saved_value_names;
 	CPPGMAstNodePtr result = Node("special-member-definition", name);
 	Add(result, member_specs);
 	Add(result, declarator);

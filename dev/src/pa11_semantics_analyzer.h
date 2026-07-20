@@ -1,13 +1,11 @@
 #pragma once
 #include "pa11_semantics_model.h"
-
 class Analyzer
 {
 public:
 	Analyzer()
 		: global_(new Scope(SCOPE_NAMESPACE, "<global>", 0)),
 		  anonymous_type_count_(0) {}
-
 	void Analyze(const CPPGMAstNodePtr& tree)
 	{
 		if (!tree || tree->kind != "translation-unit")
@@ -15,15 +13,12 @@ public:
 		for (size_t i = 0; i < tree->children.size(); ++i)
 			Process(tree->children[i], global_.get());
 	}
-
 	void Print(ostream& out) const
 	{
 		out << "translation-unit\n";
 		PrintScope(global_.get(), out, 1);
 	}
-
 	void PrintSemantics(const CPPGMAstNodePtr& tree, ostream& out);
-
 public:
 	unique_ptr<Scope> global_;
 	unsigned int anonymous_type_count_;
@@ -32,12 +27,10 @@ public:
 	map<const CPPGMAstNode*, Scope*> namespace_scopes_;
 	map<const CPPGMAstNode*, TypePtr> class_types_;
 	map<const CPPGMAstNode*, TypePtr> enum_types_;
-
 	static void Indent(ostream& out, unsigned int indentation)
 	{
 		for (unsigned int i = 0; i < indentation; ++i) out << "  ";
 	}
-
 	void PrintScope(const Scope* scope, ostream& out, unsigned int indentation) const
 	{
 		Indent(out, indentation);
@@ -59,12 +52,10 @@ public:
 		for (size_t i = 0; i < scope->children.size(); ++i)
 			PrintScope(scope->children[i].get(), out, indentation + 1);
 	}
-
 	Scope* NewChild(Scope* parent, ScopeKind kind, const string& name)
 	{
 		return parent->child(kind, name);
 	}
-
 	Scope* FindNamespaceDirect(Scope* from, const string& name,
 		set<Scope*>& visited) const
 	{
@@ -80,13 +71,11 @@ public:
 		}
 		return 0;
 	}
-
 	Scope* FindNamespaceDirect(Scope* from, const string& name) const
 	{
 		set<Scope*> visited;
 		return FindNamespaceDirect(from, name, visited);
 	}
-
 	Scope* FindNamespace(Scope* from, const string& name) const
 	{
 		for (Scope* current = from; current != 0; current = current->parent)
@@ -96,7 +85,6 @@ public:
 		}
 		return 0;
 	}
-
 	Binding* LookupUnqualified(Scope* from, const string& name) const
 	{
 		for (Scope* current = from; current != 0; current = current->parent)
@@ -111,7 +99,6 @@ public:
 		}
 		return 0;
 	}
-
 	Binding* LookupInNamespace(Scope* scope, const string& name,
 		set<Scope*>& visited) const
 	{
@@ -125,13 +112,11 @@ public:
 		}
 		return 0;
 	}
-
 	Binding* LookupInNamespace(Scope* scope, const string& name) const
 	{
 		set<Scope*> visited;
 		return LookupInNamespace(scope, name, visited);
 	}
-
 	Scope* ScopeForType(const TypePtr& type) const
 	{
 		if (!type) return 0;
@@ -139,7 +124,6 @@ public:
 			return type->owned_scope;
 		return 0;
 	}
-
 	struct PathTarget
 	{
 		Scope* scope;
@@ -147,7 +131,6 @@ public:
 		PathTarget(Scope* target_scope = 0, Binding* target_binding = 0)
 			: scope(target_scope), binding(target_binding) {}
 	};
-
 	vector<string> SplitPath(const string& raw, bool* absolute = 0) const
 	{
 		string path = raw;
@@ -166,7 +149,6 @@ public:
 		if (absolute) *absolute = is_absolute;
 		return parts;
 	}
-
 	PathTarget ResolvePath(Scope* from, const string& raw) const
 	{
 		bool absolute = false;
@@ -203,43 +185,76 @@ public:
 			}
 			Binding* binding = (i == 0 && !absolute) ?
 				LookupUnqualified(current_scope, part) : LookupInNamespace(current_scope, part);
+			if (!binding && current_scope && current_scope->kind == SCOPE_CLASS &&
+				current_scope->owner_type)
+				for (TypePtr base = current_scope->owner_type->direct_base; base;
+					base = base->direct_base)
+				{
+					if (LastComponent(base->name) == part && base->owned_scope &&
+						base->owned_scope->parent)
+						binding = base->owned_scope->parent->local(part);
+					if (!binding && base->owned_scope) binding = base->owned_scope->local(part);
+					if (binding && (binding->kind == BIND_TYPE ||
+						binding->kind == BIND_TYPE_ALIAS)) break;
+					binding = 0;
+				}
 			if (!binding) return PathTarget();
 			if (i + 1 == parts.size()) return PathTarget(0, binding);
 			current_binding = binding;
 		}
 		return current_binding ? PathTarget(0, current_binding) : PathTarget(current_scope, 0);
 	}
-
 	Scope* ResolveNamespace(Scope* from, const string& raw) const
 	{
 		PathTarget target = ResolvePath(from, raw);
 		return target.scope;
 	}
-
 	Binding* ResolveBinding(Scope* from, const string& raw) const
 	{
 		PathTarget target = ResolvePath(from, raw);
 		return target.binding;
 	}
-
 	TypePtr ResolveType(Scope* from, const string& raw) const
 	{
-		Binding* binding = ResolveBinding(from, StripTypeMarker(raw));
+		const string name = StripTypeMarker(raw);
+		if (name.find("::") == string::npos)
+		{
+			for (Scope* current = from; current; current = current->parent)
+				for (size_t i = current->bindings.size(); i > 0; --i)
+				{
+					const Binding& candidate = current->bindings[i - 1];
+					if (candidate.name == name && (candidate.kind == BIND_TYPE ||
+						candidate.kind == BIND_TYPE_ALIAS)) return candidate.type;
+				}
+			for (Scope* current = from; current; current = current->parent)
+				if (current->kind == SCOPE_CLASS && current->owner_type)
+					for (TypePtr base = current->owner_type->direct_base; base;
+						base = base->direct_base)
+					{
+						if (LastComponent(base->name) == name) return base;
+						if (!base->owned_scope) continue;
+						for (size_t i = base->owned_scope->bindings.size(); i > 0; --i)
+						{
+							const Binding& candidate = base->owned_scope->bindings[i - 1];
+							if (candidate.name == name && (candidate.kind == BIND_TYPE ||
+								candidate.kind == BIND_TYPE_ALIAS)) return candidate.type;
+						}
+					}
+		}
+		Binding* binding = ResolveBinding(from, name);
 		if (!binding || (binding->kind != BIND_TYPE &&
 			binding->kind != BIND_TYPE_ALIAS))
 			throw logic_error("unknown type: " + raw);
 		return binding->type;
 	}
-
 	static bool IsFundamentalWord(const string& word)
 	{
 		return word == "bool" || word == "char" || word == "char16_t" ||
 			word == "char32_t" || word == "double" || word == "float" ||
 			word == "int" || word == "long" || word == "short" ||
 			word == "signed" || word == "unsigned" || word == "void" ||
-			word == "wchar_t" || word == "nullptr_t";
+			word == "wchar_t" || word == "nullptr_t" || word == "auto";
 	}
-
 	static string FundamentalName(const vector<string>& words)
 	{
 		bool is_unsigned = false;
@@ -271,13 +286,11 @@ public:
 		if (base == "double" && long_count != 0) return "long double";
 		return base;
 	}
-
 	static bool IsCvNode(const CPPGMAstNodePtr& node, const string& word)
 	{
 		return node && ((node->kind == "cv-qualifier" || node->kind == "decl-specifier") &&
 			node->value.find(":" + word) != string::npos);
 	}
-
 	struct SpecFacts
 	{
 		bool is_typedef;
@@ -286,14 +299,14 @@ public:
 		bool is_volatile;
 		bool is_static;
 		bool is_mutable;
+		bool is_friend;
 		vector<string> fundamental_words;
 		TypePtr named_type;
 		SpecFacts()
 			: is_typedef(false), is_constexpr(false), is_const(false),
-			  is_volatile(false), is_static(false), is_mutable(false),
+			  is_volatile(false), is_static(false), is_mutable(false), is_friend(false),
 			  fundamental_words(), named_type() {}
 	};
-
 	TypePtr TypeFromDecltype(const CPPGMAstNodePtr& node, Scope* scope)
 	{
 		if (!node || node->children.empty()) throw logic_error("invalid decltype");
@@ -329,7 +342,6 @@ public:
 		}
 		return result;
 	}
-
 	TypePtr TypeFromSpecSeq(const CPPGMAstNodePtr& sequence, Scope* scope,
 		SpecFacts* facts = 0)
 	{
@@ -385,6 +397,7 @@ public:
 			else if (value == "KW_CONSTEXPR:constexpr") info.is_constexpr = true;
 			else if (value == "KW_STATIC:static") info.is_static = true;
 			else if (value == "KW_MUTABLE:mutable") info.is_mutable = true;
+			else if (value == "KW_FRIEND:friend") info.is_friend = true;
 			else if (value == "KW_CONST:const") info.is_const = true;
 			else if (value == "KW_VOLATILE:volatile") info.is_volatile = true;
 			else
@@ -403,7 +416,6 @@ public:
 		if (!result) throw logic_error("declaration has no type");
 		return CloneWithCv(result, info.is_const, info.is_volatile);
 	}
-
 	TypePtr TypeFromTypeId(const CPPGMAstNodePtr& type_id, Scope* scope)
 	{
 		if (!type_id || type_id->kind != "type-id" || type_id->children.empty())
@@ -414,7 +426,6 @@ public:
 			base = BuildDeclarator(type_id->children[1], base, scope);
 		return base;
 	}
-
 	long long ParseLiteral(const string& raw) const
 	{
 		string value = raw;
@@ -430,7 +441,6 @@ public:
 			throw logic_error("unsupported constant expression");
 		return result;
 	}
-
 	ConstantValue Evaluate(const CPPGMAstNodePtr& expression, Scope* scope)
 	{
 		if (!expression) return ConstantValue();
@@ -508,7 +518,6 @@ public:
 		}
 		return ConstantValue();
 	}
-
 	size_t FundamentalSize(const string& name) const
 	{
 		if (name == "char" || name == "signed char" || name == "unsigned char" || name == "bool") return 1;
@@ -520,7 +529,6 @@ public:
 		if (name == "long double") return 16;
 		return 0;
 	}
-
 	size_t TypeSize(const TypePtr& type) const
 	{
 		if (!type) return 0;
@@ -545,7 +553,6 @@ public:
 		}
 		return 0;
 	}
-
 	size_t TypeAlignment(const TypePtr& type) const
 	{
 		if (!type) return 0;
@@ -557,7 +564,6 @@ public:
 		if (type->kind == TYPE_ENUM && type->underlying) return TypeAlignment(type->underlying);
 		return TypeSize(type);
 	}
-
 	TypePtr ExpressionType(const CPPGMAstNodePtr& expression, Scope* scope)
 	{
 		if (!expression) throw logic_error("invalid expression type");
@@ -583,14 +589,12 @@ public:
 			return ExpressionType(expression->children[0], scope);
 		return Fundamental("int");
 	}
-
 	struct ParameterFacts
 	{
 		vector<TypePtr> types;
 		bool variadic;
 		ParameterFacts() : types(), variadic(false) {}
 	};
-
 	ParameterFacts Parameters(const CPPGMAstNodePtr& clause, Scope* scope)
 	{
 		ParameterFacts result;
@@ -623,7 +627,6 @@ public:
 			result.types.clear();
 		return result;
 	}
-
 	TypePtr ApplySuffix(const CPPGMAstNodePtr& suffix, const TypePtr& base, Scope* scope)
 	{
 		if (suffix->kind == "array-suffix")
@@ -644,7 +647,6 @@ public:
 		}
 		return base;
 	}
-
 	TypePtr BuildDeclarator(const CPPGMAstNodePtr& declarator,
 		const TypePtr& base, Scope* scope)
 	{
@@ -653,6 +655,7 @@ public:
 		vector<CPPGMAstNodePtr> suffixes;
 		CPPGMAstNodePtr nested;
 		bool function_const = false;
+		bool function_volatile = false;
 		bool saw_function_suffix = false;
 		for (size_t i = 0; i < declarator->children.size(); ++i)
 		{
@@ -663,6 +666,8 @@ public:
 			{
 				if (saw_function_suffix && child->value.find(":const") != string::npos)
 					function_const = true;
+				else if (saw_function_suffix && child->value.find(":volatile") != string::npos)
+					function_volatile = true;
 				else if (!saw_function_suffix) pointers.push_back(child);
 			}
 			else if (child->kind == "nested-declarator") nested = child->children.empty() ?
@@ -696,8 +701,11 @@ public:
 			for (size_t i = suffixes.size(); i-- > 0;) outer = ApplySuffix(suffixes[i], outer, scope);
 			TypePtr result = BuildDeclarator(nested, outer, scope);
 			if (function_const && result->kind == TYPE_FUNCTION) result->function_const = true;
+			if (function_volatile && result->kind == TYPE_FUNCTION) result->function_volatile = true;
 			if (function_const && result->kind == TYPE_MEMBER_POINTER && result->child &&
 				result->child->kind == TYPE_FUNCTION) result->child->function_const = true;
+			if (function_volatile && result->kind == TYPE_MEMBER_POINTER && result->child &&
+				result->child->kind == TYPE_FUNCTION) result->child->function_volatile = true;
 			return result;
 		}
 		TypePtr result = base;
@@ -720,9 +728,9 @@ public:
 		}
 		for (size_t i = suffixes.size(); i-- > 0;) result = ApplySuffix(suffixes[i], result, scope);
 		if (function_const && result->kind == TYPE_FUNCTION) result->function_const = true;
+		if (function_volatile && result->kind == TYPE_FUNCTION) result->function_volatile = true;
 		return result;
 	}
-
 	void AddTypeBinding(Scope* scope, const string& name, const TypePtr& type,
 		bool alias = false, const string& override_text = string())
 	{
@@ -737,16 +745,15 @@ public:
 		binding.type_override = override_text;
 		scope->add(binding);
 	}
-
 	Scope* ClassScope(const TypePtr& type, Scope* parent, const string& name)
 	{
 		if (type->owned_scope) return type->owned_scope;
 		Scope* result = NewChild(parent, SCOPE_CLASS, name);
 		result->owner_type = type;
+		if (parent && parent->kind == SCOPE_CLASS) type->enclosing_type = parent->owner_type;
 		type->owned_scope = result;
 		return result;
 	}
-
 	string AnonymousTypeName(const string& tag)
 	{
 		const string stem = tag == "union" ? "union" :
@@ -756,29 +763,21 @@ public:
 			<< (10 + anonymous_type_count_++);
 		return generated.str();
 	}
-
 	static size_t AlignUp(size_t value, size_t alignment)
 	;
-
 	size_t AttributeAlignment(const CPPGMAstNodePtr& attribute, Scope* scope)
 	;
-
 	void ApplyClassAttributes(const CPPGMAstNodePtr& node, const TypePtr& type,
 		Scope* scope)
 	;
-
 	void ComputeClassLayout(const CPPGMAstNodePtr& node, const TypePtr& type,
 		Scope* class_scope)
 	;
-
 	void RecordClassMembers(const CPPGMAstNodePtr& node, const TypePtr& type,
 		Scope* scope, Scope* class_scope)
 	;
-
 	TypePtr ProcessClass(const CPPGMAstNodePtr& node, Scope* scope);
-
 	TypePtr ProcessForwardClass(const CPPGMAstNodePtr& node, Scope* scope);
-
 	TypePtr ProcessEnum(const CPPGMAstNodePtr& node, Scope* scope)
 	{
 		map<const CPPGMAstNode*, TypePtr>::const_iterator cached = enum_types_.find(node.get());
@@ -890,7 +889,6 @@ public:
 		enum_types_[node.get()] = type;
 		return type;
 	}
-
 	void ProcessUsingDeclaration(const CPPGMAstNodePtr& node, Scope* scope)
 	{
 		CPPGMAstNodePtr target_node = ChildOfKind(node, "target");
@@ -904,7 +902,6 @@ public:
 		imported.name = LastComponent(target_name);
 		scope->add(imported);
 	}
-
 	void ProcessNamespace(const CPPGMAstNodePtr& node, Scope* scope)
 	{
 		const string name = node->value;
@@ -926,7 +923,6 @@ public:
 		for (size_t i = 0; i < node->children.size(); ++i)
 			if (node->children[i]->kind != "inline") Process(node->children[i], namespace_scope);
 	}
-
 	void ProcessNamespaceAlias(const CPPGMAstNodePtr& node, Scope* scope)
 	{
 		const CPPGMAstNodePtr target_node = ChildOfKind(node, "target");
@@ -939,21 +935,18 @@ public:
 		if (!target) throw logic_error("namespace alias target is not a namespace");
 		scope->namespace_aliases[node->value] = target;
 	}
-
 	void ProcessStaticAssert(const CPPGMAstNodePtr& node, Scope* scope)
 	{
 		if (node->children.empty()) throw logic_error("invalid static assertion");
 		ConstantValue value = Evaluate(node->children[0], scope);
 		if (!value.known || value.value == 0) throw logic_error("static assertion failed");
 	}
-
 	void ProcessCompound(const CPPGMAstNodePtr& node, Scope* parent)
 	{
 		Scope* block = NewChild(parent, SCOPE_BLOCK, string());
 		compound_scopes_[node.get()] = block;
 		for (size_t i = 0; i < node->children.size(); ++i) Process(node->children[i], block);
 	}
-
 	void AddFunctionParameters(Scope* function_scope, const CPPGMAstNodePtr& declarator,
 		Scope* lookup_scope)
 	{
@@ -978,7 +971,6 @@ public:
 			if (!name.empty()) function_scope->add(Binding(BIND_PARAMETER, name, type));
 		}
 	}
-
 	void ProcessFunctionDefinition(const CPPGMAstNodePtr& node, Scope* scope)
 	{
 		if (node->children.size() < 3) throw logic_error("invalid function definition");
@@ -1017,7 +1009,6 @@ public:
 		AddFunctionParameters(function_scope, declarator, declaration_scope);
 		ProcessCompound(node->children[2], function_scope);
 	}
-
 	void ProcessSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* scope)
 	{
 		if (node->children.empty()) throw logic_error("invalid simple declaration");
@@ -1051,11 +1042,13 @@ public:
 				// interpret a floating token as an integer expression.
 				const bool floating_literal = expression && expression->kind == "literal" &&
 					(expression->value.find('.') != string::npos ||
-					 expression->value.find('e') != string::npos ||
-					 expression->value.find('E') != string::npos ||
-					 expression->value.find('p') != string::npos ||
-					 expression->value.find('P') != string::npos);
-				if (!floating_literal)
+						expression->value.find('e') != string::npos ||
+						expression->value.find('E') != string::npos ||
+						expression->value.find('p') != string::npos ||
+						expression->value.find('P') != string::npos);
+				const bool string_literal = expression && expression->kind == "literal" &&
+					!expression->value.empty() && expression->value[0] == '"';
+				if (!floating_literal && !string_literal)
 				{
 					ConstantValue value = Evaluate(expression, scope);
 					if (value.known) { binding.has_value = true; binding.value = value.value; }
@@ -1064,7 +1057,6 @@ public:
 			scope->add(binding);
 		}
 	}
-
 	void ProcessSpecialMember(const CPPGMAstNodePtr& node, Scope* scope)
 	{
 		// PA11 does not model constructors/destructors as a separate type
@@ -1075,23 +1067,34 @@ public:
 			CPPGMAstNodePtr body = ChildOfKind(node, "compound-statement");
 			if (declarator && body)
 			{
-				const string name = node->value;
-				TypePtr function = BuildDeclarator(declarator, Fundamental("void"), scope);
-				Binding* binding = scope->add(Binding(BIND_FUNCTION, name, function));
-				binding->is_member = scope->kind == SCOPE_CLASS;
+				Scope* declaration_scope = scope;
+				TypePtr member_owner;
+				const size_t separator = node->value.rfind("::");
+				if(separator != string::npos)
+				{
+					PathTarget owner = ResolvePath(scope, node->value.substr(0, separator));
+					if(owner.binding) member_owner = owner.binding->type;
+					else if(owner.scope) member_owner = owner.scope->owner_type;
+					if(member_owner && member_owner->kind == TYPE_CLASS && member_owner->owned_scope)
+						declaration_scope = member_owner->owned_scope;
+				}
+				else if(scope->kind == SCOPE_CLASS) member_owner = scope->owner_type;
+				const string name = LastComponent(node->value);
+				TypePtr function = BuildDeclarator(declarator, Fundamental("void"), declaration_scope);
+				Binding* binding = declaration_scope->add(Binding(BIND_FUNCTION, name, function));
+				binding->is_member = static_cast<bool>(member_owner);
 				binding->is_static = false;
-				binding->member_owner = scope->owner_type;
-				binding->access = scope->owner_type && scope->owner_type->tag == "class" ?
+				binding->member_owner = member_owner;
+				binding->access = member_owner && member_owner->tag == "class" ?
 					"private" : "public";
 				binding->declaration = node;
-				Scope* function_scope = NewChild(scope, SCOPE_FUNCTION, name);
+				Scope* function_scope = NewChild(declaration_scope, SCOPE_FUNCTION, name);
 				function_scopes_[node.get()] = function_scope;
-				AddFunctionParameters(function_scope, declarator, scope);
+				AddFunctionParameters(function_scope, declarator, declaration_scope);
 				ProcessCompound(body, function_scope);
 			}
 		}
 	}
-
 	void ProcessTemplate(const CPPGMAstNodePtr& node, Scope* scope)
 	{
 		if (node->children.size() < 2) throw logic_error("invalid template declaration");
@@ -1116,7 +1119,6 @@ public:
 		}
 		Process(node->children[1], parameters);
 	}
-
 	void Process(const CPPGMAstNodePtr& node, Scope* scope)
 	{
 		if (!node) return;

@@ -5,10 +5,11 @@ using namespace std;
 Type::Type(TypeKind type_kind, const string& type_name)
 	: kind(type_kind), name(type_name), tag(), scoped_enum(false), complete(true),
 	  underlying_explicit(false), is_const(false), is_volatile(false), child(), bound(-1),
-	  parameters(), variadic(false), function_const(false), member_owner(), owned_scope(0),
+	  parameters(), variadic(false), function_const(false), function_volatile(false),
+	  member_owner(), owned_scope(0),
 	  underlying(), class_members(), direct_base(), object_size(0), object_alignment(1),
 	  explicit_alignment(0), layout_complete(false), layout_in_progress(false),
-	  is_union(false) {}
+	  is_union(false), enclosing_type(), friend_names() {}
 
 Binding::Binding(BindingKind binding_kind, const string& binding_name,
 	const TypePtr& binding_type)
@@ -132,12 +133,13 @@ TypePtr ArrayOf(long long bound, const TypePtr& element)
 }
 
 TypePtr FunctionOf(const vector<TypePtr>& parameters, bool variadic,
-	const TypePtr& result_type, bool function_const)
+	const TypePtr& result_type, bool function_const, bool function_volatile)
 {
 	TypePtr result(new Type(TYPE_FUNCTION));
 	result->parameters = parameters;
 	result->variadic = variadic;
 	result->function_const = function_const;
+	result->function_volatile = function_volatile;
 	result->child = result_type;
 	return result;
 }
@@ -197,6 +199,7 @@ string TypeText(const TypePtr& type, bool extended)
 			}
 			output << ")";
 			if (extended && type->function_const) output << " const";
+			if (extended && type->function_volatile) output << " volatile";
 			output << " returning " << TypeText(type->child, extended);
 			return output.str();
 		}
