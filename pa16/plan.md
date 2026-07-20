@@ -869,3 +869,74 @@ staged assignment sequence.
 
 PA17 implementation and its assignment-specific tests, preserving the
 through-PA16 green baseline.
+
+## Architecture Review
+
+The integrated PA16 stage preserves the staged compiler boundary and extends
+PA15 through the same typed LowIR path:
+
+- `ast_parser*` remains the PA10 syntax boundary.  The PA16 parser additions
+  preserve initializer form, conversion-function spelling, ref qualifiers,
+  out-of-class constructors/destructors, allocation expressions, and
+  anonymous/union members as AST structure rather than turning source text
+  into LowIR policy.
+- `pa11_semantics_model.*` owns `Type`, `ClassMemberInfo`, `Scope`, and
+  `Binding` facts.  Class layout, direct bases, member offsets, bit-field
+  units, access, friends, and function ref qualifiers are resolved before
+  lowering.  Member bindings identify their canonical class fact through a
+  stable `TypePtr` owner and member index.
+- `pa11_semantics_analyzer.*` resolves the names, class declarations,
+  qualified definitions, layouts, anonymous union storage, and special-member
+  declarations needed by PA16.  `Scope::bindings` is pointer-stable because
+  lowering can append synthesized bindings after earlier expression facts
+  have retained their addresses.
+- `pa14_lowering.*` is one compiler-owned LowIR implementation split into
+  cohesive units.  Collection records functions/globals and their ownership;
+  planning records local storage and control-flow scope; semantic lowering
+  selects calls, operators, ADL, conversions, and value categories; calls and
+  functions materialize the ABI; constructors/objects/values emit typed
+  value and lifetime actions; and the driver emits declarations and
+  demand-driven definitions.  `dev/frontend_source_sets.mk` registers every
+  unit, including `pa14_lowering_calls.cpp`, `pa14_lowering_functions.cpp`,
+  and `pa14_lowering_driver.cpp`.
+- `BuildFunctionABI` keeps source-level class types separate from LowIR
+  boundary types.  Complete class results use an indirect destination when
+  required, class parameters use by-address storage when required, and
+  non-static members retain their hidden object argument.  The value layer
+  synthesizes only the copy/move/assignment helpers reached by a supported
+  transfer and lowers trivial storage with the accepted `copyobj` form when
+  appropriate.
+- Constructor/destructor and temporary actions are explicit and ordered:
+  direct bases and members initialize in source/lifetime order, destruction
+  reverses that order, class arrays use element construction/destruction and
+  allocation cookies, and temporary results are destroyed at their recorded
+  full-expression boundary.  Union active-member and empty-base behavior is
+  represented by typed class facts rather than guessed from LowIR storage.
+- The driver emits ordinary roots and then walks demanded member/helper
+  definitions to a fixed point.  Conversion members receive deterministic
+  ordering, hidden-friend dependencies are marked before emission, and
+  declarations/globals/functions retain the PA13 presentation convention.
+  The implementation uses compiler-owned records and caches, not reference
+  output, host tools, fixture names, or an alternate execution engine.
+
+## Final Architecture Review
+
+The final PA16 checkpoint represented by `1ed0112` closes the remaining
+conversion and class-temporary group while preserving the earlier value,
+ref-qualified, aggregate/reference, delegating, scalar allocation, array,
+union, ADL, and special-member checkpoints.  The integrated `54bf1ed`
+cleanup then makes the ownership and source-file boundaries explicit without
+changing the semantic architecture.  The reviewed implementation therefore
+leaves PA17 a clean handoff: a non-polymorphic value-semantics object model
+with typed layout, lookup, ABI, lifetime, and LowIR records, while virtual
+dispatch, vtables, and other later-stage responsibilities remain outside
+PA16 as required by the README.
+
+The final review found no additional implementation blocker.  Pointer-bearing
+records have stable owners, demand emission is bounded by the recorded
+function/helper set, and the source audit reports only the three inherited
+warning-only substantial-header heuristics.  The PA16 suite passes **164 / 164**
+and the required integrated report passes **1183 / 1183** across **16 / 16**
+stages; the file audit passes and no test or reference fixture was modified.
+The final audit commit is the last PA16 change and must leave the worktree
+clean before advancing to PA17.
