@@ -671,6 +671,15 @@ void PA14Lowerer::CollectTopLevel(const CPPGMAstNodePtr& node, Scope* scope)
     }
   }
 
+void PA14Lowerer::BindClassMember(Binding* binding, bool is_static,
+                                  const TypePtr& owner) const
+{
+    if(!binding || binding->kind != BIND_VARIABLE) return;
+    binding->is_member = true;
+    binding->is_static = is_static;
+    binding->member_owner = owner;
+  }
+
 void PA14Lowerer::CollectClassMembers(const CPPGMAstNodePtr& node, Scope* scope)
 {
     if(!node) return;
@@ -721,8 +730,11 @@ void PA14Lowerer::CollectClassMembers(const CPPGMAstNodePtr& node, Scope* scope)
         if(!item || item->children.empty()) continue;
         const CPPGMAstNodePtr declarator = item->children[0];
         TypePtr member_type = analyzer_.BuildDeclarator(declarator, base, class_scope);
+        const string member_name = declarator_name(declarator);
+        Binding* member_binding = member_name.empty() ? 0 : class_scope->local(member_name);
+        BindClassMember(member_binding, facts.is_static, type_found->second);
         if(!function_type(member_type)) {
-          const string name = declarator_name(declarator);
+          const string name = member_name;
           if(!facts.is_static || name.empty()) continue;
           GlobalRecord record;
           record.node = child;
@@ -791,16 +803,42 @@ void PA14Lowerer::CollectClassMembers(const CPPGMAstNodePtr& node, Scope* scope)
   }
 
 void PA14Lowerer::CollectStringLiterals(const CPPGMAstNodePtr& node,
-                                        unsigned int braced_depth)
+                                        unsigned int braced_depth,
+                                        bool local_static_context,
+                                        bool unevaluated_context,
+                                        bool local_array_context,
+                                        bool function_context)
 {
     if(!node) return;
-    if(node->kind == "literal" && braced_depth != 1 && !node->value.empty() &&
-       node->value[0] == '"')
+    const bool string_literal = !node->value.empty() &&
+      string_literal_quote(node->value) != string::npos;
+    if(node->kind == "literal" && !unevaluated_context &&
+       (braced_depth != 1 || local_static_context) && !local_array_context &&
+       string_literal)
       InternString(node->value);
+    const bool child_local_static_context = local_static_context ||
+      (node->kind == "simple-declaration" &&
+       Analyzer::HasNodeValue(node, "decl-specifier", "static"));
+    const bool child_function_context = function_context ||
+      node->kind == "function-definition";
+    const bool character_array_declaration =
+      Analyzer::HasNodeValue(node, "decl-specifier", "char") ||
+      Analyzer::HasNodeValue(node, "decl-specifier", "wchar_t");
+    const bool child_local_array_context = local_array_context ||
+      (child_function_context && node->kind == "simple-declaration" &&
+       !Analyzer::HasNodeValue(node, "decl-specifier", "static") &&
+       character_array_declaration && DescendantOfKind(node, "array-suffix") &&
+       !DescendantOfKind(node, "ptr-operator"));
+    const bool child_unevaluated_context = unevaluated_context ||
+      node->kind == "static-assert-declaration" ||
+      node->kind == "sizeof-expression" ||
+      node->kind == "type-trait-expression";
     const unsigned int child_depth = braced_depth +
       (node->kind == "braced-init-list" ? 1U : 0U);
     for(size_t i = 0; i < node->children.size(); ++i)
-      CollectStringLiterals(node->children[i], child_depth);
+      CollectStringLiterals(node->children[i], child_depth, child_local_static_context,
+                            child_unevaluated_context, child_local_array_context,
+                            child_function_context);
   }
 
 void PA14Lowerer::CollectImplicitConstructor(const TypePtr& owner, Scope* scope,
@@ -1000,12 +1038,13 @@ PA14Lowerer::GlobalRecord* PA14Lowerer::FindGlobal(const string& qname) const
     return found == global_by_key_.end() ? 0 : found->second;
   }
 
-PA14Lowerer::GlobalRecord* PA14Lowerer::EnsureStaticMemberStorage(Binding* binding)
+PA14Lowerer::GlobalRecord* PA14Lowerer::EnsureStaticMemberStorage(Binding* binding,
+                                                                    bool force_declaration)
 {
     if(!binding || !binding->is_member || !binding->is_static) return 0;
     GlobalRecord* existing = FindGlobal(binding->qualified_name);
     if(existing) return existing;
-	if(deferred_static_members_.find(binding->qualified_name) ==
+	if(!force_declaration && deferred_static_members_.find(binding->qualified_name) ==
 		deferred_static_members_.end()) return 0;
     GlobalRecord record;
     record.node = binding->declaration;
@@ -1017,7 +1056,7 @@ PA14Lowerer::GlobalRecord* PA14Lowerer::EnsureStaticMemberStorage(Binding* bindi
     record.template_instantiation = binding->member_owner &&
       binding->member_owner->template_specialization;
     record.weak_binding = record.template_instantiation;
-    record.declaration = false;
+    record.declaration = force_declaration;
     record.internal = false;
     if(binding->member_owner && binding->member_index != static_cast<size_t>(-1) &&
        binding->member_index < binding->member_owner->class_members.size())

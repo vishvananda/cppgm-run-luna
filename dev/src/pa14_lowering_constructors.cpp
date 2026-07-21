@@ -374,8 +374,10 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
            arguments[0]->kind != "braced-init-list") {
           const TypePtr argument_type = expression_value_type(Infer(arguments[0], scope));
           if(argument_type && argument_type->kind == TYPE_CLASS &&
-             !PA12SameType(argument_type, named_base, true) &&
-             IsDerivedFrom(argument_type, named_base) &&
+             ((PA12SameType(argument_type, named_base, true) &&
+               (Analyzer::HasNodeValue(function.node, "decl-specifier", "constexpr") ||
+                Analyzer::HasNodeValue(function.node, "specifier", "constexpr"))) ||
+              IsDerivedFrom(argument_type, named_base)) &&
              EmitObjectTransferAt(named_base, base_address, arguments[0], scope, true))
             continue;
         }

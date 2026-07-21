@@ -147,4 +147,26 @@ void PA14Lowerer::EmitGlobalFinalizer(GlobalRecord& global, Scope* scope)
       (void)EmitDestructorAt(type, global_address(&global), scope);
   }
 
+void PA14Lowerer::EmitLocalStaticInitialization(VariablePlan* variable, Scope* scope)
+{
+    if(!variable || !variable->global || !variable->global->dynamic_initializer) return;
+    GlobalRecord* object = variable->global;
+    GlobalRecord* guard = FindGlobal(object->qualified_name + "__guard");
+    if(!guard) return;
+    const string loaded = new_temp();
+    AddInstruction(loaded + " = load i64 @" + guard->symbol);
+    const string initialized = new_temp();
+    AddInstruction(initialized + " = cmp ne i64 " + loaded + ", 0");
+    const string ready = new_label("local_static_ready");
+    const string init = new_label("local_static_init");
+    Terminate("branch " + initialized + ", ^" + ready + ", ^" + init);
+    AddBlock(init);
+    EmitInitializer(variable, variable->initializer, scope);
+    if(!state_->current->terminated) {
+      AddInstruction("store i64 1, @" + guard->symbol);
+      Terminate("jump ^" + ready);
+    }
+    AddBlock(ready);
+  }
+
 } // namespace cppgm_pa14_lowering

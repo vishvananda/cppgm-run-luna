@@ -69,8 +69,10 @@ Scope* Scope::child(ScopeKind child_kind, const string& child_name)
 }
 
 ConstantValue::ConstantValue(bool is_known, long long constant)
-	: integral(is_known ? PA19IntegralValue::Signed(constant, "long long", 64) :
-		PA19IntegralValue()), value(constant) {}
+	: kind(is_known ? CONSTANT_INTEGRAL : CONSTANT_UNKNOWN),
+	  integral(is_known ? PA19IntegralValue::Signed(constant, "long long", 64) :
+		PA19IntegralValue()), value(constant), floating_known(false), floating(0),
+	  type(), object(), pointer() {}
 
 string LastComponent(const string& name)
 {

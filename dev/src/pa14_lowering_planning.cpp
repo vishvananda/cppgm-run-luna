@@ -597,8 +597,11 @@ void PA14Lowerer::PlanSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* scop
       TypePtr type = PlannedType(node->children[0], declarator, scope,
         item->children.size() > 1 ? item->children[1] : CPPGMAstNodePtr());
       if(type->kind == TYPE_FUNCTION) continue;
-      AddVariablePlan(declarator_name(declarator), type, declarator,
+		VariablePlan* plan = AddVariablePlan(declarator_name(declarator), type, declarator,
         item->children.size() > 1 ? item->children[1] : CPPGMAstNodePtr());
+		map<const CPPGMAstNode*, GlobalRecord*>::const_iterator local_static =
+			local_static_plans_.find(declarator.get());
+		if(plan && local_static != local_static_plans_.end()) plan->global = local_static->second;
     }
   }
 

@@ -104,7 +104,7 @@ void PA14Lowerer::Lower(ostream& out)
         FunctionRecord& function = functions_[i];
         if(!function.definition || function.member || function.hidden_friend ||
            function.emitted || !function.needed ||
-           !function.template_instantiation) continue;
+           (!function.template_instantiation && !function.inline_definition)) continue;
         entries.push_back(EmitFunction(function));
         function.emitted = true;
         added_ordinary = true;
@@ -118,7 +118,7 @@ void PA14Lowerer::Lower(ostream& out)
           FunctionRecord& function = functions_[i];
           if(!function.definition || function.member || function.hidden_friend ||
              function.emitted || !function.needed ||
-             !function.template_instantiation) continue;
+             (!function.template_instantiation && !function.inline_definition)) continue;
           entries.push_back(EmitFunction(function));
           function.emitted = true;
           added = true;

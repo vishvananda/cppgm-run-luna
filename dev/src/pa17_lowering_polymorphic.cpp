@@ -520,10 +520,19 @@ void PA14Lowerer::PreparePolymorphicModel()
   // not itself called by main).  Discover that dependency through the typed
   // receiver and virtual-slot map so name collisions cannot manufacture an
   // unrelated demand edge.
-  for (size_t i = 0; i < functions_.size(); ++i)
-    if (functions_[i].member && functions_[i].definition && functions_[i].node &&
-        ContainsVirtualMemberCall(functions_[i].node, functions_[i]))
-      functions_[i].needed = true;
+  for (size_t i = 0; i < functions_.size(); ++i) {
+    if (!functions_[i].member || !functions_[i].definition || !functions_[i].node)
+      continue;
+    vector<bool> needed_before;
+    needed_before.reserve(functions_.size());
+    for (size_t j = 0; j < functions_.size(); ++j)
+      needed_before.push_back(functions_[j].needed);
+    const bool has_virtual_call = ContainsVirtualMemberCall(functions_[i].node,
+      functions_[i]);
+    for (size_t j = 0; j < needed_before.size() && j < functions_.size(); ++j)
+      functions_[j].needed = needed_before[j];
+    if (has_virtual_call) functions_[i].needed = true;
+  }
 }
 
 void PA14Lowerer::EmitVPointerStore(const TypePtr& owner, const string& address)

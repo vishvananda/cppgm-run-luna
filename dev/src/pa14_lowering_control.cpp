@@ -44,6 +44,18 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
     TypePtr object_type = type_value(raw_object_type);
     if(!object_type || object_type->kind != TYPE_CLASS) return false;
     const string constructor_name = LastComponent(object_type->name);
+    // The ordinary semantic pass does not need to materialize an implicit copy
+    // constructor merely to type-check a class mem-initializer.  Lowering does
+    // need that candidate when a base is initialized from an object value,
+    // however; make the implicit special member available before overload
+    // selection so `Base(base_value)` follows the C++ copy-initialization path.
+    if(raw_arguments.size() == 1 && raw_arguments[0]) {
+      TypePtr argument_type = expression_value_type(Infer(raw_arguments[0], scope));
+      if(argument_type && argument_type->kind == TYPE_CLASS &&
+         (PA12SameType(argument_type, object_type, true) ||
+          IsDerivedFrom(argument_type, object_type)))
+        (void)EnsureImplicitCopyConstructor(object_type, false);
+    }
     if(!raw_arguments.empty()) (void)EnsureAggregateConstructor(object_type);
     vector<Binding*> candidates = MemberBindings(object_type, constructor_name);
     vector<ExprInfo> argument_infos;
@@ -386,12 +398,14 @@ void PA14Lowerer::EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr&
     if(!expression) throw logic_error("reference initializer is empty");
       const ExprInfo source_info = Infer(expression, scope);
       const TypePtr source_type = expression_value_type(source_info);
+      const string destination = variable->global ?
+        global_address(variable->global) : StorageForVariable(*variable);
       string address = EmitAddress(expression, scope);
       const TypePtr target_type = type_value(variable->type);
       if(source_type && target_type && source_type->kind == TYPE_CLASS &&
          target_type->kind == TYPE_CLASS && IsDerivedFrom(source_type, target_type))
         address = AdjustBaseAddress(address, source_type, target_type);
-      emit_store(PointerTo(Fundamental("char")), address, StorageForVariable(*variable));
+      emit_store(PointerTo(Fundamental("char")), address, destination);
       return;
     }
     if(variable->type->kind == TYPE_ARRAY) {
@@ -681,6 +695,8 @@ void PA14Lowerer::EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr&
       return;
     }
     Value value;
+    const string global_destination = variable->global ?
+      global_address(variable->global) : string();
     ExprInfo source_info = Infer(expression, scope, type_value(variable->type));
     const bool direct_initializer = initializer->initializer_form == AST_INITIALIZER_DIRECT_PAREN ||
       initializer->initializer_form == AST_INITIALIZER_DIRECT_LIST;
@@ -701,8 +717,11 @@ void PA14Lowerer::EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr&
       value.type = type_value(variable->type);
       value.operand = integer_text(value.constant);
     } else value = ConvertValue(value, type_value(variable->type), false, true);
-    StoreLValue(CPPGMAstNodePtr(new CPPGMAstNode("id-expression", variable->source_name)),
-      scope, type_value(variable->type), value.operand);
+    if(variable->global)
+      emit_store(type_value(variable->type), value.operand, global_destination);
+    else
+      StoreLValue(CPPGMAstNodePtr(new CPPGMAstNode("id-expression", variable->source_name)),
+        scope, type_value(variable->type), value.operand);
   }
 bool PA14Lowerer::HasNonSizeofReference(const CPPGMAstNodePtr& node,
                                         const string& name, bool inside_sizeof) const
@@ -1234,6 +1253,10 @@ void PA14Lowerer::EmitStatement(const CPPGMAstNodePtr& node, Scope* scope)
           if(!item || item->children.empty()) continue;
           map<const CPPGMAstNode*, VariablePlan*>::iterator found =
             state_->plans.find(item->children[0].get());
+          if(found != state_->plans.end() && found->second->global) {
+            EmitLocalStaticInitialization(found->second, scope);
+            continue;
+          }
           if(found != state_->plans.end() &&
              !type_is_reference(found->second->type) &&
              type_value(found->second->type) &&
@@ -1388,7 +1411,9 @@ void PA14Lowerer::EmitStatement(const CPPGMAstNodePtr& node, Scope* scope)
 	    if(node->kind == "static-assert-declaration") return;
     // PA14 has no class/object lifetime lowering.  Parsed declaration-like
     // nodes which do not contribute procedural code are harmless here.
-    if(node->kind == "alias-declaration" || node->kind == "using-declaration" || node->kind == "using-directive" ||
+    if(node->kind == "alias-declaration" || node->kind == "class-specifier" ||
+       node->kind == "class-forward-declaration" || node->kind == "using-declaration" ||
+       node->kind == "using-directive" ||
        node->kind == "asm-declaration") return;
     throw logic_error("unsupported statement in LowIR lowering: " + node->kind);
   }

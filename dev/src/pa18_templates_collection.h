@@ -199,6 +199,7 @@ inline CPPGMAstNodePtr CloneNode(const CPPGMAstNodePtr& node)
 	result->dependent_base_lookup = node->dependent_base_lookup;
 	result->materialize_object_address = node->materialize_object_address;
 	result->materialize_object_name = node->materialize_object_name;
+	result->source_token_begin = node->source_token_begin; result->source_token_end = node->source_token_end;
 	result->template_primary = node->template_primary;
 	result->template_arguments = node->template_arguments;
 	for(size_t i = 0; i < node->children.size(); ++i)
@@ -516,7 +517,7 @@ private:
 	set<string> named_type_contexts_;
 	map<string, string> variable_types_;
 	map<string, PA19IntegralValue> constant_values_;
-	map<string, size_t> constant_type_sizes_, constant_type_alignments_;
+	map<string, vector<PA19IntegralValue> > constant_arrays_; map<string, size_t> constant_type_sizes_, constant_type_alignments_;
 	map<string, PA19IntegralValue> active_integral_substitutions_;
 	// A template parameter pack is a collection of typed substitutions.  Keep
 	// the collection separate from the scalar substitution map so an expanded
@@ -526,6 +527,7 @@ private:
 	map<string, vector<string> > active_pack_identifier_substitutions_;
 	map<string, string> type_aliases_;
 	map<string, vector<string> > type_aliases_by_name_;
+	map<string, CPPGMAstNodePtr> function_definitions_;
 	map<string, FunctionSignature> function_signatures_;
 	map<string, vector<string> > function_signatures_by_name_;
 	map<string, vector<FunctionSignature> > function_overloads_;
@@ -1032,6 +1034,7 @@ private:
 		if(node->kind == "function-definition") {
 			RecordFunctionSignature(node, context);
 			const string function_name = DeclarationName(node);
+			if(!function_name.empty()) function_definitions_[JoinPath(context, function_name)] = node;
 			string function_context = JoinPath(context, function_name);
 			if(!function_name.empty() && LastComponent(context) == function_name)
 				function_context = context;

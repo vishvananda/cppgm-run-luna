@@ -35,6 +35,10 @@ struct CPPGMAstNode
 	// the local object address to be materialized by PA14.
 	bool materialize_object_address;
 	std::string materialize_object_name;
+	// Normalized PA10 token range for declarations that need stable internal
+	// identities (notably function-local static storage).
+	std::size_t source_token_begin;
+	std::size_t source_token_end;
 	std::string template_primary;
 	std::vector<std::string> template_arguments;
 	std::vector<CPPGMAstNodePtr> children;

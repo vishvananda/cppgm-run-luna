@@ -56,8 +56,40 @@ ConstantValue Analyzer::FromIntegralValue(const PA19IntegralValue& value) const
 {
 	if (!value.known) return ConstantValue();
 	ConstantValue result;
+	result.kind = ConstantValue::CONSTANT_INTEGRAL;
 	result.integral = value;
 	result.value = PA19Signed(value);
+	result.type = Fundamental(value.type.name);
+	return result;
+}
+
+ConstantValue Analyzer::FromFloatingValue(long double value, const TypePtr& type) const
+{
+	ConstantValue result;
+	result.kind = ConstantValue::CONSTANT_FLOATING;
+	result.floating_known = true;
+	result.floating = value;
+	result.type = type ? type : Fundamental("double");
+	return result;
+}
+
+ConstantValue Analyzer::FromObjectValue(const TypePtr& type,
+	const shared_ptr<ConstantObject>& object) const
+{
+	ConstantValue result;
+	result.kind = ConstantValue::CONSTANT_OBJECT;
+	result.type = type;
+	result.object = object;
+	return result;
+}
+
+ConstantValue Analyzer::FromPointerValue(const shared_ptr<ConstantPointer>& pointer,
+	const TypePtr& type) const
+{
+	ConstantValue result;
+	result.kind = ConstantValue::CONSTANT_POINTER;
+	result.type = type;
+	result.pointer = pointer;
 	return result;
 }
 
@@ -72,6 +104,8 @@ PA19IntegralValue Analyzer::ParseLiteralValue(const string& raw) const
 	const size_t marker = spelling.find(':');
 	if (marker != string::npos && spelling.substr(0, marker) == "TT_LITERAL")
 		spelling.erase(0, marker + 1);
+	if (spelling == "true" || spelling == "false")
+		return PA19IntegralValue::Signed(spelling == "true", "bool", 1);
 	PA19IntegralValue result;
 	if (PA19DecodeCharacter(spelling, &result) || PA19ParseInteger(spelling, &result)) return result;
 	throw logic_error("unsupported constant expression");
@@ -512,6 +546,7 @@ void Analyzer::ProcessFunctionDefinition(const CPPGMAstNodePtr& node, Scope* sco
 	binding.is_member = static_cast<bool>(member_owner) && !facts.is_friend;
 	binding.is_static = facts.is_static;
 	binding.member_owner = member_owner;
+	binding.noexcept_specified = HasNodeValue(declarator, "function-qualifier", "noexcept");
 	binding.is_virtual = facts.is_virtual;
 	binding.is_override = HasNodeValue(declarator, "virt-specifier", "override");
 	binding.is_final = HasNodeValue(declarator, "virt-specifier", "final");
@@ -591,6 +626,9 @@ void Analyzer::ProcessSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* scop
 		if (facts.is_constexpr && type->kind != TYPE_FUNCTION) type = CloneWithCv(type, true, false);
 		const string name = FirstIdentifier(declarator);
 		if (name.empty()) continue;
+		if (facts.is_constexpr && !initializer &&
+			(scope->kind == SCOPE_FUNCTION || scope->kind == SCOPE_BLOCK))
+			throw logic_error("constexpr local must be initialized");
 		if (facts.is_typedef)
 		{
 			AddTypeBinding(scope, name, type, true);
@@ -609,32 +647,42 @@ void Analyzer::ProcessSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* scop
 			binding.is_final = HasNodeValue(declarator, "virt-specifier", "final");
 			binding.is_pure = IsPureInitializer(item);
 		}
-		if (initializer && (facts.is_const || facts.is_constexpr))
+		ConstantValue evaluated_value;
+		bool has_evaluated_value = false;
+		if (type->kind != TYPE_LVALUE_REFERENCE && type->kind != TYPE_RVALUE_REFERENCE &&
+			(initializer || (facts.is_const || facts.is_constexpr) &&
+			(type->kind == TYPE_CLASS || type->kind == TYPE_ARRAY)) &&
+			(facts.is_const || facts.is_constexpr))
 		{
-			CPPGMAstNodePtr expression = initializer->children.empty() ?
+			CPPGMAstNodePtr expression = !initializer || initializer->children.empty() ?
 				CPPGMAstNodePtr() : initializer->children[0];
-			const bool floating_literal = expression && expression->kind == "literal" &&
-				(expression->value.find('.') != string::npos ||
-					expression->value.find('e') != string::npos ||
-					expression->value.find('E') != string::npos ||
-					expression->value.find('p') != string::npos ||
-					expression->value.find('P') != string::npos);
-			const bool string_literal = expression && expression->kind == "literal" &&
-				(!expression->value.empty() && expression->value[0] == '"' ||
-					expression->value.size() > 1 &&
-					(expression->value[0] == 'u' || expression->value[0] == 'U' ||
-						expression->value[0] == 'L') && expression->value[1] == '"');
-			if (!floating_literal && !string_literal)
+			if (expression)
 			{
-				ConstantValue value = Evaluate(expression, scope);
-				if (value.integral.known) {
-					binding.has_value = true;
-					binding.value = value.value;
-					binding.constant_value = value.integral;
+				evaluated_value = EvaluateTyped(expression, scope, type);
+				has_evaluated_value = evaluated_value.integral.known ||
+					evaluated_value.floating_known ||
+					(evaluated_value.kind == ConstantValue::CONSTANT_OBJECT && evaluated_value.object) ||
+					(evaluated_value.kind == ConstantValue::CONSTANT_POINTER && evaluated_value.pointer);
+				if (has_evaluated_value) {
+					binding.has_value = evaluated_value.integral.known;
+					binding.value = evaluated_value.value;
+					binding.constant_value = evaluated_value.integral;
+				}
+			}
+			else if (!expression)
+			{
+				evaluated_value = DefaultConstantValue(type, scope);
+				has_evaluated_value = evaluated_value.kind != ConstantValue::CONSTANT_UNKNOWN;
+				if (has_evaluated_value)
+				{
+					binding.has_value = evaluated_value.integral.known;
+					binding.value = evaluated_value.value;
+					binding.constant_value = evaluated_value.integral;
 				}
 			}
 		}
-		scope->add(binding);
+		Binding* stored_binding = scope->add(binding);
+		if (has_evaluated_value) constant_binding_values_[stored_binding] = evaluated_value;
 		// Qualified static-member definitions are collected in the enclosing
 		// scope, while lookup of `Owner::member` uses the owner class scope.
 		// Keep both bindings and the owning ClassMemberInfo synchronized with

@@ -22,6 +22,8 @@ struct Scope;
 struct Type;
 struct ClassMemberInfo;
 struct Binding;
+struct ConstantObject;
+struct ConstantPointer;
 typedef shared_ptr<Type> TypePtr;
 
 // The PA15 object model keeps layout facts in the semantic type rather than
@@ -220,12 +222,41 @@ struct Scope
 
 struct ConstantValue
 {
+	enum Kind { CONSTANT_UNKNOWN, CONSTANT_INTEGRAL, CONSTANT_FLOATING,
+		CONSTANT_OBJECT, CONSTANT_POINTER };
+	Kind kind;
 	PA19IntegralValue integral;
 	// Legacy PA11-PA14 consumers read the signed projection; PA19 evaluation
 	// and conversion use `integral` as the sole typed owner.
 	long long value;
+	bool floating_known;
+	long double floating;
+	TypePtr type;
+	shared_ptr<ConstantObject> object;
+	shared_ptr<ConstantPointer> pointer;
 
 	ConstantValue(bool is_known = false, long long constant = 0);
+};
+
+// PA20 constant evaluation retains aggregate identity and array elements as
+// semantic values.  The LowIR layer may still lower these values into its
+// existing object representation, but it no longer has to reconstruct them
+// from source spelling.
+struct ConstantObject
+{
+	TypePtr type;
+	vector<ConstantValue> elements;
+	map<string, ConstantValue> members;
+};
+
+struct ConstantPointer
+{
+	shared_ptr<ConstantObject> object;
+	long long index;
+	bool null_pointer;
+
+	ConstantPointer()
+		: object(), index(0), null_pointer(false) {}
 };
 
 string LastComponent(const string& name);

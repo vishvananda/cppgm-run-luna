@@ -46,8 +46,11 @@ PA14Lowerer::Value PA14Lowerer::EmitIdentifier(const CPPGMAstNodePtr& node, Scop
       result.operand = emit_load(StorageForVariable(*local), local->type);
       return result;
     }
-    vector<Binding*> candidates = Lookup(node->value, scope);
-    if(candidates.empty()) throw logic_error("unknown identifier during lowering");
+    const bool decltype_form = node->value.compare(0, 9, "decltype(") == 0;
+    Binding* decltype_member = ResolveDecltypeStaticMember(node->value, scope);
+    vector<Binding*> candidates = decltype_member ?
+      vector<Binding*>(1, decltype_member) : Lookup(node->value, scope);
+    if(candidates.empty()) throw logic_error("unknown identifier during lowering: " + node->value);
     if(candidates.size() > 1) {
       bool repeated_binding = true;
       for(size_t i = 1; i < candidates.size(); ++i)
@@ -114,15 +117,16 @@ PA14Lowerer::Value PA14Lowerer::EmitIdentifier(const CPPGMAstNodePtr& node, Scop
       }
       result.type = binding->type;
       if(binding->is_static) {
-        GlobalRecord* demanded_global = EnsureStaticMemberStorage(binding);
-        if(binding->has_value) {
+        GlobalRecord* demanded_global = EnsureStaticMemberStorage(binding,
+          decltype_form);
+        if(binding->has_value && !decltype_form) {
           result.known_constant = true;
           result.constant = binding->value;
           result.operand = integer_text(result.constant);
           return result;
         }
         const TypePtr static_value_type = type_value(binding->type);
-        if(demanded_global && demanded_global->initializer && static_value_type &&
+        if(!decltype_form && demanded_global && demanded_global->initializer && static_value_type &&
             static_value_type->is_const) {
           long long constant = 0;
           if(FoldInteger(InitializerExpression(demanded_global->initializer), scope,

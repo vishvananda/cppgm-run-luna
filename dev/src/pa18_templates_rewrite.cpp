@@ -743,12 +743,13 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				definition = SelectClassTemplateDefinition(definition, args, context);
 			if(resolve_member && definition->class_template && close + 2 < raw.size() &&
 				raw.compare(close + 1, 2, "::") == 0) {
+				RecordTemplateArrayValues(*definition, args, context, substitutions);
 				size_t nested_begin = close + 3;
 				while(nested_begin < raw.size() && IsIdentifierCharacter(raw[nested_begin])) ++nested_begin;
 				const string nested = raw.substr(close + 3, nested_begin - (close + 3));
 				if(!nested.empty()) {
 					const string member_type = TemplateMemberType(*definition, args, nested, context);
-					if(!member_type.empty()) {
+					if(!member_type.empty() && member_type.find('[') == string::npos) {
 						raw.replace(begin, nested_begin - begin, member_type);
 						if(template_replaced) *template_replaced = true;
 						search = begin + member_type.size();
@@ -853,10 +854,8 @@ void PA18TemplateExpander::TransformRegularChildren(const CPPGMAstNodePtr& input
 		const CPPGMAstNodePtr original_child = input->children[i];
 		if(TransformPackChild(input, original_child, child_context, substitutions,
 			local_substitutions, result)) continue;
-				if(input->kind == "decl-specifier" &&
-				input->value.find("decltype(") != string::npos &&
-				original_child && (original_child->kind == "call-expression" ||
-					original_child->kind == "binary-expression")) continue;
+					if(input->kind == "decl-specifier" && input->value.find("decltype(") != string::npos &&
+						original_child && (original_child->kind == "call-expression" || original_child->kind == "binary-expression")) continue;
 				if(SkipUnusedNestedClass(input, original_child, child_context, substitutions, i)) continue;
 			if(original_child && original_child->kind == "namespace-alias-definition") {
 				const CPPGMAstNodePtr target = ChildOfKindLocal(original_child, "target");
@@ -865,13 +864,10 @@ void PA18TemplateExpander::TransformRegularChildren(const CPPGMAstNodePtr& input
 						target->value, child_context, *local_substitutions, 0, false);
 				continue;
 			}
-			const string node_context = input->kind == "function-definition" && original_child &&
-				original_child->kind == "compound-statement" ? function_context : child_context;
-			const CPPGMAstNodePtr using_target = original_child && original_child->kind == "using-declaration" ?
-				ChildOfKindLocal(original_child, "target") : CPPGMAstNodePtr();
+				const string node_context = input->kind == "function-definition" && original_child && original_child->kind == "compound-statement" ? function_context : child_context;
+				const CPPGMAstNodePtr using_target = original_child && original_child->kind == "using-declaration" ? ChildOfKindLocal(original_child, "target") : CPPGMAstNodePtr();
 			const bool drop_function_using = using_target && IsOrdinaryTemplateUsingTarget(
-				using_target->value, node_context) && class_contexts_.find(node_context) == class_contexts_.end();
-			CPPGMAstNodePtr child;
+				using_target->value, node_context) && class_contexts_.find(node_context) == class_contexts_.end(); CPPGMAstNodePtr child;
 			if(input->kind == "using-declaration" && original_child && original_child->kind == "target") {
 				child = CloneNode(original_child);
 				const string raw_target = original_child->value;
@@ -887,6 +883,18 @@ void PA18TemplateExpander::TransformRegularChildren(const CPPGMAstNodePtr& input
 				} else child->value = RewriteText(raw_target, node_context,
 					*local_substitutions, 0, false, false);
 				} else child = TransformNode(original_child, node_context, *local_substitutions);
+				if(child && input->kind == "array-suffix" && !child->children.empty() &&
+					child->children[0]) {
+					PA19IntegralValue bound;
+					const string expression = ConstantExpressionSpelling(child->children[0]);
+					if(EvaluateIntegralText(expression, node_context, *local_substitutions, &bound))
+						child->children[0] = CPPGMAstNodePtr(new CPPGMAstNode(
+							"literal", IntegralValueSpelling(bound)));
+				}
+				if(child && input->kind == "class-specifier" &&
+					child->kind == "simple-declaration")
+					RecordConstantArrayDeclaration(child, child_context,
+						*local_substitutions);
 				if(!child && input->kind == "decl-specifier-seq" && original_child &&
 					(original_child->kind == "class-specifier" ||
 						original_child->kind == "class-forward-declaration")) {
@@ -970,7 +978,7 @@ CPPGMAstNodePtr PA18TemplateExpander::RewriteRegularNodeValue(
 		bool template_replaced = false;
 		const bool type_spelling = input->kind == "decl-specifier" ||
 			input->kind == "type-name" || input->kind == "type-specifier";
-		result->value = RewriteText(input->value, context, substitutions,
+	result->value = RewriteText(input->value, context, substitutions,
 			&template_replaced, !type_spelling, true);
 		// Non-type template substitutions are semantic values, not names.  Keep
 		// them as literal AST nodes so PA11/lowering resolve the same typed fact
@@ -1140,6 +1148,8 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformRegularNode(
 		result->initializer_form = input->initializer_form;
 		result->dependent_base_lookup = input->dependent_base_lookup;
 		result->materialize_object_address = input->materialize_object_address;
+		result->source_token_begin = input->source_token_begin;
+		result->source_token_end = input->source_token_end;
 		if(input->kind == "simple-declaration" &&
 			SpellNode(input).find("decltype(") != string::npos) {
 			result->materialize_object_address = true;

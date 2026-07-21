@@ -321,7 +321,7 @@ string PA18TemplateExpander::DeclaratorArraySuffix(const CPPGMAstNodePtr& declar
 		const CPPGMAstNodePtr child = declarator->children[i];
 		if(!child || child->kind != "array-suffix") continue;
 		result += '[';
-		if(!child->children.empty()) result += SpellNode(child->children[0]);
+		if(!child->children.empty()) result += ConstantExpressionSpelling(child->children[0]);
 		result += ']';
 	}
 	return result;
@@ -411,7 +411,8 @@ string PA18TemplateExpander::DeclaratorTypeSpelling(const string& base,
 	if(!declarator) return base;
 	const CPPGMAstNodePtr nested = ChildOfKindLocal(declarator, "nested-declarator");
 	const CPPGMAstNodePtr clause = ChildOfKindLocal(declarator, "parameter-clause");
-	if(!nested || !clause) return CanonicalSpelling(base + DeclaratorSuffix(declarator));
+	if(!nested || !clause) return CanonicalSpelling(base + DeclaratorSuffix(declarator) +
+		DeclaratorArraySuffix(declarator));
 	const CPPGMAstNodePtr inner = nested->children.empty() ? CPPGMAstNodePtr() : nested->children[0];
 	string result = base + DeclaratorSuffix(declarator);
 	result += inner && DeclaratorSuffix(inner).find('&') != string::npos ? "(&)(" : "(*)(";
@@ -1053,7 +1054,8 @@ void PA18TemplateExpander::InsertGenerated(vector<CPPGMAstNodePtr>* children,
 	size_t function_position = children->size();
 	for(size_t i = 0; i < children->size(); ++i) {
 		const string& kind = (*children)[i]->kind;
-		if(kind == "function-definition" || kind == "special-member-definition") {
+		if(kind == "static-assert-declaration" || kind == "function-definition" ||
+			kind == "special-member-definition") {
 			function_position = i;
 			break;
 		}

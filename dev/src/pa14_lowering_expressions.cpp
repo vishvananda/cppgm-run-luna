@@ -721,8 +721,8 @@ PA14Lowerer::Value PA14Lowerer::EmitBinary(const CPPGMAstNodePtr& node, Scope* s
     if(op == "+") binary = "add";
     else if(op == "-") binary = "sub";
     else if(op == "*") binary = "mul";
-    else if(op == "/") binary = "div";
-    else if(op == "%") binary = "mod";
+    else if(op == "/") binary = common && is_unsigned_type(common) ? "udiv" : "div";
+    else if(op == "%") binary = common && is_unsigned_type(common) ? "umod" : "mod";
     else if(op == "&" || op == "bitand") binary = "and";
     else if(op == "|") binary = "or";
     else if(op == "^") binary = "xor";
@@ -1325,6 +1325,13 @@ PA14Lowerer::Value PA14Lowerer::EmitValue(const CPPGMAstNodePtr& node, Scope* sc
       }
       Value result;
       result.type = Fundamental("unsigned long int");
+      if(node->kind == "type-trait-expression" &&
+         node->value.find("NOEXCEPT") != string::npos && info.known_constant) {
+        result.operand = integer_text(info.constant);
+        result.known_constant = true;
+        result.constant = info.constant;
+        return result;
+      }
       result.operand = new_temp();
       AddInstruction(result.operand + " = const i64 " + integer_text(info.constant));
       result.known_constant = true;

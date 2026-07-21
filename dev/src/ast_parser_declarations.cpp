@@ -390,8 +390,10 @@ CPPGMAstNodePtr Parser::ParseSimpleOrFunctionDeclaration(bool member_context)
 	CPPGMAstNodePtr result;
 	vector<CPPGMAstNodePtr> declarators;
 	CPPGMAstNodePtr first_declarator;
+	size_t first_declarator_begin = static_cast<size_t>(-1);
 	if (!Is(";"))
 	{
+		first_declarator_begin = position_;
 		CPPGMAstNodePtr first = ParseDeclarator(false);
 		if (!first)
 		{
@@ -399,15 +401,20 @@ CPPGMAstNodePtr Parser::ParseSimpleOrFunctionDeclaration(bool member_context)
 			return CPPGMAstNodePtr();
 		}
 		first_declarator = first;
+		first->source_token_begin = first_declarator_begin;
+		first->source_token_end = position_ == 0 ? 0 : position_ - 1;
 		CPPGMAstNodePtr first_init;
 		if (Is("=") || ((Is("{") || Is("(")) &&
 			!HasChildKind(first, "parameter-clause"))) first_init = ParseInitializer();
 		CPPGMAstNodePtr first_item = Node("init-declarator");
+		first_item->source_token_begin = first_declarator_begin;
 		Add(first_item, first);
 		Add(first_item, first_init);
+		first_item->source_token_end = position_ == 0 ? 0 : position_ - 1;
 		declarators.push_back(first_item);
 		while (Take(","))
 		{
+			const size_t next_declarator_begin = position_;
 			CPPGMAstNodePtr next = ParseDeclarator(false);
 			if (!next)
 			{
@@ -418,8 +425,12 @@ CPPGMAstNodePtr Parser::ParseSimpleOrFunctionDeclaration(bool member_context)
 			if (Is("=") || ((Is("{") || Is("(")) &&
 				!HasChildKind(next, "parameter-clause"))) next_init = ParseInitializer();
 			CPPGMAstNodePtr next_item = Node("init-declarator");
+			next->source_token_begin = next_declarator_begin;
+			next->source_token_end = position_ == 0 ? 0 : position_ - 1;
+			next_item->source_token_begin = next_declarator_begin;
 			Add(next_item, next);
 			Add(next_item, next_init);
+			next_item->source_token_end = position_ == 0 ? 0 : position_ - 1;
 			declarators.push_back(next_item);
 		}
 	}
@@ -445,6 +456,8 @@ CPPGMAstNodePtr Parser::ParseSimpleOrFunctionDeclaration(bool member_context)
 			Restore(mark);
 			return CPPGMAstNodePtr();
 		}
+		for (size_t i = 0; i < declarators.size(); ++i)
+			if (declarators[i]) declarators[i]->source_token_end = position_ == 0 ? 0 : position_ - 1;
 		result = Node("simple-declaration");
 		Add(result, specifiers);
 		if (!declarators.empty())
@@ -454,6 +467,8 @@ CPPGMAstNodePtr Parser::ParseSimpleOrFunctionDeclaration(bool member_context)
 			Add(result, list);
 		}
 	}
+	result->source_token_begin = mark.position;
+	result->source_token_end = position_ == 0 ? 0 : position_ - 1;
 	if (HasChildKind(specifiers, "class-specifier") ||
 		HasChildKind(specifiers, "enum-specifier"))
 	{

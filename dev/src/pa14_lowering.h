@@ -146,6 +146,8 @@ class PA14Lowerer
     CPPGMAstNodePtr initializer;
     bool declaration;
     bool internal;
+    bool local_static;
+    bool local_static_guard;
     bool thread_local_storage;
     bool tls_guard;
     bool dynamic_initializer;
@@ -154,7 +156,8 @@ class PA14Lowerer
     GlobalRecord()
       : node(), scope(), type(), qualified_name(), symbol(), object_name(), template_owner(),
         template_instantiation(false), weak_binding(false), initializer(),
-        declaration(false), internal(false), thread_local_storage(false), tls_guard(false),
+        declaration(false), internal(false), local_static(false), local_static_guard(false),
+        thread_local_storage(false), tls_guard(false),
         dynamic_initializer(false), dynamic_finalizer(false) {}
   };
 
@@ -296,6 +299,7 @@ class PA14Lowerer
   map<string, vector<unsigned char> > string_data_;
   map<string, string> string_symbols_;
   vector<string> string_order_;
+	map<const CPPGMAstNode*, GlobalRecord*> local_static_plans_;
 	set<string> deferred_static_members_;
 	bool needs_init_helper_;
 	bool needs_fini_helper_;
@@ -345,7 +349,12 @@ bool HasInline(const CPPGMAstNodePtr& node) const;
 
 void CollectClassMembers(const CPPGMAstNodePtr& node, Scope* scope);
 
-  void CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, bool definition);
+void BindClassMember(Binding* binding, bool is_static, const TypePtr& owner) const;
+
+void CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, bool definition);
+
+void CollectLocalStatics(const CPPGMAstNodePtr& node, Scope* scope,
+                         const string& function_name);
 
   void CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope, bool definition);
 
@@ -374,6 +383,9 @@ void CollectGlobalDeclaration(const CPPGMAstNodePtr& node, Scope* scope,
                               const CPPGMAstNodePtr& item,
                               const CPPGMAstNodePtr& initializer,
                               const string& name, const TypePtr& type);
+
+void DemandConstantObjectConstructors(const TypePtr& type,
+                                      const CPPGMAstNodePtr& initializer);
 
 bool PrepareGlobalDeclaration(const CPPGMAstNodePtr& node, Scope* scope,
                               const Analyzer::SpecFacts& facts,
@@ -429,13 +441,17 @@ bool VirtualDestructorDeletingSlot(const TypePtr& object,
 bool ContainsVirtualMemberCall(const CPPGMAstNodePtr& node,
                                const FunctionRecord& function);
 
-void CollectStringLiterals(const CPPGMAstNodePtr& node, unsigned int braced_depth = 0);
+void CollectStringLiterals(const CPPGMAstNodePtr& node, unsigned int braced_depth = 0,
+                           bool local_static_context = false,
+                           bool unevaluated_context = false,
+                           bool local_array_context = false,
+                           bool function_context = false);
 
 FunctionRecord* FindFunction(const string& qname, const TypePtr& type) const;
 
 GlobalRecord* FindGlobal(const string& qname) const;
 
-GlobalRecord* EnsureStaticMemberStorage(Binding* binding);
+GlobalRecord* EnsureStaticMemberStorage(Binding* binding, bool force_declaration = false);
 
 void DemandTemplateStaticMembers(const TypePtr& raw_type);
 
@@ -445,6 +461,8 @@ void AppendBindings(Scope* scope, const string& name,
                     vector<Binding*>& result, set<Scope*>& visited) const;
 
 vector<Binding*> DirectBindings(Scope* scope, const string& name) const;
+
+Binding* ResolveDecltypeStaticMember(const string& spelling, Scope* scope) const;
 
 vector<Binding*> LookupUnqualifiedAll(Scope* from, const string& name) const;
 
@@ -680,7 +698,11 @@ string GlobalMetadata(bool internal) const;
 
 string GlobalMetadata(const GlobalRecord& global) const;
 
-string RenderStringGlobal(const string& symbol, const vector<unsigned char>& bytes) const;
+string RenderStringGlobal(const string& symbol, const string& raw,
+                          const vector<unsigned char>& bytes) const;
+
+bool AppendConstantGlobalData(const TypePtr& type, const ConstantValue& value,
+                             vector<GlobalDataItem>& items) const;
 
 string RenderGlobal(GlobalRecord& global);
 
@@ -900,6 +922,8 @@ string EmitFunction(FunctionRecord& function);
 void EmitDynamicInitializers(vector<string>& entries);
 
 void EmitGlobalInitializer(GlobalRecord& global, Scope* scope);
+
+void EmitLocalStaticInitialization(VariablePlan* variable, Scope* scope);
 
 void EmitGlobalFinalizer(GlobalRecord& global, Scope* scope);
 

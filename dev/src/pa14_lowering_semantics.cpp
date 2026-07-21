@@ -408,7 +408,14 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferKeyword(const CPPGMAstNodePtr& node) con
       result.operand = "nullptr";
     } else if(op == "this") {
       VariablePlan* local = FindLocalPlan("this");
-      if(!local) throw logic_error("this used outside a member function");
+      if(!local) {
+        ostringstream diagnostic;
+        diagnostic << "this used outside a member function: " <<
+          (state_ && state_->record ? state_->record->qualified_name : string("<none>"));
+        if(state_ && state_->record) diagnostic << " member=" << state_->record->member <<
+          " static=" << state_->record->static_member;
+        throw logic_error(diagnostic.str());
+      }
       result.type = local->type;
       result.category = "prvalue";
     } else {
@@ -418,7 +425,34 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferKeyword(const CPPGMAstNodePtr& node) con
       result.constant = op == "true" ? 1 : 0;
     }
     return result;
-  }
+}
+
+Binding* PA14Lowerer::ResolveDecltypeStaticMember(const string& spelling,
+                                                  Scope* scope) const
+{
+    const bool decltype_form = spelling.compare(0, 9, "decltype(") == 0;
+    const size_t separator = spelling.rfind("::");
+    if(separator == string::npos || separator == 0 || separator + 2 >= spelling.size()) return 0;
+    const size_t begin = decltype_form ? 9 : 0;
+    if(separator <= begin) return 0;
+    string type_expression = spelling.substr(begin, separator - begin);
+    if(decltype_form) {
+      if(!type_expression.empty() && type_expression[type_expression.size() - 1] == ')')
+          type_expression.erase(type_expression.size() - 1);
+      if(type_expression.size() >= 2 &&
+         type_expression.compare(type_expression.size() - 2, 2, "()") == 0)
+          type_expression.erase(type_expression.size() - 2);
+    }
+    Binding* type_binding = analyzer_.ResolveBinding(scope, type_expression);
+    if(!type_binding || (type_binding->kind != BIND_TYPE &&
+                         type_binding->kind != BIND_TYPE_ALIAS)) return 0;
+    const vector<Binding*> members = MemberBindings(type_binding->type,
+      spelling.substr(separator + 2));
+    for(size_t i = 0; i < members.size(); ++i)
+        if(members[i]->kind == BIND_VARIABLE && members[i]->is_static)
+            return members[i];
+    return 0;
+}
 
 PA14Lowerer::VariablePlan* PA14Lowerer::FindLocalPlan(const string& name) const
 {
@@ -440,6 +474,13 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferIdentifier(const CPPGMAstNodePtr& node, 
       result.type = type_is_reference(local->type) ? local->type->child : local->type;
       result.category = "lvalue";
       result.binding = 0;
+      return result;
+    }
+    Binding* decltype_member = ResolveDecltypeStaticMember(node->value, scope);
+    if(decltype_member) {
+      result.binding = decltype_member;
+      result.type = PA12AdjustedType(decltype_member->type);
+      result.category = "prvalue";
       return result;
     }
     result.candidates = Lookup(node->value, scope);
@@ -950,6 +991,16 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferSizeofExpression(
       ExprInfo result;
       result.type = Fundamental("unsigned long int");
       result.known_constant = true;
+      if(node->kind == "type-trait-expression" &&
+         node->value.find("NOEXCEPT") != string::npos) {
+        const ConstantValue value = analyzer_.Evaluate(node, scope);
+        if(value.integral.known) {
+          result.constant = PA19Signed(value.integral);
+          return result;
+        }
+        result.constant = 0;
+        return result;
+      }
       const CPPGMAstNodePtr child = node->children.empty() ? CPPGMAstNodePtr() : node->children[0];
       TypePtr type;
       if(child && child->kind == "type-id") {

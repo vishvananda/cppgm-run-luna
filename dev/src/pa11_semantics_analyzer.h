@@ -26,7 +26,22 @@ public:
 	map<const CPPGMAstNode*, Scope*> namespace_scopes_;
 	map<const CPPGMAstNode*, TypePtr> class_types_;
 	map<const CPPGMAstNode*, TypePtr> enum_types_;
-	set<const CPPGMAstNode*> constant_function_stack_;
+	map<const Binding*, ConstantValue> constant_binding_values_;
+	map<string, vector<Binding*> > constant_template_functions_;
+	vector<map<string, ConstantValue> > constant_frames_;
+	vector<map<string, vector<ConstantValue> > > constant_pack_frames_;
+	vector<ConstantValue> constant_receivers_;
+	map<const CPPGMAstNode*, unsigned> constant_function_depth_;
+	static const unsigned kConstantFunctionDepthLimit = 512;
+	static const unsigned kConstantLoopIterationLimit = 100000;
+	struct ConstantFlow
+	{
+		enum Kind { NORMAL, RETURN, BREAK, CONTINUE };
+		Kind kind;
+		ConstantValue value;
+		ConstantFlow(Kind flow_kind = NORMAL, const ConstantValue& flow_value = ConstantValue())
+			: kind(flow_kind), value(flow_value) {}
+	};
 	static void Indent(ostream& out, unsigned int indentation)
 	{
 		for (unsigned int i = 0; i < indentation; ++i) out << "  ";
@@ -253,8 +268,9 @@ public:
 		}
 		Binding* binding = ResolveBinding(from, name);
 		if (!binding || (binding->kind != BIND_TYPE &&
-			binding->kind != BIND_TYPE_ALIAS) || !AccessibleType(*binding, from))
+			binding->kind != BIND_TYPE_ALIAS) || !AccessibleType(*binding, from)) {
 			throw logic_error("unknown type: " + raw);
+		}
 		return binding->type;
 	}
 	static bool IsFundamentalWord(const string& word)
@@ -406,8 +422,16 @@ public:
 				if (!bound_text.empty()) {
 					char* end = 0;
 					const long long parsed = strtoll(bound_text.c_str(), &end, 10);
-					if (!end || *end != '\0') break;
-					bound = parsed;
+					if (end && *end == '\0') bound = parsed;
+					else {
+						CPPGMAstNodePtr bound_expression(new CPPGMAstNode(
+							"id-expression", bound_text));
+						try {
+							ConstantValue value = Evaluate(bound_expression, scope);
+							if (value.integral.known) bound = PA19Signed(value.integral);
+						} catch (...) {}
+						if (bound < 0) break;
+					}
 				}
 				array_bounds.push_back(bound);
 				spelling.erase(open);
@@ -561,10 +585,38 @@ public:
 		return base;
 	}
 	ConstantValue FromIntegralValue(const PA19IntegralValue& value) const;
+	ConstantValue FromFloatingValue(long double value, const TypePtr& type = TypePtr()) const;
+	ConstantValue FromObjectValue(const TypePtr& type,
+		const shared_ptr<ConstantObject>& object) const;
+	ConstantValue FromPointerValue(const shared_ptr<ConstantPointer>& pointer,
+		const TypePtr& type = TypePtr()) const;
 	PA19IntegralValue ToIntegralValue(const ConstantValue& value) const;
 	PA19IntegralValue ParseLiteralValue(const string& raw) const;
 	long long ParseLiteral(const string& raw) const;
 	ConstantValue Evaluate(const CPPGMAstNodePtr& expression, Scope* scope);
+	ConstantValue EvaluateTyped(const CPPGMAstNodePtr& expression, Scope* scope,
+		const TypePtr& expected_type);
+	ConstantValue EvaluateFunctionCall(Binding* function,
+		const CPPGMAstNodePtr& call, Scope* caller_scope,
+		const ConstantValue& receiver = ConstantValue(),
+		const TypePtr& expected_type = TypePtr());
+	ConstantValue EvaluateConstructor(const TypePtr& type,
+		const vector<ConstantValue>& arguments, Scope* caller_scope,
+		const CPPGMAstNodePtr& call = CPPGMAstNodePtr());
+	ConstantValue DefaultConstantValue(const TypePtr& type, Scope* scope);
+	ConstantValue ConvertConstantValue(const ConstantValue& value,
+		const TypePtr& target, Scope* scope);
+	ConstantValue EvaluateMemberCall(const CPPGMAstNodePtr& call, Scope* scope);
+	ConstantValue EvaluateMemberValue(const CPPGMAstNodePtr& expression, Scope* scope);
+	ConstantFlow EvaluateStatement(const CPPGMAstNodePtr& statement, Scope* scope);
+	ConstantFlow EvaluateCompound(const CPPGMAstNodePtr& compound, Scope* scope);
+	ConstantFlow EvaluateConditionStatement(const CPPGMAstNodePtr& statement,
+		Scope* scope);
+	bool ConstantFrameValue(const string& name, ConstantValue* value) const;
+	bool ConstantPackValue(const string& name, vector<ConstantValue>* value) const;
+	void SetConstantFrameValue(const string& name, const ConstantValue& value);
+	Binding* FindConstantFunction(const string& name, Scope* scope,
+		size_t argument_count) const;
 	size_t FundamentalSize(const string& name) const
 	{
 		if (name == "char" || name == "signed char" || name == "unsigned char" || name == "bool") return 1;
@@ -1003,17 +1055,21 @@ public:
 		try {
 			value = Evaluate(node->children[0], scope);
 		} catch (const logic_error& error) {
-			// A class specialization does not instantiate the bodies of its
-			// non-specialized member functions.  Preserve that rule for a
-			// dependent sizeof/alignof assertion whose operand is still
-			// incomplete; a called member is lowered from the same materialized
-			// definition later.
 			if (InMaterializedTemplateMember(scope) &&
 				string(error.what()).find("incomplete class") != string::npos)
 				return;
 			throw;
 		}
-		if (!value.integral.known || PA19Raw(value.integral) == 0) {
+		const bool known = value.integral.known || value.floating_known ||
+			(value.kind == ConstantValue::CONSTANT_OBJECT && value.object) ||
+			(value.kind == ConstantValue::CONSTANT_POINTER && value.pointer);
+		bool truth = false;
+		if (value.integral.known) truth = PA19Raw(value.integral) != 0;
+		else if (value.floating_known) truth = value.floating != 0;
+		else if (value.kind == ConstantValue::CONSTANT_POINTER)
+			truth = value.pointer && !value.pointer->null_pointer;
+		else if (value.kind == ConstantValue::CONSTANT_OBJECT) truth = true;
+		if (!known || !truth) {
 			throw logic_error("static assertion failed");
 		}
 	}
@@ -1078,6 +1134,14 @@ public:
 			}
 		}
 		Process(node->children[1], parameters);
+		if (node->children[1] && node->children[1]->kind == "function-definition" &&
+			node->children[1]->children.size() > 1)
+		{
+			const string function_name = FirstIdentifier(node->children[1]->children[1]);
+			Binding* function = parameters->local(function_name);
+			if (function && function->kind == BIND_FUNCTION)
+				constant_template_functions_[function_name].push_back(function);
+		}
 	}
 	void Process(const CPPGMAstNodePtr& node, Scope* scope)
 	{

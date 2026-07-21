@@ -18,6 +18,83 @@ using namespace std;
 
 namespace cppgm_pa14_lowering {
 
+namespace {
+
+string NormalizeFloatingLiteral(const string& raw, const TypePtr& target)
+{
+    string spelling = raw;
+    const size_t marker = spelling.find(':');
+    if(marker != string::npos && spelling.substr(0, marker) == "TT_LITERAL")
+      spelling.erase(0, marker + 1);
+    if(spelling.empty()) return spelling;
+    const char last = spelling[spelling.size() - 1];
+    if(last == 'f' || last == 'F' || last == 'l' || last == 'L')
+      spelling.erase(spelling.size() - 1);
+    const size_t exponent = spelling.find_first_of("eE");
+    const size_t mantissa_end = exponent == string::npos ? spelling.size() : exponent;
+    const size_t dot = spelling.find('.', 0);
+    if(dot != string::npos && dot < mantissa_end) {
+      size_t end = mantissa_end;
+      while(end > dot + 1 && spelling[end - 1] == '0') --end;
+      if(end == dot + 1) --end;
+      spelling.erase(end, mantissa_end - end);
+    }
+    TypePtr value_type = type_value(target);
+    if(value_type && value_type->kind == TYPE_FUNDAMENTAL) {
+      if(value_type->name == "float") spelling += "f";
+      else if(value_type->name == "long double") spelling += "L";
+    }
+    return spelling;
+  }
+
+bool FloatingConstantText(Analyzer& analyzer, const CPPGMAstNodePtr& expression,
+                          Scope* scope, const TypePtr& target, string* text)
+{
+    if(!expression || !target || !is_floating_type(target)) return false;
+    if(expression->kind == "literal" &&
+       (expression->value.find('.') != string::npos ||
+        expression->value.find_first_of("eEpP") != string::npos)) {
+      if(text) *text = NormalizeFloatingLiteral(expression->value, target);
+      return true;
+    }
+    ConstantValue value;
+    try {
+      value = analyzer.Evaluate(expression, scope);
+    } catch(...) {
+      return false;
+    }
+    if(!value.floating_known) return false;
+    ostringstream out;
+    out << setprecision(18) << value.floating;
+    TypePtr value_type = type_value(target);
+    if(value_type && value_type->kind == TYPE_FUNDAMENTAL) {
+      if(value_type->name == "float") out << "f";
+      else if(value_type->name == "long double") out << "L";
+    }
+    if(text) *text = out.str();
+    return true;
+  }
+
+bool IntegralConstantValue(Analyzer& analyzer, const CPPGMAstNodePtr& expression,
+                           Scope* scope, const TypePtr& target, long long* value)
+{
+    TypePtr target_value = type_value(target);
+    if(!expression || !target || !(is_integral_type(target) ||
+       (target_value && target_value->kind == TYPE_FUNDAMENTAL &&
+        target_value->name == "bool"))) return false;
+    ConstantValue constant;
+    try {
+      constant = analyzer.EvaluateTyped(expression, scope, target);
+    } catch(...) {
+      return false;
+    }
+    if(!constant.integral.known) return false;
+    if(value) *value = PA19Signed(constant.integral);
+    return true;
+  }
+
+} // namespace
+
 PA14Lowerer::Value PA14Lowerer::ConvertValue(Value value, const TypePtr& target,
                      bool immediate_return, bool adjust_derived_pointer)
 {
@@ -207,7 +284,11 @@ bool PA14Lowerer::FoldInteger(const CPPGMAstNodePtr& node, Scope* scope,
       return true;
     }
     if(node->kind == "id-expression") {
-      vector<Binding*> candidates = Lookup(node->value, scope);
+      const bool decltype_form = node->value.compare(0, 9, "decltype(") == 0;
+      Binding* qualified_member = ResolveDecltypeStaticMember(node->value, scope);
+      vector<Binding*> candidates = qualified_member ?
+        vector<Binding*>(1, qualified_member) : Lookup(node->value, scope);
+      if(qualified_member && decltype_form) return false;
       if(candidates.size() != 1 || !candidates[0]->has_value) return false;
       if(type) *type = candidates[0]->type;
       if(result) *result = candidates[0]->value;
@@ -313,7 +394,8 @@ PA14Lowerer::AddressInit PA14Lowerer::StaticAddress(const CPPGMAstNodePtr& expre
       return StaticAddress(node->children[0], scope);
     if(node->kind == "cast-expression" && node->children.size() > 1)
       return StaticAddress(node->children[1], scope);
-    if(node->kind == "literal" && !node->value.empty() && node->value[0] == '"') {
+    if(node->kind == "literal" && !node->value.empty() &&
+       node->value.find('"') != string::npos) {
       result.valid = true;
       result.symbol = InternString(node->value);
       return result;
@@ -322,7 +404,10 @@ PA14Lowerer::AddressInit PA14Lowerer::StaticAddress(const CPPGMAstNodePtr& expre
     if(node->kind == "unary-expression" && PA12Operator(node->value) == "&" &&
        !node->children.empty()) return StaticAddress(node->children[0], scope);
     if(node->kind == "id-expression") {
-      vector<Binding*> candidates = Lookup(node->value, scope);
+      const bool decltype_form = node->value.compare(0, 9, "decltype(") == 0;
+      Binding* qualified_member = ResolveDecltypeStaticMember(node->value, scope);
+      vector<Binding*> candidates = qualified_member ?
+        vector<Binding*>(1, qualified_member) : Lookup(node->value, scope);
       if(candidates.size() != 1) return result;
       Binding* binding = candidates[0];
       if(binding->kind == BIND_FUNCTION) {
@@ -334,7 +419,8 @@ PA14Lowerer::AddressInit PA14Lowerer::StaticAddress(const CPPGMAstNodePtr& expre
       }
       GlobalRecord* global = FindGlobal(binding->qualified_name);
       if(!global && binding->is_member && binding->is_static)
-        global = EnsureStaticMemberStorage(binding);
+        global = EnsureStaticMemberStorage(binding,
+          decltype_form);
       if(global) {
         result.valid = true;
         result.symbol = global->symbol;
@@ -372,17 +458,25 @@ string PA14Lowerer::GlobalMetadata(const GlobalRecord& global) const
     const string object = global.object_name.empty() ? global.symbol : global.object_name;
     if(global.tls_guard)
       return " [storage=thread_local, binding=" + binding + "]";
+    if(global.local_static)
+      return " [binding=" + binding + "]";
     if(global.thread_local_storage)
       return " [storage=thread_local, binding=" +
         binding + ", object=" + object + "]";
     return " [binding=" + binding + ", object=" + object + "]";
   }
 
-string PA14Lowerer::RenderStringGlobal(const string& symbol, const vector<unsigned char>& bytes) const
+string PA14Lowerer::RenderStringGlobal(const string& symbol, const string& raw,
+                                       const vector<unsigned char>& bytes) const
 {
     ostringstream out;
     out << "global @" << symbol << " [binding=internal] = {\n";
-    for(size_t i = 0; i < bytes.size(); ++i) out << "  i8 " << static_cast<unsigned int>(bytes[i]) << "\n";
+    string element_type = "i8";
+    if(raw.compare(0, 2, "u8") == 0) element_type = "i8";
+    else if(!raw.empty() && raw[0] == 'u') element_type = "i16";
+    else if(!raw.empty() && (raw[0] == 'U' || raw[0] == 'L')) element_type = "i32";
+    for(size_t i = 0; i < bytes.size(); ++i)
+      out << "  " << element_type << " " << static_cast<unsigned int>(bytes[i]) << "\n";
     out << "}";
     return out.str();
   }
@@ -413,7 +507,27 @@ string PA14Lowerer::RenderGlobal(GlobalRecord& global)
       out << "global @" << global.symbol << GlobalMetadata(global) << " = {\n";
       TypePtr element = type->child;
       TypePtr element_value = type_value(element);
-      if(element_value && element_value->kind == TYPE_CLASS) {
+      if(!global.local_static && global.internal && element_value &&
+         (element_value->kind == TYPE_CLASS || element_value->kind == TYPE_ARRAY) &&
+         expression &&
+         (Analyzer::HasNodeValue(global.node, "decl-specifier", "constexpr") ||
+          Analyzer::HasNodeValue(global.node, "specifier", "constexpr"))) {
+        vector<GlobalDataItem> constant_items;
+        ConstantValue constant;
+        try {
+          constant = analyzer_.EvaluateTyped(expression, global.scope, type);
+        } catch(...) {
+          constant = ConstantValue();
+        }
+        if(constant.object && AppendConstantGlobalData(type, constant, constant_items)) {
+          for(size_t i = 0; i < constant_items.size(); ++i)
+            out << "  " << constant_items[i].text << "\n";
+          out << "}";
+          return out.str();
+        }
+      }
+      if(element_value && (element_value->kind == TYPE_CLASS ||
+                           element_value->kind == TYPE_ARRAY)) {
         out << "  zero " << integer_text(static_cast<long long>(type_size(type))) << "\n";
         out << "}";
         return out.str();
@@ -438,11 +552,18 @@ string PA14Lowerer::RenderGlobal(GlobalRecord& global)
               items.push_back(GlobalDataItem("zero 8"));
             else items.push_back(GlobalDataItem("zero 8"));
           } else {
-            long long value = 0;
-            TypePtr source;
-            if(FoldInteger(item, global.scope, &value, &source))
-              items.push_back(GlobalDataItem(low_type(element) + " " + integer_text(value)));
-            else items.push_back(GlobalDataItem(low_type(element) + " 0"));
+            TypePtr element_value = type_value(element);
+            string floating;
+            if(element_value && is_floating_type(element_value) &&
+               FloatingConstantText(analyzer_, item, global.scope, element_value, &floating))
+              items.push_back(GlobalDataItem(low_type(element) + " " + floating));
+            else {
+              long long value = 0;
+              TypePtr source;
+              if(FoldInteger(item, global.scope, &value, &source))
+                items.push_back(GlobalDataItem(low_type(element) + " " + integer_text(value)));
+              else items.push_back(GlobalDataItem(low_type(element) + " 0"));
+            }
           }
         }
       }
@@ -475,12 +596,21 @@ string PA14Lowerer::RenderGlobal(GlobalRecord& global)
       long long value = 0;
       TypePtr source;
       const bool folded = expression && FoldInteger(expression, global.scope, &value, &source);
-      if(address.function || (expression && !folded &&
+      long long semantic_value = 0;
+      const bool folded_semantic = value_type &&
+        IntegralConstantValue(analyzer_, expression, global.scope, value_type, &semantic_value);
+      string floating;
+      const bool folded_floating = value_type && is_floating_type(value_type) &&
+        FloatingConstantText(analyzer_, expression, global.scope, value_type, &floating);
+      if(folded_floating) out << floating;
+      else if(folded_semantic) out << integer_text(semantic_value);
+      else if(address.function || (expression && !folded && !folded_semantic &&
          !(type_value(type)->kind == TYPE_POINTER && address.valid))) {
         global.dynamic_initializer = true;
         needs_init_helper_ = true;
+        out << "zero";
       }
-      if(folded) out << integer_text(value);
+      else if(folded) out << integer_text(value);
       else if(expression && expression->kind == "literal" && !expression->value.empty() &&
               expression->value[0] != '"') out << canonical_literal(expression->value);
       else out << "zero";
@@ -493,6 +623,8 @@ void PA14Lowerer::EmitGlobals(vector<string>& entries, size_t begin, bool includ
     for(size_t i = begin; i < globals_.size(); ++i) {
       GlobalRecord& global = globals_[i];
       if(!global.declaration) continue;
+      if(global.type && global.type->kind == TYPE_ARRAY && global.type->bound <= 0)
+        continue;
       ostringstream declaration;
       declaration << "declare global @" << global.symbol;
       TypePtr value_type = type_value(global.type);
@@ -537,7 +669,8 @@ void PA14Lowerer::EmitGlobals(vector<string>& entries, size_t begin, bool includ
     }
     for(size_t i = 0; i < string_order_.size(); ++i) {
       const string symbol = "__strlit__" + integer_text(static_cast<long long>(i + 1));
-      entries.push_back(RenderStringGlobal(symbol, string_data_[string_order_[i]]));
+      entries.push_back(RenderStringGlobal(symbol, string_order_[i],
+        string_data_[string_order_[i]]));
     }
     for(size_t i = 0; i < rendered.size(); ++i) entries.push_back(rendered[i]);
   }
@@ -666,7 +799,13 @@ void PA14Lowerer::emit_store(const TypePtr& type, const string& value, const str
 string PA14Lowerer::local_address(VariablePlan* variable)
 {
     if(!variable) throw logic_error("missing local variable");
-    if(variable->global) return global_address(variable->global);
+    if(variable->global) {
+      if(variable->global->local_static && type_is_reference(variable->type))
+        return emit_load("@" + variable->global->symbol,
+          PointerTo(Fundamental("char")));
+      const string address = global_address(variable->global);
+      return address;
+    }
     if(variable->parameter_address) return variable->parameter_operand;
     if(state_ && state_->return_slot_plan == variable) {
       const vector<string> names = ParameterNames(*state_->record);
@@ -721,6 +860,22 @@ string PA14Lowerer::EmitArrayDecay(const CPPGMAstNodePtr& node, Scope* scope)
     TypePtr type = expression_value_type(info);
     if(type && type->kind == TYPE_POINTER) return EmitValue(node, scope).operand;
     if(type && type->kind == TYPE_FUNCTION) return EmitValue(node, scope).operand;
+    // A call returning an array reference is represented in LowIR by the
+    // pointer returned by that call.  The semantic expression still has
+    // array type, but applying a second decay would add an observable,
+    // redundant `unary decay ptr` before a subscript.
+    if(type && type->kind == TYPE_ARRAY && node && node->kind == "call-expression") {
+      Value value = EmitCall(node, scope);
+      if(value.lvalue && value.type && type_value(value.type) &&
+         type_value(value.type)->kind == TYPE_ARRAY)
+        return value.operand;
+    }
+    // A subscript of an array of arrays already produces the address of the
+    // selected inner array.  Decaying that address a second time only adds a
+    // redundant LowIR unary operation before the next subscript.
+    if(type && type->kind == TYPE_ARRAY && node &&
+       node->kind == "subscript-expression")
+      return EmitAddress(node, scope);
     const string address = EmitAddress(node, scope);
     if(node && node->kind == "literal") return address;
     if(node && node->kind == "conditional-expression") return address;
@@ -921,7 +1076,10 @@ string PA14Lowerer::EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
         }
         return local_address(local);
       }
-      vector<Binding*> candidates = Lookup(node->value, scope);
+      const bool decltype_form = node->value.compare(0, 9, "decltype(") == 0;
+      Binding* qualified_member = ResolveDecltypeStaticMember(node->value, scope);
+      vector<Binding*> candidates = qualified_member ?
+        vector<Binding*>(1, qualified_member) : Lookup(node->value, scope);
       if(candidates.empty()) throw logic_error("unknown address expression");
       Binding* binding = candidates.size() == 1 ? candidates[0] : candidates[0];
       if(binding->kind == BIND_FUNCTION) {
@@ -937,7 +1095,8 @@ string PA14Lowerer::EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
       }
       GlobalRecord* global = FindGlobal(binding->qualified_name);
       if(!global && binding->is_member && binding->is_static)
-        global = EnsureStaticMemberStorage(binding);
+        global = EnsureStaticMemberStorage(binding,
+          decltype_form);
       if(global) {
         const string address = global_address(global);
         if(type_is_reference(global->type))
@@ -1194,11 +1353,12 @@ void PA14Lowerer::EmitDynamicInitializers(vector<string>& entries)
     vector<GlobalRecord*> tls_initializers;
     vector<GlobalRecord*> finalizers;
     for(size_t i = 0; i < globals_.size(); ++i) {
-      if(globals_[i].dynamic_initializer) {
+      if(globals_[i].dynamic_initializer && !globals_[i].local_static) {
         if(globals_[i].thread_local_storage) tls_initializers.push_back(&globals_[i]);
         else initializers.push_back(&globals_[i]);
       }
-      if(globals_[i].dynamic_finalizer) finalizers.push_back(&globals_[i]);
+      if(globals_[i].dynamic_finalizer && !globals_[i].local_static)
+        finalizers.push_back(&globals_[i]);
     }
     if(initializers.empty() && tls_initializers.empty() && finalizers.empty()) return;
 

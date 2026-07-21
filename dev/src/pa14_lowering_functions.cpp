@@ -132,7 +132,8 @@ string PA14Lowerer::EmitFunction(FunctionRecord& function)
         emitted_slot = true;
         out << "  slot $" << entry.name << " : " <<
           state.special_slot_types[entry.name] << "\n";
-      } else if(entry.variable && entry.variable != state.return_slot_plan) {
+      } else if(entry.variable && !entry.variable->global &&
+                entry.variable != state.return_slot_plan) {
         emitted_slot = true;
         out << "  slot $" << entry.name << " : " <<
           storage_type(entry.variable->type) << "\n";

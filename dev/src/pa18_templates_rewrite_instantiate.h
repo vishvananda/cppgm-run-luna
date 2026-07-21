@@ -1,4 +1,5 @@
 #pragma once
+
 	string NodeTypeSpelling(const CPPGMAstNodePtr& sequence) const
 	{
 		if(!sequence) return string();
@@ -10,7 +11,8 @@
 					 child->value == "KW_INLINE:inline" ||
 					 child->value == "KW_CONSTEXPR:constexpr"))) continue;
 			if(child->kind != "decl-specifier" && child->kind != "type-name" &&
-				child->kind != "type-specifier" && child->kind != "cv-qualifier") continue;
+				child->kind != "type-specifier" && child->kind != "decltype-specifier" &&
+				child->kind != "cv-qualifier") continue;
 			const string spelling = RemoveMarker(child->value);
 			if(spelling.empty()) continue;
 			if(!result.empty()) result += ' ';
@@ -64,6 +66,8 @@
 			!node->children.empty())
 			return (node->kind == "sizeof-expression" ? "sizeof(" : "alignof(") +
 				SpellNode(node->children[0]) + ")";
+		if(node->kind == "sizeof-pack-expression" && !node->children.empty())
+			return "sizeof...(" + ConstantExpressionSpelling(node->children[0]) + ")";
 		if(node->kind == "cast-expression" && node->children.size() >= 2)
 			return "static_cast<" + SpellNode(node->children[0]) + ">("
 				+ ConstantExpressionSpelling(node->children[1]) + ")";
@@ -86,6 +90,12 @@
 				RemoveMarker(node->value) + ConstantExpressionSpelling(node->children[1]);
 		return SpellNode(node);
 	}
+	void RecordConstantArrayDeclaration(const CPPGMAstNodePtr& node,
+		const string& context, const map<string, string>& substitutions);
+	const vector<PA19IntegralValue>* FindConstantArray(const string& raw,
+		const string& context) const;
+	bool EvaluateSourceArrayFunction(string raw, const string& context,
+		const map<string, string>& substitutions, PA19IntegralValue* result);
 	bool EvaluateMaterializedTemplateValue(const string& raw,
 		const string& context, const map<string, string>& substitutions,
 		PA19IntegralValue* result)
@@ -301,7 +311,18 @@
 		return EvaluateInheritedBaseValue(*definition, context,
 			member_substitutions, result);
 	}
-	bool EvaluateIntegralText(string raw, const string& context,
+	CPPGMAstNodePtr FindSourceConstantFunction(string raw, const string& context) const;
+	CPPGMAstNodePtr SourceReturnExpression(const CPPGMAstNodePtr& function) const;
+	bool EvaluateSourceFunctionReturn(const CPPGMAstNodePtr& function,
+		const string& context, const map<string, string>& substitutions,
+		PA19IntegralValue* result);
+	bool EvaluateSourceObjectMember(const string& raw, const string& context,
+		const map<string, string>& substitutions, PA19IntegralValue* result);
+	bool EvaluateSourceClassTruth(string raw, const string& context,
+		const map<string, string>& substitutions, PA19IntegralValue* result);
+	bool EvaluateSourceIntegralExpression(string raw, const string& context,
+		const map<string, string>& substitutions, PA19IntegralValue* result);
+		bool EvaluateIntegralText(string raw, const string& context,
 		const map<string, string>& substitutions, PA19IntegralValue* result)
 	{
 		raw = CanonicalSpelling(ReplaceIdentifiers(raw, substitutions));
@@ -310,6 +331,7 @@
 		const bool qualified_value_expression = raw.find("::value") != string::npos;
 		if((!qualified_value_expression || constant_values_.find(raw) != constant_values_.end()) &&
 			parser.Evaluate(raw, result)) return true;
+		if(EvaluateSourceIntegralExpression(raw, context, substitutions, result)) return true;
 		if(EvaluateMaterializedTemplateValue(raw, context, substitutions, result)) return true;
 		if(ExpandIntegralValueOperands(raw, context, substitutions, result)) return true;
 		if(EvaluateInheritedIntegralValue(raw, context, substitutions, result)) return true;
@@ -376,6 +398,9 @@
 		}
 		return false;
 	}
+	void RecordTemplateArrayValues(const TemplateDefinition& definition,
+		const vector<string>& arguments, const string& context,
+		const map<string, string>& substitutions);
 	void RecordConstantDeclaration(const CPPGMAstNodePtr& node, const string& context)
 	{
 		if(!node || node->kind != "simple-declaration" || node->children.empty()) return;
