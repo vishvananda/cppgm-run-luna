@@ -430,3 +430,100 @@ audit and `git diff --check` are also clean.
 The Remaining Work Map is empty for PA18.  No further checkpoint group is
 required; the next action is the final required audit, commit, and clean
 worktree check.
+
+## Architecture Review
+
+The integrated PA18 stage preserves the staged compiler boundary and extends
+the PA15-PA17 typed object/lowering model rather than introducing a generic-only
+compiler or a second backend:
+
+- The PA10 parser remains the syntax boundary.  `CPPGMAstNode` carries
+  initializer form, template-instantiation and explicit-instantiation state,
+  and the dependent-base fact needed by later lookup.  The parser retains GNU
+  `__alignof(type)` as a typed alignment AST operand so the analyzer can apply
+  it to the instantiated layout.  The added `ast_parser_node.cpp` is included
+  in the `cppgm++` source set.
+- `pa18_templates_collection.h` owns the first-tier template collection
+  records: `TemplateParameter`, `TemplateDefinition`, function signatures,
+  lexical namespace/function contexts, aliases, requested nested classes, and
+  generated AST ownership.  `PA18TemplateExpander::Run` separates collection,
+  deduction/resolution, specialization materialization, and generated-node
+  insertion.  `Instantiate` uses canonical type-argument keys and an active
+  recursion set; member and nested-class materialization uses separate
+  identity sets, so a repeated call reaches the same generated declaration.
+- The rewrite layer performs AST-node transformation with normalized type
+  spellings and substitution maps, not LowIR text synthesis.  It supports the
+  PA18 boundary's type defaults, direct-call deduction, explicit template ids,
+  dependent `decltype`, aliases, current-instantiation/member lookup, nested
+  definitions, and template-backed operators.  The resulting specialization
+  is then analyzed as an ordinary PA11 declaration.  Non-type parameters,
+  packs, partial/explicit specialization, full two-phase lookup, partial
+  ordering, SFINAE, and other PA18 out-of-scope features remain unsupported.
+- `pa11_semantics_model.*` continues to own `Type`, `Scope`, `Binding`, class
+  layout, direct-base offsets, virtual metadata, and template-specialization
+  facts.  `pa11_semantics_analyzer.*` creates template-parameter scopes,
+  validates local alias shadowing and nondependent names, checks special-member
+  exception specifications, resolves dependent aliases/names, and evaluates
+  typed alignment operands.  PA12 operator naming and the existing PA12-PA17
+  overload machinery remain the source of call semantics.
+- The PA14 lowerer consumes only the ordinary expanded AST and its typed
+  semantic facts.  `FunctionRecord` and `GlobalRecord` preserve specialization
+  identity, weak/object symbol metadata, demand, ABI, and lifetime ownership;
+  class values, bases, constructors, destructors, references, TLS, globals,
+  polymorphism, and LowIR actions stay in the shared PA14-PA17 modules.  The
+  driver emits ordinary roots and walks the finite demanded helper set to a
+  fixed point, including frontiers created by global initialization and
+  member/helper emission.
+- The monotonic-extension rule is explicit in `ExpandPA18Templates`: ordinary
+  PA17-only input bypasses expansion, while template syntax or a supported
+  template-id activates the first-tier collector.  The through-PA18 report is
+  therefore the regression evidence that the PA1-PA17 behavior and source
+  ordering remain intact.  LowIR top-level, block, constructor/destructor,
+  vtable, and initialization order remains owned by the existing PA13/PA14
+  contract.
+- Ownership and deterministic output are compiler-state properties.  AST and
+  type graphs use shared ownership, semantic scopes own stable bindings, and
+  lowerer records use stable deque storage.  Alias/inheritance recursion and
+  specialization materialization use visited/cache sets; generated classes
+  use dependency-aware ordering, while demand/emission order follows source
+  and semantic demand rather than heap addresses or fixture order.
+
+## Final Architecture Review
+
+The final review rechecked the completed checkpoint at `4790179` against the
+PA18 README, PA13 LowIR contract, this plan's full checkpoint history, the
+earlier PA17 final audit, all cumulative PA18 source changes, the complete
+PA18 test suite, the through-stage report, and the file audit.
+
+The final compatibility/lifetime increment closes two cross-stage seams rather
+than adding template-specific output rules:
+
+1. Cleanup of implicit class objects now materializes the declaration address
+   before the fresh destructor address when the typed object or template
+   specialization needs a lifetime anchor.  This preserves the object address
+   used by constructor/destructor actions and avoids a dangling or unrepresented
+   lifetime transition in generated LowIR.
+2. Defaulted copy/move construction projects a direct base and calls its base
+   constructor entry, while ordinary non-base members continue through their
+   normal special-member record.  `BaseEntryFor` and
+   `EnsureConstructorBaseEntry` therefore keep complete-object and
+   base-subobject ABI entry points distinct for both ordinary and instantiated
+   classes.
+
+The integrated review also confirms that the preceding checkpoints are still
+connected to the same ownership path: dependent layout and GNU alignment are
+resolved by PA11, class prvalues and reference members use PA14 typed temporary
+and storage plans, static/TLS objects use `GlobalRecord` and guarded
+initialization, generated class/function definitions are demand-indexed by the
+template expander, and PA17 vtable/dispatch facts remain in the shared object
+model.  No source-level template feature is lowered by bypassing semantic
+analysis, and no PA18 change expands the assignment into PA19's non-type or
+specialization work.
+
+The final audit found no implementation blocker.  The file audit remains a
+passing warning-only check with the seven documented implementation-header
+division warnings; the warning heuristic is not disabled and no new source
+file is omitted from `dev/frontend_source_sets.mk`.  The remaining handoff is
+the PA19 boundary: integral non-type arguments, explicit specialization,
+integral constant-expression arguments, and `static_assert`-style
+metaprogramming are intentionally left for the next stage.
