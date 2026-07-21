@@ -331,6 +331,7 @@ private:
 	map<string, string> type_aliases_;
 	map<string, vector<string> > type_aliases_by_name_;
 	map<string, FunctionSignature> function_signatures_;
+	map<string, vector<string> > function_signatures_by_name_;
 	map<string, string> specialization_bases_;
 	map<string, vector<string> > specialization_arguments_;
 	map<string, set<string> > requested_nested_classes_;
@@ -370,6 +371,32 @@ private:
 		const CPPGMAstNodePtr& declarator) const;
 	string TypeIdSpelling(const CPPGMAstNodePtr& type_id) const;
 	CPPGMAstNodePtr FunctionDeclarator(const CPPGMAstNodePtr& declaration) const;
+	bool IsBuiltinArithmeticType(string raw) const;
+	string CommonBuiltinArithmeticType(const string& left, const string& right) const;
+	bool InferOperatorResult(const string& operation, const string& left,
+		const string& right, const string& context, string* result) const;
+	bool InferTemplateOperatorResult(const string& operation,
+		const CPPGMAstNodePtr& left_expression, const CPPGMAstNodePtr& right_expression,
+		const map<string, string>& substitutions, const string& context,
+		string* result) const;
+	bool InferBinaryArgument(const CPPGMAstNodePtr& expression, string* result,
+		const map<string, string>& substitutions, const string& context) const;
+	CPPGMAstNodePtr TransformCallExpression(const CPPGMAstNodePtr& input,
+		const string& context, const map<string, string>& substitutions);
+	bool FunctionParameterCounts(const CPPGMAstNodePtr& parameters,
+		size_t* total, size_t* required) const
+	{
+		if(!parameters || !total || !required) return false;
+		*total = 0;
+		*required = 0;
+		for(size_t i = 0; i < parameters->children.size(); ++i) {
+			const CPPGMAstNodePtr parameter = parameters->children[i];
+			if(!parameter || parameter->kind != "parameter-declaration") continue;
+			++*total;
+			if(!ChildOfKindLocal(parameter, "default-argument")) ++*required;
+		}
+		return true;
+	}
 	string ResolveAlias(string spelling, const string& context) const
 	{
 		spelling = CanonicalSpelling(spelling);
@@ -508,6 +535,8 @@ private:
 		signature.result_specifiers = CloneNode(result_specs);
 		signature.parameters = CloneNode(DescendantOfKind(declarator, "parameter-clause"));
 		const string qualified = JoinPath(context, name);
+		if(function_signatures_.find(qualified) == function_signatures_.end())
+			function_signatures_by_name_[name].push_back(qualified);
 		function_signatures_[qualified] = signature;
 	}
 	const FunctionSignature* FindFunctionSignature(const string& raw_name,
@@ -525,14 +554,12 @@ private:
 		}
 		map<string, FunctionSignature>::const_iterator direct = function_signatures_.find(raw_name);
 		if(direct != function_signatures_.end()) return &direct->second;
-		const FunctionSignature* result = 0;
-		for(map<string, FunctionSignature>::const_iterator it = function_signatures_.begin();
-			it != function_signatures_.end(); ++it)
-			if(LastComponent(it->first) == name) {
-				if(result) return 0;
-				result = &it->second;
-			}
-		return result;
+		map<string, vector<string> >::const_iterator names =
+			function_signatures_by_name_.find(name);
+		if(names == function_signatures_by_name_.end() || names->second.size() != 1) return 0;
+		map<string, FunctionSignature>::const_iterator found = function_signatures_.find(
+			names->second[0]);
+		return found == function_signatures_.end() ? 0 : &found->second;
 	}
 	string FunctionMarker(const string& raw_name, const string& context) const
 	{

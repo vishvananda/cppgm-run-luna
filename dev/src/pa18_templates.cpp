@@ -197,8 +197,6 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 		if(separator == string::npos) current.clear();
 		else current.erase(separator);
 	}
-	if(class_contexts_.find(spelling) != class_contexts_.end()) {
-	}
 	if(spelling.find("::") == string::npos) {
 		set<string> active;
 		const string inherited = InheritedTypeName(context, spelling, &active);
@@ -370,6 +368,309 @@ CPPGMAstNodePtr PA18TemplateExpander::FunctionDeclarator(const CPPGMAstNodePtr& 
 			!list->children[0]->children.empty()) return list->children[0]->children[0];
 	}
 	return CPPGMAstNodePtr();
+}
+
+bool PA18TemplateExpander::IsBuiltinArithmeticType(string raw) const
+{
+	raw = CanonicalSpelling(raw);
+	while(raw.compare(0, 6, "const ") == 0)
+		raw = CanonicalSpelling(raw.substr(6));
+	while(raw.compare(0, 9, "volatile ") == 0)
+		raw = CanonicalSpelling(raw.substr(9));
+	return raw == "bool" || raw == "char" || raw == "signed char" ||
+		raw == "unsigned char" || raw == "short" || raw == "short int" ||
+		raw == "unsigned short" || raw == "unsigned short int" ||
+		raw == "int" || raw == "unsigned" || raw == "unsigned int" ||
+	raw == "long" || raw == "long int" || raw == "unsigned long" ||
+	raw == "unsigned long int" || raw == "long long" ||
+	raw == "long long int" || raw == "unsigned long long" ||
+	raw == "unsigned long long int" || raw == "float" ||
+	raw == "double" || raw == "long double";
+}
+
+string PA18TemplateExpander::CommonBuiltinArithmeticType(const string& left,
+	const string& right) const
+{
+	const string a = CanonicalSpelling(left);
+	const string b = CanonicalSpelling(right);
+	if(a == b) return a;
+	if(a == "long double" || b == "long double") return "long double";
+	if(a == "double" || b == "double") return "double";
+	if(a == "float" || b == "float") return "float";
+	if(a.find("long long") != string::npos || b.find("long long") != string::npos)
+		return a.find("unsigned") != string::npos || b.find("unsigned") != string::npos ?
+			"unsigned long long int" : "long long int";
+	if(a.find("long") != string::npos || b.find("long") != string::npos)
+		return a.find("unsigned") != string::npos || b.find("unsigned") != string::npos ?
+			"unsigned long int" : "long int";
+	return a.find("unsigned") != string::npos || b.find("unsigned") != string::npos ?
+		"unsigned int" : "int";
+}
+
+bool PA18TemplateExpander::InferOperatorResult(const string& operation,
+	const string& left, const string& right, const string& context, string* result) const
+{
+	if(operation.empty() || !result) return false;
+	const string name = "operator" + operation;
+	const set<string> no_template_parameters;
+	CPPGMAstNodePtr left_declaration = FindClassDeclaration(left, context);
+	if(left_declaration) {
+		for(size_t i = 0; i < left_declaration->children.size(); ++i) {
+			const CPPGMAstNodePtr declaration = left_declaration->children[i];
+			if(!declaration || declaration->kind != "function-definition" ||
+				declaration->children.size() < 2 ||
+				LastComponent(FirstIdentifierLocal(declaration->children[1])) != name) continue;
+			const CPPGMAstNodePtr parameters = DescendantOfKind(declaration->children[1],
+				"parameter-clause");
+			size_t total = 0;
+			size_t required = 0;
+			if(!FunctionParameterCounts(parameters, &total, &required) || total != 1)
+				continue;
+			CPPGMAstNodePtr parameter;
+			for(size_t p = 0; p < parameters->children.size(); ++p)
+				if(parameters->children[p] && parameters->children[p]->kind ==
+					"parameter-declaration") {
+					parameter = parameters->children[p];
+					break;
+				}
+			if(!parameter) continue;
+			map<string, string> inferred;
+			if(!MatchTypePattern(ParameterTypeSpelling(parameter), right,
+				no_template_parameters, &inferred, context)) continue;
+			*result = NormalizeTypeArgument(NodeTypeSpelling(declaration->children[0]) +
+				DeclaratorSuffix(declaration->children[1]));
+			return !result->empty();
+		}
+	}
+	map<string, vector<string> >::const_iterator names = function_signatures_by_name_.find(name);
+	if(names == function_signatures_by_name_.end()) return false;
+	for(size_t name_index = 0; name_index < names->second.size(); ++name_index) {
+		map<string, FunctionSignature>::const_iterator it = function_signatures_.find(
+			names->second[name_index]);
+		if(it == function_signatures_.end()) continue;
+		const CPPGMAstNodePtr parameters = it->second.parameters;
+		size_t total = 0;
+		size_t required = 0;
+		if(!FunctionParameterCounts(parameters, &total, &required) || total != 2)
+			continue;
+		CPPGMAstNodePtr first;
+		CPPGMAstNodePtr second;
+		for(size_t p = 0; p < parameters->children.size(); ++p) {
+			const CPPGMAstNodePtr parameter = parameters->children[p];
+			if(!parameter || parameter->kind != "parameter-declaration") continue;
+			if(!first) first = parameter;
+			else {
+				second = parameter;
+				break;
+			}
+		}
+		if(!first || !second) continue;
+		map<string, string> inferred;
+		if(!MatchTypePattern(ParameterTypeSpelling(first), left,
+			no_template_parameters, &inferred, context) ||
+			!MatchTypePattern(ParameterTypeSpelling(second), right,
+				no_template_parameters, &inferred, context)) continue;
+		*result = NormalizeTypeArgument(NodeTypeSpelling(it->second.result_specifiers));
+		return !result->empty();
+	}
+	return false;
+}
+
+bool PA18TemplateExpander::InferTemplateOperatorResult(const string& operation,
+	const CPPGMAstNodePtr& left_expression, const CPPGMAstNodePtr& right_expression,
+	const map<string, string>& substitutions, const string& context, string* result) const
+{
+	if(operation.empty() || !left_expression || !right_expression || !result) return false;
+	const vector<const TemplateDefinition*> candidates = FindFunctionDefinitions(
+		"operator" + operation, context);
+	if(candidates.empty()) return false;
+	CPPGMAstNodePtr call(new CPPGMAstNode("call-expression"));
+	call->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("id-expression",
+		"operator" + operation)));
+	CPPGMAstNodePtr arguments(new CPPGMAstNode("argument-list"));
+	arguments->children.push_back(left_expression);
+	arguments->children.push_back(right_expression);
+	call->children.push_back(arguments);
+	for(size_t i = 0; i < candidates.size(); ++i) {
+		vector<string> inferred;
+		if(!InferFunctionArguments(*candidates[i], call, &inferred,
+			substitutions, context)) continue;
+		if(!candidates[i]->declaration || candidates[i]->declaration->children.empty()) continue;
+		string type = NodeTypeSpelling(candidates[i]->declaration->children[0]);
+		const CPPGMAstNodePtr declarator = FunctionDeclarator(candidates[i]->declaration);
+		type += DeclaratorSuffix(declarator);
+		map<string, string> local = substitutions;
+		for(size_t parameter = 0; parameter < candidates[i]->parameters.size() &&
+			parameter < inferred.size(); ++parameter)
+			local[candidates[i]->parameters[parameter].name] = inferred[parameter];
+		*result = NormalizeTypeArgument(ResolveAlias(ReplaceIdentifiers(type, local), context));
+		return !result->empty();
+	}
+	return false;
+}
+
+bool PA18TemplateExpander::InferBinaryArgument(const CPPGMAstNodePtr& expression,
+	string* result, const map<string, string>& substitutions, const string& context) const
+{
+	if(!expression || expression->children.size() < 2 || !result) return false;
+	const string operation = RemoveMarker(expression->value);
+	string left;
+	string right;
+	const bool have_operands = InferArgument(expression->children[0], &left,
+		substitutions, context) && InferArgument(expression->children[1], &right,
+		substitutions, context);
+	if(have_operands && InferOperatorResult(operation, left, right, context, result)) return true;
+	if(have_operands && InferTemplateOperatorResult(operation, expression->children[0],
+		expression->children[1], substitutions, context, result)) return true;
+	if(have_operands && (operation == "&&" || operation == "||" || operation == "==" ||
+		operation == "!=" || operation == "<" || operation == ">" ||
+		operation == "<=" || operation == ">=") && IsBuiltinLogicalType(left) &&
+		IsBuiltinLogicalType(right)) {
+		*result = "bool";
+		return true;
+	}
+	if(have_operands && (operation == "+" || operation == "-") &&
+		IsBuiltinArithmeticType(left) && IsBuiltinArithmeticType(right)) {
+		*result = CommonBuiltinArithmeticType(left, right);
+		return true;
+	}
+	return InferArgument(expression->children[0], result, substitutions, context);
+}
+
+CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
+	const CPPGMAstNodePtr& input, const string& context,
+	const map<string, string>& substitutions)
+{
+	CPPGMAstNodePtr result(new CPPGMAstNode(input->kind, input->value));
+	result->initializer_form = input->initializer_form;
+	result->template_instantiation = input->template_instantiation;
+	result->template_primary = input->template_primary;
+	result->template_arguments = input->template_arguments;
+	CPPGMAstNodePtr input_callee = input->children.empty() ? CPPGMAstNodePtr() :
+		input->children[0];
+	if(input_callee && input_callee->kind == "parenthesized-expression" &&
+		input_callee->children.size() == 1 && input_callee->children[0] &&
+		input_callee->children[0]->kind == "id-expression")
+		input_callee = input_callee->children[0];
+	if(input_callee && input_callee->kind == "id-expression") {
+		const string raw_callee = input_callee->value;
+		string lookup_callee = raw_callee;
+		const size_t qualifier_separator = lookup_callee.find("::");
+		if(qualifier_separator != string::npos) {
+			const map<string, string>::const_iterator alias = substitutions.find(
+				lookup_callee.substr(0, qualifier_separator));
+			if(alias != substitutions.end()) lookup_callee = alias->second +
+				lookup_callee.substr(qualifier_separator);
+		}
+		const size_t open = lookup_callee.find('<');
+		if(open != string::npos) {
+			string base;
+			size_t begin = 0;
+			string argument_text;
+			size_t close = string::npos;
+			const TemplateDefinition* explicit_definition = 0;
+			if(TemplateBase(lookup_callee, open, &begin, &base) &&
+				TemplateRange(lookup_callee, open, &argument_text, &close))
+				explicit_definition = FindDefinition(base, context);
+			if(explicit_definition && !explicit_definition->class_template) {
+				vector<string> explicit_args = SplitTemplateArguments(argument_text);
+				for(size_t i = 0; i < explicit_args.size(); ++i) {
+					explicit_args[i] = NormalizeTypeArgument(RewriteText(
+						explicit_args[i], context, substitutions, 0));
+					explicit_args[i] = NormalizeTypeArgument(ReplaceIdentifiers(
+						explicit_args[i], substitutions));
+					explicit_args[i] = ResolveAlias(explicit_args[i], context);
+					explicit_args[i] = NormalizeTypeArgument(RewriteText(
+						explicit_args[i], context, substitutions, 0));
+					explicit_args[i] = ResolveAlias(explicit_args[i], context);
+					explicit_args[i] = QualifyTypeArgument(explicit_args[i], context,
+						explicit_definition->owner);
+				}
+				vector<string> complete_args;
+				bool complete = explicit_args.size() == explicit_definition->parameters.size();
+				if(complete) complete_args = explicit_args;
+				else if(explicit_args.size() < explicit_definition->parameters.size())
+					complete = InferFunctionArguments(*explicit_definition, input,
+						&complete_args, substitutions, context, &explicit_args);
+				if(complete) {
+					const string local_name = Instantiate(*explicit_definition, complete_args, context);
+					const string qualifier = PrefixComponent(base);
+					CPPGMAstNodePtr callee(new CPPGMAstNode("id-expression",
+						qualifier.empty() ? local_name : qualifier + "::" + local_name));
+					result->children.push_back(callee);
+					for(size_t i = 1; i < input->children.size(); ++i) {
+						CPPGMAstNodePtr child = TransformNode(input->children[i], context,
+							substitutions);
+						if(child) result->children.push_back(child);
+					}
+					return result;
+				}
+			}
+		}
+	}
+	for(size_t i = 0; i < input->children.size(); ++i) {
+		CPPGMAstNodePtr child = TransformNode(input->children[i], context, substitutions);
+		if(child) result->children.push_back(child);
+	}
+	CPPGMAstNodePtr result_callee = result->children.empty() ? CPPGMAstNodePtr() :
+		result->children[0];
+	if(result_callee && result_callee->kind == "parenthesized-expression" &&
+		result_callee->children.size() == 1 && result_callee->children[0] &&
+		result_callee->children[0]->kind == "id-expression") {
+		result_callee = result_callee->children[0];
+		result->children[0] = result_callee;
+	}
+	if(result_callee && result_callee->kind == "id-expression" &&
+		result_callee->value.find('<') == string::npos) {
+		const string callee_name = result_callee->value;
+		const vector<const TemplateDefinition*> definitions =
+			FindFunctionDefinitions(callee_name, context);
+		if(!HasExactOrdinaryMatch(result, callee_name, substitutions, context))
+			for(size_t candidate = 0; candidate < definitions.size(); ++candidate) {
+				const TemplateDefinition* definition = definitions[candidate];
+				vector<string> inferred;
+				if(!InferFunctionArguments(*definition, result, &inferred,
+					substitutions, context)) continue;
+				const string local_name = Instantiate(*definition, inferred, context);
+				const string qualifier = GeneratedFunctionQualifier(*definition,
+					callee_name, context);
+				result_callee->value = qualifier.empty() ? local_name : qualifier +
+					"::" + local_name;
+				break;
+			}
+		if(definitions.empty()) {
+			const FunctionSignature* signature = FindFunctionSignature(callee_name, context);
+			if(signature && callee_name.find("::") == string::npos &&
+				class_contexts_.find(context) == class_contexts_.end() && substitutions.empty()) {
+				map<string, vector<string> >::const_iterator names =
+					function_signatures_by_name_.find(LastComponent(callee_name));
+				if(names != function_signatures_by_name_.end())
+					for(size_t name = 0; name < names->second.size(); ++name) {
+						const string& qualified = names->second[name];
+						map<string, FunctionSignature>::const_iterator found =
+							function_signatures_.find(qualified);
+						if(found != function_signatures_.end() && &found->second == signature &&
+							class_contexts_.find(PrefixComponent(qualified)) == class_contexts_.end() &&
+							function_contexts_.find(PrefixComponent(qualified)) == function_contexts_.end()) {
+							result->children[0]->value = qualified;
+							break;
+						}
+					}
+			}
+			ResolveFunctionArguments(result, signature, context);
+		}
+	}
+	if(!result->children.empty() && result->children[0] &&
+		result->children[0]->kind == "id-expression") {
+		string& callee = result->children[0]->value;
+		const size_t separator = callee.find("::");
+		if(separator != string::npos) {
+			const string owner = callee.substr(0, separator);
+			if(callee.compare(separator + 2, owner.size() + 2, owner + "::") == 0)
+				callee.erase(separator + 2, owner.size() + 2);
+		}
+	}
+	return result;
 }
 
 bool PA18TemplateExpander::TypeOnlyNode(const CPPGMAstNodePtr& node) const

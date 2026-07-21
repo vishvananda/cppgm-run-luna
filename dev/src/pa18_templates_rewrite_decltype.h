@@ -53,12 +53,8 @@
 		if(!arguments) return false;
 		size_t parameter_count = 0;
 		size_t required_parameters = 0;
-		for(size_t i = 0; i < signature->parameters->children.size(); ++i) {
-			const CPPGMAstNodePtr parameter = signature->parameters->children[i];
-			if(!parameter || parameter->kind != "parameter-declaration") continue;
-			++parameter_count;
-			if(!ChildOfKindLocal(parameter, "default-argument")) ++required_parameters;
-		}
+		if(!FunctionParameterCounts(signature->parameters, &parameter_count,
+			&required_parameters)) return false;
 		if(arguments->children.size() < required_parameters ||
 			arguments->children.size() > parameter_count) return false;
 		size_t argument = 0;
@@ -172,6 +168,11 @@
 		const CPPGMAstNodePtr declarator = FunctionDeclarator(definition.declaration);
 		const CPPGMAstNodePtr parameters = DescendantOfKind(declarator, "parameter-clause");
 		if(!parameters) return false;
+		size_t parameter_count = 0;
+		size_t required_parameters = 0;
+		if(!FunctionParameterCounts(parameters, &parameter_count, &required_parameters) ||
+			actual_types.size() < required_parameters || actual_types.size() > parameter_count)
+			return false;
 		map<string, string> inferred;
 		set<string> parameter_names;
 		for(size_t i = 0; i < definition.parameters.size(); ++i) {

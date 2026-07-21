@@ -28,10 +28,21 @@ through-PA17: 1208/1208 pass
 file audit: pass with 7 pre-existing header-division warnings
 ```
 
+The checkpoint audit is complete.  It found no shortcut, timeout workaround,
+fixture-dependent acceptance path, embedded payload, or unchecked source
+fragment.  Audit fixes removed a tautological specialization branch and a
+dead lookup condition, centralized function-parameter arity checks across
+call and decltype deduction, replaced the unconditional binary-difference
+`int` fact with ordinary/template-operator and builtin arithmetic inference,
+and moved the expanded call/inference implementation into
+`pa18_templates.cpp`.  Ordinary function-signature indexing now avoids a
+full signature-map walk for each operator-result query.  The required report
+remains **174/222**, so the turn-start baseline is preserved.
+
 ## Remaining Work Map
 
-The complete current-PA failure set is **48 tests**, grouped by shared
-compiler behavior.
+The complete current-PA failure set, refreshed after the audit fixes, is
+**48 tests**, grouped by shared compiler behavior.  No new failure was added.
 
 ### A — generated records, signatures, initialization, layout, and LowIR shape
 
@@ -112,5 +123,6 @@ specialization identity through class/member initialization, nested/out-of-
 class signatures, reference/array layout, and explicit instantiation.  Start
 with the member-cv constructor-layout witness and the defaulted
 copy/move/reference-member pair, then bundle adjacent signature/layout cases
-that share the same generated-record behavior.  Validate with the focused
-group, the full PA18 report, through-PA17, and the file audit.
+that share the same generated-record behavior.  This is the next substantial
+checkpoint group.  Validate with the focused group, the full PA18 report,
+through-PA17, and the file audit.
