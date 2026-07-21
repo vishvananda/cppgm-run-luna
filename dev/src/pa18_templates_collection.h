@@ -379,6 +379,7 @@ private:
 		if(raw.find("::") != string::npos || raw.find('<') != string::npos) {
 			for(set<string>::const_iterator parameter = parameters.begin();
 				parameter != parameters.end(); ++parameter) {
+				if(parameter->empty()) continue;
 				for(size_t position = raw.find(*parameter);
 					position != string::npos;
 					position = raw.find(*parameter, position + parameter->size())) {
@@ -485,6 +486,7 @@ private:
 	map<string, string> variable_types_;
 	map<string, PA19IntegralValue> constant_values_;
 	map<string, size_t> constant_type_sizes_, constant_type_alignments_;
+	map<string, PA19IntegralValue> active_integral_substitutions_;
 	map<string, string> type_aliases_;
 	map<string, vector<string> > type_aliases_by_name_;
 	map<string, FunctionSignature> function_signatures_;

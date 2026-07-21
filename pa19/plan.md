@@ -166,8 +166,8 @@ earlier assignments remain passing.
 ## Checkpoint Result
 
 Completed this turn.  The compiler now carries a typed PA19 integral value
-(`known`, signedness, width, raw value, and spelling) through constant
-evaluation and template materialization.  The increment covers integer,
+(`known`, a typed integral type, raw value, and source spelling) through
+constant evaluation and template materialization.  The increment covers integer,
 character, boolean, string-subscript, cast, promotion, comparison, shift, and
 bitwise constant expressions; ordinary/enum/constant-member lookup;
 `sizeof`/`alignof`; integral non-type parameters and defaults; canonical
@@ -176,16 +176,24 @@ substitution.  PA14 global folding now consumes the analyzer's typed result
 for functional integral casts, and its host character signedness model agrees
 with the PA19 constant model.
 
+The checkpoint audit also closed the unnamed-parameter dependent-base scan
+loop, preserved static `constexpr` member facts across cv-only type rebuilding,
+and made the typed value/type record authoritative at the PA11/PA14 and PA18
+materialization boundaries.  Legacy signed fields remain projections for the
+earlier lowering contracts; PA19 operations do not recover their facts from
+those projections or from rewritten text.
+
 Validation for the checkpoint:
 
-* focused direct-value set: **10/10**;
+* focused direct-value set: **10/10** after the audit fixes;
 * required full current-PA report: **54/134 passing**, up from **31/134**;
 * required through-PA18 report: **1430/1430 passing**; and
 * PA19 file audit: **pass** (8 non-fatal pre-existing header-division warnings).
 
 ## Post-checkpoint Remaining Work Map
 
-The current report has **80 failures**.  They are grouped by the next shared
+After the audit repairs, the complete current-PA report remains at **54/134
+passing**, with **80 residual failures**.  They are grouped by the next shared
 compiler behavior; the complete turn-start inventory above remains the
 baseline record, while this section records the exact residual set.
 
@@ -291,12 +299,6 @@ sanity failures and belong with this ownership/materialization group.
 Start with the smallest coherent part of Group B: dependent qualified
 constant lookup and default-argument rewriting, including the dependent
 `static_assert` and `decltype` cases.  Re-run the complete PA19 report after
-that slice; keep the pack and generated-record groups separate unless the
-lookup work makes them directly share a fix.
-
-## Next Checkpoint Group
-
-After this checkpoint, refresh the complete failure set.  The next group is
-the remaining dependent lookup/default-rewrite slice (Group B), unless the
-constant-value work exposes a larger adjacent group that can be completed
-cohesively.
+that slice; keep the pack and generated-record groups separate until they
+share a concrete semantic fix.  When those remaining groups become small,
+bundle the rejection case with the adjacent pack or generated-record work.

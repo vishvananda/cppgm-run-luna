@@ -20,25 +20,15 @@ string StripTemplateArgumentsFromPath(const string& raw)
 ConstantValue Analyzer::FromIntegralValue(const PA19IntegralValue& value) const
 {
 	if (!value.known) return ConstantValue();
-	ConstantValue result(true, PA19Signed(value));
-	result.unsigned_value = PA19Raw(value);
-	result.is_unsigned = value.is_unsigned;
-	result.bits = value.bits;
-	result.type_name = value.type;
+	ConstantValue result;
+	result.integral = value;
+	result.value = PA19Signed(value);
 	return result;
 }
 
 PA19IntegralValue Analyzer::ToIntegralValue(const ConstantValue& value) const
 {
-	if (!value.known) return PA19IntegralValue();
-	PA19IntegralValue result;
-	result.known = true;
-	result.is_unsigned = value.is_unsigned;
-	result.bits = value.bits == 0 ? 64 : value.bits;
-	result.raw = value.unsigned_value;
-	result.type = value.type_name.empty() ?
-		(value.is_unsigned ? "unsigned long long" : "long long") : value.type_name;
-	return result;
+	return value.integral;
 }
 
 PA19IntegralValue Analyzer::ParseLiteralValue(const string& raw) const
@@ -63,20 +53,15 @@ ConstantValue Analyzer::Evaluate(const CPPGMAstNodePtr& expression, Scope* scope
 	if (expression->kind == "id-expression")
 	{
 		Binding* binding = ResolveBinding(scope, expression->value);
-		if (!binding || !binding->has_value) return ConstantValue();
-		ConstantValue result(true, binding->value);
-		result.unsigned_value = binding->unsigned_value;
-		result.is_unsigned = binding->value_is_unsigned;
-		result.bits = binding->value_bits;
-		result.type_name = binding->value_type.empty() ? TypeText(binding->type, true) : binding->value_type;
-		return result;
+		return !binding || !binding->constant_value.known ? ConstantValue() :
+			FromIntegralValue(binding->constant_value);
 	}
 	if (expression->kind == "parenthesized-expression")
 		return expression->children.empty() ? ConstantValue() : Evaluate(expression->children[0], scope);
 	if (expression->kind == "subscript-expression" && expression->children.size() >= 2 &&
 		expression->children[0] && expression->children[0]->kind == "literal") {
 		ConstantValue index = Evaluate(expression->children[1], scope);
-		if (!index.known) return ConstantValue();
+		if (!index.integral.known) return ConstantValue();
 		ostringstream spelling;
 		spelling << expression->children[0]->value << "[" << PA19Raw(ToIntegralValue(index)) << "]";
 		map<string, PA19IntegralValue> constants;
@@ -101,7 +86,7 @@ ConstantValue Analyzer::Evaluate(const CPPGMAstNodePtr& expression, Scope* scope
 	{
 		if (expression->children.size() < 2) return ConstantValue();
 		const ConstantValue operand = Evaluate(expression->children[1], scope);
-		if (!operand.known) return ConstantValue();
+		if (!operand.integral.known) return ConstantValue();
 		const TypePtr target = TypeFromTypeId(expression->children[0], scope);
 		return FromIntegralValue(PA19Convert(ToIntegralValue(operand), PA19Type(TypeText(target, true))));
 	}
@@ -112,20 +97,20 @@ ConstantValue Analyzer::Evaluate(const CPPGMAstNodePtr& expression, Scope* scope
 		const PA19IntegralType target = PA19Type(expression->children[0]->value);
 		if (target.integral) {
 			const ConstantValue operand = Evaluate(expression->children[1]->children[0], scope);
-			return operand.known ? FromIntegralValue(PA19Convert(ToIntegralValue(operand), target)) : ConstantValue();
+			return operand.integral.known ? FromIntegralValue(PA19Convert(ToIntegralValue(operand), target)) : ConstantValue();
 		}
 	}
 	if (expression->kind == "unary-expression")
 	{
 		if (expression->children.empty()) return ConstantValue();
 		ConstantValue child = Evaluate(expression->children[0], scope);
-		if (!child.known) return child;
+		if (!child.integral.known) return child;
 		PA19IntegralValue value = ToIntegralValue(child);
 		const string op = OperatorFromNode(expression->value);
 		if (op == "+") return FromIntegralValue(PA19Promote(value));
 		if (op == "-") {
 			value = PA19Promote(value);
-			const PA19IntegralType type = PA19Type(value.type);
+			const PA19IntegralType type = value.type;
 			const unsigned long long raw = (0ULL - PA19Raw(value)) & PA19Mask(type.bits);
 			return FromIntegralValue(type.is_unsigned ? PA19IntegralValue::Unsigned(raw, type.name, type.bits) :
 				PA19IntegralValue::Signed(static_cast<long long>(raw), type.name, type.bits));
@@ -133,7 +118,7 @@ ConstantValue Analyzer::Evaluate(const CPPGMAstNodePtr& expression, Scope* scope
 		if (op == "!") return FromIntegralValue(PA19IntegralValue::Signed(!PA19Raw(value), "int", 32));
 		if (op == "~") {
 			value = PA19Promote(value);
-			const PA19IntegralType type = PA19Type(value.type);
+			const PA19IntegralType type = value.type;
 			const unsigned long long raw = (~PA19Raw(value)) & PA19Mask(type.bits);
 			return FromIntegralValue(type.is_unsigned ? PA19IntegralValue::Unsigned(raw, type.name, type.bits) :
 				PA19IntegralValue::Signed(static_cast<long long>(raw), type.name, type.bits));
@@ -143,7 +128,7 @@ ConstantValue Analyzer::Evaluate(const CPPGMAstNodePtr& expression, Scope* scope
 	if (expression->kind == "conditional-expression" && expression->children.size() == 3)
 	{
 		ConstantValue condition = Evaluate(expression->children[0], scope);
-		return !condition.known ? ConstantValue() :
+		return !condition.integral.known ? ConstantValue() :
 			Evaluate(expression->children[PA19Raw(ToIntegralValue(condition)) ? 1 : 2], scope);
 	}
 	if (expression->kind == "binary-expression" || expression->kind == "assignment-expression")
@@ -151,7 +136,7 @@ ConstantValue Analyzer::Evaluate(const CPPGMAstNodePtr& expression, Scope* scope
 		if (expression->children.size() < 2) return ConstantValue();
 		ConstantValue left = Evaluate(expression->children[0], scope);
 		ConstantValue right = Evaluate(expression->children[1], scope);
-		if (!left.known || !right.known) return ConstantValue();
+		if (!left.integral.known || !right.integral.known) return ConstantValue();
 		return FromIntegralValue(PA19Binary(OperatorFromNode(expression->value),
 			ToIntegralValue(left), ToIntegralValue(right)));
 	}
@@ -688,13 +673,10 @@ void Analyzer::ProcessSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* scop
 			if (!floating_literal && !string_literal)
 			{
 				ConstantValue value = Evaluate(expression, scope);
-				if (value.known) {
+				if (value.integral.known) {
 					binding.has_value = true;
 					binding.value = value.value;
-					binding.unsigned_value = value.unsigned_value;
-					binding.value_is_unsigned = value.is_unsigned;
-					binding.value_bits = value.bits;
-					binding.value_type = value.type_name;
+					binding.constant_value = value.integral;
 				}
 			}
 		}
@@ -755,7 +737,7 @@ size_t Analyzer::AttributeAlignment(const CPPGMAstNodePtr& attribute, Scope* sco
 	else
 	{
 		ConstantValue value = Evaluate(argument, scope);
-		if (!value.known || value.value < 0)
+		if (!value.integral.known || value.value < 0)
 			throw logic_error("alignment is not a non-negative constant");
 		alignment = static_cast<size_t>(value.value);
 	}
@@ -1033,7 +1015,7 @@ void RecordBitField(Analyzer& analyzer, const CPPGMAstNodePtr& node,
 	if (field && field->children.size() > 1)
 	{
 		ConstantValue value = analyzer.Evaluate(field->children[1], class_scope);
-		if (!value.known) throw logic_error("bit-field width is not constant");
+		if (!value.integral.known) throw logic_error("bit-field width is not constant");
 		width = value.value;
 	}
 	if (!name.empty())
@@ -1143,8 +1125,14 @@ void Analyzer::RecordClassDeclaration(const CPPGMAstNodePtr& child, const TypePt
 		for (size_t k = 0; k < class_scope->bindings.size(); ++k)
 		{
 			Binding& binding = class_scope->bindings[k];
-				if (binding.name != name ||
-					TypeText(binding.type, true) != TypeText(field_type, true)) continue;
+			if (binding.name != name) continue;
+			if (field_type->kind != TYPE_FUNCTION && !facts.is_typedef &&
+				(binding.kind != BIND_VARIABLE || !SameTypeIgnoringTopCv(binding.type, field_type))) continue;
+			// A constexpr data member is recorded with top-level const during
+			// declaration processing, while this rebuilt declarator has the
+			// underlying member type.  Ignore only that cv-only difference.
+			if (field_type->kind == TYPE_FUNCTION &&
+				TypeText(binding.type, true) != TypeText(field_type, true)) continue;
 			binding.type = field_type;
 			binding.access = access;
 			binding.declaration = child;

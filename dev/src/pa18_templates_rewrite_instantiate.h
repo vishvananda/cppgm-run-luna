@@ -19,15 +19,15 @@
 	string IntegralValueSpelling(const PA19IntegralValue& value) const
 	{
 		if(!value.known) return string();
-		const PA19IntegralType type = PA19Type(value.type);
-		if(type.name == "bool" || value.type == "bool") return PA19Raw(value) ? "true" : "false";
+		const PA19IntegralType type = value.type;
+		if(type.name == "bool") return PA19Raw(value) ? "true" : "false";
 		ostringstream result;
-		if(value.is_unsigned) result << PA19Raw(value);
+		if(type.is_unsigned) result << PA19Raw(value);
 		else result << PA19Signed(value);
-		if(value.is_unsigned) {
-			if(value.bits > 32) result << "ULL";
+		if(type.is_unsigned) {
+			if(type.bits > 32) result << "ULL";
 			else result << "u";
-		} else if(value.bits > 32) result << "LL";
+		} else if(type.bits > 32) result << "LL";
 		return result.str();
 	}
 	bool EvaluateIntegralText(string raw, const string& context,
@@ -142,6 +142,11 @@
 				const string spelling = RemoveMarker(name->value);
 				for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter) {
 					const string& wanted = definition.parameters[parameter].name;
+					// An unnamed template parameter carries no dependent-name
+					// information.  In particular, find("") never advances and
+					// would turn this scan into an unbounded loop when PA19
+					// materializes a trait with an unnamed parameter.
+					if(wanted.empty()) continue;
 					for(size_t position = spelling.find(wanted); position != string::npos;
 						position = spelling.find(wanted, position + wanted.size())) {
 						const bool left_boundary = position == 0 ||
@@ -390,7 +395,8 @@
 			InstantiateNestedClass(parent, parent_args, parent_local_name, *it, context);
 	}
 	string ResolveIntegralArgument(const TemplateParameter& parameter,
-		string raw, const string& context, const map<string, string>& substitutions)
+		string raw, const string& context, const map<string, string>& substitutions,
+		PA19IntegralValue* typed_result = 0)
 	{
 		raw = RewriteText(raw, context, substitutions, 0);
 		raw = ReplaceIdentifiers(raw, substitutions);
@@ -401,6 +407,7 @@
 		expected = ResolveAlias(ReplaceIdentifiers(expected, substitutions), context);
 		const PA19IntegralType expected_type = PA19Type(expected);
 		if(expected_type.integral) value = PA19Convert(value, expected_type);
+		if(typed_result) *typed_result = value;
 		return IntegralValueSpelling(value);
 	}
 	void RegisterGeneratedConstants(
@@ -417,37 +424,71 @@
 					generated->kind == "class-specifier" || generated->kind == "class-forward-declaration" ?
 					JoinPath(generated_path, LastComponent(generated->value)) : generated_path);
 	}
+	CPPGMAstNodePtr TransformInstantiatedNode(const TemplateDefinition& definition,
+		const string& context, const map<string, string>& substitutions,
+		const map<string, PA19IntegralValue>& integral_substitutions)
+	{
+		const map<string, PA19IntegralValue> previous = active_integral_substitutions_;
+		active_integral_substitutions_ = integral_substitutions;
+		try {
+			CPPGMAstNodePtr result = TransformNode(definition.declaration, context, substitutions);
+			active_integral_substitutions_ = previous;
+			return result;
+		} catch(...) {
+			active_integral_substitutions_ = previous;
+			throw;
+		}
+	}
+	void ResolveTemplateArguments(const TemplateDefinition& definition,
+		const vector<string>& raw_args, const string& context,
+		vector<string>* args, vector<string>* metadata_args,
+		map<string, string>* substitutions,
+		map<string, PA19IntegralValue>* integral_substitutions)
+	{
+		for(size_t i = 0; i < definition.parameters.size(); ++i) {
+			const TemplateParameter& parameter = definition.parameters[i];
+			string argument;
+			if(i < raw_args.size() && !raw_args[i].empty()) argument = raw_args[i];
+			else {
+				map<string, string>::const_iterator substituted = substitutions->find(parameter.name);
+				if(substituted != substitutions->end()) argument = substituted->second;
+				map<string, PA19IntegralValue>::const_iterator integral =
+					integral_substitutions->find(parameter.name);
+				if(argument.empty() && integral != integral_substitutions->end())
+					argument = IntegralValueSpelling(integral->second);
+			}
+			if(argument.empty()) argument = parameter.default_type;
+			if(parameter.type) {
+				argument = RewriteText(argument, context, *substitutions, 0);
+				argument = NormalizeTypeArgument(argument);
+				argument = NormalizeTypeArgument(ReplaceIdentifiers(argument, *substitutions));
+				argument = ResolveAlias(argument, context);
+				argument = RewriteText(argument, context, *substitutions, 0);
+				argument = NormalizeTypeArgument(argument);
+				argument = QualifyTypeArgument(argument, context, definition.owner);
+			} else {
+				PA19IntegralValue integral_value;
+				argument = ResolveIntegralArgument(parameter, argument, context, *substitutions,
+					&integral_value);
+				(*integral_substitutions)[parameter.name] = integral_value;
+			}
+			if(argument.empty()) throw logic_error("missing template argument");
+			args->push_back(argument);
+			metadata_args->push_back(RestoreSpecializationSpelling(argument));
+			(*substitutions)[parameter.name] = argument;
+		}
+		if(raw_args.size() > definition.parameters.size())
+			throw logic_error("too many template arguments");
+	}
 	string Instantiate(const TemplateDefinition& definition, const vector<string>& raw_args,
 		const string& context, bool explicit_instantiation = false)
 	{
 		if(definition.parameters.empty()) throw logic_error("template has no type parameters");
 		vector<string> args, metadata_args;
 		map<string, string> substitutions;
-		for(size_t i = 0; i < definition.parameters.size(); ++i) {
-			const TemplateParameter& parameter = definition.parameters[i];
-			string argument;
-			if(i < raw_args.size() && !raw_args[i].empty()) argument = raw_args[i];
-			else {
-				map<string, string>::const_iterator substituted = substitutions.find(parameter.name);
-				if(substituted != substitutions.end()) argument = substituted->second;
-			}
-			if(argument.empty()) argument = parameter.default_type;
-			if(parameter.type) {
-				argument = RewriteText(argument, context, substitutions, 0);
-				argument = NormalizeTypeArgument(argument);
-				argument = NormalizeTypeArgument(ReplaceIdentifiers(argument, substitutions));
-				argument = ResolveAlias(argument, context);
-				argument = RewriteText(argument, context, substitutions, 0);
-				argument = NormalizeTypeArgument(argument);
-				argument = QualifyTypeArgument(argument, context, definition.owner);
-			} else argument = ResolveIntegralArgument(parameter, argument, context, substitutions);
-			if(argument.empty()) throw logic_error("missing template argument");
-			args.push_back(argument);
-			metadata_args.push_back(RestoreSpecializationSpelling(argument));
-			substitutions[parameter.name] = argument;
-		}
-		if(raw_args.size() > definition.parameters.size())
-			throw logic_error("too many template arguments");
+		map<string, PA19IntegralValue> integral_substitutions;
+		ResolveTemplateArguments(definition, raw_args, context, &args, &metadata_args,
+			&substitutions, &integral_substitutions);
 		ostringstream definition_key;
 		definition_key << definition.qualified_name << "@" << definition.declaration.get();
 		string key = definition_key.str();
@@ -499,7 +540,8 @@
 				definition.lexical_owner.empty() ? definition.owner : definition.lexical_owner,
 				local_name));
 		}
-		CPPGMAstNodePtr generated = TransformNode(definition.declaration, definition.owner, substitutions);
+		CPPGMAstNodePtr generated = TransformInstantiatedNode(definition,
+			definition.owner, substitutions, integral_substitutions);
 		if(!generated) throw logic_error("unable to instantiate template");
 		MarkGeneratedNode(generated, definition.qualified_name, metadata_args,
 			explicit_instantiation);

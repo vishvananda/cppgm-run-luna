@@ -290,11 +290,11 @@ bool PA14Lowerer::FoldInteger(const CPPGMAstNodePtr& node, Scope* scope,
 	// for expression forms that the legacy LowIR folder does not spell out
 	// (notably functional integral casts such as short(42)).
 	const ConstantValue semantic = analyzer_.Evaluate(node, scope);
-	if(!semantic.known) return false;
+	if(!semantic.integral.known) return false;
 	if(result) *result = semantic.value;
 	if(type) {
 		Analyzer::SpecFacts facts;
-		*type = analyzer_.ResolveSpelledType(semantic.type_name, scope, facts);
+		*type = analyzer_.ResolveSpelledType(semantic.integral.type.name, scope, facts);
 	}
 	return true;
 }

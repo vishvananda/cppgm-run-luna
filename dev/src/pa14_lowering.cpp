@@ -1028,14 +1028,14 @@ void PA14Lowerer::CollectSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* s
         const string member_name = name.substr(name.rfind("::") + 2);
         vector<Binding*> members = DirectBindings(record.template_owner->owned_scope, member_name);
         long long constant = 0;
-        if(FoldInteger(InitializerExpression(record.initializer), scope, &constant, 0))
-          for(size_t member = 0; member < members.size(); ++member)
-            if(members[member] && members[member]->kind == BIND_VARIABLE &&
-               type_value(members[member]->type) &&
-               type_value(members[member]->type)->is_const) {
-              members[member]->has_value = true;
-              members[member]->value = constant;
-            }
+			if(FoldInteger(InitializerExpression(record.initializer), scope, &constant, 0))
+			for(size_t member = 0; member < members.size(); ++member)
+				if(members[member] && members[member]->kind == BIND_VARIABLE &&
+				   type_value(members[member]->type) && type_value(members[member]->type)->is_const) {
+					members[member]->constant_value = PA19Convert(PA19IntegralValue::Signed(constant, "long long", 64),
+						PA19Type(TypeText(members[member]->type, true)));
+					members[member]->has_value = true; members[member]->value = PA19Signed(members[member]->constant_value);
+				}
       }
       record.declaration = false;
       record.internal = facts.is_const || facts.is_constexpr || HasStorageSpecifier(node, "static");

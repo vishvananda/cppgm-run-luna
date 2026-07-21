@@ -1,5 +1,6 @@
 #pragma once
 #include "pa11_semantics.h"
+#include "pa19_constants.h"
 
 #include <cerrno>
 #include <algorithm>
@@ -154,11 +155,10 @@ struct Binding
 	string name;
 	TypePtr type;
 	bool has_value;
+	// PA19 owns the semantic constant.  `value` remains only as the signed
+	// compatibility projection consumed by the pre-PA19 lowering paths.
+	PA19IntegralValue constant_value;
 	long long value;
-	unsigned long long unsigned_value;
-	bool value_is_unsigned;
-	unsigned value_bits;
-	string value_type;
 	string type_override;
 	string qualified_name;
 	bool injected_member;
@@ -220,14 +220,10 @@ struct Scope
 
 struct ConstantValue
 {
-	bool known;
+	PA19IntegralValue integral;
+	// Legacy PA11-PA14 consumers read the signed projection; PA19 evaluation
+	// and conversion use `integral` as the sole typed owner.
 	long long value;
-	// Keep the representation used by integral constant evaluation instead of
-	// collapsing unsigned values into a signed host integer.
-	unsigned long long unsigned_value;
-	bool is_unsigned;
-	unsigned bits;
-	string type_name;
 
 	ConstantValue(bool is_known = false, long long constant = 0);
 };
@@ -235,6 +231,7 @@ struct ConstantValue
 string LastComponent(const string& name);
 string StripTypeMarker(const string& name);
 string TypeText(const TypePtr& type, bool extended = false);
+bool SameTypeIgnoringTopCv(const TypePtr& left, const TypePtr& right);
 TypePtr Fundamental(const string& name);
 TypePtr CloneWithCv(const TypePtr& original, bool add_const, bool add_volatile);
 TypePtr PointerTo(const TypePtr& pointee);

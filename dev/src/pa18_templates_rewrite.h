@@ -931,17 +931,17 @@ bool MatchTypePattern(string pattern, string actual,
 		// Non-type template substitutions are semantic values, not names.  Keep
 		// them as literal AST nodes so PA11/lowering resolve the same typed fact
 		// that selected the specialization.
-		if(input->kind == "id-expression" &&
-			substitutions.find(RemoveMarker(input->value)) != substitutions.end()) {
-			PA19IntegralValue integral;
-			if(PA19ParseInteger(RemoveMarker(result->value), &integral)) {
-				CPPGMAstNodePtr literal(new CPPGMAstNode("literal", RemoveMarker(result->value)));
+		if(input->kind == "id-expression") {
+			map<string, PA19IntegralValue>::const_iterator typed =
+				active_integral_substitutions_.find(RemoveMarker(input->value));
+			if(typed != active_integral_substitutions_.end() && typed->second.known) {
+				const string spelling = IntegralValueSpelling(typed->second);
+				if(typed->second.type.name == "bool")
+					return CPPGMAstNodePtr(new CPPGMAstNode("keyword-literal",
+						PA19Raw(typed->second) ? "KW_TRUE:true" : "KW_FALSE:false"));
+				CPPGMAstNodePtr literal(new CPPGMAstNode("literal", spelling));
 				literal->initializer_form = input->initializer_form;
 				return literal;
-			}
-			if(RemoveMarker(result->value) == "true" || RemoveMarker(result->value) == "false") {
-				return CPPGMAstNodePtr(new CPPGMAstNode("keyword-literal",
-					RemoveMarker(result->value) == "true" ? "KW_TRUE:true" : "KW_FALSE:false"));
 			}
 		}
 		if((type_spelling || input->kind == "id-expression") &&

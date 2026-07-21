@@ -9,47 +9,6 @@
 #include <string>
 #include <vector>
 
-// PA19 keeps compile-time integral facts separate from source spelling.  The
-// expander needs the value before PA11 sees an instantiated tree, so this
-// small value model is shared by template argument normalization and the
-// ordinary semantic evaluator.  `raw` is always the value in the declared
-// width; signedness is interpreted only at the operation boundary.
-struct PA19IntegralValue
-{
-	bool known;
-	bool is_unsigned;
-	unsigned bits;
-	unsigned long long raw;
-	std::string type;
-
-	PA19IntegralValue()
-		: known(false), is_unsigned(false), bits(0), raw(0), type() {}
-
-	static PA19IntegralValue Signed(long long value, const std::string& name = "int",
-		unsigned width = 32)
-	{
-		PA19IntegralValue result;
-		result.known = true;
-		result.is_unsigned = false;
-		result.bits = width;
-		result.raw = static_cast<unsigned long long>(value);
-		result.type = name;
-		return result;
-	}
-
-	static PA19IntegralValue Unsigned(unsigned long long value,
-		const std::string& name = "unsigned int", unsigned width = 32)
-	{
-		PA19IntegralValue result;
-		result.known = true;
-		result.is_unsigned = true;
-		result.bits = width;
-		result.raw = value;
-		result.type = name;
-		return result;
-	}
-};
-
 struct PA19IntegralType
 {
 	bool integral;
@@ -60,6 +19,48 @@ struct PA19IntegralType
 
 	PA19IntegralType()
 		: integral(false), is_unsigned(false), bits(0), rank(0), name() {}
+};
+
+inline PA19IntegralType PA19Type(const std::string& raw);
+
+// PA19 keeps compile-time integral facts separate from source spelling.  The
+// expander needs the value before PA11 sees an instantiated tree, so this
+// small value model is shared by template argument normalization and the
+// ordinary semantic evaluator.  `raw` is always the value in the declared
+// width; signedness and width are owned by the typed integral type, rather
+// than being rediscovered from a type spelling at every operation boundary.
+struct PA19IntegralValue
+{
+	bool known;
+	PA19IntegralType type;
+	unsigned long long raw;
+
+	PA19IntegralValue()
+		: known(false), type(), raw(0) {}
+
+	static PA19IntegralValue Signed(long long value, const std::string& name = "int",
+		unsigned width = 32)
+	{
+		PA19IntegralValue result;
+		result.known = true;
+		result.type = PA19Type(name);
+		result.type.is_unsigned = false;
+		result.type.bits = width;
+		result.raw = static_cast<unsigned long long>(value);
+		return result;
+	}
+
+	static PA19IntegralValue Unsigned(unsigned long long value,
+		const std::string& name = "unsigned int", unsigned width = 32)
+	{
+		PA19IntegralValue result;
+		result.known = true;
+		result.type = PA19Type(name);
+		result.type.is_unsigned = true;
+		result.type.bits = width;
+		result.raw = value;
+		return result;
+	}
 };
 
 inline std::string PA19Trim(const std::string& raw)
@@ -150,17 +151,17 @@ inline unsigned long long PA19Mask(unsigned bits)
 
 inline unsigned long long PA19Raw(const PA19IntegralValue& value)
 {
-	return value.raw & PA19Mask(value.bits);
+	return value.raw & PA19Mask(value.type.bits);
 }
 
 inline long long PA19Signed(const PA19IntegralValue& value)
 {
 	const unsigned long long raw = PA19Raw(value);
-	if(value.type == "bool") return raw != 0;
-	if(value.bits == 0 || value.bits >= 64) return static_cast<long long>(raw);
-	const unsigned long long sign = 1ULL << (value.bits - 1);
+	if(value.type.name == "bool") return raw != 0;
+	if(value.type.bits == 0 || value.type.bits >= 64) return static_cast<long long>(raw);
+	const unsigned long long sign = 1ULL << (value.type.bits - 1);
 	if((raw & sign) == 0) return static_cast<long long>(raw);
-	return static_cast<long long>(raw | ~PA19Mask(value.bits));
+	return static_cast<long long>(raw | ~PA19Mask(value.type.bits));
 }
 
 inline PA19IntegralValue PA19Convert(const PA19IntegralValue& value,
@@ -175,7 +176,7 @@ inline PA19IntegralValue PA19Convert(const PA19IntegralValue& value,
 inline PA19IntegralValue PA19Promote(const PA19IntegralValue& value)
 {
 	if(!value.known) return value;
-	const PA19IntegralType type = PA19Type(value.type);
+	const PA19IntegralType type = value.type;
 	if(!type.integral || type.rank >= 4) return value;
 	// All ordinary narrow integral types fit in the signed host int model.
 	return PA19IntegralValue::Signed(PA19Signed(value), "int", 32);
@@ -186,8 +187,8 @@ inline PA19IntegralType PA19CommonType(const PA19IntegralValue& left,
 {
 	const PA19IntegralValue a = PA19Promote(left);
 	const PA19IntegralValue b = PA19Promote(right);
-	const PA19IntegralType at = PA19Type(a.type);
-	const PA19IntegralType bt = PA19Type(b.type);
+	const PA19IntegralType at = a.type;
+	const PA19IntegralType bt = b.type;
 	PA19IntegralType result;
 	result.integral = at.integral && bt.integral;
 	if(!result.integral) return result;
@@ -497,9 +498,9 @@ private:
 	bool ParseUnary(PA19IntegralValue* result)
 	{
 		if(Take("+")) { if(!ParseUnary(result)) return false; *result = PA19Promote(*result); return result->known; }
-		if(Take("-")) { if(!ParseUnary(result)) return false; *result = PA19Promote(*result); if(!result->known) return false; const PA19IntegralType t = PA19Type(result->type); const unsigned long long raw = (0ULL - PA19Raw(*result)) & PA19Mask(t.bits); *result = t.is_unsigned ? PA19IntegralValue::Unsigned(raw, t.name, t.bits) : PA19IntegralValue::Signed(static_cast<long long>(raw), t.name, t.bits); return true; }
+		if(Take("-")) { if(!ParseUnary(result)) return false; *result = PA19Promote(*result); if(!result->known) return false; const PA19IntegralType t = result->type; const unsigned long long raw = (0ULL - PA19Raw(*result)) & PA19Mask(t.bits); *result = t.is_unsigned ? PA19IntegralValue::Unsigned(raw, t.name, t.bits) : PA19IntegralValue::Signed(static_cast<long long>(raw), t.name, t.bits); return true; }
 		if(Take("!")) { if(!ParseUnary(result)) return false; *result = PA19IntegralValue::Signed(!result->raw, "int", 32); return true; }
-		if(Take("~")) { if(!ParseUnary(result)) return false; *result = PA19Promote(*result); if(!result->known) return false; const PA19IntegralType t = PA19Type(result->type); const unsigned long long raw = (~PA19Raw(*result)) & PA19Mask(t.bits); *result = t.is_unsigned ? PA19IntegralValue::Unsigned(raw, t.name, t.bits) : PA19IntegralValue::Signed(static_cast<long long>(raw), t.name, t.bits); return true; }
+		if(Take("~")) { if(!ParseUnary(result)) return false; *result = PA19Promote(*result); if(!result->known) return false; const PA19IntegralType t = result->type; const unsigned long long raw = (~PA19Raw(*result)) & PA19Mask(t.bits); *result = t.is_unsigned ? PA19IntegralValue::Unsigned(raw, t.name, t.bits) : PA19IntegralValue::Signed(static_cast<long long>(raw), t.name, t.bits); return true; }
 		return ParsePrimary(result);
 	}
 	bool ParseString(std::vector<unsigned long long>* values, std::string* type)

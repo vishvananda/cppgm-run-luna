@@ -682,7 +682,7 @@ public:
 			if (!suffix->children.empty())
 			{
 				ConstantValue value = Evaluate(suffix->children[0], scope);
-				if (!value.known) throw logic_error("array bound is not constant");
+				if (!value.integral.known) throw logic_error("array bound is not constant");
 				bound = value.value;
 			}
 			return ArrayOf(bound, base);
@@ -952,19 +952,18 @@ public:
 			const CPPGMAstNodePtr enumerator = node->children[i];
 			if (!enumerator || enumerator->kind != "enumerator") continue;
 			long long value = next_value;
+			PA19IntegralValue constant_value = PA19IntegralValue::Signed(value, "int", 32);
 			if (!enumerator->children.empty())
 			{
 				ConstantValue evaluated = Evaluate(enumerator->children[0], enum_scope ? enum_scope : owner);
-				if (!evaluated.known) throw logic_error("enum value is not constant");
+				if (!evaluated.integral.known) throw logic_error("enum value is not constant");
 				value = evaluated.value;
+				constant_value = evaluated.integral;
 			}
 			Binding binding(BIND_ENUMERATOR, enumerator->value, type);
 			binding.has_value = true;
 			binding.value = value;
-			binding.unsigned_value = static_cast<unsigned long long>(value);
-			binding.value_is_unsigned = false;
-			binding.value_bits = 32;
-			binding.value_type = "int";
+			binding.constant_value = constant_value;
 			if (qualified_definition) binding.type_override = override_text;
 			if (scoped) enum_scope->add(binding);
 			else owner->add(binding);
@@ -991,7 +990,8 @@ public:
 	{
 		if (node->children.empty()) throw logic_error("invalid static assertion");
 		ConstantValue value = Evaluate(node->children[0], scope);
-		if (!value.known || value.value == 0) throw logic_error("static assertion failed");
+		if (!value.integral.known || PA19Raw(value.integral) == 0)
+			throw logic_error("static assertion failed");
 	}
 	void ProcessCompound(const CPPGMAstNodePtr& node, Scope* parent)
 	{

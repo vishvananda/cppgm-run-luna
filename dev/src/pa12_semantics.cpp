@@ -816,7 +816,7 @@ private:
 			if (arguments_node && !arguments_node->children.empty())
 			{
 				ConstantValue value = a_.Evaluate(arguments_node->children[0], scope);
-				known = value.known;
+					known = value.integral.known;
 			}
 			ExprHeader(indentation, "literal", info, known ? "1" : "0");
 			return;
