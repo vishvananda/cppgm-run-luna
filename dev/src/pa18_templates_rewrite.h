@@ -928,6 +928,22 @@ bool MatchTypePattern(string pattern, string actual,
 			input->kind == "type-name" || input->kind == "type-specifier";
 		result->value = RewriteText(input->value, context, substitutions,
 			&template_replaced, !type_spelling, true);
+		// Non-type template substitutions are semantic values, not names.  Keep
+		// them as literal AST nodes so PA11/lowering resolve the same typed fact
+		// that selected the specialization.
+		if(input->kind == "id-expression" &&
+			substitutions.find(RemoveMarker(input->value)) != substitutions.end()) {
+			PA19IntegralValue integral;
+			if(PA19ParseInteger(RemoveMarker(result->value), &integral)) {
+				CPPGMAstNodePtr literal(new CPPGMAstNode("literal", RemoveMarker(result->value)));
+				literal->initializer_form = input->initializer_form;
+				return literal;
+			}
+			if(RemoveMarker(result->value) == "true" || RemoveMarker(result->value) == "false") {
+				return CPPGMAstNodePtr(new CPPGMAstNode("keyword-literal",
+					RemoveMarker(result->value) == "true" ? "KW_TRUE:true" : "KW_FALSE:false"));
+			}
+		}
 		if((type_spelling || input->kind == "id-expression") &&
 			result->value.find('<') != string::npos)
 			result->value = RewriteText(result->value, context, substitutions, &template_replaced);

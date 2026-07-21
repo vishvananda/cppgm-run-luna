@@ -1,4 +1,115 @@
 #pragma once
+	string NodeTypeSpelling(const CPPGMAstNodePtr& sequence) const
+	{
+		if(!sequence) return string();
+		string result;
+		for(size_t i = 0; i < sequence->children.size(); ++i) {
+			const CPPGMAstNodePtr child = sequence->children[i];
+			if(!child || (child->kind == "decl-specifier" &&
+				(child->value == "KW_TYPEDEF:typedef" || child->value == "KW_STATIC:static"))) continue;
+			if(child->kind != "decl-specifier" && child->kind != "type-name" &&
+				child->kind != "type-specifier" && child->kind != "cv-qualifier") continue;
+			const string spelling = RemoveMarker(child->value);
+			if(spelling.empty()) continue;
+			if(!result.empty()) result += ' ';
+			result += spelling;
+		}
+		return CanonicalSpelling(result);
+	}
+	string IntegralValueSpelling(const PA19IntegralValue& value) const
+	{
+		if(!value.known) return string();
+		const PA19IntegralType type = PA19Type(value.type);
+		if(type.name == "bool" || value.type == "bool") return PA19Raw(value) ? "true" : "false";
+		ostringstream result;
+		if(value.is_unsigned) result << PA19Raw(value);
+		else result << PA19Signed(value);
+		if(value.is_unsigned) {
+			if(value.bits > 32) result << "ULL";
+			else result << "u";
+		} else if(value.bits > 32) result << "LL";
+		return result.str();
+	}
+	bool EvaluateIntegralText(string raw, const string& context,
+		const map<string, string>& substitutions, PA19IntegralValue* result) const
+	{
+		raw = CanonicalSpelling(ReplaceIdentifiers(raw, substitutions));
+		PA19ConstantExpressionParser parser(constant_values_, substitutions,
+			constant_type_sizes_, constant_type_alignments_, type_aliases_);
+		if(parser.Evaluate(raw, result)) return true;
+		if(raw.find("::") == string::npos && !context.empty()) {
+			for(string current = context; ; ) {
+				const string qualified = JoinPath(current, raw);
+				if(parser.Evaluate(qualified, result)) return true;
+				const size_t separator = current.rfind("::");
+				if(separator == string::npos) break;
+				current.erase(separator);
+			}
+		}
+		return false;
+	}
+	void RecordConstantDeclaration(const CPPGMAstNodePtr& node, const string& context)
+	{
+		if(!node || node->kind != "simple-declaration" || node->children.empty()) return;
+		const string specifiers = SpellNode(node->children[0]);
+		if(specifiers.find("const") == string::npos && specifiers.find("constexpr") == string::npos) return;
+		const string base_type = NodeTypeSpelling(node->children[0]);
+		if(!PA19Type(base_type).integral) return;
+		const CPPGMAstNodePtr list = ChildOfKindLocal(node, "init-declarator-list");
+		if(!list) return;
+		for(size_t i = 0; i < list->children.size(); ++i) {
+			const CPPGMAstNodePtr item = list->children[i];
+			if(!item || item->children.size() < 2) continue;
+			const string name = FirstIdentifierLocal(item->children[0]);
+			const CPPGMAstNodePtr initializer = item->children[1];
+			if(name.empty() || !initializer || initializer->children.empty()) continue;
+			PA19IntegralValue value;
+			if(!EvaluateIntegralText(SpellNode(initializer->children[0]), context,
+				map<string,string>(), &value)) continue;
+			const string qualified = JoinPath(context, name);
+			constant_values_[qualified] = value;
+			if(constant_values_.find(name) == constant_values_.end()) constant_values_[name] = value;
+			const PA19IntegralType type = PA19Type(base_type);
+			if(type.integral) {
+				constant_type_sizes_[qualified] = type.bits <= 8 ? 1 : type.bits <= 16 ? 2 : type.bits <= 32 ? 4 : 8;
+				constant_type_alignments_[qualified] = constant_type_sizes_[qualified];
+			}
+		}
+	}
+	void RecordEnumConstants(const CPPGMAstNodePtr& node, const string& context)
+	{
+		if(!node || node->kind != "enum-specifier") return;
+		long long next = 0;
+		const string enum_name = LastComponent(node->value);
+		for(size_t i = 0; i < node->children.size(); ++i) {
+			const CPPGMAstNodePtr enumerator = node->children[i];
+			if(!enumerator || enumerator->kind != "enumerator") continue;
+			PA19IntegralValue value = PA19IntegralValue::Signed(next, "int", 32);
+			if(!enumerator->children.empty())
+				EvaluateIntegralText(SpellNode(enumerator->children[0]), context,
+					map<string,string>(), &value);
+			const string unqualified = JoinPath(context, enumerator->value);
+			constant_values_[unqualified] = value;
+			if(constant_values_.find(enumerator->value) == constant_values_.end())
+				constant_values_[enumerator->value] = value;
+			if(!enum_name.empty()) constant_values_[JoinPath(JoinPath(context, enum_name), enumerator->value)] = value;
+			next = PA19Signed(value) + 1;
+		}
+	}
+	bool FunctionParameterCounts(const CPPGMAstNodePtr& parameters,
+		size_t* total, size_t* required) const
+	{
+		if(!parameters || !total || !required) return false;
+		*total = 0;
+		*required = 0;
+		for(size_t i = 0; i < parameters->children.size(); ++i) {
+			const CPPGMAstNodePtr parameter = parameters->children[i];
+			if(!parameter || parameter->kind != "parameter-declaration") continue;
+			++*total;
+			if(!ChildOfKindLocal(parameter, "default-argument")) ++*required;
+		}
+		return true;
+	}
 	string ResolveGeneratedFunctionOwner(const string& owner, const string& context,
 		string* child_context) const
 	{
@@ -168,7 +279,7 @@
 			map<string, string> substitutions;
 			for(size_t parameter = 0; parameter < member.parameters.size() &&
 				parameter < parent_args.size(); ++parameter)
-				if(member.parameters[parameter].type)
+				if(member.parameters[parameter].type || !member.parameters[parameter].non_type_type.empty())
 					substitutions[member.parameters[parameter].name] = parent_args[parameter];
 			substitutions[parent.name] = parent_local_name;
 			const string generated_context = JoinPath(
@@ -237,7 +348,7 @@
 		if(!materialized_nested_classes_.insert(key).second) return;
 		map<string, string> substitutions;
 		for(size_t i = 0; i < nested->parameters.size() && i < parent_args.size(); ++i)
-			if(nested->parameters[i].type)
+			if(nested->parameters[i].type || !nested->parameters[i].non_type_type.empty())
 				substitutions[nested->parameters[i].name] = parent_args[i];
 		substitutions[parent.name] = parent_local_name;
 		const vector<const TemplateDefinition*> candidates = NestedDefinitions(parent);
@@ -278,16 +389,42 @@
 		for(set<string>::const_iterator it = requested.begin(); it != requested.end(); ++it)
 			InstantiateNestedClass(parent, parent_args, parent_local_name, *it, context);
 	}
+	string ResolveIntegralArgument(const TemplateParameter& parameter,
+		string raw, const string& context, const map<string, string>& substitutions)
+	{
+		raw = RewriteText(raw, context, substitutions, 0);
+		raw = ReplaceIdentifiers(raw, substitutions);
+		PA19IntegralValue value;
+		if(!EvaluateIntegralText(raw, context, substitutions, &value))
+			throw logic_error("non-type template argument is not an integral constant");
+		string expected = RewriteText(parameter.non_type_type, context, substitutions, 0);
+		expected = ResolveAlias(ReplaceIdentifiers(expected, substitutions), context);
+		const PA19IntegralType expected_type = PA19Type(expected);
+		if(expected_type.integral) value = PA19Convert(value, expected_type);
+		return IntegralValueSpelling(value);
+	}
+	void RegisterGeneratedConstants(
+		const CPPGMAstNodePtr& generated, const string& generated_path)
+	{
+		if(!generated) return;
+		if(generated->kind == "simple-declaration")
+			RecordConstantDeclaration(generated, generated_path);
+		if(generated->kind == "enum-specifier")
+			RecordEnumConstants(generated, generated_path);
+		for(size_t i = 0; i < generated->children.size(); ++i)
+			if(generated->children[i] && generated->children[i]->kind != "compound-statement")
+				RegisterGeneratedConstants(generated->children[i],
+					generated->kind == "class-specifier" || generated->kind == "class-forward-declaration" ?
+					JoinPath(generated_path, LastComponent(generated->value)) : generated_path);
+	}
 	string Instantiate(const TemplateDefinition& definition, const vector<string>& raw_args,
 		const string& context, bool explicit_instantiation = false)
 	{
 		if(definition.parameters.empty()) throw logic_error("template has no type parameters");
-		vector<string> args;
-		vector<string> metadata_args;
+		vector<string> args, metadata_args;
 		map<string, string> substitutions;
 		for(size_t i = 0; i < definition.parameters.size(); ++i) {
 			const TemplateParameter& parameter = definition.parameters[i];
-			if(!parameter.type) throw logic_error("unsupported non-type template parameter");
 			string argument;
 			if(i < raw_args.size() && !raw_args[i].empty()) argument = raw_args[i];
 			else {
@@ -295,13 +432,15 @@
 				if(substituted != substitutions.end()) argument = substituted->second;
 			}
 			if(argument.empty()) argument = parameter.default_type;
-			argument = RewriteText(argument, context, substitutions, 0);
-			argument = NormalizeTypeArgument(argument);
-			argument = NormalizeTypeArgument(ReplaceIdentifiers(argument, substitutions));
-			argument = ResolveAlias(argument, context);
-			argument = RewriteText(argument, context, substitutions, 0);
-			argument = NormalizeTypeArgument(argument);
-			argument = QualifyTypeArgument(argument, context, definition.owner);
+			if(parameter.type) {
+				argument = RewriteText(argument, context, substitutions, 0);
+				argument = NormalizeTypeArgument(argument);
+				argument = NormalizeTypeArgument(ReplaceIdentifiers(argument, substitutions));
+				argument = ResolveAlias(argument, context);
+				argument = RewriteText(argument, context, substitutions, 0);
+				argument = NormalizeTypeArgument(argument);
+				argument = QualifyTypeArgument(argument, context, definition.owner);
+			} else argument = ResolveIntegralArgument(parameter, argument, context, substitutions);
 			if(argument.empty()) throw logic_error("missing template argument");
 			args.push_back(argument);
 			metadata_args.push_back(RestoreSpecializationSpelling(argument));
@@ -377,6 +516,7 @@
 				local_name);
 			class_declarations_[lexical_path] = generated;
 			class_contexts_.insert(generated_path);
+			RegisterGeneratedConstants(generated, generated_path);
 			InstantiateRequestedNestedClasses(definition, args, local_name, context);
 			InstantiateMemberDefinitions(definition, args, local_name,
 				explicit_instantiation);

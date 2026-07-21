@@ -253,8 +253,8 @@ bool PA14Lowerer::FoldInteger(const CPPGMAstNodePtr& node, Scope* scope,
       if(!FoldInteger(node->children[0], scope, &condition, 0)) return false;
       return FoldInteger(node->children[condition ? 1 : 2], scope, result, type);
     }
-    if((node->kind == "binary-expression" || node->kind == "assignment-expression") &&
-       node->children.size() >= 2) {
+	if((node->kind == "binary-expression" || node->kind == "assignment-expression") &&
+		node->children.size() >= 2) {
       long long left = 0, right = 0;
       TypePtr left_type, right_type;
       if(!FoldInteger(node->children[0], scope, &left, &left_type) ||
@@ -283,11 +283,21 @@ bool PA14Lowerer::FoldInteger(const CPPGMAstNodePtr& node, Scope* scope,
       if(type) *type = (op == "==" || op == "!=" || op == "<" || op == ">" ||
         op == "<=" || op == ">=" || op == "&&" || op == "||") ?
         Fundamental("bool") : (op == "," ? right_type : left_type);
-      if(result) *result = left;
-      return true;
-    }
-    return false;
-  }
+		if(result) *result = left;
+		return true;
+	}
+	// The semantic analyzer owns the typed constant representation.  Use it
+	// for expression forms that the legacy LowIR folder does not spell out
+	// (notably functional integral casts such as short(42)).
+	const ConstantValue semantic = analyzer_.Evaluate(node, scope);
+	if(!semantic.known) return false;
+	if(result) *result = semantic.value;
+	if(type) {
+		Analyzer::SpecFacts facts;
+		*type = analyzer_.ResolveSpelledType(semantic.type_name, scope, facts);
+	}
+	return true;
+}
 
 PA14Lowerer::AddressInit PA14Lowerer::StaticAddress(const CPPGMAstNodePtr& expression, Scope* scope)
 {

@@ -155,6 +155,10 @@ struct Binding
 	TypePtr type;
 	bool has_value;
 	long long value;
+	unsigned long long unsigned_value;
+	bool value_is_unsigned;
+	unsigned value_bits;
+	string value_type;
 	string type_override;
 	string qualified_name;
 	bool injected_member;
@@ -218,6 +222,12 @@ struct ConstantValue
 {
 	bool known;
 	long long value;
+	// Keep the representation used by integral constant evaluation instead of
+	// collapsing unsigned values into a signed host integer.
+	unsigned long long unsigned_value;
+	bool is_unsigned;
+	unsigned bits;
+	string type_name;
 
 	ConstantValue(bool is_known = false, long long constant = 0);
 };

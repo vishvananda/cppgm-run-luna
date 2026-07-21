@@ -17,6 +17,147 @@ string StripTemplateArgumentsFromPath(const string& raw)
 
 }
 
+ConstantValue Analyzer::FromIntegralValue(const PA19IntegralValue& value) const
+{
+	if (!value.known) return ConstantValue();
+	ConstantValue result(true, PA19Signed(value));
+	result.unsigned_value = PA19Raw(value);
+	result.is_unsigned = value.is_unsigned;
+	result.bits = value.bits;
+	result.type_name = value.type;
+	return result;
+}
+
+PA19IntegralValue Analyzer::ToIntegralValue(const ConstantValue& value) const
+{
+	if (!value.known) return PA19IntegralValue();
+	PA19IntegralValue result;
+	result.known = true;
+	result.is_unsigned = value.is_unsigned;
+	result.bits = value.bits == 0 ? 64 : value.bits;
+	result.raw = value.unsigned_value;
+	result.type = value.type_name.empty() ?
+		(value.is_unsigned ? "unsigned long long" : "long long") : value.type_name;
+	return result;
+}
+
+PA19IntegralValue Analyzer::ParseLiteralValue(const string& raw) const
+{
+	PA19IntegralValue result;
+	if (PA19DecodeCharacter(raw, &result) || PA19ParseInteger(raw, &result)) return result;
+	throw logic_error("unsupported constant expression");
+}
+
+long long Analyzer::ParseLiteral(const string& raw) const
+{
+	return PA19Signed(ParseLiteralValue(raw));
+}
+
+ConstantValue Analyzer::Evaluate(const CPPGMAstNodePtr& expression, Scope* scope)
+{
+	if (!expression) return ConstantValue();
+	if (expression->kind == "literal") return FromIntegralValue(ParseLiteralValue(expression->value));
+	if (expression->kind == "keyword-literal")
+		return FromIntegralValue(PA19IntegralValue::Signed(
+			OperatorFromNode(expression->value) == "true" ? 1 : 0, "bool", 1));
+	if (expression->kind == "id-expression")
+	{
+		Binding* binding = ResolveBinding(scope, expression->value);
+		if (!binding || !binding->has_value) return ConstantValue();
+		ConstantValue result(true, binding->value);
+		result.unsigned_value = binding->unsigned_value;
+		result.is_unsigned = binding->value_is_unsigned;
+		result.bits = binding->value_bits;
+		result.type_name = binding->value_type.empty() ? TypeText(binding->type, true) : binding->value_type;
+		return result;
+	}
+	if (expression->kind == "parenthesized-expression")
+		return expression->children.empty() ? ConstantValue() : Evaluate(expression->children[0], scope);
+	if (expression->kind == "subscript-expression" && expression->children.size() >= 2 &&
+		expression->children[0] && expression->children[0]->kind == "literal") {
+		ConstantValue index = Evaluate(expression->children[1], scope);
+		if (!index.known) return ConstantValue();
+		ostringstream spelling;
+		spelling << expression->children[0]->value << "[" << PA19Raw(ToIntegralValue(index)) << "]";
+		map<string, PA19IntegralValue> constants;
+		map<string, string> substitutions;
+		PA19ConstantExpressionParser parser(constants, substitutions);
+		PA19IntegralValue value;
+		return parser.Evaluate(spelling.str(), &value) ? FromIntegralValue(value) : ConstantValue();
+	}
+	if (expression->kind == "sizeof-expression" || expression->kind == "type-trait-expression")
+	{
+		if (expression->children.empty()) return ConstantValue();
+		const CPPGMAstNodePtr child = expression->children[0];
+		TypePtr type;
+		if (child->kind == "type-id") type = TypeFromTypeId(child, scope);
+		else type = ExpressionType(child, scope);
+		const bool align = expression->kind == "type-trait-expression";
+		return FromIntegralValue(PA19IntegralValue::Unsigned(
+			static_cast<unsigned long long>(align ? TypeAlignment(type) : TypeSize(type)),
+			"unsigned long", 64));
+	}
+	if (expression->kind == "cast-expression")
+	{
+		if (expression->children.size() < 2) return ConstantValue();
+		const ConstantValue operand = Evaluate(expression->children[1], scope);
+		if (!operand.known) return ConstantValue();
+		const TypePtr target = TypeFromTypeId(expression->children[0], scope);
+		return FromIntegralValue(PA19Convert(ToIntegralValue(operand), PA19Type(TypeText(target, true))));
+	}
+	if (expression->kind == "call-expression" && expression->children.size() >= 2 &&
+		expression->children[0] && expression->children[0]->kind == "id-expression" &&
+		expression->children[1] && expression->children[1]->kind == "paren-argument-list" &&
+		!expression->children[1]->children.empty()) {
+		const PA19IntegralType target = PA19Type(expression->children[0]->value);
+		if (target.integral) {
+			const ConstantValue operand = Evaluate(expression->children[1]->children[0], scope);
+			return operand.known ? FromIntegralValue(PA19Convert(ToIntegralValue(operand), target)) : ConstantValue();
+		}
+	}
+	if (expression->kind == "unary-expression")
+	{
+		if (expression->children.empty()) return ConstantValue();
+		ConstantValue child = Evaluate(expression->children[0], scope);
+		if (!child.known) return child;
+		PA19IntegralValue value = ToIntegralValue(child);
+		const string op = OperatorFromNode(expression->value);
+		if (op == "+") return FromIntegralValue(PA19Promote(value));
+		if (op == "-") {
+			value = PA19Promote(value);
+			const PA19IntegralType type = PA19Type(value.type);
+			const unsigned long long raw = (0ULL - PA19Raw(value)) & PA19Mask(type.bits);
+			return FromIntegralValue(type.is_unsigned ? PA19IntegralValue::Unsigned(raw, type.name, type.bits) :
+				PA19IntegralValue::Signed(static_cast<long long>(raw), type.name, type.bits));
+		}
+		if (op == "!") return FromIntegralValue(PA19IntegralValue::Signed(!PA19Raw(value), "int", 32));
+		if (op == "~") {
+			value = PA19Promote(value);
+			const PA19IntegralType type = PA19Type(value.type);
+			const unsigned long long raw = (~PA19Raw(value)) & PA19Mask(type.bits);
+			return FromIntegralValue(type.is_unsigned ? PA19IntegralValue::Unsigned(raw, type.name, type.bits) :
+				PA19IntegralValue::Signed(static_cast<long long>(raw), type.name, type.bits));
+		}
+		return ConstantValue();
+	}
+	if (expression->kind == "conditional-expression" && expression->children.size() == 3)
+	{
+		ConstantValue condition = Evaluate(expression->children[0], scope);
+		return !condition.known ? ConstantValue() :
+			Evaluate(expression->children[PA19Raw(ToIntegralValue(condition)) ? 1 : 2], scope);
+	}
+	if (expression->kind == "binary-expression" || expression->kind == "assignment-expression")
+	{
+		if (expression->children.size() < 2) return ConstantValue();
+		ConstantValue left = Evaluate(expression->children[0], scope);
+		ConstantValue right = Evaluate(expression->children[1], scope);
+		if (!left.known || !right.known) return ConstantValue();
+		return FromIntegralValue(PA19Binary(OperatorFromNode(expression->value),
+			ToIntegralValue(left), ToIntegralValue(right)));
+	}
+	return ConstantValue();
+}
+
 bool Analyzer::HasTemplateParameterScope(Scope* scope) const
 	{
 		for (Scope* current = scope; current; current = current->parent)
@@ -547,7 +688,14 @@ void Analyzer::ProcessSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* scop
 			if (!floating_literal && !string_literal)
 			{
 				ConstantValue value = Evaluate(expression, scope);
-				if (value.known) { binding.has_value = true; binding.value = value.value; }
+				if (value.known) {
+					binding.has_value = true;
+					binding.value = value.value;
+					binding.unsigned_value = value.unsigned_value;
+					binding.value_is_unsigned = value.is_unsigned;
+					binding.value_bits = value.bits;
+					binding.value_type = value.type_name;
+				}
 			}
 		}
 		scope->add(binding);

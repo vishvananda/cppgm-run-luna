@@ -126,10 +126,10 @@ bool is_unsigned_type(const TypePtr& type)
 {
   TypePtr value = type_value(type);
   if(!value) return false;
-  if(value->kind == TYPE_ENUM)
-    return value->underlying && is_unsigned_type(value->underlying);
-  return value->kind == TYPE_FUNDAMENTAL &&
-    (value->name == "bool" || value->name.find("unsigned") != string::npos);
+	if(value->kind == TYPE_ENUM)
+		return value->underlying && is_unsigned_type(value->underlying);
+	return value->kind == TYPE_FUNDAMENTAL &&
+		(value->name == "bool" || value->name == "char32_t" || value->name.find("unsigned") != string::npos);
 }
 
 bool is_pointer_like(const TypePtr& type)
@@ -407,7 +407,8 @@ string PA14Lowerer::low_type(const TypePtr& raw) const
     if(name == "char") return "i8";
     if(name == "char16_t" || name == "short int" || name == "unsigned short int")
       return name == "unsigned short int" ? "u16" : "i16";
-    if(name == "char32_t" || name == "wchar_t") return "u32";
+	if(name == "char32_t") return "u32";
+	if(name == "wchar_t") return "i32";
     if(name == "int") return "i32";
     if(name == "unsigned int") return "u32";
     if(name == "long int" || name == "long long int" ||

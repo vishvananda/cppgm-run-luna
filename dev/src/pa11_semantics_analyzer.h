@@ -1,5 +1,6 @@
 #pragma once
 #include "pa11_semantics_model.h"
+#include "pa19_constants.h"
 class Analyzer {
 public:
 	Analyzer()
@@ -559,98 +560,11 @@ public:
 			base = BuildDeclarator(type_id->children[1], base, scope);
 		return base;
 	}
-	long long ParseLiteral(const string& raw) const
-	{
-		string value = raw;
-		while (!value.empty() &&
-			(value[value.size() - 1] == 'u' || value[value.size() - 1] == 'U' ||
-			 value[value.size() - 1] == 'l' || value[value.size() - 1] == 'L'))
-			value.erase(value.size() - 1);
-		if (value.empty()) throw logic_error("invalid integer literal");
-		errno = 0;
-		char* end = 0;
-		const long long result = strtoll(value.c_str(), &end, 0);
-		if (errno == ERANGE || end == value.c_str() || *end != '\0')
-			throw logic_error("unsupported constant expression");
-		return result;
-	}
-	ConstantValue Evaluate(const CPPGMAstNodePtr& expression, Scope* scope)
-	{
-		if (!expression) return ConstantValue();
-		if (expression->kind == "literal") return ConstantValue(true, ParseLiteral(expression->value));
-		if (expression->kind == "keyword-literal")
-			return ConstantValue(true, OperatorFromNode(expression->value) == "true" ? 1 : 0);
-		if (expression->kind == "id-expression")
-		{
-			Binding* binding = ResolveBinding(scope, expression->value);
-			if (!binding || !binding->has_value) return ConstantValue();
-			return ConstantValue(true, binding->value);
-		}
-		if (expression->kind == "parenthesized-expression")
-			return expression->children.empty() ? ConstantValue() : Evaluate(expression->children[0], scope);
-		if (expression->kind == "sizeof-expression" || expression->kind == "type-trait-expression")
-		{
-			if (expression->children.empty()) return ConstantValue();
-			const CPPGMAstNodePtr child = expression->children[0];
-			TypePtr type;
-			if (child->kind == "type-id") type = TypeFromTypeId(child, scope);
-			else type = ExpressionType(child, scope);
-			const bool align = expression->kind == "type-trait-expression";
-			return ConstantValue(true, static_cast<long long>(align ? TypeAlignment(type) : TypeSize(type)));
-		}
-		if (expression->kind == "cast-expression")
-		{
-			if (expression->children.size() < 2) return ConstantValue();
-			return Evaluate(expression->children[1], scope);
-		}
-		if (expression->kind == "unary-expression")
-		{
-			if (expression->children.empty()) return ConstantValue();
-			ConstantValue child = Evaluate(expression->children[0], scope);
-			if (!child.known) return child;
-			const string op = OperatorFromNode(expression->value);
-			if (op == "+") return child;
-			if (op == "-") return ConstantValue(true, -child.value);
-			if (op == "!") return ConstantValue(true, !child.value);
-			if (op == "~") return ConstantValue(true, ~child.value);
-			return ConstantValue();
-		}
-		if (expression->kind == "conditional-expression" && expression->children.size() == 3)
-		{
-			ConstantValue condition = Evaluate(expression->children[0], scope);
-			return !condition.known ? ConstantValue() :
-				Evaluate(expression->children[condition.value ? 1 : 2], scope);
-		}
-		if (expression->kind == "binary-expression" || expression->kind == "assignment-expression")
-		{
-			if (expression->children.size() < 2) return ConstantValue();
-			ConstantValue left = Evaluate(expression->children[0], scope);
-			ConstantValue right = Evaluate(expression->children[1], scope);
-			if (!left.known || !right.known) return ConstantValue();
-			const string op = OperatorFromNode(expression->value);
-			if (op == "+") return ConstantValue(true, left.value + right.value);
-			if (op == "-") return ConstantValue(true, left.value - right.value);
-			if (op == "*") return ConstantValue(true, left.value * right.value);
-			if (op == "/") return right.value == 0 ? ConstantValue() : ConstantValue(true, left.value / right.value);
-			if (op == "%") return right.value == 0 ? ConstantValue() : ConstantValue(true, left.value % right.value);
-			if (op == "==") return ConstantValue(true, left.value == right.value);
-			if (op == "!=") return ConstantValue(true, left.value != right.value);
-			if (op == "<") return ConstantValue(true, left.value < right.value);
-			if (op == ">") return ConstantValue(true, left.value > right.value);
-			if (op == "<=") return ConstantValue(true, left.value <= right.value);
-			if (op == ">=") return ConstantValue(true, left.value >= right.value);
-			if (op == "&&" || op == "and") return ConstantValue(true, left.value && right.value);
-			if (op == "||" || op == "or") return ConstantValue(true, left.value || right.value);
-			if (op == "&" || op == "bitand") return ConstantValue(true, left.value & right.value);
-			if (op == "|" || op == "bitor") return ConstantValue(true, left.value | right.value);
-			if (op == "^") return ConstantValue(true, left.value ^ right.value);
-			if (op == "<<") return ConstantValue(true, left.value << right.value);
-			if (op == ">>") return ConstantValue(true, left.value >> right.value);
-			if (op == ",") return right;
-			return ConstantValue();
-		}
-		return ConstantValue();
-	}
+	ConstantValue FromIntegralValue(const PA19IntegralValue& value) const;
+	PA19IntegralValue ToIntegralValue(const ConstantValue& value) const;
+	PA19IntegralValue ParseLiteralValue(const string& raw) const;
+	long long ParseLiteral(const string& raw) const;
+	ConstantValue Evaluate(const CPPGMAstNodePtr& expression, Scope* scope);
 	size_t FundamentalSize(const string& name) const
 	{
 		if (name == "char" || name == "signed char" || name == "unsigned char" || name == "bool") return 1;
@@ -1047,6 +961,10 @@ public:
 			Binding binding(BIND_ENUMERATOR, enumerator->value, type);
 			binding.has_value = true;
 			binding.value = value;
+			binding.unsigned_value = static_cast<unsigned long long>(value);
+			binding.value_is_unsigned = false;
+			binding.value_bits = 32;
+			binding.value_type = "int";
 			if (qualified_definition) binding.type_override = override_text;
 			if (scoped) enum_scope->add(binding);
 			else owner->add(binding);

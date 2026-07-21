@@ -18,6 +18,7 @@ Type::Type(TypeKind type_kind, const string& type_name)
 Binding::Binding(BindingKind binding_kind, const string& binding_name,
 	const TypePtr& binding_type)
 	: kind(binding_kind), name(binding_name), type(binding_type), has_value(false), value(0),
+	  unsigned_value(0), value_is_unsigned(false), value_bits(64), value_type(),
 	  type_override(), qualified_name(), injected_member(false), injected_object_name(),
 	  injected_owner(), hidden_friend(false), friend_owner(), is_member(false),
 	  is_static(false), is_virtual(false), is_pure(false), is_override(false),
@@ -68,7 +69,8 @@ Scope* Scope::child(ScopeKind child_kind, const string& child_name)
 }
 
 ConstantValue::ConstantValue(bool is_known, long long constant)
-	: known(is_known), value(constant) {}
+	: known(is_known), value(constant), unsigned_value(static_cast<unsigned long long>(constant)),
+	  is_unsigned(false), bits(64), type_name("long long") {}
 
 string LastComponent(const string& name)
 {

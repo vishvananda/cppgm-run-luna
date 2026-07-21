@@ -1,5 +1,6 @@
 #pragma once
 #include "pa18_templates.h"
+#include "pa19_constants.h"
 #include <algorithm>
 #include <cctype>
 #include <map>
@@ -278,8 +279,13 @@ struct TemplateParameter
 {
 	string name;
 	string default_type;
+	// `type` is retained for the PA18 type-parameter path.  PA19 records the
+	// declared integral type separately so value substitutions never get
+	// confused with type substitutions.
+	string non_type_type;
 	bool type;
-	TemplateParameter() : name(), default_type(), type(false) {}
+	bool pack;
+	TemplateParameter() : name(), default_type(), non_type_type(), type(false), pack(false) {}
 };
 struct TemplateDefinition
 {
@@ -477,6 +483,8 @@ private:
 	map<string, CPPGMAstNodePtr> class_declarations_;
 	set<string> named_type_contexts_;
 	map<string, string> variable_types_;
+	map<string, PA19IntegralValue> constant_values_;
+	map<string, size_t> constant_type_sizes_, constant_type_alignments_;
 	map<string, string> type_aliases_;
 	map<string, vector<string> > type_aliases_by_name_;
 	map<string, FunctionSignature> function_signatures_;
@@ -484,27 +492,8 @@ private:
 	map<string, string> specialization_bases_;
 	map<string, vector<string> > specialization_arguments_;
 	map<string, set<string> > requested_nested_classes_;
-	set<string> materialized_nested_classes_;
-	set<string> materialized_member_definitions_;
-	mutable map<string, string> function_markers_;
-	mutable map<string, string> function_marker_names_;
-	string NodeTypeSpelling(const CPPGMAstNodePtr& sequence) const
-	{
-		if(!sequence) return string();
-		string result;
-		for(size_t i = 0; i < sequence->children.size(); ++i) {
-			const CPPGMAstNodePtr child = sequence->children[i];
-			if(!child || (child->kind == "decl-specifier" &&
-				(child->value == "KW_TYPEDEF:typedef" || child->value == "KW_STATIC:static"))) continue;
-			if(child->kind != "decl-specifier" && child->kind != "type-name" &&
-				child->kind != "type-specifier" && child->kind != "cv-qualifier") continue;
-			const string spelling = RemoveMarker(child->value);
-			if(spelling.empty()) continue;
-			if(!result.empty()) result += ' ';
-			result += spelling;
-		}
-		return CanonicalSpelling(result);
-	}
+	set<string> materialized_nested_classes_, materialized_member_definitions_;
+	mutable map<string, string> function_markers_, function_marker_names_;
 	string InheritedTypeName(const string& scope, const string& name,
 		set<string>* active) const;
 	string QualifyTypeArgument(string spelling, const string& context,
@@ -532,20 +521,6 @@ private:
 		const map<string, string>& substitutions, const string& context) const;
 	CPPGMAstNodePtr TransformCallExpression(const CPPGMAstNodePtr& input,
 		const string& context, const map<string, string>& substitutions);
-	bool FunctionParameterCounts(const CPPGMAstNodePtr& parameters,
-		size_t* total, size_t* required) const
-	{
-		if(!parameters || !total || !required) return false;
-		*total = 0;
-		*required = 0;
-		for(size_t i = 0; i < parameters->children.size(); ++i) {
-			const CPPGMAstNodePtr parameter = parameters->children[i];
-			if(!parameter || parameter->kind != "parameter-declaration") continue;
-			++*total;
-			if(!ChildOfKindLocal(parameter, "default-argument")) ++*required;
-		}
-		return true;
-	}
 	string ResolveAlias(string spelling, const string& context) const
 	{
 		spelling = CanonicalSpelling(spelling);
@@ -924,9 +899,29 @@ private:
 			const CPPGMAstNodePtr parameter = list->children[i];
 			if(!parameter) continue;
 			TemplateParameter item;
-			item.name = FirstIdentifierLocal(parameter);
+			if(parameter->kind == "type-parameter") item.name = FirstIdentifierLocal(parameter);
+			else {
+				for(size_t child = 0; child < parameter->children.size(); ++child)
+					if(parameter->children[child] &&
+						(parameter->children[child]->kind == "declarator" ||
+						 parameter->children[child]->kind == "abstract-declarator")) {
+						item.name = FirstIdentifierLocal(parameter->children[child]);
+						if(!item.name.empty()) break;
+					}
+				if(item.name.empty()) item.name = FirstIdentifierLocal(parameter);
+			}
 			item.default_type = DefaultTypeSpelling(parameter);
 			item.type = parameter->kind == "type-parameter";
+			item.pack = ChildOfKindLocal(parameter, "parameter-pack") != CPPGMAstNodePtr();
+			if(!item.type && !parameter->children.empty()) {
+				item.non_type_type = NodeTypeSpelling(parameter->children[0]);
+				for(size_t child = 0; child < parameter->children.size(); ++child)
+					if(parameter->children[child] &&
+						(parameter->children[child]->kind == "declarator" ||
+						 parameter->children[child]->kind == "abstract-declarator"))
+						item.non_type_type += DeclaratorSuffix(parameter->children[child]);
+				item.non_type_type = CanonicalSpelling(item.non_type_type);
+			}
 			result.push_back(item);
 		}
 		return result;
@@ -1060,6 +1055,10 @@ private:
 		}
 		if(node->kind == "simple-declaration")
 			RecordFunctionSignature(node, context);
+		if(node->kind == "simple-declaration")
+			RecordConstantDeclaration(node, context);
+		if(node->kind == "enum-specifier")
+			RecordEnumConstants(node, context);
 		if(node->kind == "alias-declaration" && !node->value.empty() && !node->children.empty()) {
 			const string alias = JoinPath(context, node->value);
 			const string target = TypeIdSpelling(node->children[0]);
