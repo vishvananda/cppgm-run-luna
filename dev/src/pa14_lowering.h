@@ -18,6 +18,7 @@ string trim_type_name(const string& name);
 bool type_is_reference(const TypePtr& type);
 TypePtr type_value(const TypePtr& type);
 string last_component(const string& name);
+string special_member_symbol_name(const TypePtr& owner, const string& name);
 string low_symbol_component(const string& name);
 bool is_integral_type(const TypePtr& type);
 bool is_arithmetic_type(const TypePtr& type);
@@ -684,7 +685,8 @@ string EmitCallAddress(const CPPGMAstNodePtr& node, Scope* scope);
 
 string EmitLiteralAddress(const CPPGMAstNodePtr& node);
 
-string EmitMemberAddress(const CPPGMAstNodePtr& node, Scope* scope);
+string EmitMemberAddress(const CPPGMAstNodePtr& node, Scope* scope,
+                         bool reference_projection = false);
 
 string AdjustBaseAddress(const string& base, const TypePtr& derived,
                          const TypePtr& target);

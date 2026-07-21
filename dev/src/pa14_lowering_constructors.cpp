@@ -20,8 +20,12 @@ bool PA14Lowerer::EmitValueSpecialMemberBody(FunctionRecord& function, Scope* sc
     const bool assignment = function.copy_assignment || function.move_assignment;
     const bool move = function.move_constructor || function.move_assignment;
     bool has_bit_field = false;
+    bool has_reference_member = false;
     for(size_t i = 0; i < owner->class_members.size(); ++i)
-      if(owner->class_members[i].bit_field) { has_bit_field = true; break; }
+      if(owner->class_members[i].bit_field) has_bit_field = true;
+      else if(owner->class_members[i].type &&
+              type_is_reference(owner->class_members[i].type))
+        has_reference_member = true;
     const bool defer_destination = assignment && owner->direct_base &&
       IsEmptyBaseStorage(owner->direct_base);
     const bool defer_bit_field_destination = assignment && has_bit_field;
@@ -52,7 +56,8 @@ bool PA14Lowerer::EmitValueSpecialMemberBody(FunctionRecord& function, Scope* sc
       }
     }
     set<long long> copied_bit_offsets;
-    if((IsTrivialValueStorage(owner) && !(assignment && has_bit_field)) ||
+    if((IsTrivialValueStorage(owner) && !has_reference_member &&
+        !(assignment && has_bit_field)) ||
        defaulted_copy_storage) {
       source = emit_load(source_storage, PointerTo(Fundamental("char")));
       AddInstruction("copyobj " + integer_text(static_cast<long long>(type_size(owner))) +
@@ -93,7 +98,8 @@ bool PA14Lowerer::EmitValueSpecialMemberBody(FunctionRecord& function, Scope* sc
         const ClassMemberInfo& member = owner->class_members[i];
         if(member.is_static || !member.type || member.name.empty()) continue;
         TypePtr member_type = type_value(member.type);
-        if(member.bit_field || !IsTrivialValueStorage(member_type)) {
+        if(member.bit_field || type_is_reference(member.type) ||
+           !IsTrivialValueStorage(member_type)) {
           trivial_prefix_size = member.offset;
           break;
         }
@@ -147,6 +153,23 @@ bool PA14Lowerer::EmitValueSpecialMemberBody(FunctionRecord& function, Scope* sc
             " = index i8 [projection=field] " + destination_object + ", " +
             integer_text(member.offset));
           emit_store(member.type, loaded, destination_member);
+          continue;
+        }
+        if(type_is_reference(member.type)) {
+          if(source.empty())
+            source = emit_load(source_storage, PointerTo(Fundamental("char")));
+          const string source_member = new_temp();
+          AddInstruction(source_member +
+            " = index i8 [projection=reference_field] " + source + ", " +
+            integer_text(member.offset));
+          const string referred = emit_load(source_member,
+            PointerTo(Fundamental("char")));
+          if(destination.empty()) destination = EmitValue(this_node, scope).operand;
+          const string destination_member = new_temp();
+          AddInstruction(destination_member +
+            " = index i8 [projection=field] " + destination + ", " +
+            integer_text(member.offset));
+          emit_store(PointerTo(Fundamental("char")), referred, destination_member);
           continue;
         }
         if(destination.empty()) destination = EmitValue(this_node, scope).operand;
@@ -334,14 +357,17 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
         if(alias_type && alias_type == base) named_base = base;
       }
       if(named_base) {
+        if(arguments.empty() && IsEmptyBaseStorage(named_base) &&
+           !HasDefaultConstructionEffects(named_base))
+          continue;
         const string this_address = EmitValue(this_node, scope).operand;
         const string base_address = AdjustBaseAddress(this_address, owner, named_base);
         if(arguments.size() == 1 && arguments[0] &&
            arguments[0]->kind != "braced-init-list") {
           const TypePtr argument_type = expression_value_type(Infer(arguments[0], scope));
           if(argument_type && argument_type->kind == TYPE_CLASS &&
-             (PA12SameType(argument_type, named_base, true) ||
-              IsDerivedFrom(argument_type, named_base)) &&
+             !PA12SameType(argument_type, named_base, true) &&
+             IsDerivedFrom(argument_type, named_base) &&
              EmitObjectTransferAt(named_base, base_address, arguments[0], scope, true))
             continue;
         }

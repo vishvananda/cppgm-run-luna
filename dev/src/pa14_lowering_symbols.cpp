@@ -241,7 +241,8 @@ string abi_type(const TypePtr& raw)
 string abi_terminal(const string& name, const TypePtr& result)
 {
   static const char* const names[][2] = {
-    {"operator=", "aS"}, {"operator+", "pl"}, {"operator-", "mi"},
+    {"operator=", "aS"}, {"operator+", "pl"}, {"operator+=", "pL"},
+    {"operator-", "mi"}, {"operator-=", "mI"},
     {"operator*", "ml"}, {"operator/", "dv"}, {"operator%", "rm"},
     {"operator<<", "ls"}, {"operator>>", "rs"}, {"operator<", "lt"},
     {"operator>", "gt"}, {"operator<=", "le"}, {"operator>=", "ge"},
@@ -262,11 +263,114 @@ string abi_terminal(const string& name, const TypePtr& result)
   return integer_text(static_cast<long long>(name.size())) + name;
 }
 
-string abi_function_parameters(const TypePtr& source)
+size_t abi_named_type_count(const string& raw)
+{
+  string value = abi_trim(raw);
+  const char* qualifiers[] = {"const ", "volatile ", "struct ", "class ",
+    "union ", "enum "};
+  bool removed = true;
+  while(removed) {
+    removed = false;
+    for(size_t i = 0; i < sizeof(qualifiers) / sizeof(qualifiers[0]); ++i)
+      if(value.compare(0, strlen(qualifiers[i]), qualifiers[i]) == 0) {
+        value = abi_trim(value.substr(strlen(qualifiers[i])));
+        removed = true;
+        break;
+      }
+  }
+  if(value.empty() || !abi_fundamental(value).empty()) return 0;
+  if(value[value.size() - 1] == '&')
+    return abi_named_type_count(value.substr(0, value.size() - 1));
+  if(value[value.size() - 1] == '*')
+    return abi_named_type_count(value.substr(0, value.size() - 1));
+  const size_t open = value.find('<');
+  if(open == string::npos) return 1;
+  const size_t close = abi_matching_angle(value, open);
+  if(close == string::npos) return 1;
+  size_t result = 1;
+  const vector<string> arguments = abi_split_arguments(value.substr(open + 1,
+    close - open - 1));
+  for(size_t i = 0; i < arguments.size(); ++i)
+    result += abi_named_type_count(arguments[i]);
+  return result;
+}
+
+bool abi_template_substitution_index(const TypePtr& raw, const TypePtr& owner,
+                                     size_t* index)
+{
+  if(!raw || !owner || !owner->template_specialization ||
+     owner->template_arguments.empty() || !index) return false;
+  const string raw_type = abi_type(raw);
+  string unqualified_raw = raw_type;
+  while(!unqualified_raw.empty() &&
+        (unqualified_raw[0] == 'K' || unqualified_raw[0] == 'V'))
+    unqualified_raw.erase(unqualified_raw.begin());
+  size_t next = 0;
+  for(size_t i = 0; i < owner->template_arguments.size(); ++i) {
+    const string argument = abi_trim(owner->template_arguments[i]);
+    const string argument_type = abi_type_text(argument);
+    const size_t nested = abi_named_type_count(argument);
+    if(raw_type == argument_type || unqualified_raw == argument_type) {
+      // Template-id arguments encode their nested named arguments before
+      // the outer specialization; a plain named argument has no such
+      // prefix.  The matched argument therefore starts after nested-1
+      // substitutions, while the enclosing sequence advances by all of
+      // them.
+      *index = next + (nested == 0 ? 0 : nested - 1);
+      return true;
+    }
+    next += nested;
+  }
+  const TypePtr owner_value = type_value(owner);
+  if(owner_value && PA12SameType(type_value(raw), owner_value, true)) {
+    *index = next;
+    return true;
+  }
+  return false;
+}
+
+string abi_substitution(size_t index)
+{
+  return "S" + integer_text(static_cast<long long>(index)) + "_";
+}
+
+string abi_member_parameter_type(const TypePtr& raw, const TypePtr& owner)
+{
+  if(!raw) return "v";
+  string cv;
+  if(raw->is_const) cv += "K";
+  if(raw->is_volatile) cv += "V";
+  if(raw->kind == TYPE_LVALUE_REFERENCE || raw->kind == TYPE_RVALUE_REFERENCE) {
+    size_t substitution = 0;
+    const string reference = raw->kind == TYPE_LVALUE_REFERENCE ? "R" : "O";
+    if(abi_template_substitution_index(type_value(raw->child), owner,
+                                       &substitution))
+      return cv + reference +
+        string(raw->child && raw->child->is_const ? "K" : "") +
+        (raw->child && raw->child->is_volatile ? "V" : "") +
+        abi_substitution(substitution);
+    return cv + reference + abi_member_parameter_type(raw->child, owner);
+  }
+  if(raw->kind == TYPE_POINTER) {
+    size_t substitution = 0;
+    if(abi_template_substitution_index(type_value(raw->child), owner,
+                                       &substitution))
+      return cv + "P" + abi_substitution(substitution);
+    return cv + "P" + abi_member_parameter_type(raw->child, owner);
+  }
+  size_t substitution = 0;
+  if(abi_template_substitution_index(raw, owner, &substitution))
+    return cv + abi_substitution(substitution);
+  return abi_type(raw);
+}
+
+string abi_function_parameters(const TypePtr& source, const TypePtr& owner = TypePtr())
 {
   if(!source || source->parameters.empty()) return "v";
   string result;
-  for(size_t i = 0; i < source->parameters.size(); ++i) result += abi_type(source->parameters[i]);
+  for(size_t i = 0; i < source->parameters.size(); ++i)
+    result += owner ? abi_member_parameter_type(source->parameters[i], owner) :
+      abi_type(source->parameters[i]);
   return result;
 }
 
@@ -309,8 +413,9 @@ string PA14Lowerer::TemplateFunctionObjectName(const FunctionRecord& function) c
     if(source->function_volatile) result += "V";
     result += abi_nested_body(function.member_owner);
     result += terminal;
-    result += abi_function_parameters(source);
-    return result + "E";
+    result += "E";
+    result += abi_function_parameters(source, function.member_owner);
+    return result;
   }
 
   const vector<string> components = abi_split_qualified(function.qualified_name);

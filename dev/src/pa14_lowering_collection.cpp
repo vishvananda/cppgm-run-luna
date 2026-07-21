@@ -240,7 +240,7 @@ void PA14Lowerer::ClassifySpecialMember(FunctionRecord* record)
     TypePtr function = function_target_type(record->source_type);
     if(!owner || owner->kind != TYPE_CLASS || !function) return;
     const string name = LastComponent(record->qualified_name);
-    const bool constructor = name == LastComponent(owner->name);
+    const bool constructor = record->constructor || name == LastComponent(owner->name);
     const bool assignment = name == "operator=";
     if(!constructor && !assignment) return;
     if(function->parameters.empty()) return;
@@ -286,7 +286,12 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
     if(!owner || owner->kind != TYPE_CLASS) throw logic_error("special member has no class owner");
     const string raw_name = declarator_name(declarator);
     const string name = SpecialMemberName(raw_name);
-    const string qname = TypeQualifiedName(owner) + "::" + name;
+    const string qname = TypeQualifiedName(owner) + "::" +
+      special_member_symbol_name(owner, name);
+    for(size_t i = 0; i < declared_bindings.size(); ++i)
+      if(declared_bindings[i] && declared_bindings[i]->kind == BIND_FUNCTION &&
+         declared_bindings[i]->declaration.get() == node.get())
+        declared_bindings[i]->qualified_name = qname;
     const string key = function_key(qname, function);
     vector<Binding*> existing_bindings = DirectBindings(scope, name);
     bool has_binding = false;
@@ -299,6 +304,7 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
       }
     if(!has_binding) {
       Binding binding(BIND_FUNCTION, name, function);
+      binding.qualified_name = qname;
       binding.is_member = true;
       binding.is_static = false;
       binding.member_owner = owner;
@@ -322,7 +328,9 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
     record->qualified_name = qname;
     record->member = true;
     record->static_member = false;
-	record->template_instantiation = node->template_instantiation || owner->template_specialization;
+	record->template_instantiation = node->template_instantiation || owner->template_specialization ||
+		(owner->direct_base && type_value(owner->direct_base) &&
+		 type_value(owner->direct_base)->template_specialization);
 	record->weak_binding = record->template_instantiation;
 	if(node->template_instantiation) {
 		record->template_primary = node->template_primary;
@@ -350,6 +358,8 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
     if(definition) record->unwind_no = record->unwind_no || HasNoexcept(declarator);
     RememberDefaults(record, declarator);
     ClassifySpecialMember(record);
+    if(record->defaulted && record->value_special_member)
+      record->unwind_no = record->unwind_no || IsTrivialValueStorage(owner);
     const bool out_of_class_definition = definition && node->value.find("::") != string::npos;
     if(out_of_class_definition && (record->constructor || record->destructor)) {
       record->needed = true;
@@ -420,7 +430,8 @@ void PA14Lowerer::CollectInheritedConstructors(const TypePtr& raw_owner, Scope* 
         unwind_no = source_record->unwind_no;
         if(source_record->source_type) source_function = source_record->source_type;
       }
-      const string qname = TypeQualifiedName(owner) + "::" + owner_name;
+      const string qname = TypeQualifiedName(owner) + "::" +
+        special_member_symbol_name(owner, owner_name);
       const string key = function_key(qname, source_function);
       if(function_by_key_.find(key) != function_by_key_.end()) continue;
 
@@ -511,6 +522,16 @@ void PA14Lowerer::CollectInheritedConstructors(const TypePtr& raw_owner, Scope* 
       record->unwind_no = unwind_no;
       record->special_initializer = ctor_initializer;
       record->default_arguments = default_arguments;
+      record->template_instantiation = owner->template_specialization ||
+        (source_record && source_record->template_instantiation);
+      record->weak_binding = record->template_instantiation;
+      if(owner->template_specialization) {
+        record->template_primary = owner->template_primary;
+        record->template_arguments = owner->template_arguments;
+      } else if(source_record) {
+        record->template_primary = source_record->template_primary;
+        record->template_arguments = source_record->template_arguments;
+      }
       EnsureConstructorBaseEntry(record);
     }
   }

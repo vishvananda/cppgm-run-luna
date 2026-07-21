@@ -67,6 +67,17 @@ string last_component(const string& name)
   return p == string::npos ? name : name.substr(p + 2);
 }
 
+string special_member_symbol_name(const TypePtr& owner, const string& name)
+{
+  if(owner && owner->template_specialization && !owner->template_primary.empty()) {
+    const string owner_name = LastComponent(owner->name);
+    const string primary_name = LastComponent(owner->template_primary);
+    if(name == owner_name) return primary_name;
+    if(name == "~" + owner_name) return "~" + primary_name;
+  }
+  return name;
+}
+
 string low_symbol_component(const string& name)
 {
   string result;
@@ -77,7 +88,7 @@ string low_symbol_component(const string& name)
     else if(name[i] == ':' && i + 1 < name.size() && name[i + 1] == ':') {
       result += "__";
       ++i;
-    }
+    } else result += "_";
   }
   if(result.empty()) result = "anonymous";
   return result;
@@ -900,7 +911,8 @@ void PA14Lowerer::CollectImplicitDestructor(const TypePtr& owner, Scope* scope)
     special->children.push_back(declarator);
     special->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("compound-statement")));
     TypePtr source = FunctionOf(vector<TypePtr>(), false, Fundamental("void"), false);
-    const string qname = TypeQualifiedName(owner) + "::" + name;
+    const string qname = TypeQualifiedName(owner) + "::" +
+      special_member_symbol_name(owner, name);
     const string key = function_key(qname, source);
     if(function_by_key_.find(key) != function_by_key_.end()) return;
     Binding binding(BIND_FUNCTION, name, source);
@@ -1196,7 +1208,14 @@ void PA14Lowerer::EnsureConstructorBaseEntry(FunctionRecord* function)
     base_entry.type = function->type;
     base_entry.source_type = function->source_type;
     base_entry.member_owner = function->member_owner;
-    base_entry.qualified_name = function->qualified_name + "__base_entry";
+    string base_qname = function->qualified_name;
+    unsigned int overload = 0;
+    for(size_t i = 0; i < functions_.size(); ++i)
+      if(!functions_[i].base_entry && functions_[i].qualified_name == function->qualified_name)
+        ++overload;
+    if(overload > 1)
+      base_qname += "__ov" + integer_text(static_cast<long long>(overload));
+    base_entry.qualified_name = base_qname + "__base_entry";
     base_entry.definition = function->definition;
     base_entry.member = function->member;
     base_entry.static_member = function->static_member;
@@ -1260,7 +1279,8 @@ PA14Lowerer::FunctionRecord* PA14Lowerer::EnsureAggregateConstructor(const TypeP
     }
     if(member_parameters.empty()) return 0;
     const string name = LastComponent(owner->name);
-    const string qname = TypeQualifiedName(owner) + "::" + name;
+    const string qname = TypeQualifiedName(owner) + "::" +
+      special_member_symbol_name(owner, name);
     TypePtr source = FunctionOf(member_parameters, false, Fundamental("void"), false);
     const string key = function_key(qname, source);
     map<string, FunctionRecord*>::const_iterator found = function_by_key_.find(key);

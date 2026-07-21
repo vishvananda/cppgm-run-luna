@@ -647,6 +647,15 @@ bool PA14Lowerer::EmitObjectTransferAt(const TypePtr& raw_target,
           source_address + ", " + destination);
         return true;
       }
+      bool empty_target = !target->direct_base;
+      for(size_t member_index = 0; member_index < target->class_members.size();
+          ++member_index)
+        if(!target->class_members[member_index].is_static &&
+           !target->class_members[member_index].name.empty()) {
+          empty_target = false;
+          break;
+        }
+      if(empty_target) return true;
       vector<CPPGMAstNodePtr> constructor_arguments;
       constructor_arguments.push_back(source);
       if(EmitConstructorAt(target, destination, constructor_arguments, scope,
@@ -661,15 +670,6 @@ bool PA14Lowerer::EmitObjectTransferAt(const TypePtr& raw_target,
       else
         source_address = EmitAddress(source, scope);
       source_address = AdjustBaseAddress(source_address, source_type, target);
-      bool empty_target = !target->direct_base;
-      for(size_t member_index = 0; member_index < target->class_members.size();
-          ++member_index)
-        if(!target->class_members[member_index].is_static &&
-           !target->class_members[member_index].name.empty()) {
-          empty_target = false;
-          break;
-        }
-      if(empty_target) return true;
       if(IsTrivialValueStorage(target)) {
         AddInstruction("copyobj " + integer_text(static_cast<long long>(type_size(target))) +
           "x" + integer_text(static_cast<long long>(type_alignment(target))) + " " +
@@ -680,6 +680,12 @@ bool PA14Lowerer::EmitObjectTransferAt(const TypePtr& raw_target,
     if(same_type && ValueOperationDeleted(target, move, false)) return false;
     if(same_type && IsTrivialValueStorage(target) &&
        !(move && ClassHasDeclaredMoveMember(target))) {
+      FunctionRecord* copy_member = FindValueMember(target, false, false);
+      if(copy_member && source->kind == "unary-expression") {
+        copy_member->needed = true;
+        FunctionRecord* base_entry = BaseEntryFor(copy_member);
+        if(base_entry) base_entry->needed = true;
+      }
       string source_operand;
       if(source_info.category == "lvalue" || source_info.category == "xvalue")
         source_operand = EmitAddress(source, scope);

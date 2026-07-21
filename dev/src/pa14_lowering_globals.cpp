@@ -951,15 +951,20 @@ string PA14Lowerer::EmitOperatorAddress(const CPPGMAstNodePtr& node, Scope* scop
     CallChoice choice = ChooseOperatorCall(name, arguments, scope);
     if(!choice.binding) return string();
     ExprInfo expression_info = Infer(node, scope);
+    TypePtr value_type = expression_value_type(expression_info);
+    FunctionRecord* function = expression_info.binding ?
+      RecordForBinding(expression_info.binding) : 0;
+    string address;
+    if(value_type && value_type->kind == TYPE_CLASS && expression_info.type &&
+       !type_is_reference(expression_info.type) &&
+       !(function && function->indirect_result)) {
+      const string slot = new_special_slot("tmpobj", low_type(value_type));
+      address = new_temp();
+      AddInstruction(address + " = addr $" + slot);
+    }
     Value result = EmitOperatorCall(name, arguments, scope);
     if(result.lvalue) return result.operand;
-    TypePtr value_type = expression_value_type(expression_info);
     if(value_type && value_type->kind == TYPE_CLASS) {
-      FunctionRecord* function = expression_info.binding ?
-        RecordForBinding(expression_info.binding) : 0;
-      const string slot = new_special_slot("tmpobj", low_type(value_type));
-      const string address = new_temp();
-      AddInstruction(address + " = addr $" + slot);
       if(function && function->indirect_result) {
         RegisterTemporaryObject(value_type, result.operand);
         return result.operand;
@@ -1000,7 +1005,8 @@ string PA14Lowerer::EmitCallAddress(const CPPGMAstNodePtr& node, Scope* scope)
     throw logic_error("expression is not addressable");
   }
 
-string PA14Lowerer::EmitMemberAddress(const CPPGMAstNodePtr& node, Scope* scope)
+string PA14Lowerer::EmitMemberAddress(const CPPGMAstNodePtr& node, Scope* scope,
+                                      bool reference_projection)
 {
     ExprInfo object_info;
     Binding* member = MemberBinding(node, scope, &object_info);
@@ -1063,8 +1069,11 @@ string PA14Lowerer::EmitMemberAddress(const CPPGMAstNodePtr& node, Scope* scope)
     } else base = AdjustBaseAddress(base, object, member->member_owner);
     const string result = new_temp();
     const bool raw_bit_field = IsBitField(member) && op == ".";
+    const bool reference_field = reference_projection && type_is_reference(fact.type);
     AddInstruction(result + " = index i8 " +
-      (raw_bit_field ? string() : "[projection=field] ") + base + ", " +
+      (raw_bit_field ? string() :
+       (reference_field ? "[projection=reference_field] " : "[projection=field] ")) +
+      base + ", " +
       integer_text(fact.offset));
     return result;
   }

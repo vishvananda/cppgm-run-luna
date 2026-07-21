@@ -50,6 +50,32 @@
 			if(RenameGeneratedIdentifier(node->children[i], name)) return true;
 		return false;
 	}
+	string RestoreSpecializationSpelling(const string& raw) const
+	{
+		string result;
+		for(size_t i = 0; i < raw.size();) {
+			if(!IsIdentifierCharacter(raw[i])) {
+				result += raw[i++];
+				continue;
+			}
+			size_t end = i + 1;
+			while(end < raw.size() && IsIdentifierCharacter(raw[end])) ++end;
+			const string word = raw.substr(i, end - i);
+			map<string, string>::const_iterator base = specialization_bases_.find(word);
+			map<string, vector<string> >::const_iterator arguments =
+				specialization_arguments_.find(word);
+			if(base != specialization_bases_.end() && arguments != specialization_arguments_.end()) {
+				result += base->second + "<";
+				for(size_t argument = 0; argument < arguments->second.size(); ++argument) {
+					if(argument != 0) result += ", ";
+					result += RestoreSpecializationSpelling(arguments->second[argument]);
+				}
+				result += ">";
+			} else result += word;
+			i = end;
+		}
+		return result;
+	}
 	const TemplateDefinition* FindNestedDefinition(const TemplateDefinition& parent,
 		const string& nested_name) const
 	{
@@ -181,6 +207,7 @@
 	{
 		if(definition.parameters.empty()) throw logic_error("template has no type parameters");
 		vector<string> args;
+		vector<string> metadata_args;
 		map<string, string> substitutions;
 		for(size_t i = 0; i < definition.parameters.size(); ++i) {
 			const TemplateParameter& parameter = definition.parameters[i];
@@ -201,6 +228,7 @@
 			argument = QualifyTypeArgument(argument, context, definition.owner);
 			if(argument.empty()) throw logic_error("missing template argument");
 			args.push_back(argument);
+			metadata_args.push_back(RestoreSpecializationSpelling(argument));
 			substitutions[parameter.name] = argument;
 		}
 		if(raw_args.size() > definition.parameters.size())
@@ -239,7 +267,7 @@
 		definition.owner : definition.lexical_owner;
 	if(definition.class_template) {
 		specialization_bases_[local_name] = definition.qualified_name;
-		specialization_arguments_[local_name] = args;
+			specialization_arguments_[local_name] = metadata_args;
 		const string forward_owner = generated_owner;
 			if(class_contexts_.find(forward_owner) == class_contexts_.end()) {
 				vector<CPPGMAstNodePtr>& forwards = generated_namespace_forwards_[forward_owner];
@@ -261,7 +289,7 @@
 		}
 		CPPGMAstNodePtr generated = TransformNode(definition.declaration, definition.owner, substitutions);
 		if(!generated) throw logic_error("unable to instantiate template");
-		MarkGeneratedNode(generated, definition.qualified_name, args);
+		MarkGeneratedNode(generated, definition.qualified_name, metadata_args);
 		if(!definition.class_template && !definition.alias_template)
 			RenameGeneratedFunction(generated, local_name);
 		if(definition.class_template || definition.alias_template) generated->value = local_name;

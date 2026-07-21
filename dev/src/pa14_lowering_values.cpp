@@ -307,7 +307,9 @@ PA14Lowerer::FunctionRecord* PA14Lowerer::EnsureImplicitCopyConstructor(
       return candidate_record;
     }
     if(move && ClassHasDeclaredValueMember(owner)) return 0;
-    const string key = function_key(owner->name + "::" + name,
+    const string qname = owner->name + "::" +
+      special_member_symbol_name(owner, name);
+    const string key = function_key(qname,
       FunctionOf(vector<TypePtr>(1, parameter), false, Fundamental("void"), false));
     map<string, FunctionRecord*>::const_iterator found = function_by_key_.find(key);
     if(found != function_by_key_.end()) return found->second;
@@ -315,7 +317,7 @@ PA14Lowerer::FunctionRecord* PA14Lowerer::EnsureImplicitCopyConstructor(
     CPPGMAstNodePtr special = SyntheticValueMember(name, parameter_name, move, false);
     Binding binding(BIND_FUNCTION, name, FunctionOf(vector<TypePtr>(1, parameter), false,
       Fundamental("void"), false));
-    binding.qualified_name = owner->name + "::" + name;
+    binding.qualified_name = qname;
     binding.is_member = true;
     binding.is_static = false;
     binding.member_owner = owner;

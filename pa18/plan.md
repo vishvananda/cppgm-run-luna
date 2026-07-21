@@ -1,55 +1,63 @@
 # PA18 checkpoint plan
 
+## Current turn baseline and selected scope
+
+The refreshed current-PA baseline for this turn is **174/222**, with the
+complete failure set at **48 tests**.  It matches the failure inventory below
+and preserves the prior checkpoint's 174/222 result as the starting point for
+this increment.
+
+This turn selects the following substantial Group A slice: carry typed
+reference-member facts through instantiated class layouts and defaulted
+copy/move constructor lowering, retain the generated special-member records
+needed by those calls, and preserve the same instantiated-member identity when
+an enclosing template class invokes an out-of-class or defaulted member.  The
+scope covers the defaulted copy/move reference-member pair, the template class
+member-plus-copy call path, and the adjacent defaulted base-constructor chain
+cases that share this generated-record and member-layout behavior.  Validation
+will use those focused cases, the complete PA18 report, through-PA17, and the
+file audit.
+
 ## Baseline and checkpoint result
 
-The turn-start PA18 baseline was **169/222**.  This checkpoint raises the
-current report to **174/222** and keeps all earlier assignments green.
+The turn-start PA18 baseline was **174/222**.  This checkpoint raises the
+current report to **179/222** and preserves the earlier PA results.
 
-The implementation scope was typed function-template candidate viability and
-lookup: reject candidates whose function-argument arity is impossible; do not
-mistake a template signature for an ordinary member match; infer constructor
-arguments through enclosing class scopes; use inherited member/cv facts while
-deducing references; and make function-scope `using` declarations contribute a
-visible template target without leaving an unsupported `using-declaration` in
-the PA14 AST.  The same lookup path now handles dependent functional
-template-ids and inline-namespace function templates.  A shared PA14 fix adds
-an owning inference cache entry so nested overloaded-operator expressions are
-memoized without synthetic-node pointer aliasing.
+The selected increment now carries typed reference-member facts through
+instantiated layouts and defaulted copy/move bodies, distinguishes reference
+storage projection from reference-value reads, and handles derived-to-empty
+base transfers without inventing source projections.  It also retains the
+special-member records needed by instantiated calls, gives inherited
+constructors their template identity, emits overload-stable base entries and
+constructor aliases, and encodes member-template ABI substitutions.  The
+shared lowering fixes cover pointer subtraction over dependent arrays,
+class-valued operator temporaries, and operator `+=`/`-=` names.
 
 Validation for the checkpoint:
 
 ```text
-focused PA18 candidate/using witnesses: 5/6 exact; the member-cv witness has
-  the expected successful semantic path but remains a LowIR-only constructor
-  layout diff
-focused PA15 shift stress pair: 2/2 pass
-full PA18 report: 174/222
+selected PA18 reference-member/base-template witnesses: 5/5 pass
+regression sweep for the ten previously passing affected tests: 10/10 pass
+full PA18 report: 179/222
 through-PA17: 1208/1208 pass
 file audit: pass with 7 pre-existing header-division warnings
 ```
 
-The checkpoint audit is complete.  It found no shortcut, timeout workaround,
-fixture-dependent acceptance path, embedded payload, or unchecked source
-fragment.  Audit fixes removed a tautological specialization branch and a
-dead lookup condition, centralized function-parameter arity checks across
-call and decltype deduction, replaced the unconditional binary-difference
-`int` fact with ordinary/template-operator and builtin arithmetic inference,
-and moved the expanded call/inference implementation into
-`pa18_templates.cpp`.  Ordinary function-signature indexing now avoids a
-full signature-map walk for each operator-result query.  The required report
-remains **174/222**, so the turn-start baseline is preserved.
+The checkpoint audit found no shortcut, timeout workaround, fixture-dependent
+acceptance path, embedded payload, or unchecked source fragment.  The focused
+changes are semantic lowering and typed compiler-state fixes; the remaining
+failures below are the pre-existing PA18 inventory after this increment.
 
 ## Remaining Work Map
 
-The complete current-PA failure set, refreshed after the audit fixes, is
-**48 tests**, grouped by shared compiler behavior.  No new failure was added.
+The complete current-PA failure set, refreshed after the checkpoint, is
+**43 tests**, grouped by shared compiler behavior.  The five selected
+reference/base/layout witnesses are no longer failing, and the ten
+checkpoint-induced regressions were restored.
 
 ### A — generated records, signatures, initialization, layout, and LowIR shape
 
 `general/100-class-template-alias-array-member`,
-`general/100-class-template-member-plus-calls-later-plus-assign`,
-`general/100-defaulted-copy-constructor-reference-member`,
-`general/100-defaulted-move-constructor-reference-member`,
 `general/100-function-template-parameter-decltype-ref-array`,
 `general/100-member-cv-overload-deduction-argument`,
 `general/100-namespace-template-function-before-tls-object`,
@@ -57,8 +65,6 @@ The complete current-PA failure set, refreshed after the audit fixes, is
 `general/100-qualified-function-template-member-overload-argument`,
 `general/100-static-member-function-object-access-pointer`,
 `general/100-template-function-pointer-rvalue-argument-emits-move`,
-`general/200-defaulted-template-arg-base-initializer-match`,
-`general/200-defaulted-template-arg-base-reference-chain`,
 `general/200-template-alignas-gnu-alignof-instantiation`,
 `general/300-class-template-alias-out-of-class-ctor`,
 `general/300-member-rvalue-subscript-overload-binding`,
@@ -107,22 +113,18 @@ success instead of the required failure status.
 
 ## Completed checkpoint scope
 
-The selected candidate/using group is complete at the semantic/status level:
-the pair-vs-range, nested-type functional-cast, base-cv reference, inline
-namespace using, and dependent functional-template-id witnesses pass; the
-member-cv witness reaches the correct instantiated `join_alloc` call and only
-differs in an existing constructor-layout presentation.  Arity filtering and
-direct member-signature lookup preserve ordinary overloads while allowing
-template deduction, and the PA15 operator-chain regression is fixed by typed
-owning memoization rather than a test-specific timeout change.
+The selected reference/base/layout group is complete: both defaulted
+reference-member copy/move witnesses, the class-template member-plus-copy
+call, and both defaulted-template base-initializer/chain witnesses pass.  The
+same typed path also restored the ten affected operator, inherited-constructor,
+move-only, static-member, dependent-cv, and ADL/member-call regressions.
 
 ## Next checkpoint scope
 
-Take group A's generated declaration and LowIR shape work: preserve typed
-specialization identity through class/member initialization, nested/out-of-
-class signatures, reference/array layout, and explicit instantiation.  Start
-with the member-cv constructor-layout witness and the defaulted
-copy/move/reference-member pair, then bundle adjacent signature/layout cases
-that share the same generated-record behavior.  This is the next substantial
-checkpoint group.  Validate with the focused group, the full PA18 report,
-through-PA17, and the file audit.
+Take the remaining Group A declaration/layout slice: preserve typed
+specialization identity through reference/array parameter layout, class
+aliases, nested and out-of-class member signatures, and explicit class
+instantiation.  Start with the function-template ref/array and member-cv
+witnesses, then bundle the adjacent generated-record cases that share their
+signature and LowIR-shape behavior.  Validate with that focused group, the
+full PA18 report, through-PA17, and the file audit.

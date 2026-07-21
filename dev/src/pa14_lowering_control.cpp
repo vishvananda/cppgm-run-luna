@@ -144,8 +144,19 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
     }
     FunctionRecord* record = RecordForBinding(best_binding);
     if(record && base_entry) {
+      const TypePtr first_parameter = record->source_type && !record->source_type->parameters.empty() ? record->source_type->parameters[0] : TypePtr();
+      if(record->template_instantiation && !raw_arguments.empty() &&
+         (record->value_special_member || !type_is_reference(first_parameter)))
+        record->needed = true;
+      const string original_qname = record->qualified_name;
+      const TypePtr original_type = record->type;
       if(!BaseEntryFor(record)) EnsureConstructorBaseEntry(record);
-      FunctionRecord* entry = BaseEntryFor(record);
+      FunctionRecord* entry = 0;
+      for(size_t i = 0; i < functions_.size(); ++i)
+        if(functions_[i].base_entry && functions_[i].base_entry_for == original_qname && PA12SameType(functions_[i].type, original_type, false)) {
+          entry = &functions_[i];
+          break;
+        }
       if(entry) record = entry;
     }
     if(record) {
@@ -627,7 +638,6 @@ void PA14Lowerer::EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr&
     StoreLValue(CPPGMAstNodePtr(new CPPGMAstNode("id-expression", variable->source_name)),
       scope, type_value(variable->type), value.operand);
   }
-
 bool PA14Lowerer::HasNonSizeofReference(const CPPGMAstNodePtr& node,
                                         const string& name, bool inside_sizeof) const
 {
@@ -760,7 +770,6 @@ void PA14Lowerer::EmitReturn(const CPPGMAstNodePtr& node, Scope* scope)
     EmitLiveDestructors(scope);
     Terminate("return " + low_type(return_type) + " " + value.operand);
   }
-
 void PA14Lowerer::EmitIf(const CPPGMAstNodePtr& node, Scope* scope)
 {
     EnterEnvironment();
@@ -790,7 +799,6 @@ void PA14Lowerer::EmitIf(const CPPGMAstNodePtr& node, Scope* scope)
     if(needs_end) AddBlock(end_label);
     LeaveEnvironment();
   }
-
 void PA14Lowerer::EmitWhile(const CPPGMAstNodePtr& node, Scope* scope)
 {
     EnterEnvironment();
@@ -816,7 +824,6 @@ void PA14Lowerer::EmitWhile(const CPPGMAstNodePtr& node, Scope* scope)
     AddBlock(end_label);
     LeaveEnvironment();
   }
-
 void PA14Lowerer::EmitDo(const CPPGMAstNodePtr& node, Scope* scope)
 {
     EnterEnvironment();
@@ -838,7 +845,6 @@ void PA14Lowerer::EmitDo(const CPPGMAstNodePtr& node, Scope* scope)
     AddBlock(end_label);
     LeaveEnvironment();
   }
-
 void PA14Lowerer::EmitFor(const CPPGMAstNodePtr& node, Scope* scope)
 {
     EnterEnvironment();
@@ -890,7 +896,6 @@ void PA14Lowerer::EmitFor(const CPPGMAstNodePtr& node, Scope* scope)
     }
     LeaveEnvironment();
   }
-
 void PA14Lowerer::CollectCaseNodes(const CPPGMAstNodePtr& node,
                         vector<CPPGMAstNodePtr>& cases) const
 {
@@ -905,7 +910,6 @@ void PA14Lowerer::CollectCaseNodes(const CPPGMAstNodePtr& node,
     for(size_t i = 0; i < node->children.size(); ++i)
       CollectCaseNodes(node->children[i], cases);
   }
-
 void PA14Lowerer::CollectNamedLabels(const CPPGMAstNodePtr& node,
                           vector<string>& labels) const
 {
@@ -914,7 +918,6 @@ void PA14Lowerer::CollectNamedLabels(const CPPGMAstNodePtr& node,
     for(size_t i = 0; i < node->children.size(); ++i)
       CollectNamedLabels(node->children[i], labels);
   }
-
 bool PA14Lowerer::HasBlockLabel(const string& label) const
 {
     if(!state_) return false;
@@ -922,7 +925,6 @@ bool PA14Lowerer::HasBlockLabel(const string& label) const
       if(state_->blocks[i].label == label) return true;
     return false;
   }
-
 void PA14Lowerer::EmitCaseLabelAndBody(const CPPGMAstNodePtr& node, Scope* scope)
 {
     if(!node) return;
@@ -944,7 +946,6 @@ void PA14Lowerer::EmitCaseLabelAndBody(const CPPGMAstNodePtr& node, Scope* scope
     for(size_t i = first_body; i < node->children.size(); ++i)
       EmitStatement(node->children[i], scope);
   }
-
 void PA14Lowerer::EmitSwitchBody(const CPPGMAstNodePtr& node, Scope* scope)
 {
     if(!node) return;
@@ -966,7 +967,6 @@ void PA14Lowerer::EmitSwitchBody(const CPPGMAstNodePtr& node, Scope* scope)
       EmitCaseLabelAndBody(node, scope);
     else EmitStatement(node, scope);
   }
-
 void PA14Lowerer::EmitSwitch(const CPPGMAstNodePtr& node, Scope* scope)
 {
     EnterEnvironment();

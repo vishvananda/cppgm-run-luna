@@ -138,7 +138,9 @@ PA14Lowerer::Value PA14Lowerer::EmitIdentifier(const CPPGMAstNodePtr& node, Scop
           throw logic_error("member has no layout record");
         const ClassMemberInfo& fact = binding->member_owner->class_members[binding->member_index];
         const string address = new_temp();
-        AddInstruction(address + " = index i8 [projection=field] " + base + ", " +
+        const string projection = type_is_reference(fact.type) ?
+          "[projection=reference_field] " : "[projection=field] ";
+        AddInstruction(address + " = index i8 " + projection + base + ", " +
           integer_text(fact.offset));
         result.type = binding->type;
         if(type_is_reference(result.type)) result.type = result.type->child;
@@ -147,6 +149,9 @@ PA14Lowerer::Value PA14Lowerer::EmitIdentifier(const CPPGMAstNodePtr& node, Scop
         if(IsBitField(binding)) {
           TypePtr read_type = expected ? type_value(expected) : result.type;
           result = EmitBitFieldLoad(binding, address, read_type, static_cast<bool>(expected));
+        } else if(type_is_reference(fact.type)) {
+          const string referred = emit_load(address, PointerTo(Fundamental("char")));
+          result.operand = emit_load(referred, result.type);
         } else result.operand = emit_load(address, result.type);
         result.lvalue = false;
         return result;
@@ -161,13 +166,15 @@ PA14Lowerer::Value PA14Lowerer::EmitIdentifier(const CPPGMAstNodePtr& node, Scop
         result.operand = EmitArrayDecay(member, scope);
         return result;
       }
-      const string address = EmitMemberAddress(member, scope);
+      const string address = EmitMemberAddress(member, scope, true);
       if(IsBitField(binding)) {
         TypePtr read_type = expected ? type_value(expected) : result.type;
         result = EmitBitFieldLoad(binding, address, read_type,
           static_cast<bool>(expected));
-      }
-      else
+      } else if(type_is_reference(binding->type)) {
+        const string referred = emit_load(address, PointerTo(Fundamental("char")));
+        result.operand = emit_load(referred, result.type);
+      } else
         result.operand = emit_load(address, result.type);
       result.lvalue = false;
       return result;
@@ -801,11 +808,25 @@ PA14Lowerer::Value PA14Lowerer::EmitBinary(const CPPGMAstNodePtr& node, Scope* s
     ExprInfo right_info = Infer(node->children[1], scope);
     TypePtr left_type = expression_value_type(left_info);
     TypePtr right_type = expression_value_type(right_info);
+    if(left_type && left_type->kind == TYPE_POINTER &&
+       node->children[0] && node->children[0]->kind == "binary-expression" &&
+       PA12Operator(node->children[0]->value) == "-" &&
+       node->children[0]->children.size() >= 2) {
+      const TypePtr nested_left = expression_value_type(
+        Infer(node->children[0]->children[0], scope));
+      const TypePtr nested_right = expression_value_type(
+        Infer(node->children[0]->children[1], scope));
+      if(nested_left && nested_left->kind == TYPE_POINTER && nested_right &&
+         (nested_right->kind == TYPE_POINTER || nested_right->kind == TYPE_ARRAY)) {
+        left_type = Fundamental("long int");
+        result_type = Fundamental("long int");
+      }
+    }
     if((op == "+" || op == "-") &&
        ((left_type && (left_type->kind == TYPE_POINTER || left_type->kind == TYPE_ARRAY)) ||
         (right_type && (right_type->kind == TYPE_POINTER || right_type->kind == TYPE_ARRAY)))) {
       if(op == "-" && left_type && right_type && left_type->kind == TYPE_POINTER &&
-         right_type->kind == TYPE_POINTER) {
+         (right_type->kind == TYPE_POINTER || right_type->kind == TYPE_ARRAY)) {
         Value left = EmitValue(node->children[0], scope);
         Value right = EmitValue(node->children[1], scope);
         const string difference = new_temp();
@@ -814,7 +835,9 @@ PA14Lowerer::Value PA14Lowerer::EmitBinary(const CPPGMAstNodePtr& node, Scope* s
         AddInstruction(result + " = binary div i64 " + difference + ", " +
           integer_text(static_cast<long long>(type_size(left_type->child))));
         Value value;
-        value.type = result_type;
+        // Pointer subtraction yields ptrdiff_t even when the analyzer has
+        // retained the pointer-shaped expression type for a dependent AST.
+        value.type = Fundamental("long int");
         value.operand = result;
         return value;
       }
@@ -1352,13 +1375,16 @@ PA14Lowerer::Value PA14Lowerer::EmitValue(const CPPGMAstNodePtr& node, Scope* sc
         result.array = true;
         result.operand = EmitArrayDecay(node, scope);
       } else {
-        const string address = EmitMemberAddress(node, scope);
+        const string address = EmitMemberAddress(node, scope, true);
         if(info.binding && IsBitField(info.binding)) {
           TypePtr read_type = expected ? type_value(expected) : info.type;
           result = EmitBitFieldLoad(info.binding, address, read_type,
             static_cast<bool>(expected));
         }
-        else result.operand = emit_load(address, info.type);
+        else if(info.binding && type_is_reference(info.binding->type)) {
+          const string referred = emit_load(address, PointerTo(Fundamental("char")));
+          result.operand = emit_load(referred, info.type);
+        } else result.operand = emit_load(address, info.type);
       }
       return result;
     }
