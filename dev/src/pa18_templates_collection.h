@@ -74,11 +74,11 @@ inline string CanonicalSpelling(string raw)
 inline string NormalizeTypeArgument(string raw)
 {
 	raw = CanonicalSpelling(raw);
-	// The PA10 parser preserves some adjacent fundamental tokens as one AST
-	// spelling (for example `unsigned long` can arrive as `unsignedlong`).
-	// Keep the spelling typed as a fundamental type before it is used as a
-	// substitution or specialization key; treating it as an identifier would
-	// make an otherwise valid specialization unresolvable later.
+	for(size_t k = 0; k < 2; ++k) { const string keyword = k ? "volatile" : "const";
+		for(size_t p = raw.find(keyword); p != string::npos; p = raw.find(keyword, p + keyword.size() + 1))
+			if(p > 0 && IsIdentifierCharacter(raw[p - 1]) && (p < 2 || !IsIdentifierCharacter(raw[p - 2]))) raw.insert(p, " "); }
+	raw = CanonicalSpelling(raw);
+	// Preserve compact PA10 fundamental-type spellings before semantic substitution.
 	static const char* const compact_fundamentals[][2] = {
 		{"short", "short int"},
 		{"long", "long int"},

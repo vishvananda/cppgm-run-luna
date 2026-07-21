@@ -4,20 +4,96 @@
 #include "pa18_templates_rewrite_instantiate.h"
 bool MatchTypePattern(string pattern, string actual,
 		const set<string>& parameter_names, map<string, string>* inferred,
-		const string& context) const;
+		const string& context, bool class_pattern = false) const;
+	int ClassSpecializationSpecificity(const TemplateDefinition& definition) const
+	{
+		// Partial-specialization ordering is represented as a deterministic
+		// structural score.  Concrete components constrain more of the key than
+		// a deduced parameter; repeated parameters constrain two positions to the
+		// same type/value; and a pack leaves the most freedom.  This is the
+		// ordering information needed by the source surface supported here and is
+		// retained with the typed template definition rather than inferred from
+		// generated LowIR names.
+		set<string> parameters;
+		for(size_t i = 0; i < definition.specialization_parameters.size(); ++i)
+			if(!definition.specialization_parameters[i].empty())
+				parameters.insert(definition.specialization_parameters[i]);
+		map<string, int> occurrences;
+		int score = 0;
+		for(size_t i = 0; i < definition.specialization_pattern.size(); ++i) {
+			const string pattern = CanonicalSpelling(
+				definition.specialization_pattern[i]);
+			bool in_identifier = false;
+			string identifier;
+			for(size_t character = 0; character <= pattern.size(); ++character) {
+				const bool identifier_character = character < pattern.size() &&
+					IsIdentifierCharacter(pattern[character]);
+				if(identifier_character) {
+					identifier += pattern[character];
+					in_identifier = true;
+					continue;
+				}
+				if(!in_identifier) continue;
+				if(parameters.find(identifier) != parameters.end()) {
+					++occurrences[identifier];
+				} else if(identifier != "const" && identifier != "volatile" &&
+					identifier != "typename" && identifier != "class") {
+					// A named template, fundamental type, enum, or literal is a
+					// concrete constraint.  Give all such words the same base
+					// weight; punctuation below captures the shape.
+					score += 4;
+				} else if(identifier == "const" || identifier == "volatile") {
+					score += 2;
+				}
+				identifier.clear();
+				in_identifier = false;
+			}
+			for(size_t character = 0; character < pattern.size(); ++character) {
+				const char value = pattern[character];
+				if(value == '*' || value == '&' || value == '[' || value == ']' ||
+					value == '<' || value == '>' || value == ',') ++score;
+			}
+			if(pattern.size() >= 3 &&
+				pattern.compare(pattern.size() - 3, 3, "...") == 0) score -= 8;
+		}
+		for(map<string, int>::const_iterator occurrence = occurrences.begin();
+			occurrence != occurrences.end(); ++occurrence)
+			if(occurrence->second > 1)
+				score += (occurrence->second - 1) * 7;
+		return score;
+	}
 	bool MatchClassSpecializationPattern(const TemplateDefinition& definition,
 		const vector<string>& arguments, map<string, string>* inferred,
 		const string& context) const
 	{
-		if(!definition.partial_specialization ||
-			definition.specialization_pattern.size() > arguments.size()) return false;
+		if(!definition.partial_specialization) return false;
 		set<string> parameter_names;
 		for(size_t i = 0; i < definition.specialization_parameters.size(); ++i)
-			parameter_names.insert(definition.specialization_parameters[i]);
+			if(!definition.specialization_parameters[i].empty())
+				parameter_names.insert(definition.specialization_parameters[i]);
 		map<string, string> local;
-		for(size_t i = 0; i < definition.specialization_pattern.size(); ++i) {
-			const string pattern = CanonicalSpelling(definition.specialization_pattern[i]);
-			const string actual = CanonicalSpelling(arguments[i]);
+		size_t pattern_index = 0;
+		size_t argument_index = 0;
+		for(; pattern_index < definition.specialization_pattern.size(); ++pattern_index) {
+			const string pattern = CanonicalSpelling(
+				definition.specialization_pattern[pattern_index]);
+			const bool pack = pattern.size() > 3 &&
+				pattern.compare(pattern.size() - 3, 3, "...") == 0;
+			if(pack && pattern_index + 1 == definition.specialization_pattern.size()) {
+				const string pack_pattern = CanonicalSpelling(pattern.substr(0,
+					pattern.size() - 3));
+				if(parameter_names.find(pack_pattern) != parameter_names.end()) {
+					string combined;
+					while(argument_index < arguments.size()) {
+						if(!combined.empty()) combined += ",";
+						combined += CanonicalSpelling(arguments[argument_index++]);
+					}
+					local[pack_pattern] = combined;
+					break;
+				}
+			}
+			if(argument_index >= arguments.size()) return false;
+			const string actual = CanonicalSpelling(arguments[argument_index++]);
 			if(pattern.size() > 2 && pattern.compare(pattern.size() - 2, 2, "&&") == 0 &&
 				(actual.size() < 2 || actual.compare(actual.size() - 2, 2, "&&") != 0)) return false;
 			const bool lvalue_reference_pattern = pattern.size() > 0 &&
@@ -25,7 +101,21 @@ bool MatchTypePattern(string pattern, string actual,
 				!(pattern.size() > 1 && pattern[pattern.size() - 2] == '&');
 			if(lvalue_reference_pattern &&
 				(actual.empty() || actual[actual.size() - 1] != '&')) return false;
-			if(!MatchTypePattern(pattern, actual, parameter_names, &local, context)) return false;
+			if(!MatchTypePattern(pattern, actual, parameter_names, &local, context, true)) return false;
+		}
+		// A partial specialization may omit trailing primary parameters whose
+		// defaults are part of the concrete specialization-id.  For example,
+		// `same_v<T, T>` matches the primary `same_v<T, U = void>` after the
+		// caller has supplied the defaulted third argument.  Retain exact
+		// matching for non-defaulted extras, but validate defaulted ones against
+		// the primary parameter contract stored on the typed definition.
+		while(argument_index < arguments.size()) {
+			if(argument_index >= definition.parameters.size() ||
+				definition.parameters[argument_index].default_type.empty()) return false;
+			const string expected = NormalizeTypeArgument(ReplaceIdentifiers(
+				definition.parameters[argument_index].default_type, local));
+			if(expected != NormalizeTypeArgument(arguments[argument_index])) return false;
+			++argument_index;
 		}
 		if(inferred) *inferred = local;
 		return true;
@@ -38,10 +128,20 @@ bool MatchTypePattern(string pattern, string actual,
 		map<string, vector<TemplateDefinition> >::const_iterator candidates =
 			class_specializations_.find(primary->qualified_name);
 		if(candidates == class_specializations_.end()) return primary;
-		for(size_t i = 0; i < candidates->second.size(); ++i)
-			if(MatchClassSpecializationPattern(candidates->second[i], arguments,
-				0, context)) return &candidates->second[i];
-		return primary;
+		const TemplateDefinition* selected = primary;
+		int selected_score = -1;
+		for(size_t i = 0; i < candidates->second.size(); ++i) {
+			const bool matched = MatchClassSpecializationPattern(candidates->second[i], arguments,
+				0, context);
+			if(matched) {
+				const int score = ClassSpecializationSpecificity(candidates->second[i]);
+				if(!selected || score > selected_score) {
+					selected = &candidates->second[i];
+					selected_score = score;
+				}
+			}
+		}
+		return selected;
 	}
 	CPPGMAstNodePtr FindClassDeclaration(string raw_class, const string& context) const
 	{
@@ -55,8 +155,14 @@ bool MatchTypePattern(string pattern, string actual,
 		if(template_open != string::npos) {
 			const TemplateDefinition* template_definition = FindDefinition(
 				raw_class.substr(0, template_open), context);
-			if(template_definition && template_definition->class_template)
-				return template_definition->declaration;
+			if(template_definition && template_definition->class_template) {
+				const string argument_text = raw_class.substr(template_open + 1,
+					raw_class.size() - template_open - 2);
+				const vector<string> arguments = SplitTemplateArguments(argument_text);
+				const TemplateDefinition* selected = SelectClassTemplateDefinition(
+					template_definition, arguments, context);
+				return selected ? selected->declaration : template_definition->declaration;
+			}
 		}
 		map<string, string>::const_iterator specialization = specialization_bases_.find(
 			LastComponent(raw_class));

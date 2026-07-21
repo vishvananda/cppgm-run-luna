@@ -7,26 +7,137 @@ namespace pa18_templates_internal {
 
 bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 	const set<string>& parameter_names, map<string, string>* inferred,
-	const string& context) const
+	const string& context, bool class_pattern) const
 {
+	pattern = NormalizeTypeArgument(pattern);
+	actual = NormalizeTypeArgument(ResolveAlias(actual, context));
+	pattern = CanonicalSpelling(pattern);
+	// Array types are part of a specialization key, not an expression suffix
+	// to be discarded.  Match the element type and the bound independently so
+	// `T[N]` can bind both a type and a typed non-type parameter.  This also
+	// keeps `T[]` distinct from a bounded array, which is required when a
+	// bounded partial specialization is not viable.
+	const size_t pattern_array_open = pattern.rfind('[');
+	const size_t actual_array_open = actual.rfind('[');
+	if(pattern_array_open != string::npos || actual_array_open != string::npos) {
+		if(pattern_array_open == string::npos || actual_array_open == string::npos ||
+			pattern.empty() || actual.empty() || pattern[pattern.size() - 1] != ']' ||
+			actual[actual.size() - 1] != ']') return false;
+		const string pattern_element = CanonicalSpelling(pattern.substr(0,
+			pattern_array_open));
+		const string actual_element = CanonicalSpelling(actual.substr(0,
+			actual_array_open));
+		if(!MatchTypePattern(pattern_element, actual_element, parameter_names,
+			inferred, context, class_pattern)) {
+			return false;
+		}
+		const string pattern_bound = CanonicalSpelling(pattern.substr(
+			pattern_array_open + 1, pattern.size() - pattern_array_open - 2));
+		const string actual_bound = CanonicalSpelling(actual.substr(
+			actual_array_open + 1, actual.size() - actual_array_open - 2));
+		if(pattern_bound.empty() || actual_bound.empty()) return pattern_bound.empty() &&
+			actual_bound.empty();
+		if(parameter_names.find(pattern_bound) != parameter_names.end()) {
+			map<string, string>::const_iterator prior = inferred->find(pattern_bound);
+			if(prior != inferred->end() && CanonicalSpelling(prior->second) != actual_bound)
+				return false;
+			(*inferred)[pattern_bound] = actual_bound;
+			return true;
+		}
+		return CanonicalSpelling(ReplaceIdentifiers(pattern_bound, *inferred)) ==
+			actual_bound;
+	}
+	const auto trailing_cv_kind = [](const string& spelling) {
+		if(spelling.size() >= 9 && spelling.compare(spelling.size() - 8, 8,
+			"volatile") == 0 && spelling[spelling.size() - 9] == '*') return 2;
+		if(spelling.size() >= 6 && spelling.compare(spelling.size() - 5, 5,
+			"const") == 0 && spelling[spelling.size() - 6] == '*') return 1;
+		if(spelling.size() >= 9 && spelling.compare(spelling.size() - 9, 9,
+			" volatile") == 0) return 2;
+		if(spelling.size() >= 6 && spelling.compare(spelling.size() - 6, 6,
+			" const") == 0) return 1;
+		return 0;
+	};
+	const int pattern_trailing_cv = trailing_cv_kind(pattern);
+	const int actual_trailing_cv = trailing_cv_kind(actual);
+	const auto has_top_level_pointer = [](const string& spelling) {
+		int angle_depth = 0;
+		int parenthesis_depth = 0;
+		for(size_t i = 0; i < spelling.size(); ++i) {
+			if(spelling[i] == '<' && IsTemplateAngleOpen(spelling, i)) ++angle_depth;
+			else if(spelling[i] == '>' && angle_depth > 0 &&
+				IsTemplateAngleClose(spelling, i)) --angle_depth;
+			else if(spelling[i] == '(') ++parenthesis_depth;
+			else if(spelling[i] == ')' && parenthesis_depth > 0) --parenthesis_depth;
+			else if(spelling[i] == '*' && angle_depth == 0 && parenthesis_depth == 0)
+				return true;
+		}
+		return false;
+	};
+	const bool pattern_has_pointer = has_top_level_pointer(pattern);
+	const bool actual_has_pointer = has_top_level_pointer(actual);
+	const bool reference_pattern = !pattern.empty() && pattern[pattern.size() - 1] == '&';
+	const int pattern_object_cv = !pattern_has_pointer ?
+		(pattern.compare(0, 6, "const ") == 0 ? 1 :
+		 (pattern.compare(0, 9, "volatile ") == 0 ? 2 : pattern_trailing_cv)) : 0;
+	const int actual_object_cv = !actual_has_pointer ?
+		(actual.compare(0, 6, "const ") == 0 ? 1 :
+		 (actual.compare(0, 9, "volatile ") == 0 ? 2 : actual_trailing_cv)) : 0;
+	if(pattern_trailing_cv && pattern_has_pointer) {
+		pattern.erase(pattern.size() - (pattern_trailing_cv == 1 ? 5 : 8));
 		pattern = CanonicalSpelling(pattern);
-		actual = ResolveAlias(actual, context);
-		pattern = CanonicalSpelling(pattern);
-		const bool pattern_pointer = !pattern.empty() && pattern[pattern.size() - 1] == '*';
-		const bool actual_pointer = !actual.empty() && actual[actual.size() - 1] == '*';
-		const bool pattern_cv_qualified =
-			pattern.compare(0, 6, "const ") == 0 ||
-			pattern.compare(0, 9, "volatile ") == 0;
+	}
+	if(actual_trailing_cv && actual_has_pointer) {
+		actual.erase(actual.size() - (actual_trailing_cv == 1 ? 5 : 8));
+		actual = CanonicalSpelling(actual);
+	}
+	const int pattern_effective_cv = pattern_has_pointer ? pattern_trailing_cv :
+		pattern_object_cv;
+	const int actual_effective_cv = actual_has_pointer ? actual_trailing_cv :
+		actual_object_cv;
+	const bool direct_parameter = parameter_names.find(pattern) != parameter_names.end();
+	// A cv qualifier on a reference parameter is part of the binding rule, not
+	// a requirement that the argument spelling carry the same top-level cv.
+	// Keep the stricter comparison for pointer pointee patterns, where
+	// `const T*` and `T*` are distinct specialization keys.
+	if((class_pattern || pattern_has_pointer || actual_has_pointer) &&
+		pattern_effective_cv && pattern_effective_cv != actual_effective_cv &&
+		!reference_pattern) return false;
+	if((class_pattern || pattern_has_pointer || actual_has_pointer) &&
+		actual_effective_cv && !pattern_effective_cv && !direct_parameter &&
+		!reference_pattern) return false;
+	if(pattern_has_pointer && pattern_trailing_cv &&
+		pattern_trailing_cv != actual_trailing_cv) return false;
+	const bool pattern_pointer = !pattern.empty() && pattern[pattern.size() - 1] == '*';
+	const bool actual_pointer = !actual.empty() && actual[actual.size() - 1] == '*';
+	const bool pattern_cv_qualified =
+		pattern.compare(0, 6, "const ") == 0 ||
+		pattern.compare(0, 9, "volatile ") == 0;
+	const int pattern_cv_kind = pattern.compare(0, 6, "const ") == 0 ? 1 :
+		(pattern.compare(0, 9, "volatile ") == 0 ? 2 : 0);
+	const int actual_cv_kind = actual.compare(0, 6, "const ") == 0 ? 1 :
+		(actual.compare(0, 9, "volatile ") == 0 ? 2 : 0);
+	// A cv-qualified pattern constrains the corresponding pointee/object
+	// type.  `const T*` may deduce T from `const int*`, but it must not also
+	// claim `int*`; the unqualified `T*` candidate is the viable one there.
+	if(pattern_has_pointer && actual_has_pointer && pattern_cv_qualified &&
+		pattern_cv_kind != actual_cv_kind) return false;
+		string cv_parameter = pattern;
+		if(pattern_trailing_cv && !pattern_has_pointer)
+			cv_parameter.erase(cv_parameter.size() -
+				(pattern_trailing_cv == 1 ? 6 : 9));
+		cv_parameter = CanonicalSpelling(cv_parameter);
 		// For T*, cv-qualification before the pointed-to type belongs to T.
 		// It must survive deduction; stripping it here previously made a
 		// candidate deduced from T* and const T& appear consistent when it was
 		// not.  A pattern that explicitly spells const T* still consumes that
 		// qualification as part of the pattern.
-		const bool preserve_pointee_cv = pattern_pointer && actual_pointer &&
-			!pattern_cv_qualified;
+		const bool preserve_pointee_cv = actual_pointer && !pattern_cv_qualified &&
+			(pattern_pointer || (pattern_trailing_cv &&
+				parameter_names.find(cv_parameter) != parameter_names.end()));
 		while(pattern.compare(0, 6, "const ") == 0) pattern = CanonicalSpelling(pattern.substr(6));
 		while(pattern.compare(0, 9, "volatile ") == 0) pattern = CanonicalSpelling(pattern.substr(9));
-		if(!preserve_pointee_cv) {
+		if(!preserve_pointee_cv && !direct_parameter) {
 			while(actual.compare(0, 6, "const ") == 0) actual = CanonicalSpelling(actual.substr(6));
 			while(actual.compare(0, 9, "volatile ") == 0) actual = CanonicalSpelling(actual.substr(9));
 		}
@@ -109,10 +220,11 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 			const vector<string> actual_parameters = SplitTemplateArguments(actual.substr(
 				actual_function + 2, actual.size() - actual_function - 3));
 			if(pattern_parameters.size() != actual_parameters.size() ||
-				!MatchTypePattern(pattern_result, actual_result, parameter_names, inferred, context)) return false;
+				!MatchTypePattern(pattern_result, actual_result, parameter_names, inferred,
+					context, class_pattern)) return false;
 			for(size_t parameter = 0; parameter < pattern_parameters.size(); ++parameter)
 				if(!MatchTypePattern(pattern_parameters[parameter], actual_parameters[parameter],
-					parameter_names, inferred, context)) return false;
+					parameter_names, inferred, context, class_pattern)) return false;
 			return true;
 		}
 		if(parameter_names.find(pattern) != parameter_names.end()) {
@@ -135,8 +247,12 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 				map<string, vector<string> >::const_iterator specialization =
 					specialization_arguments_.find(LastComponent(actual));
 				map<string, string>::const_iterator base = specialization_bases_.find(LastComponent(actual));
+				const string pattern_base = LastComponent(pattern.substr(0, pattern_open));
 				if(specialization == specialization_arguments_.end() || base == specialization_bases_.end() ||
-					LastComponent(base->second) != LastComponent(pattern.substr(0, pattern_open))) return false;
+					(parameter_names.find(pattern_base) == parameter_names.end() &&
+					LastComponent(base->second) != pattern_base)) return false;
+				if(parameter_names.find(pattern_base) != parameter_names.end())
+					(*inferred)[pattern_base] = LastComponent(base->second);
 				if(pattern_parts.empty()) return true;
 				actual_parts = specialization->second;
 			} else {
@@ -145,7 +261,9 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 				if(!TemplateRange(actual, actual_open, &actual_arguments, &actual_close)) return false;
 				const string pattern_base = LastComponent(pattern.substr(0, pattern_open));
 				const string actual_base = LastComponent(actual.substr(0, actual_open));
-				if(pattern_base != actual_base) {
+				if(parameter_names.find(pattern_base) != parameter_names.end()) {
+					(*inferred)[pattern_base] = actual_base;
+				} else if(pattern_base != actual_base) {
 					// A pointer to a derived class can bind to a dependent base
 					// pointer.  Recover the concrete base spelling from the actual
 					// class template before matching its arguments (for example,
@@ -171,7 +289,7 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 								const string concrete_base = CanonicalSpelling(ReplaceIdentifiers(
 									base_name->value, class_substitutions));
 								if(MatchTypePattern(pattern, concrete_base, parameter_names,
-									inferred, context)) return true;
+									inferred, context, class_pattern)) return true;
 							}
 						}
 					}
@@ -188,18 +306,24 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 				for(size_t i = 0; i < actual_parts.size(); ++i) {
 					map<string, string> one;
 					if(!MatchTypePattern(pack_pattern, actual_parts[i], parameter_names,
-						&one, context)) return false;
+						&one, context, class_pattern)) return false;
 					map<string, string>::const_iterator value = one.find(pack_pattern);
 					if(value == one.end()) return false;
 					if(!combined.empty()) combined += ",";
 					combined += value->second;
 				}
-				if(inferred) (*inferred)[pack_pattern] = combined;
+				if(inferred) {
+					map<string, string>::const_iterator prior = inferred->find(pack_pattern);
+					if(prior != inferred->end() && CanonicalSpelling(prior->second) !=
+						CanonicalSpelling(combined)) return false;
+					(*inferred)[pack_pattern] = combined;
+				}
 				return true;
 			}
 			if(pattern_parts.size() != actual_parts.size()) return false;
 			for(size_t i = 0; i < pattern_parts.size(); ++i)
-				if(!MatchTypePattern(pattern_parts[i], actual_parts[i], parameter_names, inferred, context))
+				if(!MatchTypePattern(pattern_parts[i], actual_parts[i], parameter_names,
+					inferred, context, class_pattern))
 					return false;
 			return true;
 		}
@@ -649,7 +773,24 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			if(!current_class && !context.empty())
 				current_class = class_contexts_.find(JoinPath(context, current_name)) !=
 					class_contexts_.end();
-			if(current_class) {
+			bool same_current_specialization = false;
+			map<string, vector<string> >::const_iterator current_key =
+				specialization_arguments_.find(LastComponent(current_name));
+			if(current_class && current_key != specialization_arguments_.end() &&
+				current_key->second.size() == current_arguments.size()) {
+				same_current_specialization = true;
+				for(size_t argument = 0; argument < current_arguments.size(); ++argument) {
+					const string actual = NormalizeTypeArgument(ReplaceIdentifiers(
+						CanonicalSpelling(current_arguments[argument]), substitutions));
+					const string expected = NormalizeTypeArgument(
+						CanonicalSpelling(current_key->second[argument]));
+					if(actual != expected) {
+						same_current_specialization = false;
+						break;
+					}
+				}
+			}
+			if(current_class && same_current_specialization) {
 				raw.replace(begin, close - begin + 1, current_name);
 				if(template_replaced) *template_replaced = true;
 				search = begin + current_name.size();

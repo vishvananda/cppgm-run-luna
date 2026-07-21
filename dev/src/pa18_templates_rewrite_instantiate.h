@@ -604,34 +604,17 @@
 		}
 		return result;
 	}
+	bool MemberOwnerPattern(const TemplateDefinition& candidate,
+		const TemplateDefinition& parent, const vector<string>& parent_args,
+		map<string, string>* inferred, int* specificity) const;
+	string MemberSignatureKey(const TemplateDefinition& candidate) const;
 	vector<const TemplateDefinition*> MemberDefinitions(
-		const TemplateDefinition& parent) const
-	{
-		vector<const TemplateDefinition*> result;
-		for(map<string, TemplateDefinition>::const_iterator it = definitions_.begin();
-			it != definitions_.end(); ++it) {
-			const TemplateDefinition& candidate = it->second;
-			if(candidate.class_template ||
-				(candidate.declaration->kind != "simple-declaration" &&
-					candidate.declaration->kind != "function-definition" &&
-					candidate.declaration->kind != "special-member-definition")) continue;
-			// Anonymous namespace components use the ABI spelling
-			// `<unnamed>`.  Searching from the beginning would mistake that
-			// namespace delimiter for the template argument list.
-			const size_t angle = candidate.owner.rfind('<');
-			const size_t close = angle == string::npos ? string::npos :
-				candidate.owner.find('>', angle);
-			if(angle != string::npos && close != string::npos &&
-				candidate.owner.substr(0, angle) == parent.qualified_name)
-				result.push_back(&candidate);
-		}
-		return result;
-	}
+		const TemplateDefinition& parent, const vector<string>& parent_args) const;
 	void InstantiateMemberDefinitions(const TemplateDefinition& parent,
 		const vector<string>& parent_args, const string& parent_local_name,
 		bool explicit_instantiation = false)
 	{
-		const vector<const TemplateDefinition*> members = MemberDefinitions(parent);
+		const vector<const TemplateDefinition*> members = MemberDefinitions(parent, parent_args);
 		for(size_t i = 0; i < members.size(); ++i) {
 			const TemplateDefinition& member = *members[i];
 			const string key = member.qualified_name + "@" + parent_local_name;
@@ -639,24 +622,38 @@
 			map<string, string> substitutions;
 			map<string, vector<string> > pack_substitutions;
 			map<string, PA19IntegralValue> integral_substitutions;
+			for(size_t parameter = 0; parameter < parent.parameters.size() &&
+				parameter < parent_args.size(); ++parameter)
+				if(!parent.parameters[parameter].name.empty())
+					substitutions[parent.parameters[parameter].name] = parent_args[parameter];
+			map<string, string> owner_substitutions;
+			MemberOwnerPattern(member, parent, parent_args, &owner_substitutions, 0);
 			size_t parent_argument = 0;
 			for(size_t parameter = 0; parameter < member.parameters.size(); ++parameter) {
 				const TemplateParameter& member_parameter = member.parameters[parameter];
+				map<string, string>::const_iterator owner_value = owner_substitutions.find(
+					member_parameter.name);
 				if(member_parameter.pack) {
-					size_t trailing_fixed = 0;
-					for(size_t later = parameter + 1; later < member.parameters.size(); ++later)
-						if(!member.parameters[later].pack) ++trailing_fixed;
-					const size_t available = parent_args.size() > parent_argument ?
-						parent_args.size() - parent_argument : 0;
-					const size_t count = available > trailing_fixed ? available - trailing_fixed : 0;
 					vector<string>& values = pack_substitutions[member_parameter.name];
-					for(size_t value = 0; value < count; ++value)
-						values.push_back(parent_args[parent_argument++]);
+					if(owner_value != owner_substitutions.end())
+						values = SplitTemplateArguments(owner_value->second);
+					else {
+						size_t trailing_fixed = 0;
+						for(size_t later = parameter + 1; later < member.parameters.size(); ++later)
+							if(!member.parameters[later].pack) ++trailing_fixed;
+						const size_t available = parent_args.size() > parent_argument ?
+							parent_args.size() - parent_argument : 0;
+						const size_t count = available > trailing_fixed ? available - trailing_fixed : 0;
+						for(size_t value = 0; value < count; ++value)
+							values.push_back(parent_args[parent_argument++]);
+					}
 					if(!values.empty()) substitutions[member_parameter.name] = values[0];
 					else substitutions.erase(member_parameter.name);
 					continue;
 				}
-				if(parent_argument < parent_args.size())
+				if(owner_value != owner_substitutions.end())
+					substitutions[member_parameter.name] = owner_value->second;
+				else if(parent_argument < parent_args.size())
 					substitutions[member_parameter.name] = parent_args[parent_argument++];
 			}
 			substitutions[parent.name] = parent_local_name;

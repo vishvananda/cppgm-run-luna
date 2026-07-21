@@ -7,6 +7,139 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
+bool PA18TemplateExpander::MemberOwnerPattern(const TemplateDefinition& candidate,
+	const TemplateDefinition& parent, const vector<string>& parent_args,
+	map<string, string>* inferred, int* specificity) const
+{
+	size_t angle = string::npos;
+	for(size_t search = 0; ; ) {
+		const size_t candidate_angle = candidate.owner.find('<', search);
+		if(candidate_angle == string::npos) break;
+		if(candidate.owner.substr(0, candidate_angle) == parent.qualified_name) {
+			angle = candidate_angle;
+			break;
+		}
+		search = candidate_angle + 1;
+	}
+	if(angle == string::npos)
+		return false;
+	string owner_arguments;
+	size_t close = string::npos;
+	if(!TemplateRange(candidate.owner, angle, &owner_arguments, &close)) return false;
+	const vector<string> patterns = SplitTemplateArguments(owner_arguments);
+	set<string> parameter_names;
+	for(size_t i = 0; i < candidate.parameters.size(); ++i)
+		if(!candidate.parameters[i].name.empty()) parameter_names.insert(
+			candidate.parameters[i].name);
+	map<string, string> local;
+	size_t pattern_index = 0;
+	size_t argument_index = 0;
+	for(; pattern_index < patterns.size(); ++pattern_index) {
+		const string pattern = CanonicalSpelling(patterns[pattern_index]);
+		const bool pack = pattern.size() > 3 &&
+			pattern.compare(pattern.size() - 3, 3, "...") == 0;
+		if(pack && pattern_index + 1 == patterns.size()) {
+			const string pack_name = CanonicalSpelling(pattern.substr(0, pattern.size() - 3));
+			if(parameter_names.find(pack_name) == parameter_names.end()) return false;
+			string combined;
+			while(argument_index < parent_args.size()) {
+				if(!combined.empty()) combined += ",";
+				combined += parent_args[argument_index++];
+			}
+			local[pack_name] = combined;
+			break;
+		}
+		if(argument_index >= parent_args.size() || !MatchTypePattern(pattern,
+			parent_args[argument_index++], parameter_names, &local, parent.owner, true)) return false;
+	}
+	if(argument_index != parent_args.size()) return false;
+	if(inferred) *inferred = local;
+	if(specificity) {
+		map<string, int> occurrences;
+		int score = 0;
+		for(size_t i = 0; i < patterns.size(); ++i) {
+			const string pattern = CanonicalSpelling(patterns[i]);
+			string identifier;
+			bool in_identifier = false;
+			for(size_t character = 0; character <= pattern.size(); ++character) {
+				const bool identifier_character = character < pattern.size() &&
+					IsIdentifierCharacter(pattern[character]);
+				if(identifier_character) {
+					identifier += pattern[character];
+					in_identifier = true;
+					continue;
+				}
+				if(!in_identifier) continue;
+				if(parameter_names.find(identifier) != parameter_names.end())
+					++occurrences[identifier];
+				else if(identifier == "const" || identifier == "volatile") score += 2;
+				else if(identifier != "typename" && identifier != "class") score += 4;
+				identifier.clear();
+				in_identifier = false;
+			}
+			for(size_t character = 0; character < pattern.size(); ++character)
+				if(pattern[character] == '*' || pattern[character] == '&' ||
+					pattern[character] == '[' || pattern[character] == ']' ||
+					pattern[character] == '<' || pattern[character] == '>' ||
+					pattern[character] == ',') ++score;
+			if(pattern.size() >= 3 && pattern.compare(pattern.size() - 3, 3, "...") == 0)
+				score -= 8;
+		}
+		for(map<string, int>::const_iterator occurrence = occurrences.begin();
+			occurrence != occurrences.end(); ++occurrence)
+			if(occurrence->second > 1) score += (occurrence->second - 1) * 7;
+		*specificity = score;
+	}
+	return true;
+}
+
+string PA18TemplateExpander::MemberSignatureKey(const TemplateDefinition& candidate) const
+{
+	string result = LastComponent(candidate.name);
+	const CPPGMAstNodePtr declarator = FunctionDeclarator(candidate.declaration);
+	const CPPGMAstNodePtr clause = DescendantOfKind(declarator, "parameter-clause");
+	if(!clause) return result;
+	for(size_t i = 0; i < clause->children.size(); ++i)
+		if(clause->children[i]) result += "|" + ParameterTypeSpelling(clause->children[i]);
+	return result;
+}
+
+vector<const TemplateDefinition*> PA18TemplateExpander::MemberDefinitions(
+	const TemplateDefinition& parent, const vector<string>& parent_args) const
+{
+	vector<const TemplateDefinition*> matches;
+	for(map<string, TemplateDefinition>::const_iterator it = definitions_.begin();
+		it != definitions_.end(); ++it) {
+		const TemplateDefinition& candidate = it->second;
+		if(candidate.class_template ||
+			(candidate.declaration->kind != "simple-declaration" &&
+				candidate.declaration->kind != "function-definition" &&
+				candidate.declaration->kind != "special-member-definition")) continue;
+		map<string, string> inferred;
+		const bool matched = MemberOwnerPattern(candidate, parent, parent_args, &inferred, 0);
+		if(matched)
+			matches.push_back(&candidate);
+	}
+	vector<const TemplateDefinition*> result;
+	for(size_t i = 0; i < matches.size(); ++i) {
+		int candidate_score = 0;
+		map<string, string> ignored;
+		MemberOwnerPattern(*matches[i], parent, parent_args, &ignored, &candidate_score);
+		bool dominated = false;
+		for(size_t j = 0; j < matches.size(); ++j) {
+			if(i == j || MemberSignatureKey(*matches[i]) != MemberSignatureKey(*matches[j])) continue;
+			int other_score = 0;
+			MemberOwnerPattern(*matches[j], parent, parent_args, &ignored, &other_score);
+			if(other_score > candidate_score) {
+				dominated = true;
+				break;
+			}
+		}
+		if(!dominated) result.push_back(matches[i]);
+	}
+	return result;
+}
+
 void PA18TemplateExpander::RecordConstantArrayDeclaration(
 	const CPPGMAstNodePtr& node, const string& context,
 	const map<string, string>& substitutions)
