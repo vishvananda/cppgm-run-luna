@@ -236,3 +236,77 @@ repository audits, commit, and clean-status verification remain.
 
 Final validation of all PA20 tests plus all earlier assignments through PA19,
 including the repaired static-member demand and local string-storage boundary.
+
+## Architecture Review
+
+The completed PA20 implementation remains a monotonic extension of the
+existing compiler pipeline.  The parser and AST remain the syntax boundary:
+the AST carries the source token range needed to give function-local statics
+stable identities, while declarations, expressions, control flow, and
+initializers remain structured nodes rather than being reinterpreted from
+LowIR.
+
+`ExpandPA18Templates` still runs before PA11 analysis and PA14 lowering.  It
+materializes template declarations, parameter packs, generated members, and
+dependent source facts as ordinary AST declarations.  Its pre-semantic source
+boundary uses the existing PA19 typed integral parser for source expressions;
+the array-function fallback now interprets the matching constexpr function
+AST generically, including calls, scalar values, array pointers, branches,
+loops, and recursive calls.  This boundary is limited to facts needed while
+materializing dependent template source; ordinary constexpr evaluation is
+owned by PA11 after materialization.
+
+PA11 owns the compile-time value model.  `ConstantValue` distinguishes typed
+integral and floating values from aggregate objects and pointers,
+`ConstantObject` owns array/member values, and `ConstantPointer` preserves
+array identity, offset, and nullness.  `Evaluate`/`EvaluateTyped` share the
+same value facts with constexpr calls, constructors, member access,
+conversions, static assertions, and ordinary semantic checks.  Call frames,
+pack frames, receivers, binding-value caching, and explicit flow results
+support defaults, packs, recursion, declarations, assignments, branches,
+loops, and return/break/continue propagation.  Recursion is capped at 512
+active calls and loop interpretation at 100,000 iterations.
+
+PA14 consumes those semantic facts instead of reconstructing answers from
+source spelling.  Its global-data projection lowers typed scalar, floating,
+aggregate, array, pointer, and reference values into the existing LowIR data
+items.  The same lowerer owns local-static storage and guards, string globals,
+constructor demand, global initialization, and function emission.  PA17
+polymorphic/vtable and ABI behavior remains on this shared path; PA20 does not
+introduce a second backend or change the output contract.
+
+Ownership follows the established boundaries: AST nodes and semantic types
+are shared-owned, scopes own child scopes, and PA14's function/global records
+use stable storage for non-owning lookup and demand references.  Constant
+objects and pointers own their nested semantic values through shared objects.
+Template specialization caches, active-recursion sets, binding-value caches,
+and the evaluator limits bound repeated work.  Both new implementation files
+are registered in `dev/frontend_source_sets.mk`.
+
+## Final Architecture Review
+
+The final audit reviewed the integrated PA20 checkpoint at `75eacf2`, the
+PA18/PA19 handoff audits, all 71 PA20 fixtures, and the complete changed
+source set.  It found and repaired three shortcut risks inherited by the
+checkpoint.  The source evaluator no longer dispatches by the fixture-shaped
+names `first_true` or `first_true_loop`; the dependent-class path no longer
+special-cases `integral_constant`; and PA11 no longer treats extra arguments
+to generated `__inst_` functions as an instruction to return their sum.
+Those cases now use generic AST evaluation, normal generated-function
+materialization, and the existing typed semantic conversion path.  Generated
+names remain only identity/lookup metadata.
+
+The audit also added reverse lookup for expanded pack identifiers in
+`InferArgument`, so recursive materialized calls recover the source pack's
+type instead of depending on a generated identifier spelling.  Nested source
+constexpr calls are folded through a generic call replacer before the PA19
+expression parser handles the surrounding expression.  Typed branch values
+now select a statement through `ConstantKnown`, and aggregate global-data
+fallback compares the current item range rather than the entire output list;
+the existing zero/unsized array-bound convention is intentionally preserved.
+
+The required file audit passes with only the repository's eight established
+warning-only header-division findings and no fatal or unregistered-source
+finding.  No test, reference fixture, output-format path, reference binary,
+host compiler, or unchecked implementation path was added.  PA20 is
+architecturally consolidated and ready for the next assignment.

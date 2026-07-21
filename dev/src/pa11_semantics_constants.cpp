@@ -453,7 +453,7 @@ Analyzer::ConstantFlow Analyzer::EvaluateConditionStatement(
 	if (ConstantKnown(value))
 		selected = ChildOfKind(statement, ConstantTrue(value) ? "then" : "else");
 	ConstantFlow result;
-	if (value.integral.known && selected && !selected->children.empty())
+	if (ConstantKnown(value) && selected && !selected->children.empty())
 		result = EvaluateStatement(selected->children[0], scope);
 	if (declaration) constant_frames_.pop_back();
 	return result;
@@ -609,17 +609,6 @@ ConstantValue Analyzer::EvaluateFunctionCall(Binding* function,
 			}
 			values.push_back(Evaluate(argument_node, caller_scope));
 		}
-	if (function->name.find("__inst_") != string::npos && function->type &&
-		function->type->kind == TYPE_FUNCTION && values.size() > function->type->parameters.size())
-	{
-		PA19IntegralValue sum;
-		for (size_t i = 0; i < values.size(); ++i)
-		{
-			if (!values[i].integral.known) return ConstantValue();
-			sum = !sum.known ? values[i].integral : PA19Binary("+", sum, values[i].integral);
-		}
-		return ConvertConstantValue(FromIntegralValue(sum), function->type->child, caller_scope);
-	}
 	constant_frames_.push_back(map<string, ConstantValue>());
 	constant_pack_frames_.push_back(map<string, vector<ConstantValue> >());
 	const bool has_receiver = receiver.kind != ConstantValue::CONSTANT_UNKNOWN;

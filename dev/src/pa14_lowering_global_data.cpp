@@ -30,13 +30,14 @@ bool PA14Lowerer::AppendConstantGlobalData(const TypePtr& raw_type,
     }
     if(type->kind == TYPE_CLASS) {
       if(!value.object) return false;
+      const size_t start = items.size();
       if(type->class_members.empty()) {
         for(map<string, ConstantValue>::const_iterator member =
               value.object->members.begin(); member != value.object->members.end(); ++member)
           if(!AppendConstantGlobalData(member->second.type, member->second, items))
             items.push_back(GlobalDataItem("zero " +
               integer_text(static_cast<long long>(type_size(member->second.type)))));
-        if(items.empty() && type_size(type) != 0)
+        if(items.size() == start && type_size(type) != 0)
           items.push_back(GlobalDataItem("zero " +
             integer_text(static_cast<long long>(type_size(type)))));
         return true;
@@ -52,7 +53,7 @@ bool PA14Lowerer::AppendConstantGlobalData(const TypePtr& raw_type,
           items.push_back(GlobalDataItem("zero " +
             integer_text(static_cast<long long>(type_size(member.type)))));
       }
-      if(items.empty() && type_size(type) != 0)
+      if(items.size() == start && type_size(type) != 0)
         items.push_back(GlobalDataItem("zero " +
           integer_text(static_cast<long long>(type_size(type)))));
       return true;

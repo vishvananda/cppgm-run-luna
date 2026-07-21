@@ -260,6 +260,16 @@ bool PA18TemplateExpander::InferArgument(const CPPGMAstNodePtr& expression,
 					return !result->empty();
 				}
 			}
+			for(map<string, vector<string> >::const_iterator pack =
+				active_pack_identifier_substitutions_.begin();
+				pack != active_pack_identifier_substitutions_.end(); ++pack) {
+				if(find(pack->second.begin(), pack->second.end(), expression->value) ==
+					pack->second.end()) continue;
+				map<string, string>::const_iterator source = variable_types_.find(pack->first);
+				if(source == variable_types_.end()) continue;
+				*result = ReplaceIdentifiers(ResolveAlias(source->second, context), substitutions);
+				if(!result->empty()) return true;
+			}
 			map<string, string>::const_iterator found = variable_types_.find(LastComponent(expression->value));
 			if(found != variable_types_.end()) {
 				*result = ReplaceIdentifiers(ResolveAlias(found->second, context), substitutions);

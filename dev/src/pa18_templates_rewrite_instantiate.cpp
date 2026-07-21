@@ -1,6 +1,8 @@
 #include "pa18_templates_collection.h"
 #include "pa18_templates_rewrite.h"
 
+#include <functional>
+
 using namespace std;
 
 namespace pa18_templates_internal {
@@ -78,59 +80,392 @@ bool PA18TemplateExpander::EvaluateSourceArrayFunction(
 	if(!result) return false;
 	string callee, arguments_text;
 	if(!SplitTextCall(raw, &callee, &arguments_text)) return false;
-	callee = LastComponent(CanonicalSpelling(callee));
-	if(callee != "first_true" && callee != "first_true_loop") return false;
-	const vector<string> arguments = SplitTemplateArguments(arguments_text);
-	if(arguments.size() != 2) return false;
-	const string array_name = CanonicalSpelling(arguments[0]);
-	const vector<PA19IntegralValue>* values = FindConstantArray(array_name, context);
-	if(!values) return false;
-	long long begin = 0;
-	long long end = static_cast<long long>(values->size());
-	for(size_t argument = 0; argument < arguments.size(); ++argument) {
-		string expression = CanonicalSpelling(arguments[argument]);
-		while(expression.size() >= 2 && expression[0] == '(' &&
-			expression[expression.size() - 1] == ')') {
+	const CPPGMAstNodePtr function = FindSourceConstantFunction(callee, context);
+	if(!function || function->children.size() < 3 ||
+		SpellNode(function->children[0]).find("constexpr") == string::npos)
+		return false;
+
+	struct SourceValue {
+		PA19IntegralValue integral;
+		bool pointer;
+		string array;
+		long long index;
+
+		SourceValue() : integral(), pointer(false), array(), index(0) {}
+	};
+	struct SourceFlow {
+		enum Kind { NORMAL, RETURN, BREAK, CONTINUE };
+		Kind kind;
+		SourceValue value;
+
+		SourceFlow(Kind flow = NORMAL, const SourceValue& result = SourceValue())
+			: kind(flow), value(result) {}
+	};
+	typedef map<string, SourceValue> Frame;
+	vector<Frame> frames;
+	map<const CPPGMAstNode*, unsigned> depths;
+
+	const auto known = [](const SourceValue& value) {
+		return value.integral.known || value.pointer;
+	};
+	const auto truth = [&](const SourceValue& value) {
+		if(value.integral.known) return PA19Raw(value.integral) != 0;
+		return value.pointer;
+	};
+	const auto array_key = [](string name) {
+		name = CanonicalSpelling(name);
+		while(!name.empty() && name[0] == '&') name = CanonicalSpelling(name.substr(1));
+		const size_t separator = name.rfind("::");
+		return separator == string::npos ? name : name.substr(separator + 2);
+	};
+
+	std::function<SourceValue(const string&)> source_text_value;
+	std::function<SourceValue(const CPPGMAstNodePtr&)> evaluate;
+	std::function<SourceFlow(const CPPGMAstNodePtr&)> evaluate_statement;
+	std::function<SourceValue(const CPPGMAstNodePtr&, const vector<SourceValue>&)> evaluate_function;
+	const auto operator_from_node = [](const string& value) {
+		const size_t separator = value.find(':');
+		return separator == string::npos ? value : value.substr(separator + 1);
+	};
+	const auto assignment_operator = [](const string& operation) {
+		if(operation == "+=") return string("+");
+		if(operation == "-=") return string("-");
+		if(operation == "*=") return string("*");
+		if(operation == "/=") return string("/");
+		if(operation == "%=") return string("%");
+		if(operation == "<<=") return string("<<");
+		if(operation == ">>=") return string(">>");
+		if(operation == "&=") return string("&");
+		if(operation == "|=") return string("|");
+		if(operation == "^=") return string("^");
+		return string();
+	};
+
+	const auto lookup = [&](const string& raw_name) {
+		SourceValue value;
+		const string name = CanonicalSpelling(raw_name);
+		for(vector<Frame>::reverse_iterator frame = frames.rbegin();
+			frame != frames.rend(); ++frame) {
+			map<string, SourceValue>::const_iterator found = frame->find(name);
+			if(found != frame->end()) return found->second;
+		}
+		if(FindConstantArray(name, context)) {
+			value.pointer = true;
+			value.array = array_key(name);
+			return value;
+		}
+		PA19IntegralValue integral;
+		if(EvaluateIntegralText(name, context, substitutions, &integral))
+			value.integral = integral;
+		return value;
+	};
+	const auto set_value = [&](const string& raw_name, const SourceValue& value) {
+		const string name = CanonicalSpelling(raw_name);
+		for(vector<Frame>::reverse_iterator frame = frames.rbegin();
+			frame != frames.rend(); ++frame) {
+			if(frame->find(name) == frame->end()) continue;
+			(*frame)[name] = value;
+			return;
+		}
+		if(!frames.empty()) frames.back()[name] = value;
+	};
+	const auto pointer_element = [&](const SourceValue& pointer) {
+		SourceValue value;
+		if(!pointer.pointer) return value;
+		const vector<PA19IntegralValue>* array = FindConstantArray(pointer.array, context);
+		if(!array || pointer.index < 0 ||
+			static_cast<size_t>(pointer.index) >= array->size()) return value;
+		value.integral = (*array)[static_cast<size_t>(pointer.index)];
+		return value;
+	};
+
+	source_text_value = [&](const string& raw_text) {
+		SourceValue value;
+		string text = CanonicalSpelling(ReplaceIdentifiers(raw_text, substitutions));
+		while(text.size() >= 2 && text[0] == '(' && text[text.size() - 1] == ')') {
 			int depth = 0;
 			bool encloses_all = true;
-			for(size_t position = 0; position < expression.size(); ++position) {
-				if(expression[position] == '(') ++depth;
-				else if(expression[position] == ')' && --depth == 0 &&
-					position + 1 != expression.size()) {
+			for(size_t i = 0; i < text.size(); ++i) {
+				if(text[i] == '(') ++depth;
+				else if(text[i] == ')' && --depth == 0 && i + 1 != text.size()) {
 					encloses_all = false;
 					break;
 				}
 			}
 			if(!encloses_all || depth != 0) break;
-			expression = CanonicalSpelling(expression.substr(1, expression.size() - 2));
+			text = CanonicalSpelling(text.substr(1, text.size() - 2));
 		}
-		if(expression == array_name) continue;
-		if(expression.compare(0, array_name.size(), array_name) != 0) return false;
-		string offset = CanonicalSpelling(expression.substr(array_name.size()));
-		if(offset.empty()) continue;
-		if(offset[0] != '+' && offset[0] != '-') return false;
-		if(offset.find("sizeof...") != string::npos) {
-			if(argument == 0) begin = offset[0] == '+' ?
-				static_cast<long long>(values->size()) :
-				-static_cast<long long>(values->size());
-			else end = offset[0] == '+' ?
-				static_cast<long long>(values->size()) :
-				-static_cast<long long>(values->size());
-			continue;
+		if(FindConstantArray(text, context)) {
+			value.pointer = true;
+			value.array = array_key(text);
+			return value;
 		}
-		PA19IntegralValue offset_value;
-		if(!EvaluateIntegralText(offset.substr(1), context, substitutions, &offset_value) ||
-			!offset_value.known) return false;
-		long long amount = static_cast<long long>(PA19Signed(offset_value));
-		if(offset[0] == '-') amount = -amount;
-		if(argument == 0) begin = amount;
-		else end = amount;
-	}
-	if(begin < 0 || end < begin || end > static_cast<long long>(values->size())) return false;
-	long long index = begin;
-	while(index < end && !PA19Raw((*values)[static_cast<size_t>(index)])) ++index;
-	*result = PA19IntegralValue::Unsigned(
-		static_cast<unsigned long long>(index - begin), "unsigned long", 64);
+		int depth = 0;
+		for(size_t i = 0; i < text.size(); ++i) {
+			if(text[i] == '(') ++depth;
+			else if(text[i] == ')') --depth;
+			if(depth != 0 || i == 0 || (text[i] != '+' && text[i] != '-')) continue;
+			const string base = CanonicalSpelling(text.substr(0, i));
+			const vector<PA19IntegralValue>* array = FindConstantArray(base, context);
+			if(!array) continue;
+			long long offset = 0;
+			const string raw_offset = CanonicalSpelling(text.substr(i + 1));
+			if(raw_offset.find("sizeof...") != string::npos) {
+				offset = static_cast<long long>(array->size());
+			} else {
+				PA19IntegralValue offset_value;
+				if(!EvaluateIntegralText(raw_offset, context, substitutions, &offset_value))
+					return SourceValue();
+				offset = static_cast<long long>(PA19Signed(offset_value));
+			}
+			if(text[i] == '-') offset = -offset;
+			value.pointer = true;
+			value.array = array_key(base);
+			value.index = offset;
+			return value;
+		}
+		PA19IntegralValue integral;
+		if(EvaluateIntegralText(text, context, substitutions, &integral))
+			value.integral = integral;
+		return value;
+	};
+
+	evaluate = [&](const CPPGMAstNodePtr& node) {
+		SourceValue value;
+		if(!node) return value;
+		if(node->kind == "literal") {
+			if(!PA19DecodeCharacter(node->value, &value.integral) &&
+				!PA19ParseInteger(node->value, &value.integral))
+				value = source_text_value(node->value);
+			return value;
+		}
+		if(node->kind == "keyword-literal") {
+			const string spelling = RemoveMarker(node->value);
+			if(spelling == "true" || spelling == "false")
+				value.integral = PA19IntegralValue::Signed(spelling == "true", "bool", 1);
+			return value;
+		}
+		if(node->kind == "id-expression") return lookup(node->value);
+		if(node->kind == "parenthesized-expression" || node->kind == "initializer" ||
+			node->kind == "paren-initializer" || node->kind == "initializer-clause" ||
+			node->kind == "condition")
+			return node->children.empty() ? value : evaluate(node->children[0]);
+		if(node->kind == "subscript-expression" && node->children.size() >= 2) {
+			SourceValue base = evaluate(node->children[0]);
+			SourceValue index = evaluate(node->children[1]);
+			if(!base.pointer || !index.integral.known) return SourceValue();
+			base.index += PA19Signed(index.integral);
+			return pointer_element(base);
+		}
+		if(node->kind == "cast-expression" && node->children.size() >= 2) {
+			SourceValue operand = evaluate(node->children[1]);
+			const PA19IntegralType target = PA19Type(ResolveAlias(
+				NodeTypeSpelling(node->children[0]), context));
+			if(!operand.integral.known || !target.integral) return SourceValue();
+			value.integral = PA19Convert(operand.integral, target);
+			return value;
+		}
+		if(node->kind == "unary-expression" && !node->children.empty()) {
+			const string op = operator_from_node(node->value);
+			if(op == "*") return pointer_element(evaluate(node->children[0]));
+			if(op == "++" || op == "--") {
+				const CPPGMAstNodePtr operand_node = node->children[0];
+				if(!operand_node || operand_node->kind != "id-expression") return SourceValue();
+				SourceValue current = lookup(operand_node->value);
+				if(current.pointer) current.index += op == "++" ? 1 : -1;
+				else if(current.integral.known) current.integral = PA19Binary(
+					op == "++" ? "+" : "-", current.integral,
+					PA19IntegralValue::Signed(1));
+				else return SourceValue();
+				set_value(operand_node->value, current);
+				return current;
+			}
+			SourceValue operand = evaluate(node->children[0]);
+			if(!operand.integral.known) return SourceValue();
+			if(op == "!") value.integral = PA19IntegralValue::Signed(
+				!PA19Raw(operand.integral), "int", 32);
+			else if(op == "+") value.integral = PA19Promote(operand.integral);
+			else if(op == "-") {
+				const PA19IntegralValue promoted = PA19Promote(operand.integral);
+				const PA19IntegralType type = promoted.type;
+				const unsigned long long raw_value = (0ULL - PA19Raw(promoted)) &
+					PA19Mask(type.bits);
+				value.integral = type.is_unsigned ? PA19IntegralValue::Unsigned(
+					raw_value, type.name, type.bits) : PA19IntegralValue::Signed(
+					static_cast<long long>(raw_value), type.name, type.bits);
+			} else if(op == "~") {
+				const PA19IntegralValue promoted = PA19Promote(operand.integral);
+				const PA19IntegralType type = promoted.type;
+				const unsigned long long raw_value = (~PA19Raw(promoted)) & PA19Mask(type.bits);
+				value.integral = type.is_unsigned ? PA19IntegralValue::Unsigned(
+					raw_value, type.name, type.bits) : PA19IntegralValue::Signed(
+					static_cast<long long>(raw_value), type.name, type.bits);
+			} else return SourceValue();
+			return value;
+		}
+		if(node->kind == "assignment-expression" && node->children.size() >= 2) {
+			const string op = operator_from_node(node->value);
+			SourceValue right = evaluate(node->children[1]);
+			if(op != "=") {
+				SourceValue left = evaluate(node->children[0]);
+				if(!left.integral.known || !right.integral.known) return SourceValue();
+				right.integral = PA19Binary(assignment_operator(op), left.integral,
+					right.integral);
+			}
+			if(node->children[0]->kind == "id-expression")
+				set_value(node->children[0]->value, right);
+			return right;
+		}
+		if(node->kind == "conditional-expression" && node->children.size() >= 3) {
+			SourceValue condition = evaluate(node->children[0]);
+			if(!known(condition)) return SourceValue();
+			return evaluate(node->children[truth(condition) ? 1 : 2]);
+		}
+		if(node->kind == "binary-expression" && node->children.size() >= 2) {
+			const string op = operator_from_node(node->value);
+			SourceValue left = evaluate(node->children[0]);
+			if((op == "&&" || op == "and") && known(left) && !truth(left)) {
+				value.integral = PA19IntegralValue::Signed(0, "int", 32);
+				return value;
+			}
+			if((op == "||" || op == "or") && known(left) && truth(left)) {
+				value.integral = PA19IntegralValue::Signed(1, "int", 32);
+				return value;
+			}
+			SourceValue right = evaluate(node->children[1]);
+			if(!known(left) || !known(right)) return SourceValue();
+			if(left.pointer || right.pointer) {
+				if((op == "==" || op == "!=") && left.pointer && right.pointer) {
+					const bool equal = left.array == right.array && left.index == right.index;
+					value.integral = PA19IntegralValue::Signed(op == "==" ? equal : !equal,
+						"bool", 1);
+					return value;
+				}
+				if(left.pointer && right.integral.known && (op == "+" || op == "-")) {
+					left.index += (op == "+" ? 1 : -1) * PA19Signed(right.integral);
+					return left;
+				}
+				if(left.pointer && right.pointer && op == "-") {
+					value.integral = PA19IntegralValue::Signed(left.index - right.index);
+					return value;
+				}
+				return SourceValue();
+			}
+			value.integral = PA19Binary(op, left.integral, right.integral);
+			return value;
+		}
+		if(node->kind == "call-expression" && !node->children.empty() &&
+			node->children[0] && node->children[0]->kind == "id-expression") {
+			vector<SourceValue> arguments;
+			if(node->children.size() > 1 && node->children[1])
+				for(size_t i = 0; i < node->children[1]->children.size(); ++i) {
+					const CPPGMAstNodePtr argument = node->children[1]->children[i];
+					if(argument && argument->kind == "pack-expansion-expression") return SourceValue();
+					arguments.push_back(evaluate(argument));
+				}
+			const CPPGMAstNodePtr target = FindSourceConstantFunction(
+				node->children[0]->value, context);
+			return target ? evaluate_function(target, arguments) : SourceValue();
+		}
+		return source_text_value(ConstantExpressionSpelling(node));
+	};
+
+	evaluate_statement = [&](const CPPGMAstNodePtr& node) {
+		if(!node) return SourceFlow();
+		if(node->kind == "compound-statement") {
+			frames.push_back(Frame());
+			SourceFlow flow;
+			for(size_t i = 0; i < node->children.size(); ++i) {
+				flow = evaluate_statement(node->children[i]);
+				if(flow.kind != SourceFlow::NORMAL) break;
+			}
+			frames.pop_back();
+			return flow;
+		}
+		if(node->kind == "simple-declaration") {
+			const CPPGMAstNodePtr list = ChildOfKindLocal(node, "init-declarator-list");
+			if(!list) return SourceFlow();
+			for(size_t i = 0; i < list->children.size(); ++i) {
+				const CPPGMAstNodePtr item = list->children[i];
+				if(!item || item->children.empty()) continue;
+				const string name = FirstIdentifierLocal(item->children[0]);
+				SourceValue value = item->children.size() > 1 ? evaluate(item->children[1]) : SourceValue();
+				if(!name.empty() && !frames.empty()) frames.back()[name] = value;
+			}
+			return SourceFlow();
+		}
+		if(node->kind == "expression-statement") {
+			if(!node->children.empty()) evaluate(node->children[0]);
+			return SourceFlow();
+		}
+		if(node->kind == "return-statement")
+			return SourceFlow(SourceFlow::RETURN,
+				node->children.empty() ? SourceValue() : evaluate(node->children[0]));
+		if(node->kind == "break-statement") return SourceFlow(SourceFlow::BREAK);
+		if(node->kind == "continue-statement") return SourceFlow(SourceFlow::CONTINUE);
+		if(node->kind == "if-statement") {
+			const CPPGMAstNodePtr condition_wrapper = ChildOfKindLocal(node, "condition");
+			const SourceValue condition = condition_wrapper && !condition_wrapper->children.empty() ?
+				evaluate(condition_wrapper->children[0]) : SourceValue();
+			if(!known(condition)) return SourceFlow();
+			const CPPGMAstNodePtr selected = ChildOfKindLocal(node,
+				truth(condition) ? "then" : "else");
+			return selected && !selected->children.empty() ?
+				evaluate_statement(selected->children[0]) : SourceFlow();
+		}
+		if(node->kind == "while-statement" || node->kind == "do-statement") {
+			const bool do_loop = node->kind == "do-statement";
+			const CPPGMAstNodePtr condition_wrapper = ChildOfKindLocal(node, "condition");
+			const CPPGMAstNodePtr body = ChildOfKindLocal(node, "body") ?
+				ChildOfKindLocal(node, "body") : ChildOfKindLocal(node, "compound-statement");
+			for(unsigned i = 0; i < 100000; ++i) {
+				if(!do_loop || i != 0) {
+					const SourceValue condition = condition_wrapper && !condition_wrapper->children.empty() ?
+						evaluate(condition_wrapper->children[0]) : SourceValue();
+					if(!known(condition) || !truth(condition)) break;
+				}
+				SourceFlow flow = body ? evaluate_statement(body) : SourceFlow();
+				if(flow.kind == SourceFlow::RETURN) return flow;
+				if(flow.kind == SourceFlow::BREAK) break;
+				if(flow.kind != SourceFlow::CONTINUE && do_loop && i == 0) continue;
+			}
+			return SourceFlow();
+		}
+		return SourceFlow();
+	};
+
+	evaluate_function = [&](const CPPGMAstNodePtr& target,
+		const vector<SourceValue>& arguments) {
+		SourceValue value;
+		if(!target || target->children.size() < 3) return value;
+		unsigned& depth = depths[target.get()];
+		if(depth++ >= 512) { --depth; return value; }
+		frames.push_back(Frame());
+		const CPPGMAstNodePtr clause = target->children.size() > 1 ?
+			DescendantOfKind(target->children[1], "parameter-clause") : CPPGMAstNodePtr();
+		size_t argument = 0;
+		if(clause) for(size_t i = 0; i < clause->children.size(); ++i) {
+			const CPPGMAstNodePtr parameter = clause->children[i];
+			if(!parameter || parameter->kind != "parameter-declaration") continue;
+			const string name = parameter->children.size() > 1 ?
+				FirstIdentifierLocal(parameter->children[1]) : string();
+			if(!name.empty() && argument < arguments.size()) frames.back()[name] = arguments[argument];
+			++argument;
+		}
+		const SourceFlow flow = evaluate_statement(ChildOfKindLocal(target, "compound-statement"));
+		if(flow.kind == SourceFlow::RETURN) value = flow.value;
+		frames.pop_back();
+		--depth;
+		return value;
+	};
+
+	const vector<string> argument_text = SplitTemplateArguments(arguments_text);
+	vector<SourceValue> arguments;
+	for(size_t i = 0; i < argument_text.size(); ++i)
+		arguments.push_back(source_text_value(argument_text[i]));
+	const SourceValue value = evaluate_function(function, arguments);
+	if(!value.integral.known) return false;
+	*result = value.integral;
 	return true;
 }
 
@@ -278,17 +613,6 @@ bool PA18TemplateExpander::EvaluateSourceClassTruth(
 		raw.substr(raw.size() - 2) == "()"))
 		raw.erase(raw.size() - 2);
 	raw = CanonicalSpelling(raw);
-	const size_t open = raw.find('<');
-	if(open != string::npos) {
-		string argument_text;
-		size_t close = string::npos;
-		if(TemplateRange(raw, open, &argument_text, &close)) {
-			const string base = LastComponent(raw.substr(0, open));
-			const vector<string> arguments = SplitTemplateArguments(argument_text);
-			if(base == "integral_constant" && arguments.size() >= 2)
-				return EvaluateIntegralText(arguments[1], context, substitutions, result);
-		}
-	}
 	const CPPGMAstNodePtr declaration = FindClassDeclaration(raw, context);
 	if(!declaration) return false;
 	for(size_t child = 0; child < declaration->children.size(); ++child) {
@@ -324,20 +648,18 @@ bool PA18TemplateExpander::EvaluateSourceIntegralExpression(
 	raw = CanonicalSpelling(ReplaceIdentifiers(raw, substitutions));
 	if(EvaluateSourceArrayFunction(raw, context, substitutions, result)) return true;
 	string expanded = raw;
-	bool expanded_array_call = false;
-	for(size_t search = 0; ; ) {
-		size_t first = expanded.find("first_true(", search);
-		size_t loop = expanded.find("first_true_loop(", search);
-		size_t begin = string::npos;
-		if(first == string::npos) begin = loop;
-		else if(loop == string::npos) begin = first;
-		else begin = first < loop ? first : loop;
-		if(begin == string::npos) break;
-		const size_t open = expanded.find('(', begin);
-		if(open == string::npos) break;
+	bool expanded_source_call = false;
+	for(size_t search = 0; search < expanded.size(); ) {
+		if(!IsIdentifierCharacter(expanded[search])) {
+			++search;
+			continue;
+		}
+		const size_t begin = search;
+		while(search < expanded.size() && IsIdentifierCharacter(expanded[search])) ++search;
+		if(search >= expanded.size() || expanded[search] != '(') continue;
 		int depth = 0;
 		size_t close = string::npos;
-		for(size_t position = open; position < expanded.size(); ++position) {
+		for(size_t position = search; position < expanded.size(); ++position) {
 			if(expanded[position] == '(') ++depth;
 			else if(expanded[position] == ')' && --depth == 0) {
 				close = position;
@@ -345,18 +667,22 @@ bool PA18TemplateExpander::EvaluateSourceIntegralExpression(
 			}
 		}
 		if(close == string::npos) break;
+		const string candidate = expanded.substr(begin, close - begin + 1);
+		if(!FindSourceConstantFunction(expanded.substr(begin, search - begin), context)) {
+			search = close + 1;
+			continue;
+		}
 		PA19IntegralValue call_value;
-		const string call = expanded.substr(begin, close - begin + 1);
-		if(!EvaluateSourceArrayFunction(call, context, substitutions, &call_value)) {
+		if(!EvaluateSourceArrayFunction(candidate, context, substitutions, &call_value)) {
 			search = close + 1;
 			continue;
 		}
 		const string replacement = IntegralValueSpelling(call_value);
-		expanded.replace(begin, call.size(), replacement);
-		expanded_array_call = true;
+		expanded.replace(begin, candidate.size(), replacement);
+		expanded_source_call = true;
 		search = begin + replacement.size();
 	}
-	if(expanded_array_call) {
+	if(expanded_source_call) {
 		PA19ConstantExpressionParser parser(constant_values_, substitutions,
 			constant_type_sizes_, constant_type_alignments_, type_aliases_);
 		if(parser.Evaluate(expanded, result)) return true;
