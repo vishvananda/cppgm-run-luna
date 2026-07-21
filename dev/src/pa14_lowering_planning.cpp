@@ -532,8 +532,12 @@ CPPGMAstNodePtr PA14Lowerer::InitializerExpression(const CPPGMAstNodePtr& initia
 long long PA14Lowerer::BracedElementCount(const CPPGMAstNodePtr& initializer) const
 {
     CPPGMAstNodePtr expression = InitializerExpression(initializer);
-    return expression && expression->kind == "braced-init-list" ?
-      static_cast<long long>(expression->children.size()) : -1;
+    if(expression && expression->kind == "braced-init-list")
+      return static_cast<long long>(expression->children.size());
+    if(expression && expression->kind == "literal" &&
+       expression->value.find('"') != string::npos)
+      return static_cast<long long>(decode_string_literal(expression->value).size());
+    return -1;
   }
 
 TypePtr PA14Lowerer::PlannedType(const CPPGMAstNodePtr& declaration,

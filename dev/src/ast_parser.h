@@ -31,6 +31,10 @@ struct CPPGMAstNode
 	// specialization so PA14 can distinguish a dependent base from an
 	// ordinary concrete base during unqualified lookup.
 	bool dependent_base_lookup;
+	// PA18 records that an unevaluated callable type expression still requires
+	// the local object address to be materialized by PA14.
+	bool materialize_object_address;
+	std::string materialize_object_name;
 	std::string template_primary;
 	std::vector<std::string> template_arguments;
 	std::vector<CPPGMAstNodePtr> children;

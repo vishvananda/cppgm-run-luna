@@ -151,6 +151,50 @@ string abi_type_text(const string& raw)
 {
   string value = abi_trim(raw);
   if(value.empty()) return "v";
+	// PA19 preserves an enum non-type argument as `EnumType value` so the
+	// source type remains available for specialization names.  In the ABI it
+	// is a typed non-type literal, not a named type containing a space.
+	const size_t typed_value_separator = value.rfind(' ');
+	if(typed_value_separator != string::npos && typed_value_separator > 0) {
+		const string enum_type = abi_trim(value.substr(0, typed_value_separator));
+		string enum_value = abi_trim(value.substr(typed_value_separator + 1));
+		const bool signed_value = !enum_value.empty() &&
+			enum_value[0] == '-';
+		const size_t first_digit = (!enum_value.empty() &&
+			(enum_value[0] == '-' || enum_value[0] == '+')) ? 1 : 0;
+		bool numeric_value = first_digit < enum_value.size();
+		for(size_t i = first_digit; numeric_value && i < enum_value.size(); ++i)
+			if(!isdigit(static_cast<unsigned char>(enum_value[i]))) numeric_value = false;
+		if(numeric_value) {
+			while(!enum_value.empty() && (enum_value[enum_value.size() - 1] == 'u' ||
+				enum_value[enum_value.size() - 1] == 'U' ||
+				enum_value[enum_value.size() - 1] == 'l' ||
+				enum_value[enum_value.size() - 1] == 'L')) enum_value.erase(enum_value.size() - 1);
+			if(!enum_value.empty()) {
+				const string enum_encoding = abi_fundamental(enum_type).empty() ?
+					abi_qualified(enum_type) : abi_fundamental(enum_type);
+				return "L" + enum_encoding +
+					(signed_value ? "n" : "") + enum_value.substr(first_digit) + "E";
+			}
+		}
+	}
+	// Non-type integral template arguments use the Itanium literal encoding;
+	// treating a digit as an identifier produces `I1818` instead of `ILi8ELi8E`.
+	if((value[0] == '-' || value[0] == '+' ||
+		isdigit(static_cast<unsigned char>(value[0]))) &&
+		(value[0] == '-' || value[0] == '+' ||
+		isdigit(static_cast<unsigned char>(value[0])))) {
+		size_t first_digit = value[0] == '-' || value[0] == '+' ? 1 : 0;
+		if(first_digit < value.size() &&
+			isdigit(static_cast<unsigned char>(value[first_digit]))) {
+			string number = value.substr(first_digit);
+			while(!number.empty() && (number[number.size() - 1] == 'u' ||
+				number[number.size() - 1] == 'U' || number[number.size() - 1] == 'l' ||
+				number[number.size() - 1] == 'L')) number.erase(number.size() - 1);
+			if(!number.empty()) return string("Li") +
+				(value[0] == '-' ? "n" : "") + number + "E";
+		}
+	}
   if(value[value.size() - 1] == '&') {
     const bool rvalue = value.size() > 1 && value[value.size() - 2] == '&';
     value.erase(value.size() - (rvalue ? 2 : 1));
@@ -382,6 +426,11 @@ string abi_function_parameters(const TypePtr& source, const TypePtr& owner = Typ
 
 } // namespace
 
+string template_type_mangled_name(const TypePtr& type)
+{
+	return abi_type_components(type);
+}
+
 string PA14Lowerer::TemplateGlobalObjectName(const GlobalRecord& global) const
 {
   if(!global.template_instantiation) return string();
@@ -401,7 +450,8 @@ string PA14Lowerer::TemplateGlobalObjectName(const GlobalRecord& global) const
 
 string PA14Lowerer::TemplateFunctionObjectName(const FunctionRecord& function) const
 {
-  if(!function.template_instantiation || !function.source_type) return string();
+  if((!function.template_instantiation && !function.inline_definition) ||
+     !function.source_type) return string();
   const TypePtr source = function_target_type(function.source_type);
   if(!source || source->kind != TYPE_FUNCTION) return string();
   const bool nested = function.member || (function.hidden_friend && function.member_owner);
@@ -429,7 +479,7 @@ string PA14Lowerer::TemplateFunctionObjectName(const FunctionRecord& function) c
   if(components.size() > 1) result += "N";
   for(size_t i = 0; i + 1 < components.size(); ++i) result += abi_component(components[i]);
   result += abi_terminal(components.back(), source->child);
-  if(function.template_instantiation && !function.template_arguments.empty()) {
+    if(function.template_instantiation && !function.template_arguments.empty()) {
     result += "I";
     for(size_t i = 0; i < function.template_arguments.size(); ++i)
       result += abi_type_text(function.template_arguments[i]);
@@ -470,7 +520,7 @@ void PA14Lowerer::FinalizeSymbols()
               type_value(second->child)->name == "void")
         function.object_name = "_ZdlPvS_";
     }
-    if(function.template_instantiation) {
+    if(function.template_instantiation || function.inline_definition) {
       function.weak_binding = true;
       if(function.object_name.empty()) function.object_name = TemplateFunctionObjectName(function);
     }

@@ -37,7 +37,8 @@ PA14Lowerer::Value PA14Lowerer::ValueWithNullptr() const
 bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string& address,
                                     const vector<CPPGMAstNodePtr>& raw_arguments,
                                     Scope* scope, bool allow_explicit, bool base_entry,
-                                    bool allow_aggregate, bool force_move)
+                                    bool allow_aggregate, bool force_move,
+                                    bool value_initialization)
 {
     const size_t temporary_mark = state_ ? state_->temporary_objects.size() : 0;
     TypePtr object_type = type_value(raw_object_type);
@@ -162,6 +163,26 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
     if(record) {
       record->needed = true;
     }
+	bool has_instance_member = false;
+	for(size_t member = 0; member < object_type->class_members.size(); ++member)
+		if(!object_type->class_members[member].is_static &&
+			!object_type->class_members[member].name.empty()) {
+			has_instance_member = true;
+			break;
+		}
+	if(value_initialization && raw_arguments.empty() && has_instance_member && record &&
+		(record->aggregate_constructor || record->implicit_constructor || record->defaulted)) {
+		TypePtr zero_type;
+		switch(type_size(object_type)) {
+		case 1: zero_type = Fundamental("char"); break;
+		case 2: zero_type = Fundamental("short int"); break;
+		case 4: zero_type = Fundamental("int"); break;
+		case 8: zero_type = Fundamental("long int"); break;
+		default: break;
+		}
+		if(zero_type) emit_store(zero_type, "0", address);
+		else AddInstruction("store " + low_type(object_type) + " 0, " + address);
+	}
     vector<CPPGMAstNodePtr> arguments = raw_arguments;
     if(record) {
       while(arguments.size() < best_function->parameters.size()) {
@@ -233,7 +254,8 @@ string PA14Lowerer::EmitTemporaryObjectAddress(const CPPGMAstNodePtr& node,
     if(node->value == "braced-construction" && arguments.size() == 1 &&
        arguments[0] && arguments[0]->kind == "braced-init-list")
       arguments = arguments[0]->children;
-    if(!EmitConstructorAt(object_type, address, arguments, scope))
+    if(!EmitConstructorAt(object_type, address, arguments, scope,
+                          true, false, false, false, arguments.empty()))
       throw logic_error("no viable temporary object construction");
     RegisterTemporaryObject(object_type, address);
     return address;
@@ -354,7 +376,7 @@ bool PA14Lowerer::EmitObjectConstructor(VariablePlan* variable,
     }
     return EmitConstructorAt(raw_object_type, address, raw_arguments, scope,
       allow_explicit);
-  }
+}
 void PA14Lowerer::EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr& initializer,
                        Scope* scope)
 {
@@ -375,7 +397,9 @@ void PA14Lowerer::EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr&
     if(variable->type->kind == TYPE_ARRAY) {
       if(!expression) return;
       string base = EmitAddress(CPPGMAstNodePtr(new CPPGMAstNode("id-expression", variable->source_name)), scope);
-      if(expression->kind == "literal" && !expression->value.empty() && expression->value[0] == '"') {
+      if(expression->kind == "literal" &&
+         expression->value.find('"') != string::npos &&
+         !is_user_defined_string_literal(expression->value)) {
         const vector<unsigned char> bytes = decode_string_literal(expression->value);
         for(size_t i = 0; i < bytes.size() && i < static_cast<size_t>(max(0LL, variable->type->bound)); ++i) {
           string storage = base;
@@ -468,6 +492,28 @@ void PA14Lowerer::EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr&
     }
     TypePtr aggregate_type = type_value(variable->type);
     if(aggregate_type && aggregate_type->kind == TYPE_CLASS) {
+      // A value-initialized materialized class specialization uses its
+      // implicitly generated default constructor.  Treating an empty list as
+      // an aggregate initializer instead leaks the member-zeroing path and
+      // leaves the constructor demand stale, which is observable when the
+      // specialization is later used by a template function.
+      if(aggregate_type->template_specialization && expression &&
+         expression->kind == "braced-init-list" && expression->children.empty() &&
+         aggregate_type->owned_scope) {
+        CollectImplicitConstructor(aggregate_type, aggregate_type->owned_scope, true);
+      }
+      if(aggregate_type->template_specialization && expression &&
+         expression->kind == "braced-init-list" && expression->children.empty() &&
+         HasConstructor(aggregate_type)) {
+        string address;
+        if(!variable->initialization_address.empty()) {
+          address = variable->initialization_address;
+          variable->initialization_address.clear();
+        } else address = local_address(variable);
+        if(EmitConstructorAt(aggregate_type, address,
+                             vector<CPPGMAstNodePtr>(), scope, true, false,
+                             false, false, false)) return;
+      }
       if(expression && expression->kind != "braced-init-list") {
         const ExprInfo source_info = Infer(expression, scope);
         const TypePtr source_type = expression_value_type(source_info);
@@ -547,6 +593,23 @@ void PA14Lowerer::EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr&
         initializer->initializer_form != AST_INITIALIZER_COPY;
       const bool empty_aggregate = expression &&
         expression->kind == "braced-init-list" && expression->children.empty();
+		// An empty class (or a class containing only static members) is an
+		// aggregate with no synthesized constructor parameters.  `{}` still
+		// performs a valid value-initialization, but there is no constructor
+		// record for the ordinary call path to select.
+		if(empty_aggregate && !aggregate_candidate) {
+			bool has_instance_member = false;
+			for(size_t member = 0; member < aggregate_type->class_members.size(); ++member)
+				if(!aggregate_type->class_members[member].is_static &&
+					aggregate_type->class_members[member].type) {
+					has_instance_member = true;
+					break;
+				}
+			if(!has_instance_member) {
+				variable->initialization_address.clear();
+				return;
+			}
+		}
       if((!aggregate_candidate || !empty_aggregate) &&
          EmitObjectConstructor(variable, aggregate_type, constructor_arguments, scope,
                                allow_explicit)) return;
@@ -645,7 +708,8 @@ bool PA14Lowerer::HasNonSizeofReference(const CPPGMAstNodePtr& node,
                                         const string& name, bool inside_sizeof) const
 {
     if(!node) return false;
-    const bool now_inside_sizeof = inside_sizeof || node->kind == "sizeof-expression";
+    const bool now_inside_sizeof = inside_sizeof || node->kind == "sizeof-expression" ||
+      node->kind == "sizeof-pack-expression";
     if(node->kind == "id-expression" && node->value == name && !now_inside_sizeof)
       return true;
     for(size_t i = 0; i < node->children.size(); ++i)
@@ -1176,7 +1240,13 @@ void PA14Lowerer::EmitStatement(const CPPGMAstNodePtr& node, Scope* scope)
              (type_value(found->second->type)->kind == TYPE_CLASS ||
               (type_value(found->second->type)->kind == TYPE_ARRAY &&
                type_value(found->second->type)->child &&
-               type_value(found->second->type)->child->kind == TYPE_CLASS))) {
+              type_value(found->second->type)->child->kind == TYPE_CLASS))) {
+            if(node->materialize_object_address && !node->materialize_object_name.empty()) {
+              VariablePlan* dependency = LocalForName(node->materialize_object_name);
+              if(dependency && dependency != found->second &&
+                 dependency->initialization_address.empty())
+                dependency->initialization_address = local_address(dependency);
+            }
             bool initialized = item->children.size() > 1;
             bool empty_initializer = false;
             if(initialized) {
@@ -1194,6 +1264,9 @@ void PA14Lowerer::EmitStatement(const CPPGMAstNodePtr& node, Scope* scope)
             if(initialized || (referenced &&
                                (!empty_initializer ||
                                 HasDefaultInitializationEffects(found->second->type))))
+              found->second->initialization_address = local_address(found->second);
+            else if(node->materialize_object_address &&
+                    found->second->initialization_address.empty())
               found->second->initialization_address = local_address(found->second);
           }
           if(found != state_->plans.end() && !found->second->slot_declared) {
@@ -1309,6 +1382,10 @@ void PA14Lowerer::EmitStatement(const CPPGMAstNodePtr& node, Scope* scope)
       return;
     }
     if(node->kind == "null-statement") return;
+	    // PA11 has already validated static assertions.  They are declarations
+	    // with no runtime LowIR effect and must not reach the statement emitter
+	    // when they occur in a materialized function body.
+	    if(node->kind == "static-assert-declaration") return;
     // PA14 has no class/object lifetime lowering.  Parsed declaration-like
     // nodes which do not contribute procedural code are harmless here.
     if(node->kind == "alias-declaration" || node->kind == "using-declaration" || node->kind == "using-directive" ||
@@ -1316,145 +1393,4 @@ void PA14Lowerer::EmitStatement(const CPPGMAstNodePtr& node, Scope* scope)
     throw logic_error("unsupported statement in LowIR lowering: " + node->kind);
   }
 
-void PA14Lowerer::EmitGlobalInitializer(GlobalRecord& global, Scope* scope)
-{
-    TypePtr type = global.type;
-    TypePtr value_type = type_value(type);
-    if(!type || !value_type) return;
-    CPPGMAstNodePtr expression = InitializerExpression(global.initializer);
-    VariablePlan plan;
-    plan.source_name = LastComponent(global.qualified_name);
-    plan.slot_name = plan.source_name;
-    plan.type = type;
-    plan.initializer = global.initializer;
-    plan.global = &global;
-
-    if(type_is_reference(type)) {
-      if(!expression) return;
-      emit_store(PointerTo(Fundamental("char")),
-        EmitReferenceArgument(expression, scope, type), "@" + global.symbol);
-      return;
-    }
-
-    if(type->kind == TYPE_ARRAY) {
-      TypePtr element_type = type_value(type->child);
-      if(!element_type) return;
-      vector<CPPGMAstNodePtr> children;
-      if(expression && expression->kind == "braced-init-list") children = expression->children;
-      const size_t bound = type->bound < 0 ? children.size() : static_cast<size_t>(type->bound);
-      for(size_t i = 0; i < bound; ++i) {
-        if(i >= children.size() && element_type->kind != TYPE_CLASS) continue;
-        const string base = global_address(&global);
-        const string decay = new_temp();
-        AddInstruction(decay + " = unary decay ptr " + base);
-        const string offset = new_temp();
-        AddInstruction(offset + " = binary mul i64 " + integer_text(static_cast<long long>(i)) +
-          ", " + integer_text(static_cast<long long>(type_size(type->child))));
-        const string element = new_temp();
-        AddInstruction(element + " = index i8 [projection=array_element] " + decay + ", " + offset);
-        CPPGMAstNodePtr child = i < children.size() ? children[i] : CPPGMAstNodePtr();
-        if(element_type->kind == TYPE_CLASS) {
-          vector<CPPGMAstNodePtr> arguments;
-          if(child && child->kind == "braced-init-list") arguments = child->children;
-          else if(child && child->kind == "paren-initializer") arguments = child->children;
-          else if(child && child->kind == "call-expression" && child->children.size() > 1 &&
-                  child->children[0] && child->children[0]->kind == "id-expression" &&
-                  LastComponent(element_type->name) == child->children[0]->value)
-            arguments = child->children[1] ? child->children[1]->children :
-              vector<CPPGMAstNodePtr>();
-          if(child && child->kind != "braced-init-list" &&
-             child->kind != "paren-initializer" &&
-             EmitObjectTransferAt(element_type, element, child, scope, true)) continue;
-          if(EmitConstructorAt(element_type, element, arguments, scope,
-                               true, false, true)) continue;
-          if(child && child->kind == "braced-init-list") {
-            EmitAggregateAt(element, element_type, child, scope);
-            continue;
-          }
-          continue;
-        }
-        if(element_type->kind == TYPE_ARRAY && child &&
-           child->kind == "braced-init-list") {
-          EmitAggregateAt(element, element_type, child, scope);
-          continue;
-        }
-        if(!child) continue;
-        Value value = EmitValue(child, scope, type->child);
-        if(value.known_constant && is_integral_type(value.type) &&
-           is_integral_type(type->child)) {
-          value.type = type->child;
-          value.operand = integer_text(value.constant);
-        } else value = ConvertValue(value, type->child);
-        emit_store(type->child, value.operand, element);
-      }
-      return;
-    }
-
-    if(value_type->kind == TYPE_CLASS) {
-      vector<CPPGMAstNodePtr> arguments;
-      if(global.initializer && !global.initializer->children.empty() &&
-         global.initializer->children[0] &&
-         global.initializer->children[0]->kind == "paren-initializer")
-        arguments = global.initializer->children[0]->children;
-      else if(expression && expression->kind == "braced-init-list")
-        arguments = expression->children;
-      if(!expression && !HasConstructor(value_type)) return;
-      if(!HasDefaultInitializationEffects(value_type) && !HasDestructor(value_type)) return;
-      bool declared_constructor = false;
-      const vector<Binding*> constructors =
-        MemberBindings(value_type, LastComponent(value_type->name));
-      for(size_t i = 0; i < constructors.size(); ++i) {
-        FunctionRecord* record = RecordForBinding(constructors[i]);
-        if(record && record->constructor && !record->implicit_constructor &&
-           !record->aggregate_constructor) {
-          declared_constructor = true;
-          break;
-        }
-      }
-      if(expression && expression->kind == "braced-init-list" && !declared_constructor) {
-        // Aggregate members of a global are projected from a fresh global
-        // address, just as ordinary global lvalue projections are.  Keeping
-        // the source node here lets the aggregate walker recompute that
-        // typed base for each member without changing local aggregate
-        // lowering.
-        CPPGMAstNodePtr object_node(new CPPGMAstNode(
-          "id-expression", plan.source_name));
-        EmitAggregateAt(string(), value_type, expression, scope, object_node);
-        return;
-      }
-      plan.initialization_address = global_address(&global);
-      if(EmitObjectConstructor(&plan, value_type, arguments, scope)) return;
-      return;
-    }
-
-    if(!expression) return;
-    Value value = EmitValue(expression, scope, type);
-    value = ConvertValue(value, type);
-    emit_store(type, value.operand, "@" + global.symbol);
-  }
-void PA14Lowerer::EmitGlobalFinalizer(GlobalRecord& global, Scope* scope)
-{
-    TypePtr type = type_value(global.type);
-    if(!type) return;
-    if(type->kind == TYPE_ARRAY) {
-      TypePtr element_type = type_value(type->child);
-      if(!element_type || type->bound < 0) return;
-      const string base = global_address(&global);
-      const string decay = new_temp();
-      AddInstruction(decay + " = unary decay ptr " + base);
-      for(size_t i = static_cast<size_t>(type->bound); i > 0; --i) {
-        const size_t index_value = i - 1;
-        const string offset = new_temp();
-        AddInstruction(offset + " = binary mul i64 " +
-          integer_text(static_cast<long long>(index_value)) + ", " +
-          integer_text(static_cast<long long>(type_size(type->child))));
-        const string element = new_temp();
-        AddInstruction(element + " = index i8 [projection=array_element] " + decay + ", " + offset);
-        (void)EmitDestructorAt(element_type, element, scope);
-      }
-      return;
-    }
-    if(type->kind == TYPE_CLASS)
-      (void)EmitDestructorAt(type, global_address(&global), scope);
-  }
 } // namespace cppgm_pa14_lowering

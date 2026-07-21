@@ -371,6 +371,16 @@ CPPGMAstNodePtr Parser::ParseTypeTraitExpression()
 {
 	const string keyword = Peek().text;
 	++position_;
+	if (keyword == "sizeof" && Is("..."))
+	{
+		++position_;
+		if (!Take("(")) return CPPGMAstNodePtr();
+		CPPGMAstNodePtr pack = ParseIdExpression();
+		if (!pack || !Take(")")) return CPPGMAstNodePtr();
+		CPPGMAstNodePtr result = Node("sizeof-pack-expression");
+		Add(result, pack);
+		return result;
+	}
 	if (keyword == "sizeof" && !Is("("))
 	{
 		CPPGMAstNodePtr result = Node("sizeof-expression");

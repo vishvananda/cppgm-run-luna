@@ -33,6 +33,7 @@ long long parse_integer_literal(const string& raw, bool* okay = 0);
 vector<unsigned char> decode_string_literal(const string& raw);
 string canonical_literal(const string& raw, TypePtr* type_out = 0,
                          long long* constant = 0, bool* known = 0);
+string template_type_mangled_name(const TypePtr& type);
 
 class PA14Lowerer
 {
@@ -295,6 +296,7 @@ class PA14Lowerer
   map<string, vector<unsigned char> > string_data_;
   map<string, string> string_symbols_;
   vector<string> string_order_;
+	set<string> deferred_static_members_;
 	bool needs_init_helper_;
 	bool needs_fini_helper_;
 	set<const Type*> emitted_vtables_;
@@ -363,6 +365,23 @@ void CollectImplicitDestructor(const TypePtr& owner, Scope* scope);
 void RememberDefaults(FunctionRecord* record, const CPPGMAstNodePtr& declarator);
 
 void CollectSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* scope);
+void CollectSimpleDeclarationItem(const CPPGMAstNodePtr& node, Scope* scope,
+                                  const Analyzer::SpecFacts& facts,
+                                  const CPPGMAstNodePtr& item);
+
+void CollectGlobalDeclaration(const CPPGMAstNodePtr& node, Scope* scope,
+                              const Analyzer::SpecFacts& facts,
+                              const CPPGMAstNodePtr& item,
+                              const CPPGMAstNodePtr& initializer,
+                              const string& name, const TypePtr& type);
+
+bool PrepareGlobalDeclaration(const CPPGMAstNodePtr& node, Scope* scope,
+                              const Analyzer::SpecFacts& facts,
+                              const CPPGMAstNodePtr& initializer,
+                              const string& name, const TypePtr& type,
+                              GlobalRecord* record);
+
+void StoreGlobalDeclaration(GlobalRecord& record, const TypePtr& record_value);
 
 bool HasStorageSpecifier(const CPPGMAstNodePtr& node, const string& word) const;
 
@@ -415,6 +434,10 @@ void CollectStringLiterals(const CPPGMAstNodePtr& node, unsigned int braced_dept
 FunctionRecord* FindFunction(const string& qname, const TypePtr& type) const;
 
 GlobalRecord* FindGlobal(const string& qname) const;
+
+GlobalRecord* EnsureStaticMemberStorage(Binding* binding);
+
+void DemandTemplateStaticMembers(const TypePtr& raw_type);
 
 void EnsureThreadLocalGuard(GlobalRecord* object);
 
@@ -661,7 +684,8 @@ string RenderStringGlobal(const string& symbol, const vector<unsigned char>& byt
 
 string RenderGlobal(GlobalRecord& global);
 
-void EmitGlobals(vector<string>& entries);
+void EmitGlobals(vector<string>& entries, size_t begin = 0,
+                bool include_strings = true);
 
 void EmitDeclarations(vector<string>& entries);
 
@@ -789,7 +813,8 @@ bool EmitObjectConstructor(VariablePlan* variable, const TypePtr& object_type,
 bool EmitConstructorAt(const TypePtr& object_type, const string& address,
                        const vector<CPPGMAstNodePtr>& arguments, Scope* scope,
                        bool allow_explicit = true, bool base_entry = false,
-                       bool allow_aggregate = false, bool force_move = false);
+                       bool allow_aggregate = false, bool force_move = false,
+                       bool value_initialization = false);
 
 string EmitTemporaryObjectAddress(const CPPGMAstNodePtr& node, Scope* scope,
                                   const string& prefix);
@@ -895,6 +920,8 @@ ExprInfo Infer(const CPPGMAstNodePtr& node, Scope* scope,
 
 ExprInfo InferUncached(const CPPGMAstNodePtr& node, Scope* scope,
                        const TypePtr& expected);
+
+ExprInfo InferSizeofExpression(const CPPGMAstNodePtr& node, Scope* scope);
 
 ExprInfo InferAllocation(const CPPGMAstNodePtr& node, Scope* scope);
 };

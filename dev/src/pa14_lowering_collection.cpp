@@ -207,7 +207,7 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
 	record->object_root = record->object_root || node->explicit_instantiation;
 	if(node->explicit_instantiation) record->needed = true;
 	record->weak_binding = record->template_instantiation;
-	record->inline_definition = record->inline_definition || HasInline(node);
+	record->inline_definition = record->inline_definition || HasInline(node) || facts.is_constexpr;
 	if(node->template_instantiation) {
 		record->template_primary = node->template_primary;
 		record->template_arguments = node->template_arguments;
@@ -227,6 +227,8 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
     } else record->type = function;
     record->qualified_name = qname;
     record->definition = record->definition || definition;
+    if(definition && facts.is_constexpr && record->member && record->static_member)
+      record->needed = true;
     if(definition) record->node = node;
     record->variadic = function->variadic;
     if(definition) record->unwind_no = record->unwind_no || HasNoexcept(node->children[1]);
@@ -550,4 +552,207 @@ void PA14Lowerer::CollectInheritedConstructors(const TypePtr& raw_owner, Scope* 
     }
   }
 
+void PA14Lowerer::CollectSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* scope)
+{
+    if(!node || node->children.empty()) return;
+    CheckTypeAccess(node->children[0], scope);
+    Analyzer::SpecFacts facts;
+    analyzer_.TypeFromSpecSeq(node->children[0], scope, &facts);
+    CPPGMAstNodePtr list = ChildOfKind(node, "init-declarator-list");
+    if(!list) return;
+    for(size_t i = 0; i < list->children.size(); ++i)
+      CollectSimpleDeclarationItem(node, scope, facts, list->children[i]);
+  }
+
+void PA14Lowerer::CollectSimpleDeclarationItem(const CPPGMAstNodePtr& node,
+                                                Scope* scope,
+                                                const Analyzer::SpecFacts& facts,
+                                                const CPPGMAstNodePtr& item)
+{
+    if(!item || item->children.empty()) return;
+    CPPGMAstNodePtr declarator = item->children[0];
+    CPPGMAstNodePtr initializer = item->children.size() > 1 ? item->children[1] :
+      CPPGMAstNodePtr();
+    TypePtr type = PlannedType(node->children[0], declarator, scope, initializer);
+    if(facts.is_constexpr && type->kind != TYPE_FUNCTION)
+      type = CloneWithCv(type, true, false);
+    if(facts.is_typedef) return;
+    const string name = declarator_name(declarator);
+    if(name.empty()) return;
+    if(type->kind == TYPE_FUNCTION) {
+      if(initializer && !initializer->children.empty() && initializer->children[0] &&
+         initializer->children[0]->kind == "special-initializer" &&
+         initializer->children[0]->value == "delete") return;
+      CPPGMAstNodePtr wrapper(new CPPGMAstNode("function-declaration"));
+      wrapper->children.push_back(node->children[0]);
+      wrapper->children.push_back(declarator);
+      if(item->children.size() > 1) wrapper->children.push_back(item->children[1]);
+      CPPGMAstNodePtr special_initializer = ChildOfKind(initializer, "special-initializer");
+      const bool definition = special_initializer && special_initializer->value == "default";
+      CollectFunction(wrapper, scope, definition);
+      return;
+    }
+    const bool is_extern = HasStorageSpecifier(node, "extern");
+    if(is_extern && item->children.size() < 2) return;
+    CollectGlobalDeclaration(node, scope, facts, item, initializer, name, type);
+  }
+
+bool PA14Lowerer::PrepareGlobalDeclaration(const CPPGMAstNodePtr& node,
+                                           Scope* scope,
+                                           const Analyzer::SpecFacts& facts,
+                                           const CPPGMAstNodePtr& initializer,
+                                           const string& name,
+                                           const TypePtr& type,
+                                           GlobalRecord* record)
+{
+    record->node = node;
+    record->scope = scope;
+    record->type = type;
+    record->qualified_name = qualified_name(scope, name);
+    record->template_instantiation = node->template_instantiation;
+    record->weak_binding = record->template_instantiation;
+    if(name.find("::") != string::npos) {
+      const size_t separator = name.rfind("::");
+      Analyzer::PathTarget owner = analyzer_.ResolvePath(scope, name.substr(0, separator));
+      record->template_owner = owner.binding ? type_value(owner.binding->type) :
+        (owner.scope ? owner.scope->owner_type : TypePtr());
+      if(record->template_owner && record->template_owner->template_specialization)
+        record->template_instantiation = record->weak_binding = true;
+    }
+    record->initializer = initializer;
+    Binding* semantic_binding = scope ? scope->local(name) : 0;
+    const TypePtr record_value = type_value(record->type);
+    Binding* member_binding = semantic_binding;
+    if(record->template_owner && record->template_owner->owned_scope &&
+       name.find("::") != string::npos) {
+      const string member_name = name.substr(name.rfind("::") + 2);
+      vector<Binding*> candidates = DirectBindings(record->template_owner->owned_scope, member_name);
+      for(size_t candidate = 0; candidate < candidates.size(); ++candidate)
+        if(candidates[candidate]->kind == BIND_VARIABLE &&
+           candidates[candidate]->is_member && candidates[candidate]->is_static) {
+          member_binding = candidates[candidate];
+          break;
+        }
+    }
+    const bool deferred_static_integral_storage = node->template_instantiation &&
+      !initializer && member_binding && member_binding->is_member &&
+      member_binding->is_static && member_binding->has_value && record_value &&
+      is_integral_type(record_value);
+    const bool deferred_static_integral_definition = node->template_instantiation &&
+      record->template_owner && initializer && member_binding &&
+      member_binding->is_member && member_binding->is_static &&
+      !member_binding->has_value &&
+      (facts.is_const || facts.is_constexpr) && record_value &&
+      is_integral_type(record_value);
+    const bool generated_integral_constant = !record->template_owner &&
+      node->template_instantiation && (facts.is_const || facts.is_constexpr) &&
+      record_value && (is_integral_type(record_value) ||
+        (record_value->kind == TYPE_FUNDAMENTAL && record_value->name == "bool")) &&
+      semantic_binding && semantic_binding->has_value;
+    const TypePtr record_value_type = type_value(record->type);
+    const bool enum_function_style_initializer = record_value_type &&
+      record_value_type->kind == TYPE_ENUM && record->initializer &&
+      !record->initializer->children.empty() && record->initializer->children[0] &&
+      record->initializer->children[0]->kind == "paren-initializer";
+    if(enum_function_style_initializer)
+      record->object_name = "_Z" + integer_text(static_cast<long long>(name.size())) + name;
+    if(generated_integral_constant || deferred_static_integral_storage ||
+       deferred_static_integral_definition) {
+      if(deferred_static_integral_storage || deferred_static_integral_definition)
+        deferred_static_members_.insert(record->qualified_name);
+      return true;
+    }
+    return false;
+  }
+
+void PA14Lowerer::CollectGlobalDeclaration(const CPPGMAstNodePtr& node,
+                                           Scope* scope,
+                                           const Analyzer::SpecFacts& facts,
+                                           const CPPGMAstNodePtr& item,
+                                           const CPPGMAstNodePtr& initializer,
+                                           const string& name,
+                                           const TypePtr& type)
+{
+    (void)item;
+    GlobalRecord record;
+    if(PrepareGlobalDeclaration(node, scope, facts, initializer, name, type, &record))
+      return;
+    if(!record.initializer && record.template_owner && record.template_owner->owned_scope) {
+      const string member_name = name.substr(name.rfind("::") + 2);
+      for(size_t member = 0; member < record.template_owner->class_members.size(); ++member)
+        if(record.template_owner->class_members[member].name == member_name &&
+           record.template_owner->class_members[member].initializer) {
+          record.initializer = record.template_owner->class_members[member].initializer;
+          break;
+        }
+    }
+    if(record.template_owner && record.initializer && record.template_owner->owned_scope) {
+      const string member_name = name.substr(name.rfind("::") + 2);
+      vector<Binding*> members = DirectBindings(record.template_owner->owned_scope, member_name);
+      long long constant = 0;
+      if(FoldInteger(InitializerExpression(record.initializer), scope, &constant, 0))
+        for(size_t member = 0; member < members.size(); ++member)
+          if(members[member] && members[member]->kind == BIND_VARIABLE &&
+             type_value(members[member]->type) && type_value(members[member]->type)->is_const) {
+            members[member]->constant_value = PA19Convert(
+              PA19IntegralValue::Signed(constant, "long long", 64),
+              PA19Type(TypeText(members[member]->type, true)));
+            members[member]->has_value = true;
+            members[member]->value = PA19Signed(members[member]->constant_value);
+          }
+    }
+    record.declaration = false;
+    record.internal = facts.is_const || facts.is_constexpr || HasStorageSpecifier(node, "static");
+    record.thread_local_storage = HasStorageSpecifier(node, "thread_local");
+    record.dynamic_initializer = false;
+    record.dynamic_finalizer = false;
+    TypePtr value_type = type_value(type);
+    const bool object = value_type &&
+      (value_type->kind == TYPE_CLASS ||
+       (value_type->kind == TYPE_ARRAY && value_type->child &&
+        type_value(value_type->child) && type_value(value_type->child)->kind == TYPE_CLASS));
+    const bool is_extern = HasStorageSpecifier(node, "extern");
+    if(!is_extern && object) {
+      const bool static_member_object = static_cast<bool>(record.template_owner);
+      record.dynamic_initializer = !static_member_object ||
+        HasDefaultConstructionEffects(value_type);
+      record.dynamic_finalizer = HasDestructor(value_type) &&
+        (!static_member_object || DestructorHasEffects(value_type));
+      if(record.dynamic_initializer) needs_init_helper_ = true;
+      if(record.dynamic_finalizer) needs_fini_helper_ = true;
+    }
+    StoreGlobalDeclaration(record, type_value(record.type));
+  }
+
+void PA14Lowerer::StoreGlobalDeclaration(GlobalRecord& record,
+                                         const TypePtr& record_value)
+{
+    const string key = global_key(record.qualified_name);
+    map<string, GlobalRecord*>::iterator found = global_by_key_.find(key);
+    GlobalRecord* stored = 0;
+    if(found == global_by_key_.end()) {
+      globals_.push_back(record);
+      global_by_key_[key] = &globals_.back();
+      stored = &globals_.back();
+    } else {
+      GlobalRecord* prior = found->second;
+      if(record.initializer) prior->initializer = record.initializer;
+      prior->type = record.type;
+      if(record.object_name.size()) prior->object_name = record.object_name;
+      if(record.template_owner) prior->template_owner = record.template_owner;
+      prior->template_instantiation = prior->template_instantiation ||
+        record.template_instantiation;
+      prior->weak_binding = prior->weak_binding || record.weak_binding;
+      prior->declaration = false;
+      prior->internal = prior->internal || record.internal;
+      prior->thread_local_storage = prior->thread_local_storage || record.thread_local_storage;
+      prior->dynamic_initializer = prior->dynamic_initializer || record.dynamic_initializer;
+      prior->dynamic_finalizer = prior->dynamic_finalizer || record.dynamic_finalizer;
+      stored = prior;
+    }
+    if(stored && stored->thread_local_storage && stored->dynamic_initializer)
+      EnsureThreadLocalGuard(stored);
+    if(stored && record_value && record_value->kind == TYPE_CLASS)
+      DemandTemplateStaticMembers(record_value);
+  }
 } // namespace cppgm_pa14_lowering

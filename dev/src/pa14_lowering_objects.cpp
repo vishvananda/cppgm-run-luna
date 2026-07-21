@@ -10,6 +10,24 @@ using namespace std;
 
 namespace cppgm_pa14_lowering {
 
+namespace {
+
+bool HasIntegralTemplateArgument(const TypePtr& raw_type)
+{
+  const TypePtr type = type_value(raw_type);
+  if(!type || !type->template_specialization) return false;
+  for(size_t i = 0; i < type->template_arguments.size(); ++i) {
+    PA19IntegralValue value;
+    if(PA19ParseInteger(type->template_arguments[i], &value) ||
+       PA19DecodeCharacter(type->template_arguments[i], &value)) return true;
+    const string argument = PA19Compact(type->template_arguments[i]);
+    if(argument == "true" || argument == "false") return true;
+  }
+  return false;
+}
+
+} // namespace
+
 PA14Lowerer::Value PA14Lowerer::EmitNewExpression(const CPPGMAstNodePtr& node,
                                                   Scope* scope,
                                                   const TypePtr& expected)
@@ -594,8 +612,10 @@ bool PA14Lowerer::EmitObjectTransferAt(const TypePtr& raw_target,
         CollectImplicitConstructor(constructed, constructed->owned_scope, true);
       const bool allow_aggregate = !arguments.empty() &&
         EnsureAggregateConstructor(constructed);
+      const bool value_initialization = arguments.empty() && HasConstructor(constructed) &&
+        (source->value == "braced-construction" || HasIntegralTemplateArgument(constructed));
       return EmitConstructorAt(target, destination, arguments, scope, allow_explicit,
-        false, allow_aggregate);
+        false, allow_aggregate, false, value_initialization);
     }
     if(!constructed && source->kind == "call-expression") {
       CallChoice choice = ChooseCall(source, scope);

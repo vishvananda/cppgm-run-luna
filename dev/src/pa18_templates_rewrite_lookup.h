@@ -53,8 +53,8 @@
 	{
 		int depth = 0;
 		for(size_t i = open; i < raw.size(); ++i) {
-			if(raw[i] == '<') ++depth;
-			else if(raw[i] == '>') {
+			if(raw[i] == '<' && IsTemplateAngleOpen(raw, i)) ++depth;
+			else if(raw[i] == '>' && IsTemplateAngleClose(raw, i)) {
 				--depth;
 				if(depth == 0) {
 					if(arguments) *arguments = raw.substr(open + 1, i - open - 1);
@@ -63,11 +63,32 @@
 				}
 			}
 		}
+		// PA10's declaration spelling can omit the final `>` when a
+		// less-than expression is used as the first non-type argument.  The
+		// source parser has nevertheless preserved the complete argument text;
+		// treat the end of that spelling as the template range so PA18 can
+		// materialize the declaration normally.
+		if(depth == 1 && open < raw.size()) {
+			if(arguments) *arguments = raw.substr(open + 1);
+			if(close_out) *close_out = raw.size() - 1;
+			return true;
+		}
 		return false;
 	}
 
 	bool TemplateBase(const string& raw, size_t open, size_t* begin, string* base) const
 	{
+		const size_t literal_operator = raw.rfind("operator\"\"", open);
+		if(literal_operator != string::npos && literal_operator + 10 <= open) {
+			bool suffix = literal_operator + 10 < open;
+			for(size_t i = literal_operator + 10; i < open; ++i)
+				if(!IsIdentifierCharacter(raw[i])) suffix = false;
+			if(suffix) {
+				if(begin) *begin = literal_operator;
+				if(base) *base = raw.substr(literal_operator, open - literal_operator);
+				return true;
+			}
+		}
 		size_t end = open;
 		while(end > 0) {
 			const char ch = raw[end - 1];
@@ -101,6 +122,17 @@
 			if(found != definitions_.end()) return &found->second;
 		}
 		return 0;
+	}
+	const TemplateDefinition* FindExplicitFunctionSpecialization(
+		const string& raw_name, const vector<string>& arguments,
+		const string& context) const
+	{
+		const TemplateDefinition* primary = FindDefinition(raw_name, context);
+		if(!primary || primary->class_template) return 0;
+		map<string, TemplateDefinition>::const_iterator found =
+			explicit_function_specializations_.find(
+				PA18ExplicitSpecializationKey(primary->qualified_name, arguments));
+		return found == explicit_function_specializations_.end() ? 0 : &found->second;
 	}
 
 	vector<const TemplateDefinition*> FindFunctionDefinitions(string raw_name,

@@ -168,7 +168,12 @@ inline PA19IntegralValue PA19Convert(const PA19IntegralValue& value,
 	const PA19IntegralType& type)
 {
 	if(!value.known || !type.integral) return PA19IntegralValue();
-	const unsigned long long raw = PA19Raw(value) & PA19Mask(type.bits);
+	unsigned long long raw = PA19Raw(value);
+	// Widening a signed value sign-extends before the destination-width mask;
+	// truncating and unsigned conversions retain the ordinary bit pattern.
+	if(type.bits > value.type.bits && !value.type.is_unsigned)
+		raw = static_cast<unsigned long long>(PA19Signed(value));
+	raw &= PA19Mask(type.bits);
 	if(type.is_unsigned) return PA19IntegralValue::Unsigned(raw, type.name, type.bits);
 	return PA19IntegralValue::Signed(static_cast<long long>(raw), type.name, type.bits);
 }
@@ -212,6 +217,23 @@ inline PA19IntegralValue PA19Binary(const std::string& operation,
 	if(!left_raw.known || !right_raw.known) return PA19IntegralValue();
 	const PA19IntegralValue left = PA19Promote(left_raw);
 	const PA19IntegralValue right = PA19Promote(right_raw);
+	// Shift expressions keep the promoted type of the left operand.  The
+	// right operand is only a shift count; applying the usual arithmetic
+	// conversions to both operands would incorrectly turn `1LL << n` into an
+	// unsigned-long result whenever `n` came from sizeof.
+	if(operation == "<<" || operation == ">>") {
+		const unsigned long long shift = PA19Raw(right);
+		const PA19IntegralType type = left.type;
+		if(!type.integral || shift >= type.bits) return PA19IntegralValue();
+		const unsigned long long raw = PA19Raw(left);
+		const unsigned long long shifted = operation == "<<" ?
+			(raw << shift) & PA19Mask(type.bits) :
+			(type.is_unsigned ? raw >> shift :
+				static_cast<unsigned long long>(PA19Signed(left) >> shift));
+		return type.is_unsigned ?
+			PA19IntegralValue::Unsigned(shifted, type.name, type.bits) :
+			PA19IntegralValue::Signed(static_cast<long long>(shifted), type.name, type.bits);
+	}
 	const PA19IntegralType common = PA19CommonType(left, right);
 	if(!common.integral) return PA19IntegralValue();
 	const PA19IntegralValue a = PA19Convert(left, common);
@@ -235,15 +257,6 @@ inline PA19IntegralValue PA19Binary(const std::string& operation,
 	if(operation == "&") return common.is_unsigned ? PA19IntegralValue::Unsigned(ar & br, common.name, common.bits) : PA19IntegralValue::Signed(static_cast<long long>(ar & br), common.name, common.bits);
 	if(operation == "|") return common.is_unsigned ? PA19IntegralValue::Unsigned(ar | br, common.name, common.bits) : PA19IntegralValue::Signed(static_cast<long long>(ar | br), common.name, common.bits);
 	if(operation == "^") return common.is_unsigned ? PA19IntegralValue::Unsigned(ar ^ br, common.name, common.bits) : PA19IntegralValue::Signed(static_cast<long long>(ar ^ br), common.name, common.bits);
-	if(operation == "<<" || operation == ">>") {
-		const unsigned long long shift = br;
-		if(shift >= common.bits) return PA19IntegralValue();
-		unsigned long long shifted = operation == "<<" ? (ar << shift) :
-			(common.is_unsigned ? (ar >> shift) : static_cast<unsigned long long>(as >> shift));
-		shifted &= result_mask;
-		return common.is_unsigned ? PA19IntegralValue::Unsigned(shifted, common.name, common.bits) :
-			PA19IntegralValue::Signed(static_cast<long long>(shifted), common.name, common.bits);
-	}
 	unsigned long long raw = 0;
 	if(operation == "+") raw = ar + br;
 	else if(operation == "-") raw = ar - br;
@@ -266,6 +279,9 @@ inline bool PA19ParseInteger(const std::string& raw, PA19IntegralValue* result)
 	std::string value = PA19Trim(raw);
 	if(value.empty()) return false;
 	while(!value.empty() && value[value.size() - 1] == ';') value.erase(value.size() - 1);
+	const bool negative = !value.empty() && value[0] == '-';
+	const bool positive = !value.empty() && value[0] == '+';
+	if(negative || positive) value.erase(0, 1);
 	std::string suffix;
 	while(!value.empty() && (value[value.size() - 1] == 'u' || value[value.size() - 1] == 'U' ||
 		value[value.size() - 1] == 'l' || value[value.size() - 1] == 'L')) {
@@ -304,8 +320,9 @@ inline bool PA19ParseInteger(const std::string& raw, PA19IntegralValue* result)
 	else if(base != 10 && number > 0x7fffffffULL) type = number <= 0xffffffffULL ? "unsigned int" : "unsigned long long";
 	else if(number > 0x7fffffffULL) { bits = 64; type = "long long"; }
 	else type = "int";
-	if(uns) *result = PA19IntegralValue::Unsigned(number, type, bits);
-	else *result = PA19IntegralValue::Signed(static_cast<long long>(number), type, bits);
+	if(uns) *result = PA19IntegralValue::Unsigned(negative ? 0ULL - number : number, type, bits);
+	else *result = PA19IntegralValue::Signed(negative ? -static_cast<long long>(number) :
+		static_cast<long long>(number), type, bits);
 	return true;
 }
 
@@ -438,13 +455,14 @@ private:
 		Skip();
 		if(text_.compare(position_, 2, "||") == 0 || text_.compare(position_, 3, "or ") == 0) return 1;
 		if(text_.compare(position_, 2, "&&") == 0 || text_.compare(position_, 4, "and ") == 0) return 2;
-		if(text_.compare(position_, 2, "|") == 0) return 3;
+		if(text_.compare(position_, 1, "|") == 0) return 3;
 		if(text_.compare(position_, 1, "^") == 0) return 4;
 		if(text_.compare(position_, 1, "&") == 0) return 5;
 		if(text_.compare(position_, 2, "==") == 0 || text_.compare(position_, 2, "!=") == 0) return 6;
-		if(text_.compare(position_, 2, "<=") == 0 || text_.compare(position_, 2, ">=") == 0 ||
-			text_.compare(position_, 1, "<") == 0 || text_.compare(position_, 1, ">") == 0) return 7;
+		if(text_.compare(position_, 2, "<=") == 0 || text_.compare(position_, 2, ">=") == 0) return 7;
+		// Shift tokens must win over the single-character relational check.
 		if(text_.compare(position_, 2, "<<") == 0 || text_.compare(position_, 2, ">>") == 0) return 8;
+		if(text_.compare(position_, 1, "<") == 0 || text_.compare(position_, 1, ">") == 0) return 7;
 		if(text_.compare(position_, 1, "+") == 0 || text_.compare(position_, 1, "-") == 0) return 9;
 		if(text_.compare(position_, 1, "*") == 0 || text_.compare(position_, 1, "/") == 0 ||
 			text_.compare(position_, 1, "%") == 0) return 10;
@@ -553,8 +571,24 @@ private:
 			while(position_ < text_.size() && (std::isalnum(static_cast<unsigned char>(text_[position_])) || text_[position_] == 'x' || text_[position_] == 'X')) ++position_;
 			return PA19ParseInteger(text_.substr(start, position_ - start), result);
 		}
-		const std::string name = ReadIdentifier();
+		std::string name = ReadIdentifier();
 		if(name.empty()) return false;
+		// The AST can spell a functional cast as `long long int(value)` or
+		// `unsigned int(value)`.  ReadIdentifier deliberately stops at spaces,
+		// so recover the complete fundamental type here while preserving the
+		// cursor when the following words are not part of a cast type.
+		for(;;) {
+			const size_t before = position_;
+			const std::string next = ReadIdentifier();
+			if(next.empty()) { position_ = before; break; }
+			const std::string candidate = name + " " + next;
+			if(!PA19Type(candidate).integral) { position_ = before; break; }
+			name = candidate;
+		}
+		return ParseNamedPrimary(name, result);
+	}
+	bool ParseNamedPrimary(const std::string& name, PA19IntegralValue* result)
+	{
 		const std::string bare = name.compare(0, 2, "::") == 0 ? name.substr(2) : name;
 		if(bare == "true") { *result = PA19IntegralValue::Signed(1, "bool", 1); return true; }
 		if(bare == "false") { *result = PA19IntegralValue::Signed(0, "bool", 1); return true; }
@@ -591,7 +625,16 @@ private:
 		if((bare == "static_cast" || bare == "const_cast" || bare == "reinterpret_cast" || bare == "dynamic_cast") && Take("<")) {
 			const size_t begin = position_; int depth = 1; while(position_ < text_.size() && depth) { if(text_[position_] == '<') ++depth; else if(text_[position_] == '>') --depth; ++position_; } if(depth || position_ == 0) return false; std::string target = PA19Compact(text_.substr(begin, position_ - begin - 1)); std::map<std::string,std::string>::const_iterator alias = type_aliases_.find(target); if(alias != type_aliases_.end()) target = alias->second; if(!Take("(")) return false; PA19IntegralValue operand; if(!ParseConditional(&operand) || !Take(")")) return false; const PA19IntegralType type = PA19Type(target); *result = PA19Convert(operand, type); return result->known;
 		}
-		if(Take("(")) { PA19IntegralValue operand; if(!ParseConditional(&operand) || !Take(")")) return false; const PA19IntegralType type = PA19Type(name); if(type.integral) { *result = PA19Convert(operand, type); return true; } return false; }
+		if(Take("(")) {
+			PA19IntegralValue operand;
+			if(!ParseConditional(&operand) || !Take(")")) return false;
+			std::string cast_name = name;
+			std::map<std::string,std::string>::const_iterator alias = type_aliases_.find(cast_name);
+			if(alias != type_aliases_.end()) cast_name = alias->second;
+			const PA19IntegralType type = PA19Type(cast_name);
+			if(type.integral) { *result = PA19Convert(operand, type); return true; }
+			return false;
+		}
 		std::string substituted = name;
 		for(std::map<std::string,std::string>::const_iterator it = substitutions_.begin(); it != substitutions_.end(); ++it) {
 			std::string rebuilt;
@@ -599,9 +642,36 @@ private:
 			substituted = rebuilt;
 		}
 		if(substituted.compare(0, 2, "::") == 0) substituted.erase(0, 2);
+		// In the supported metaprogramming subset, conversion of an
+		// integral-constant temporary (`B{}`) is its typed `value` member.
+		// The expander has already materialized that member by this point.
+		if(Take("{")) {
+			if(!Take("}")) return false;
+			std::map<std::string, PA19IntegralValue>::const_iterator object_value =
+				constants_.find(substituted + "::value");
+			if(object_value == constants_.end())
+				object_value = constants_.find(name + "::value");
+			if(object_value == constants_.end()) return false;
+			*result = object_value->second;
+			return result->known;
+		}
 		std::map<std::string, PA19IntegralValue>::const_iterator found = constants_.find(substituted);
-		if(found == constants_.end()) found = constants_.find(name);
-		if(found == constants_.end()) { const size_t separator = substituted.rfind("::"); if(separator != std::string::npos) found = constants_.find(substituted.substr(separator + 2)); }
+		// A qualified lookup must not silently resolve to an unrelated
+		// unqualified member with the same spelling.  In particular, a
+		// generated trait may have a `value` member whose result differs from
+		// another integral_constant already in the table.
+		if(found == constants_.end() && substituted.find("::") == std::string::npos &&
+			name.find("::") == std::string::npos)
+			found = constants_.find(name);
+		// Keep the legacy unqualified recovery for named constants such as
+		// `const_min`; generated trait `::value` members are deliberately
+		// excluded so inherited-value resolution can select the correct base.
+		if(found == constants_.end()) {
+			const size_t separator = substituted.rfind("::");
+			if(separator != std::string::npos &&
+				substituted.substr(separator + 2) != "value")
+				found = constants_.find(substituted.substr(separator + 2));
+		}
 		if(found == constants_.end()) return false;
 		*result = found->second;
 		return result->known;

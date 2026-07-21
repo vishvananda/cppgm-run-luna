@@ -45,6 +45,8 @@ bool SameLowFunctionShape(const TypePtr& left, const TypePtr& right)
 string PA14Lowerer::TypeMangledName(const TypePtr& type) const
 {
   const string name = TypeQualifiedName(type);
+  if(type && type->template_specialization && !type->template_primary.empty())
+    return template_type_mangled_name(type);
   if (name == "std::ios_base") return "St8ios_base";
   vector<string> components;
   size_t begin = 0;
@@ -366,9 +368,18 @@ PA14Lowerer::FunctionRecord* PA14Lowerer::EnsureVirtualDestructor(const TypePtr&
     entry->needed = true;
     entry->unwind_no = complete->unwind_no;
     entry->special_initializer = complete->special_initializer;
+    entry->template_instantiation = complete->template_instantiation;
+    entry->inline_definition = complete->inline_definition;
+    entry->weak_binding = complete->weak_binding;
+    entry->template_primary = complete->template_primary;
+    entry->template_arguments = complete->template_arguments;
     return entry;
   }
-  if (!owner->direct_base && !BaseEntryFor(complete)) {
+  // The materialized template-vtable ABI used by PA19 has no standalone D2
+  // body for a class without a base; its D2 alias points at the complete
+  // destructor.  Keep the PA17 base-entry model for ordinary classes and
+  // for template classes that actually have a base subobject.
+  if (!owner->direct_base && !owner->template_specialization && !BaseEntryFor(complete)) {
     const string qname = complete->qualified_name + "__base_entry";
     const string key = function_key(qname, complete->source_type);
     if (function_by_key_.find(key) == function_by_key_.end()) {

@@ -82,9 +82,20 @@ PA14Lowerer::Value PA14Lowerer::EmitIdentifier(const CPPGMAstNodePtr& node, Scop
       }
     }
     if(!binding && candidates.size() == 1) binding = candidates[0];
-    if(!binding) throw logic_error("ambiguous identifier during lowering");
-    if(!IsAccessible(binding, scope)) throw logic_error("inaccessible member");
-    if(binding->kind == BIND_ENUMERATOR) {
+	if(!binding) throw logic_error("ambiguous identifier during lowering");
+	if(!IsAccessible(binding, scope)) throw logic_error("inaccessible member");
+	if(binding->kind == BIND_VARIABLE && binding->has_value && binding->declaration &&
+		binding->declaration->template_instantiation &&
+		is_integral_type(type_value(binding->type))) {
+		if(binding->is_member && binding->is_static)
+			EnsureStaticMemberStorage(binding);
+		result.type = binding->type;
+		result.operand = integer_text(binding->value);
+		result.known_constant = true;
+		result.constant = binding->value;
+		return result;
+	}
+	if(binding->kind == BIND_ENUMERATOR) {
       result.type = binding->type;
       result.operand = integer_text(binding->value);
       result.known_constant = binding->has_value;
@@ -103,13 +114,27 @@ PA14Lowerer::Value PA14Lowerer::EmitIdentifier(const CPPGMAstNodePtr& node, Scop
       }
       result.type = binding->type;
       if(binding->is_static) {
+        GlobalRecord* demanded_global = EnsureStaticMemberStorage(binding);
         if(binding->has_value) {
           result.known_constant = true;
           result.constant = binding->value;
           result.operand = integer_text(result.constant);
           return result;
         }
-        GlobalRecord* global_member = FindGlobal(binding->qualified_name);
+        const TypePtr static_value_type = type_value(binding->type);
+        if(demanded_global && demanded_global->initializer && static_value_type &&
+            static_value_type->is_const) {
+          long long constant = 0;
+          if(FoldInteger(InitializerExpression(demanded_global->initializer), scope,
+              &constant, 0)) {
+            result.known_constant = true;
+            result.constant = constant;
+            result.operand = integer_text(constant);
+            return result;
+          }
+        }
+        GlobalRecord* global_member = demanded_global ? demanded_global :
+          FindGlobal(binding->qualified_name);
         if(!global_member) throw logic_error("unknown static member during lowering");
         result.type = global_member->type;
         result.operand = global_member->type->kind == TYPE_ARRAY ?
@@ -340,6 +365,28 @@ bool PA14Lowerer::ClassValueNeedsIndirect(const TypePtr& raw_type) const
     TypePtr type = type_value(raw_type);
     if(!type || type->kind != TYPE_CLASS) return false;
     if(type->is_union) return true;
+    // A materialized class specialization carrying another specialization as
+    // a template argument has ABI-sensitive nested object state.  Preserve
+    // the indirect-result boundary instead of classifying the outer 16-byte
+    // shell as a scalar aggregate.
+    if(type->template_specialization) {
+      bool nested_argument = false;
+      for(size_t argument = 0; argument < type->template_arguments.size(); ++argument)
+        if(type->template_arguments[argument].find('<') != string::npos) {
+          nested_argument = true;
+          break;
+        }
+          if(nested_argument)
+        for(size_t member = 0; member < type->class_members.size(); ++member)
+          if(!type->class_members[member].is_static && type->class_members[member].type) {
+            const TypePtr member_type = type->class_members[member].type;
+            const TypePtr member_value = type_value(member_type);
+            if(type_is_reference(member_type) && member_value &&
+               member_value->kind == TYPE_CLASS &&
+               member_value->template_specialization)
+              return true;
+          }
+    }
     if(type_size(type) > 16) return true;
     bool base_only = type->direct_base != 0;
     for(size_t i = 0; i < type->class_members.size(); ++i) {

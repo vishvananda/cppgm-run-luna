@@ -210,7 +210,7 @@ CPPGMAstNodePtr Parser::ParseBaseClause()
 			return CPPGMAstNodePtr();
 		}
 		Add(base, Node("base-name", name));
-		Take("...");
+		if (Take("...")) Add(base, Node("pack-expansion", "..."));
 		Add(result, base);
 		if (!Take(",")) break;
 	}
@@ -599,6 +599,12 @@ CPPGMAstNodePtr Parser::ParseTypeParameter()
 		Add(result, Node("identifier", name));
 		RegisterType(name);
 	}
+	if (!Is("=") && !Is(",") && !Is(">") &&
+		Peek().kind != AST_RSHIFT_1 && Peek().kind != AST_RSHIFT_2)
+	{
+		Restore(mark);
+		return CPPGMAstNodePtr();
+	}
 	if (Take("="))
 	{
 		CPPGMAstNodePtr value = ParseTypeId();
@@ -646,6 +652,12 @@ CPPGMAstNodePtr Parser::ParseTemplateArgument()
 		CPPGMAstNodePtr expression = ParseAssignmentExpression();
 		if (expression && (Is(",") || Is(">") || Peek().kind == AST_RSHIFT_1 ||
 			Peek().kind == AST_RSHIFT_2)) return expression;
+		if (expression && Take("..."))
+		{
+			CPPGMAstNodePtr expansion = Node("pack-expansion-expression");
+			Add(expansion, expression);
+			return expansion;
+		}
 		Restore(mark);
 	}
 	if (IsTypeStart())
@@ -653,6 +665,12 @@ CPPGMAstNodePtr Parser::ParseTemplateArgument()
 		CPPGMAstNodePtr type = ParseTypeId();
 		if (type && (Is(",") || Is(">") || Peek().kind == AST_RSHIFT_1 ||
 			Peek().kind == AST_RSHIFT_2)) return type;
+		if (type && Take("..."))
+		{
+			CPPGMAstNodePtr expansion = Node("pack-expansion");
+			Add(expansion, type);
+			return expansion;
+		}
 		Restore(mark);
 	}
 	return ParseAssignmentExpression();

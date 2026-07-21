@@ -27,6 +27,7 @@ void PA14Lowerer::Lower(ostream& out)
     vector<string> entries;
     EmitGlobals(entries);
     EmitPolymorphicGlobals(entries);
+    const size_t initial_global_count = globals_.size();
     MarkHiddenFriendDependencies();
     // Emit non-template ordinary roots first.  Calls made while lowering
     // those roots establish the demand-driven set of materialized template
@@ -39,6 +40,62 @@ void PA14Lowerer::Lower(ostream& out)
          (functions_[i].hidden_friend && !functions_[i].needed)) continue;
       entries.push_back(EmitFunction(functions_[i]));
       functions_[i].emitted = true;
+    }
+    // A template object constructed directly by an ordinary root is a
+    // dependency of that root, not of a later generated function.  Emit its
+    // needed constructor at the demand frontier so the LowIR order reflects
+    // the call dependency (construct the pack object before lowering the
+    // function that expands its uses).  Constructors demanded transitively by
+    // generated functions remain in the member fixed-point below.
+    bool added_root_member = true;
+    while(added_root_member) {
+      added_root_member = false;
+      for(size_t i = 0; i < functions_.size(); ++i) {
+        FunctionRecord& function = functions_[i];
+        if(!function.definition || !function.member || !function.constructor ||
+           !function.needed || function.emitted || !function.template_instantiation)
+          continue;
+        entries.push_back(EmitFunction(function));
+        function.emitted = true;
+        added_root_member = true;
+      }
+    }
+    const auto is_nested_reference_template_owner = [](const FunctionRecord& function) {
+      const TypePtr owner = type_value(function.member_owner);
+      if(!owner || !owner->template_specialization) return false;
+      bool nested_argument = false;
+      for(size_t argument = 0; argument < owner->template_arguments.size(); ++argument)
+        if(owner->template_arguments[argument].find('<') != string::npos) {
+          nested_argument = true;
+          break;
+        }
+      if(!nested_argument) return false;
+      for(size_t member = 0; member < owner->class_members.size(); ++member) {
+        const ClassMemberInfo& field = owner->class_members[member];
+        if(field.is_static || !field.type || !type_is_reference(field.type)) continue;
+        const TypePtr value = type_value(field.type);
+        if(value && value->kind == TYPE_CLASS && value->template_specialization)
+          return true;
+      }
+      return false;
+    };
+    // A call from an ordinary root can demand a nested template member
+    // operation before the generated free-template wrappers are lowered.
+    // Keep this frontier limited to the ABI-sensitive nested-reference
+    // specialization shape; broad member pre-emission changes the ordering of
+    // unrelated earlier-PA template functions.
+    bool added_root_member_operation = true;
+    while(added_root_member_operation) {
+      added_root_member_operation = false;
+      for(size_t i = 0; i < functions_.size(); ++i) {
+        FunctionRecord& function = functions_[i];
+        if(!function.definition || !function.member || function.constructor ||
+           !function.needed || function.emitted || !function.template_instantiation ||
+           !is_nested_reference_template_owner(function)) continue;
+        entries.push_back(EmitFunction(function));
+        function.emitted = true;
+        added_root_member_operation = true;
+      }
     }
     bool added_ordinary = true;
     while(added_ordinary) {
@@ -194,6 +251,9 @@ void PA14Lowerer::Lower(ostream& out)
       base_object.replace(constructor, 2, "C2");
       entries.push_back("alias object " + base_object + " = @" + function.symbol);
     }
+    vector<string> globals;
+	EmitGlobals(globals, initial_global_count, false);
+    entries.insert(entries.begin(), globals.begin(), globals.end());
     vector<string> declarations;
     EmitDeclarations(declarations);
     entries.insert(entries.begin(), declarations.begin(), declarations.end());

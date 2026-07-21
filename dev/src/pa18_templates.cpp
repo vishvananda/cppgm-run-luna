@@ -1,7 +1,7 @@
-#include <iostream>
-
 #include "pa18_templates_collection.h"
 #include "pa18_templates_rewrite.h"
+
+using namespace pa18_templates_internal;
 
 namespace {
 string OrderingDeclaredName(const CPPGMAstNodePtr& node)
@@ -40,6 +40,9 @@ bool MentionsQualifiedGeneratedType(const CPPGMAstNodePtr& node,
 bool NeedsPA18Expansion(const CPPGMAstNodePtr& node)
 {
 	if(!node) return false;
+	if(node->kind == "literal" && !node->value.empty() &&
+		isdigit(static_cast<unsigned char>(node->value[0])) &&
+		node->value.find('_') != string::npos) return true;
 	if(node->kind == "template-declaration" ||
 		node->kind == "explicit-instantiation-declaration") return true;
 	if((node->kind == "id-expression" || node->kind == "decl-specifier" ||
@@ -52,6 +55,91 @@ bool NeedsPA18Expansion(const CPPGMAstNodePtr& node)
 	return false;
 }
 
+}
+
+namespace pa18_templates_internal {
+
+size_t PA18TemplateExpander::EstimateTypeSize(string raw, const string& context) const
+{
+	raw = CanonicalSpelling(raw);
+	while(raw.compare(0, 8, "typename") == 0 &&
+		(raw.size() == 8 || isspace(static_cast<unsigned char>(raw[8]))))
+		raw = CanonicalSpelling(raw.substr(8));
+	while(raw.compare(0, 6, "const ") == 0 ||
+		raw.compare(0, 9, "volatile ") == 0) {
+		raw = CanonicalSpelling(raw.substr(raw.find(' ') + 1));
+	}
+	const size_t array_open = raw.find('[');
+	if(array_open != string::npos) {
+		const size_t array_close = raw.find(']', array_open);
+		if(array_close != string::npos) {
+			const long count = strtol(raw.substr(array_open + 1,
+				array_close - array_open - 1).c_str(), 0, 10);
+			if(count >= 0) return EstimateTypeSize(raw.substr(0, array_open), context) *
+				static_cast<size_t>(count);
+		}
+	}
+	if(!raw.empty() && (raw[raw.size() - 1] == '*' || raw[raw.size() - 1] == '&')) return 8;
+	const PA19IntegralType fundamental = PA19Type(raw);
+	if(fundamental.integral) return fundamental.bits <= 8 ? 1 :
+		fundamental.bits <= 16 ? 2 : fundamental.bits <= 32 ? 4 : 8;
+	map<string, string>::const_iterator alias = type_aliases_.find(raw);
+	if(alias != type_aliases_.end() && alias->second != raw)
+		return EstimateTypeSize(alias->second, context);
+	map<string, size_t>::const_iterator direct = constant_type_sizes_.find(raw);
+	if(direct != constant_type_sizes_.end()) return direct->second;
+	for(string current = context; ; ) {
+		const string candidate = JoinPath(current, raw);
+		map<string, size_t>::const_iterator found = constant_type_sizes_.find(candidate);
+		if(found != constant_type_sizes_.end()) return found->second;
+		if(current.empty()) break;
+		const size_t separator = current.rfind("::");
+		if(separator == string::npos) current.clear();
+		else current.erase(separator);
+	}
+	return 0;
+}
+
+void PA18TemplateExpander::RecordClassTypeSize(const CPPGMAstNodePtr& node,
+	const string& context, const string& class_path)
+{
+	if(!node || (node->kind != "class-specifier" &&
+		node->kind != "class-forward-declaration")) return;
+	size_t offset = 0;
+	size_t alignment = 1;
+	for(size_t i = 0; i < node->children.size(); ++i) {
+		const CPPGMAstNodePtr child = node->children[i];
+		if(!child || child->kind != "simple-declaration" || child->children.empty()) continue;
+		const string specifiers = SpellNode(child->children[0]);
+		if(specifiers.find("typedef") != string::npos ||
+			specifiers.find("static") != string::npos) continue;
+		const string base = NodeTypeSpelling(child->children[0]);
+		const CPPGMAstNodePtr list = ChildOfKindLocal(child, "init-declarator-list");
+		if(!list) continue;
+		for(size_t j = 0; j < list->children.size(); ++j) {
+			const CPPGMAstNodePtr item = list->children[j];
+			if(!item || item->children.empty()) continue;
+			const CPPGMAstNodePtr declarator = item->children[0];
+			if(DescendantOfKind(declarator, "parameter-clause")) continue;
+			const string spelling = base + DeclaratorSuffix(declarator) +
+				DeclaratorArraySuffix(declarator);
+			const size_t size = EstimateTypeSize(spelling, class_path);
+			if(!size) continue;
+			const size_t member_alignment = size > 8 ? 8 : size;
+			alignment = max(alignment, member_alignment);
+			offset = (offset + member_alignment - 1) / member_alignment * member_alignment;
+			offset += size;
+		}
+	}
+	if(!offset) offset = 1;
+	offset = (offset + alignment - 1) / alignment * alignment;
+	constant_type_sizes_[class_path] = offset;
+	constant_type_alignments_[class_path] = alignment;
+	const string short_name = LastComponent(class_path);
+	if(constant_type_sizes_.find(short_name) == constant_type_sizes_.end()) {
+		constant_type_sizes_[short_name] = offset;
+		constant_type_alignments_[short_name] = alignment;
+	}
 }
 
 // Type spelling and alias helpers live out of line to keep the collection
@@ -584,26 +672,51 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 				explicit_definition = FindDefinition(base, context);
 			if(explicit_definition && !explicit_definition->class_template) {
 				vector<string> explicit_args = SplitTemplateArguments(argument_text);
+				map<string, string> explicit_substitutions = substitutions;
+				for(map<string, PA19IntegralValue>::const_iterator integral =
+					active_integral_substitutions_.begin();
+					integral != active_integral_substitutions_.end(); ++integral)
+					if(integral->second.known)
+						explicit_substitutions[integral->first] =
+							IntegralValueSpelling(integral->second);
 				for(size_t i = 0; i < explicit_args.size(); ++i) {
 					explicit_args[i] = NormalizeTypeArgument(RewriteText(
-						explicit_args[i], context, substitutions, 0));
+						explicit_args[i], context, explicit_substitutions, 0));
 					explicit_args[i] = NormalizeTypeArgument(ReplaceIdentifiers(
-						explicit_args[i], substitutions));
+						explicit_args[i], explicit_substitutions));
 					explicit_args[i] = ResolveAlias(explicit_args[i], context);
 					explicit_args[i] = NormalizeTypeArgument(RewriteText(
-						explicit_args[i], context, substitutions, 0));
+						explicit_args[i], context, explicit_substitutions, 0));
 					explicit_args[i] = ResolveAlias(explicit_args[i], context);
 					explicit_args[i] = QualifyTypeArgument(explicit_args[i], context,
 						explicit_definition->owner);
 				}
+				const TemplateDefinition* explicit_specialization =
+					FindExplicitFunctionSpecialization(base, explicit_args, context);
+				if(explicit_specialization) explicit_definition = explicit_specialization;
 				vector<string> complete_args;
-				bool complete = explicit_args.size() == explicit_definition->parameters.size();
+				bool has_parameter_pack = false;
+				size_t fixed_template_parameters = 0;
+				for(size_t parameter = 0; parameter < explicit_definition->parameters.size(); ++parameter)
+					if(explicit_definition->parameters[parameter].pack)
+						has_parameter_pack = true;
+					else ++fixed_template_parameters;
+				// Explicit arguments fill a trailing pack only once at least one
+				// element beyond the fixed prefix was written.  With just the
+				// fixed prefix (`construct<T>(args...)`), the function arguments
+				// still deduce the remaining pack.
+				const bool explicit_pack_elements = has_parameter_pack &&
+					explicit_args.size() > fixed_template_parameters;
+				bool complete = explicit_pack_elements ||
+					(!has_parameter_pack && explicit_args.size() == explicit_definition->parameters.size());
 				if(complete) complete_args = explicit_args;
 				else if(explicit_args.size() < explicit_definition->parameters.size())
 					complete = InferFunctionArguments(*explicit_definition, input,
 						&complete_args, substitutions, context, &explicit_args);
 				if(complete) {
 					const string local_name = Instantiate(*explicit_definition, complete_args, context);
+					result->template_primary = explicit_definition->qualified_name;
+					result->template_arguments = complete_args;
 					const string qualifier = PrefixComponent(base);
 					CPPGMAstNodePtr callee(new CPPGMAstNode("id-expression",
 						qualifier.empty() ? local_name : qualifier + "::" + local_name));
@@ -630,18 +743,32 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 		result_callee = result_callee->children[0];
 		result->children[0] = result_callee;
 	}
+	// A constructor's function-pointer parameter supplies the expected
+	// signature for an otherwise overloaded function template argument.  The
+	// class specialization has already been rewritten at this point, so use
+	// its concrete constructor declaration before ordinary call deduction.
+	ResolveClassConstructorFunctionArguments(result, context);
 	if(result_callee && result_callee->kind == "id-expression" &&
 		result_callee->value.find('<') == string::npos) {
 		const string callee_name = result_callee->value;
 		const vector<const TemplateDefinition*> definitions =
 			FindFunctionDefinitions(callee_name, context);
-		if(!HasExactOrdinaryMatch(result, callee_name, substitutions, context))
+		if(!HasMaterializedMemberFunction(callee_name, context) &&
+			!HasExactOrdinaryMatch(result, callee_name, substitutions, context))
 			for(size_t candidate = 0; candidate < definitions.size(); ++candidate) {
 				const TemplateDefinition* definition = definitions[candidate];
 				vector<string> inferred;
-				if(!InferFunctionArguments(*definition, result, &inferred,
-					substitutions, context)) continue;
-				const string local_name = Instantiate(*definition, inferred, context);
+				map<string, vector<string> > inferred_pack_values;
+				const bool inferred_ok = InferFunctionArguments(*definition, result, &inferred,
+					substitutions, context, 0, &inferred_pack_values);
+				if(!inferred_ok) continue;
+				const TemplateDefinition* selected_definition =
+					FindExplicitFunctionSpecialization(definition->qualified_name, inferred, context);
+				if(!selected_definition) selected_definition = definition;
+				const string local_name = Instantiate(*selected_definition, inferred, context, false,
+					&inferred_pack_values);
+				result->template_primary = definition->qualified_name;
+				result->template_arguments = inferred;
 				const string qualifier = GeneratedFunctionQualifier(*definition,
 					callee_name, context);
 				result_callee->value = qualifier.empty() ? local_name : qualifier +
@@ -828,6 +955,7 @@ void PA18TemplateExpander::InsertGenerated(vector<CPPGMAstNodePtr>* children,
 	map<string, vector<CPPGMAstNodePtr> >::iterator found = generated_by_owner_.find(owner);
 	if(found == generated_by_owner_.end() || found->second.empty()) return;
 	vector<CPPGMAstNodePtr> generated_classes;
+	vector<CPPGMAstNodePtr> generated_variables;
 	vector<CPPGMAstNodePtr> generated_functions;
 	for(size_t i = 0; i < found->second.size(); ++i) {
 		const CPPGMAstNodePtr& generated = found->second[i];
@@ -835,6 +963,7 @@ void PA18TemplateExpander::InsertGenerated(vector<CPPGMAstNodePtr>* children,
 		if(generated->kind == "class-specifier" ||
 			generated->kind == "class-forward-declaration" ||
 			generated->kind == "alias-declaration") generated_classes.push_back(generated);
+		else if(generated->kind == "simple-declaration") generated_variables.push_back(generated);
 		else generated_functions.push_back(generated);
 	}
 	generated_classes = OrderGeneratedClasses(generated_classes);
@@ -932,6 +1061,19 @@ void PA18TemplateExpander::InsertGenerated(vector<CPPGMAstNodePtr>* children,
 	if(!generated_functions.empty())
 		children->insert(children->begin() + function_position,
 			generated_functions.begin(), generated_functions.end());
+	if(!generated_variables.empty()) {
+		size_t variable_position = children->size();
+		for(size_t i = 0; i < children->size(); ++i) {
+			const string& kind = (*children)[i]->kind;
+			if(kind == "static-assert-declaration" || kind == "function-definition" ||
+				kind == "special-member-definition") {
+				variable_position = i;
+				break;
+			}
+		}
+		children->insert(children->begin() + variable_position,
+			generated_variables.begin(), generated_variables.end());
+	}
 }
 
 void PA18TemplateExpander::InjectGenerated(const CPPGMAstNodePtr& node,
@@ -1089,12 +1231,15 @@ void PA18TemplateExpander::InjectGenerated(const CPPGMAstNodePtr& node,
 		InjectGenerated(node->children[i], context, lexical_context);
 }
 
+} // namespace pa18_templates_internal
+
 vector<CPPGMAstNodePtr> ExpandPA18Templates(const vector<CPPGMAstNodePtr>& translation_units)
 {
 	for(size_t i = 0; i < translation_units.size(); ++i)
 		if(NeedsPA18Expansion(translation_units[i])) {
 			PA18TemplateExpander expander;
-			return expander.Run(translation_units);
+			const vector<CPPGMAstNodePtr> result = expander.Run(translation_units);
+			return result;
 		}
 	return translation_units;
 }

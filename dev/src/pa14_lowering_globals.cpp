@@ -224,6 +224,11 @@ bool PA14Lowerer::FoldInteger(const CPPGMAstNodePtr& node, Scope* scope,
       if(result) *result = value;
       return true;
     }
+    if(node->kind == "sizeof-pack-expression") {
+      if(type) *type = Fundamental("unsigned long int");
+      if(result) *result = node->value.empty() ? 0 : atoll(node->value.c_str());
+      return true;
+    }
     if(node->kind == "sizeof-expression" || node->kind == "type-trait-expression") {
       TypePtr target;
       if(node->children.empty()) return false;
@@ -328,6 +333,8 @@ PA14Lowerer::AddressInit PA14Lowerer::StaticAddress(const CPPGMAstNodePtr& expre
         return result;
       }
       GlobalRecord* global = FindGlobal(binding->qualified_name);
+      if(!global && binding->is_member && binding->is_static)
+        global = EnsureStaticMemberStorage(binding);
       if(global) {
         result.valid = true;
         result.symbol = global->symbol;
@@ -386,6 +393,16 @@ string PA14Lowerer::RenderGlobal(GlobalRecord& global)
     CPPGMAstNodePtr expression = InitializerExpression(global.initializer);
     ostringstream out;
     TypePtr value_type = type_value(type);
+    const bool enum_function_style_initializer = value_type &&
+      value_type->kind == TYPE_ENUM && global.initializer &&
+      !global.initializer->children.empty() && global.initializer->children[0] &&
+      global.initializer->children[0]->kind == "paren-initializer";
+    if(enum_function_style_initializer) {
+      out << "global @" << global.symbol << GlobalMetadata(global) << " = {\n";
+      out << "  zero " << integer_text(static_cast<long long>(type_size(type))) << "\n";
+      out << "}";
+      return out.str();
+    }
     if(!type_is_reference(type) && value_type && value_type->kind == TYPE_CLASS) {
       out << "global @" << global.symbol << GlobalMetadata(global) << " = {\n";
       out << "  zero " << integer_text(static_cast<long long>(type_size(type))) << "\n";
@@ -471,9 +488,9 @@ string PA14Lowerer::RenderGlobal(GlobalRecord& global)
     return out.str();
   }
 
-void PA14Lowerer::EmitGlobals(vector<string>& entries)
+void PA14Lowerer::EmitGlobals(vector<string>& entries, size_t begin, bool include_strings)
 {
-    for(size_t i = 0; i < globals_.size(); ++i) {
+    for(size_t i = begin; i < globals_.size(); ++i) {
       GlobalRecord& global = globals_[i];
       if(!global.declaration) continue;
       ostringstream declaration;
@@ -500,7 +517,7 @@ void PA14Lowerer::EmitGlobals(vector<string>& entries)
     // A thread-local definition also has a TLS address wrapper.  Definitions
     // are rendered below, but the wrapper is a declaration and must precede
     // the rendered global just like the declaration-only case above.
-    for(size_t i = 0; i < globals_.size(); ++i) {
+    for(size_t i = begin; i < globals_.size(); ++i) {
       GlobalRecord& global = globals_[i];
       if(global.declaration || !global.thread_local_storage) continue;
       const string wrapper = global.symbol + "__tls_wrapper";
@@ -512,8 +529,12 @@ void PA14Lowerer::EmitGlobals(vector<string>& entries)
       entries.push_back(wrapper_declaration.str());
     }
     vector<string> rendered;
-    for(size_t i = 0; i < globals_.size(); ++i)
+    for(size_t i = begin; i < globals_.size(); ++i)
       if(!globals_[i].declaration) rendered.push_back(RenderGlobal(globals_[i]));
+	if(begin != 0 || !include_strings) {
+      for(size_t i = 0; i < rendered.size(); ++i) entries.push_back(rendered[i]);
+      return;
+    }
     for(size_t i = 0; i < string_order_.size(); ++i) {
       const string symbol = "__strlit__" + integer_text(static_cast<long long>(i + 1));
       entries.push_back(RenderStringGlobal(symbol, string_data_[string_order_[i]]));
@@ -837,8 +858,25 @@ string PA14Lowerer::EmitPointerOffset(const CPPGMAstNodePtr& node, Scope* scope)
     }
     if(offset_conversion)
       offset = ConvertValue(offset, Fundamental("long int"), false, true);
+    // Pointer arithmetic is performed in signed ptrdiff_t-sized units.  Keep
+    // the typed conversion visible when an unsigned size/count expression
+    // arrives with the same LowIR width; otherwise the later multiplication
+    // consumes the unsigned load directly and loses the conversion boundary.
+    const TypePtr offset_type = type_value(offset.type);
+    const TypePtr signed_offset_type = Fundamental("long int");
     const long long size = pointer_type && pointer_type->kind == TYPE_POINTER ?
       static_cast<long long>(type_size(pointer_type->child)) : 1;
+    // The existing byte-pointer path already materializes its signed index
+    // copy while scaling.  For wider element pointers, preserve the explicit
+    // unsigned-to-ptrdiff boundary before multiplication.
+    if(offset_type && is_integral_type(offset_type) &&
+       is_unsigned_type(offset_type) && !offset.known_constant && size > 1 &&
+       type_size(offset_type) == type_size(signed_offset_type)) {
+      const string converted = new_temp();
+      AddInstruction(converted + " = copy i64 " + offset.operand);
+      offset.operand = converted;
+      offset.type = signed_offset_type;
+    }
     string scaled;
     if(size == 1 && !subtract &&
        (!pointer_node || pointer_node->kind != "binary-expression")) scaled = offset.operand;
@@ -898,6 +936,8 @@ string PA14Lowerer::EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
         return function_address(function);
       }
       GlobalRecord* global = FindGlobal(binding->qualified_name);
+      if(!global && binding->is_member && binding->is_static)
+        global = EnsureStaticMemberStorage(binding);
       if(global) {
         const string address = global_address(global);
         if(type_is_reference(global->type))
@@ -909,7 +949,7 @@ string PA14Lowerer::EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
         CPPGMAstNodePtr member(new CPPGMAstNode("member-expression", "OP_ARROW:->"));
         member->children.push_back(this_node);
         member->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("identifier", binding->name)));
-        const string address = EmitMemberAddress(member, scope);
+        const string address = EmitMemberAddress(member, scope, true);
         if(type_is_reference(binding->type))
           return emit_load(address, PointerTo(Fundamental("char")));
         return address;
@@ -917,7 +957,7 @@ string PA14Lowerer::EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
       throw logic_error("cannot take address of expression");
     }
     if(node->kind == "member-expression") {
-      const string address = EmitMemberAddress(node, scope);
+      const string address = EmitMemberAddress(node, scope, true);
       Binding* member = MemberBinding(node, scope);
       if(member && type_is_reference(member->type))
         return emit_load(address, PointerTo(Fundamental("char")));
@@ -1064,7 +1104,7 @@ string PA14Lowerer::EmitMemberAddress(const CPPGMAstNodePtr& node, Scope* scope,
       throw logic_error("member function is not an lvalue");
     }
     if(member->is_static) {
-      GlobalRecord* global = FindGlobal(member->qualified_name);
+      GlobalRecord* global = EnsureStaticMemberStorage(member);
       if(!global) throw logic_error("static member has no storage");
       return global_address(global);
     }

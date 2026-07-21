@@ -26,6 +26,7 @@ public:
 	map<const CPPGMAstNode*, Scope*> namespace_scopes_;
 	map<const CPPGMAstNode*, TypePtr> class_types_;
 	map<const CPPGMAstNode*, TypePtr> enum_types_;
+	set<const CPPGMAstNode*> constant_function_stack_;
 	static void Indent(ostream& out, unsigned int indentation)
 	{
 		for (unsigned int i = 0; i < indentation; ++i) out << "  ";
@@ -193,9 +194,7 @@ public:
 						base->owned_scope->parent)
 						binding = base->owned_scope->parent->local(part);
 					if (!binding && base->owned_scope) binding = base->owned_scope->local(part);
-					if (binding && (binding->kind == BIND_TYPE ||
-						binding->kind == BIND_TYPE_ALIAS)) break;
-					binding = 0;
+					if (binding) break;
 				}
 			if (!binding) return PathTarget();
 			if (i + 1 == parts.size()) return PathTarget(0, binding);
@@ -331,6 +330,7 @@ public:
 			expression->value.find(":nullptr") != string::npos)
 			return Fundamental("nullptr_t");
 		if (expression && (expression->kind == "sizeof-expression" ||
+			expression->kind == "sizeof-pack-expression" ||
 			expression->kind == "type-trait-expression"))
 			return Fundamental("unsigned long int");
 		Binding* binding = 0;
@@ -622,7 +622,9 @@ public:
 		}
 		if (expression->kind == "parenthesized-expression" && !expression->children.empty())
 			return ExpressionType(expression->children[0], scope);
-		if (expression->kind == "sizeof-expression" || expression->kind == "type-trait-expression")
+		if (expression->kind == "sizeof-expression" ||
+			expression->kind == "sizeof-pack-expression" ||
+			expression->kind == "type-trait-expression")
 			return Fundamental("unsigned long int");
 		if (expression->kind == "cast-expression" && expression->children.size() >= 2)
 			return TypeFromTypeId(expression->children[0], scope);
@@ -986,12 +988,34 @@ public:
 		if (!target) throw logic_error("namespace alias target is not a namespace");
 		scope->namespace_aliases[node->value] = target;
 	}
+	bool InMaterializedTemplateMember(Scope* scope) const
+	{
+		for (Scope* current = scope; current; current = current->parent)
+			if (current->kind == SCOPE_CLASS && current->owner_type &&
+				current->owner_type->template_specialization)
+				return true;
+		return false;
+	}
 	void ProcessStaticAssert(const CPPGMAstNodePtr& node, Scope* scope)
 	{
 		if (node->children.empty()) throw logic_error("invalid static assertion");
-		ConstantValue value = Evaluate(node->children[0], scope);
-		if (!value.integral.known || PA19Raw(value.integral) == 0)
+		ConstantValue value;
+		try {
+			value = Evaluate(node->children[0], scope);
+		} catch (const logic_error& error) {
+			// A class specialization does not instantiate the bodies of its
+			// non-specialized member functions.  Preserve that rule for a
+			// dependent sizeof/alignof assertion whose operand is still
+			// incomplete; a called member is lowered from the same materialized
+			// definition later.
+			if (InMaterializedTemplateMember(scope) &&
+				string(error.what()).find("incomplete class") != string::npos)
+				return;
+			throw;
+		}
+		if (!value.integral.known || PA19Raw(value.integral) == 0) {
 			throw logic_error("static assertion failed");
+		}
 	}
 	void ProcessCompound(const CPPGMAstNodePtr& node, Scope* parent)
 	{

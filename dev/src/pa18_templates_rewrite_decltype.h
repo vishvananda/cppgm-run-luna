@@ -20,6 +20,27 @@
 			longs == 1 ? (uns ? "unsigned long" : "long") : uns ? "unsigned int" : "int";
 	}
 
+	bool HasMaterializedMemberFunction(const string& callee,
+		const string& context) const
+	{
+		const size_t separator = callee.rfind("::");
+		if(separator == string::npos) return false;
+		const string owner = callee.substr(0, separator);
+		const string member = callee.substr(separator + 2);
+		const CPPGMAstNodePtr declaration = FindClassDeclaration(owner, context);
+		if(!declaration) return false;
+		for(size_t i = 0; i < declaration->children.size(); ++i) {
+			const CPPGMAstNodePtr child = declaration->children[i];
+			if(!child) continue;
+			if((child->kind == "simple-declaration" ||
+				child->kind == "function-definition" ||
+				child->kind == "special-member-definition") &&
+				LastComponent(DeclarationName(child)) == member &&
+				DescendantOfKind(child, "parameter-clause")) return true;
+		}
+		return false;
+	}
+
 	bool HasExactOrdinaryMatch(const CPPGMAstNodePtr& call, const string& callee,
 		const map<string, string>& substitutions, const string& context)
 	{
@@ -313,6 +334,26 @@
 				*result = NodeTypeSpelling(signature->result_specifiers);
 				return !result->empty();
 			}
+			// A call through a local callable object is resolved from its
+			// materialized class's operator(), not from free-function lookup.
+			// This is needed for decltype(factory()) inside an instantiated
+			// function body.
+			map<string, string>::const_iterator variable = variable_types_.find(
+				LastComponent(callee));
+			if(variable != variable_types_.end()) {
+				const string object_type = NormalizeTypeArgument(ResolveAlias(
+					ReplaceIdentifiers(variable->second, substitutions), context));
+				const CPPGMAstNodePtr declaration = FindClassDeclaration(object_type, context);
+				if(declaration) for(size_t member = 0; member < declaration->children.size(); ++member) {
+					const CPPGMAstNodePtr candidate = declaration->children[member];
+					if(!candidate || candidate->kind != "function-definition" ||
+						candidate->children.size() < 2 ||
+						LastComponent(FirstIdentifierLocal(candidate->children[1])) != "operator()") continue;
+					*result = NormalizeTypeArgument(RewriteText(
+						NodeTypeSpelling(candidate->children[0]), context, substitutions, 0));
+					return !result->empty();
+				}
+			}
 		}
 		return false;
 	}
@@ -448,12 +489,19 @@
 		string tail;
 		if(SplitTopLevelComma(expression, &tail))
 			return EvaluateDecltypeExpression(tail, context, substitutions, result);
-		const string normalized = StripTextParentheses(expression);
+		string normalized = StripTextParentheses(expression);
+		if(normalized.compare(0, 6, "delete") == 0 && normalized.size() > 6 &&
+			normalized[6] != ' ')
+			normalized.insert(6, " ");
 		if(normalized != expression)
 			return EvaluateDecltypeExpression(normalized, context, substitutions, result);
 		if(normalized.compare(0, 7, "sizeof(") == 0 ||
 			normalized.compare(0, 7, "alignof(") == 0) {
 			*result = "unsigned long";
+			return true;
+		}
+		if(normalized.compare(0, 7, "delete ") == 0 || normalized == "delete") {
+			*result = "void";
 			return true;
 		}
 		if(FunctionCallResultType(normalized, context, substitutions, result)) return true;
@@ -471,34 +519,83 @@
 		const vector<string>& arguments, const string& member, const string& context)
 	{
 		if(!definition.declaration) return string();
+		ostringstream active_key;
+		active_key << definition.qualified_name;
+		for(size_t argument = 0; argument < arguments.size(); ++argument)
+			active_key << "|" << CanonicalSpelling(arguments[argument]);
+		if(!active_template_member_types_.insert(active_key.str()).second) return string();
 		map<string, string> local;
 		for(size_t i = 0; i < definition.parameters.size() && i < arguments.size(); ++i)
 			local[definition.parameters[i].name] = arguments[i];
+		// Once the specialization has been materialized, make references to the
+		// primary template inside its member aliases refer to the generated class
+		// instead of reopening the primary template.
+		for(map<string, vector<string> >::const_iterator generated =
+			specialization_arguments_.begin(); generated != specialization_arguments_.end();
+			++generated) {
+			map<string, string>::const_iterator generated_base =
+				specialization_bases_.find(generated->first);
+			if(generated_base == specialization_bases_.end() ||
+				LastComponent(generated_base->second) != LastComponent(definition.qualified_name) ||
+				generated->second.size() != arguments.size()) continue;
+			bool same_arguments = true;
+			for(size_t argument = 0; argument < arguments.size(); ++argument)
+				if(NormalizeTypeArgument(CanonicalSpelling(generated->second[argument])) !=
+					NormalizeTypeArgument(CanonicalSpelling(arguments[argument]))) {
+					same_arguments = false;
+					break;
+				}
+			if(same_arguments) {
+				local[definition.name] = generated->first;
+				break;
+			}
+		}
 		for(size_t i = 0; i < definition.declaration->children.size(); ++i) {
 			const CPPGMAstNodePtr child = definition.declaration->children[i];
 			if(!child) continue;
 			string spelling;
-			if(child->kind == "alias-declaration" && child->value == member &&
-				!child->children.empty()) spelling = TypeIdSpelling(child->children[0]);
+			if(child->kind == "alias-declaration" && !child->children.empty()) {
+				spelling = TypeIdSpelling(child->children[0]);
+				spelling = ResolveAlias(ReplaceIdentifiers(
+					RewriteText(spelling, context, local, 0), local), context);
+				local[child->value] = NormalizeTypeArgument(spelling);
+				if(child->value != member) continue;
+			}
 			else if(child->kind == "simple-declaration" && !child->children.empty() &&
 				SpellNode(child->children[0]).find("typedef") != string::npos) {
 				const CPPGMAstNodePtr list = ChildOfKindLocal(child, "init-declarator-list");
 				if(list) for(size_t j = 0; j < list->children.size(); ++j) {
 					const CPPGMAstNodePtr item = list->children[j];
 					if(!item || item->children.empty() ||
-						LastComponent(FirstIdentifierLocal(item->children[0])) != member) continue;
+						LastComponent(FirstIdentifierLocal(item->children[0])).empty()) continue;
 					if(!DeclaratorArraySuffix(item->children[0]).empty()) continue;
 					spelling = NodeTypeSpelling(child->children[0]) +
 						DeclaratorSuffix(item->children[0]) +
 						DeclaratorArraySuffix(item->children[0]);
-					break;
+					spelling = ResolveAlias(ReplaceIdentifiers(
+						RewriteText(spelling, context, local, 0), local), context);
+					local[LastComponent(FirstIdentifierLocal(item->children[0]))] =
+						NormalizeTypeArgument(spelling);
+					if(LastComponent(FirstIdentifierLocal(item->children[0])) == member)
+						break;
 				}
 			}
 			if(!spelling.empty()) {
-				const string result = ResolveAlias(RewriteText(spelling, context, local, 0), context);
-				return result;
+				map<string, string>::const_iterator found = local.find(member);
+				if(found != local.end()) {
+					const string result = NormalizeTypeArgument(found->second);
+					active_template_member_types_.erase(active_key.str());
+					return result;
+				}
 			}
 		}
+		map<string, string>::const_iterator found = local.find(member);
+		if(found != local.end()) {
+			const string result = NormalizeTypeArgument(found->second);
+			active_template_member_types_.erase(active_key.str());
+			return result;
+		}
+		active_template_member_types_.erase(active_key.str());
 		return string();
 	}
 

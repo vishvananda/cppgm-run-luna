@@ -1,5 +1,7 @@
 #include "pa14_lowering.h"
 
+#include <cstdlib>
+
 using namespace std;
 
 namespace cppgm_pa14_lowering {
@@ -468,7 +470,7 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferIdentifier(const CPPGMAstNodePtr& node, 
     }
     if(result.binding) result.candidates.clear();
 	if(!result.binding && result.candidates.empty())
-	  throw logic_error("unknown expression name: " + node->value);
+		throw logic_error("unknown expression name: " + node->value);
     if(!result.binding && result.candidates.size() == 1)
       result.binding = result.candidates[0];
     if(result.binding && !IsAccessible(result.binding, scope))
@@ -942,6 +944,58 @@ PA14Lowerer::ExprInfo PA14Lowerer::Infer(const CPPGMAstNodePtr& node, Scope* sco
     return result;
 }
 
+PA14Lowerer::ExprInfo PA14Lowerer::InferSizeofExpression(
+    const CPPGMAstNodePtr& node, Scope* scope)
+{
+      ExprInfo result;
+      result.type = Fundamental("unsigned long int");
+      result.known_constant = true;
+      const CPPGMAstNodePtr child = node->children.empty() ? CPPGMAstNodePtr() : node->children[0];
+      TypePtr type;
+      if(child && child->kind == "type-id") {
+        const string local_name = TypeNameValue(child);
+        VariablePlan* local = local_name.empty() ? 0 : FindLocalPlan(local_name);
+        type = local ? type_value(local->type) : TypePtr();
+        if(!type && !local_name.empty()) {
+          const vector<Binding*> expression_bindings = Lookup(local_name, scope);
+          for(size_t binding = 0; binding < expression_bindings.size(); ++binding)
+            if(expression_bindings[binding] &&
+              expression_bindings[binding]->kind != BIND_TYPE &&
+              expression_bindings[binding]->kind != BIND_TYPE_ALIAS) {
+              type = expression_bindings[binding]->type;
+              break;
+            }
+        }
+        if(!type) type = analyzer_.TypeFromTypeId(child, scope);
+      }
+      else if(child) {
+        bool template_operand = false;
+        CPPGMAstNodePtr object = child;
+        if(object->kind == "member-expression" && !object->children.empty())
+          object = object->children[0];
+        if(object && object->kind == "id-expression") {
+          VariablePlan* local = LocalForName(object->value);
+          TypePtr local_type = local ? type_value(local->type) : TypePtr();
+          template_operand = local_type && local_type->kind == TYPE_CLASS &&
+            local_type->template_specialization;
+        }
+        const bool unevaluated_operand = template_operand ||
+          (child && child->kind != "id-expression");
+        const bool prior_unevaluated = state_ && state_->unevaluated_context;
+        if(state_ && unevaluated_operand) state_->unevaluated_context = true;
+        try {
+          type = Infer(child, scope).type;
+        } catch(...) {
+          if(state_) state_->unevaluated_context = prior_unevaluated;
+          throw;
+        }
+        if(state_ && unevaluated_operand) state_->unevaluated_context = prior_unevaluated;
+      }
+      result.constant = node->kind == "type-trait-expression" ?
+        static_cast<long long>(type_alignment(type)) : static_cast<long long>(type_size(type));
+      return result;
+}
+
 PA14Lowerer::ExprInfo PA14Lowerer::InferUncached(const CPPGMAstNodePtr& node, Scope* scope,
                 const TypePtr& expected)
 {
@@ -1018,44 +1072,15 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferUncached(const CPPGMAstNodePtr& node, Sc
         result.type->kind == TYPE_LVALUE_REFERENCE ? "lvalue" : "xvalue" : "prvalue";
       return result;
     }
-    if(node->kind == "sizeof-expression" || node->kind == "type-trait-expression") {
+    if(node->kind == "sizeof-pack-expression") {
       ExprInfo result;
-      result.type = Fundamental("long int");
+      result.type = Fundamental("unsigned long int");
       result.known_constant = true;
-      const CPPGMAstNodePtr child = node->children.empty() ? CPPGMAstNodePtr() : node->children[0];
-      TypePtr type;
-      if(child && child->kind == "type-id") {
-        const string local_name = TypeNameValue(child);
-        VariablePlan* local = local_name.empty() ? 0 : FindLocalPlan(local_name);
-        type = local ? type_value(local->type) : analyzer_.TypeFromTypeId(child, scope);
-      }
-      else if(child) {
-        bool template_operand = false;
-        CPPGMAstNodePtr object = child;
-        if(object->kind == "member-expression" && !object->children.empty())
-          object = object->children[0];
-        if(object && object->kind == "id-expression") {
-          VariablePlan* local = LocalForName(object->value);
-          TypePtr local_type = local ? type_value(local->type) : TypePtr();
-          template_operand = local_type && local_type->kind == TYPE_CLASS &&
-            local_type->template_specialization;
-        }
-        const bool unevaluated_operand = template_operand ||
-          (child && child->kind != "id-expression");
-        const bool prior_unevaluated = state_ && state_->unevaluated_context;
-        if(state_ && unevaluated_operand) state_->unevaluated_context = true;
-        try {
-          type = Infer(child, scope).type;
-        } catch(...) {
-          if(state_) state_->unevaluated_context = prior_unevaluated;
-          throw;
-        }
-        if(state_ && unevaluated_operand) state_->unevaluated_context = prior_unevaluated;
-      }
-      result.constant = node->kind == "type-trait-expression" ?
-        static_cast<long long>(type_alignment(type)) : static_cast<long long>(type_size(type));
+      result.constant = node->value.empty() ? 0 : atoll(node->value.c_str());
       return result;
     }
+    if(node->kind == "sizeof-expression" || node->kind == "type-trait-expression")
+      return InferSizeofExpression(node, scope);
     if(node->kind == "braced-init-list") {
       ExprInfo result;
       result.type = expected ? expected : Fundamental("int");

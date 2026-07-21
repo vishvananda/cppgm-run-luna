@@ -571,7 +571,7 @@ PA14Lowerer::Value PA14Lowerer::EmitCompare(const CPPGMAstNodePtr& node, Scope* 
       (is_integral_type(right.type) ||
        (type_value(right.type)->kind == TYPE_FUNDAMENTAL &&
         type_value(right.type)->name == "bool"));
-    if(!left.known_constant && right.known_constant &&
+	if(right.known_constant &&
        right_scalar_integral &&
        is_integral_type(common) &&
        type_size(common) > type_size(right.type) && !is_unsigned_type(common)) {
@@ -1222,6 +1222,7 @@ PA14Lowerer::Value PA14Lowerer::EmitValue(const CPPGMAstNodePtr& node, Scope* sc
       }
       if(info.binding && info.binding->is_member && info.binding->is_static &&
          info.binding->has_value) {
+        EnsureStaticMemberStorage(info.binding);
         result.operand = integer_text(info.binding->value);
         result.known_constant = true;
         result.constant = info.binding->value;
@@ -1297,7 +1298,8 @@ PA14Lowerer::Value PA14Lowerer::EmitValue(const CPPGMAstNodePtr& node, Scope* sc
       Value value = EmitValue(node->children[1], scope, target);
       return ConvertValue(value, target);
     }
-    if(node->kind == "sizeof-expression" || node->kind == "type-trait-expression") {
+    if(node->kind == "sizeof-pack-expression" || node->kind == "sizeof-expression" ||
+       node->kind == "type-trait-expression") {
       ExprInfo info = Infer(node, scope);
       const CPPGMAstNodePtr operand = node->children.empty() ? CPPGMAstNodePtr() : node->children[0];
       if(node->kind == "sizeof-expression" && operand &&
@@ -1322,7 +1324,7 @@ PA14Lowerer::Value PA14Lowerer::EmitValue(const CPPGMAstNodePtr& node, Scope* sc
         }
       }
       Value result;
-      result.type = Fundamental("long int");
+      result.type = Fundamental("unsigned long int");
       result.operand = new_temp();
       AddInstruction(result.operand + " = const i64 " + integer_text(info.constant));
       result.known_constant = true;

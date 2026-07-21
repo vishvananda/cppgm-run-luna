@@ -1,6 +1,30 @@
 #include "pa11_semantics_analyzer.h"
+#include <cstdlib>
 
 namespace {
+
+string AttributeNodeSpelling(const CPPGMAstNodePtr& node)
+{
+	if (!node) return string();
+	if (node->children.empty()) {
+		const size_t colon = node->value.find(':');
+		if (colon != string::npos &&
+			(node->value.compare(0, colon, "TT_") == 0 ||
+			 node->value.compare(0, colon, "KW_") == 0 ||
+			 node->value.compare(0, colon, "OP_") == 0))
+			return node->value.substr(colon + 1);
+		return node->value;
+	}
+	string result;
+	for (size_t i = 0; i < node->children.size(); ++i) {
+		const string child = AttributeNodeSpelling(node->children[i]);
+		if (child.empty()) continue;
+		if (!result.empty() && node->kind != "type-id" &&
+			node->kind != "type-specifier-seq") result += ' ';
+		result += child;
+	}
+	return result;
+}
 
 string StripTemplateArgumentsFromPath(const string& raw)
 {
@@ -13,6 +37,17 @@ string StripTemplateArgumentsFromPath(const string& raw)
 		if (depth == 0) result += c;
 	}
 	return result;
+}
+
+CPPGMAstNodePtr FindReturnStatement(const CPPGMAstNodePtr& node)
+{
+	if (!node) return CPPGMAstNodePtr();
+	if (node->kind == "return-statement") return node;
+	for (size_t i = 0; i < node->children.size(); ++i) {
+		CPPGMAstNodePtr found = FindReturnStatement(node->children[i]);
+		if (found) return found;
+	}
+	return CPPGMAstNodePtr();
 }
 
 }
@@ -33,8 +68,12 @@ PA19IntegralValue Analyzer::ToIntegralValue(const ConstantValue& value) const
 
 PA19IntegralValue Analyzer::ParseLiteralValue(const string& raw) const
 {
+	string spelling = raw;
+	const size_t marker = spelling.find(':');
+	if (marker != string::npos && spelling.substr(0, marker) == "TT_LITERAL")
+		spelling.erase(0, marker + 1);
 	PA19IntegralValue result;
-	if (PA19DecodeCharacter(raw, &result) || PA19ParseInteger(raw, &result)) return result;
+	if (PA19DecodeCharacter(spelling, &result) || PA19ParseInteger(spelling, &result)) return result;
 	throw logic_error("unsupported constant expression");
 }
 
@@ -43,105 +82,6 @@ long long Analyzer::ParseLiteral(const string& raw) const
 	return PA19Signed(ParseLiteralValue(raw));
 }
 
-ConstantValue Analyzer::Evaluate(const CPPGMAstNodePtr& expression, Scope* scope)
-{
-	if (!expression) return ConstantValue();
-	if (expression->kind == "literal") return FromIntegralValue(ParseLiteralValue(expression->value));
-	if (expression->kind == "keyword-literal")
-		return FromIntegralValue(PA19IntegralValue::Signed(
-			OperatorFromNode(expression->value) == "true" ? 1 : 0, "bool", 1));
-	if (expression->kind == "id-expression")
-	{
-		Binding* binding = ResolveBinding(scope, expression->value);
-		return !binding || !binding->constant_value.known ? ConstantValue() :
-			FromIntegralValue(binding->constant_value);
-	}
-	if (expression->kind == "parenthesized-expression")
-		return expression->children.empty() ? ConstantValue() : Evaluate(expression->children[0], scope);
-	if (expression->kind == "subscript-expression" && expression->children.size() >= 2 &&
-		expression->children[0] && expression->children[0]->kind == "literal") {
-		ConstantValue index = Evaluate(expression->children[1], scope);
-		if (!index.integral.known) return ConstantValue();
-		ostringstream spelling;
-		spelling << expression->children[0]->value << "[" << PA19Raw(ToIntegralValue(index)) << "]";
-		map<string, PA19IntegralValue> constants;
-		map<string, string> substitutions;
-		PA19ConstantExpressionParser parser(constants, substitutions);
-		PA19IntegralValue value;
-		return parser.Evaluate(spelling.str(), &value) ? FromIntegralValue(value) : ConstantValue();
-	}
-	if (expression->kind == "sizeof-expression" || expression->kind == "type-trait-expression")
-	{
-		if (expression->children.empty()) return ConstantValue();
-		const CPPGMAstNodePtr child = expression->children[0];
-		TypePtr type;
-		if (child->kind == "type-id") type = TypeFromTypeId(child, scope);
-		else type = ExpressionType(child, scope);
-		const bool align = expression->kind == "type-trait-expression";
-		return FromIntegralValue(PA19IntegralValue::Unsigned(
-			static_cast<unsigned long long>(align ? TypeAlignment(type) : TypeSize(type)),
-			"unsigned long", 64));
-	}
-	if (expression->kind == "cast-expression")
-	{
-		if (expression->children.size() < 2) return ConstantValue();
-		const ConstantValue operand = Evaluate(expression->children[1], scope);
-		if (!operand.integral.known) return ConstantValue();
-		const TypePtr target = TypeFromTypeId(expression->children[0], scope);
-		return FromIntegralValue(PA19Convert(ToIntegralValue(operand), PA19Type(TypeText(target, true))));
-	}
-	if (expression->kind == "call-expression" && expression->children.size() >= 2 &&
-		expression->children[0] && expression->children[0]->kind == "id-expression" &&
-		expression->children[1] && expression->children[1]->kind == "paren-argument-list" &&
-		!expression->children[1]->children.empty()) {
-		const PA19IntegralType target = PA19Type(expression->children[0]->value);
-		if (target.integral) {
-			const ConstantValue operand = Evaluate(expression->children[1]->children[0], scope);
-			return operand.integral.known ? FromIntegralValue(PA19Convert(ToIntegralValue(operand), target)) : ConstantValue();
-		}
-	}
-	if (expression->kind == "unary-expression")
-	{
-		if (expression->children.empty()) return ConstantValue();
-		ConstantValue child = Evaluate(expression->children[0], scope);
-		if (!child.integral.known) return child;
-		PA19IntegralValue value = ToIntegralValue(child);
-		const string op = OperatorFromNode(expression->value);
-		if (op == "+") return FromIntegralValue(PA19Promote(value));
-		if (op == "-") {
-			value = PA19Promote(value);
-			const PA19IntegralType type = value.type;
-			const unsigned long long raw = (0ULL - PA19Raw(value)) & PA19Mask(type.bits);
-			return FromIntegralValue(type.is_unsigned ? PA19IntegralValue::Unsigned(raw, type.name, type.bits) :
-				PA19IntegralValue::Signed(static_cast<long long>(raw), type.name, type.bits));
-		}
-		if (op == "!") return FromIntegralValue(PA19IntegralValue::Signed(!PA19Raw(value), "int", 32));
-		if (op == "~") {
-			value = PA19Promote(value);
-			const PA19IntegralType type = value.type;
-			const unsigned long long raw = (~PA19Raw(value)) & PA19Mask(type.bits);
-			return FromIntegralValue(type.is_unsigned ? PA19IntegralValue::Unsigned(raw, type.name, type.bits) :
-				PA19IntegralValue::Signed(static_cast<long long>(raw), type.name, type.bits));
-		}
-		return ConstantValue();
-	}
-	if (expression->kind == "conditional-expression" && expression->children.size() == 3)
-	{
-		ConstantValue condition = Evaluate(expression->children[0], scope);
-		return !condition.integral.known ? ConstantValue() :
-			Evaluate(expression->children[PA19Raw(ToIntegralValue(condition)) ? 1 : 2], scope);
-	}
-	if (expression->kind == "binary-expression" || expression->kind == "assignment-expression")
-	{
-		if (expression->children.size() < 2) return ConstantValue();
-		ConstantValue left = Evaluate(expression->children[0], scope);
-		ConstantValue right = Evaluate(expression->children[1], scope);
-		if (!left.integral.known || !right.integral.known) return ConstantValue();
-		return FromIntegralValue(PA19Binary(OperatorFromNode(expression->value),
-			ToIntegralValue(left), ToIntegralValue(right)));
-	}
-	return ConstantValue();
-}
 
 bool Analyzer::HasTemplateParameterScope(Scope* scope) const
 	{
@@ -576,6 +516,7 @@ void Analyzer::ProcessFunctionDefinition(const CPPGMAstNodePtr& node, Scope* sco
 	binding.is_override = HasNodeValue(declarator, "virt-specifier", "override");
 	binding.is_final = HasNodeValue(declarator, "virt-specifier", "final");
 	Binding* stored = declaration_scope->add(binding);
+	stored->declaration = node;
 	if (member_owner)
 	{
 		for (size_t prior = 0; prior + 1 < declaration_scope->bindings.size(); ++prior)
@@ -636,17 +577,27 @@ void Analyzer::ProcessSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* scop
 		CPPGMAstNodePtr item = list->children[i];
 		if (!item || item->children.empty()) continue;
 		CPPGMAstNodePtr declarator = item->children[0];
+		CPPGMAstNodePtr initializer = item->children.size() > 1 ? item->children[1] : CPPGMAstNodePtr();
 		TypePtr type = BuildDeclarator(declarator, base, scope);
+		// An out-of-class definition of an unknown-bound array supplies the
+		// bound through its braced initializer.  Preserve that fact on the
+		// semantic type so qualified uses such as `sizeof(T::member)` see the
+		// completed static member rather than the declaration's zero bound.
+		if(type->kind == TYPE_ARRAY && type->bound == 0 && initializer &&
+			!initializer->children.empty() && initializer->children[0] &&
+			initializer->children[0]->kind == "braced-init-list")
+			type = ArrayOf(static_cast<long long>(initializer->children[0]->children.size()),
+				type->child);
 		if (facts.is_constexpr && type->kind != TYPE_FUNCTION) type = CloneWithCv(type, true, false);
 		const string name = FirstIdentifier(declarator);
 		if (name.empty()) continue;
-		CPPGMAstNodePtr initializer = item->children.size() > 1 ? item->children[1] : CPPGMAstNodePtr();
 		if (facts.is_typedef)
 		{
 			AddTypeBinding(scope, name, type, true);
 			continue;
 		}
 		Binding binding(type->kind == TYPE_FUNCTION ? BIND_FUNCTION : BIND_VARIABLE, name, type);
+		binding.declaration = node;
 		binding.hidden_friend = facts.is_friend && type->kind == TYPE_FUNCTION;
 		binding.friend_owner = binding.hidden_friend ?
 			(scope && scope->kind == SCOPE_CLASS ? scope->owner_type : TypePtr()) : TypePtr();
@@ -669,7 +620,10 @@ void Analyzer::ProcessSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* scop
 					expression->value.find('p') != string::npos ||
 					expression->value.find('P') != string::npos);
 			const bool string_literal = expression && expression->kind == "literal" &&
-				!expression->value.empty() && expression->value[0] == '"';
+				(!expression->value.empty() && expression->value[0] == '"' ||
+					expression->value.size() > 1 &&
+					(expression->value[0] == 'u' || expression->value[0] == 'U' ||
+						expression->value[0] == 'L') && expression->value[1] == '"');
 			if (!floating_literal && !string_literal)
 			{
 				ConstantValue value = Evaluate(expression, scope);
@@ -681,6 +635,27 @@ void Analyzer::ProcessSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* scop
 			}
 		}
 		scope->add(binding);
+		// Qualified static-member definitions are collected in the enclosing
+		// scope, while lookup of `Owner::member` uses the owner class scope.
+		// Keep both bindings and the owning ClassMemberInfo synchronized with
+		// the completed definition's typed array (or scalar) type.
+		const size_t separator = name.rfind("::");
+		if(separator != string::npos) {
+			PathTarget owner_target = ResolvePath(scope, name.substr(0, separator));
+			TypePtr owner_type = owner_target.binding ? owner_target.binding->type :
+				(owner_target.scope ? owner_target.scope->owner_type : TypePtr());
+			if(owner_type && owner_type->kind == TYPE_CLASS && owner_type->owned_scope) {
+				Binding* member = owner_type->owned_scope->local(name.substr(separator + 2));
+				if(member && member->kind == BIND_VARIABLE && member->is_static) {
+					member->type = type;
+					if(member->member_index < owner_type->class_members.size()) {
+						owner_type->class_members[member->member_index].type = type;
+						if(initializer)
+							owner_type->class_members[member->member_index].initializer = initializer;
+					}
+				}
+			}
+		}
 	}
 }
 
@@ -730,9 +705,20 @@ size_t Analyzer::AttributeAlignment(const CPPGMAstNodePtr& attribute, Scope* sco
 	}
 	else if (argument && argument->kind == "type-id")
 	{
-		TypePtr type = TypeFromTypeId(argument, scope);
-		alignment = TypeAlignment(type);
-		if (alignment == 0) throw logic_error("alignment type has no alignment");
+		try {
+			TypePtr type = TypeFromTypeId(argument, scope);
+			alignment = TypeAlignment(type);
+			if (alignment == 0) throw logic_error("alignment type has no alignment");
+		} catch (const logic_error&) {
+			const string spelling = AttributeNodeSpelling(argument);
+			CPPGMAstNodePtr expression(new CPPGMAstNode(
+				!spelling.empty() && isdigit(static_cast<unsigned char>(spelling[0])) ?
+					"literal" : "id-expression", spelling));
+			ConstantValue value = Evaluate(expression, scope);
+			if (!value.integral.known || value.value < 0)
+				throw logic_error("alignment is not a non-negative constant");
+			alignment = static_cast<size_t>(value.value);
+		}
 	}
 	else
 	{

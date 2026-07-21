@@ -147,7 +147,14 @@ string PA14Lowerer::EmitReferenceArgument(const CPPGMAstNodePtr& node, Scope* sc
       // prvalue needs a real temporary object, and a derived result needs its
       // typed base projection; storing the value into a refarg slot loses
       // both lifetime and base-subobject shape.
-      const string slot = new_special_slot("tmpobj", low_type(source_type));
+      bool template_call = false;
+      if(node && node->kind == "call-expression") {
+        const CallChoice choice = ChooseCall(node, scope);
+        FunctionRecord* function = choice.binding ? RecordForBinding(choice.binding) : 0;
+        template_call = function && function->template_instantiation;
+      }
+      const string slot = new_special_slot(template_call ? "arg" : "tmpobj",
+        low_type(source_type));
       const string address = new_temp();
       AddInstruction(address + " = addr $" + slot);
       Value value = EmitValue(node, scope);
@@ -271,15 +278,18 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
       } else if(choice.object->kind == "call-expression" && object_type &&
                 object_type->kind == TYPE_CLASS) {
         // A class-valued call is a prvalue object, not a scalar to spill into
-        // an arbitrary member-call slot.  Materialize it through the common
-        // temporary path so the object ABI and lifetime stay consistent.
+        // an arbitrary member-call slot.  Give the common object-transfer
+        // path the final member-call destination so an indirect class return
+        // can construct there without an intermediate return object.
         const string slot = new_special_slot("tmpobj", low_type(object_type));
         object_operand = new_temp();
         AddInstruction(object_operand + " = addr $" + slot);
-        Value object_value = EmitValue(choice.object, scope);
-        AddInstruction("copyobj " + integer_text(static_cast<long long>(type_size(object_type))) +
-          "x" + integer_text(static_cast<long long>(type_alignment(object_type))) + " " +
-          object_value.operand + ", " + object_operand);
+        if(!EmitObjectTransferAt(object_type, object_operand, choice.object, scope, true)) {
+          Value object_value = EmitValue(choice.object, scope);
+          AddInstruction("copyobj " + integer_text(static_cast<long long>(type_size(object_type))) +
+            "x" + integer_text(static_cast<long long>(type_alignment(object_type))) + " " +
+            object_value.operand + ", " + object_operand);
+        }
       } else if(object_type && object_type->kind == TYPE_CLASS &&
                 object_info.category != "lvalue") {
         const string slot = new_special_slot("tmpobj", low_type(object_type));
@@ -339,7 +349,11 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
         type_value(target)->kind == TYPE_CLASS ?
         EmitObjectValueArgument(all_arguments[i], scope, target) :
         EmitValue(all_arguments[i], scope, target);
-      if(target && value.known_constant && is_integral_type(value.type) &&
+      const bool preserve_size_expression = all_arguments[i] &&
+        (all_arguments[i]->kind == "sizeof-expression" ||
+         all_arguments[i]->kind == "type-trait-expression");
+      if(target && value.known_constant && !preserve_size_expression &&
+         is_integral_type(value.type) &&
          is_integral_type(target) &&
          (type_size(target) < type_size(value.type) ||
           (!is_unsigned_type(target) && type_size(target) > type_size(value.type)))) {

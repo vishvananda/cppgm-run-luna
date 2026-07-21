@@ -10,12 +10,12 @@
 #include <string>
 #include <utility>
 using namespace std;
-namespace {
-bool IsIdentifierCharacter(char ch)
+namespace pa18_templates_internal {
+inline bool IsIdentifierCharacter(char ch)
 {
 	return isalnum(static_cast<unsigned char>(ch)) || ch == '_';
 }
-string Trim(const string& raw)
+inline string Trim(const string& raw)
 {
 	size_t begin = 0;
 	while(begin < raw.size() && isspace(static_cast<unsigned char>(raw[begin]))) ++begin;
@@ -23,17 +23,18 @@ string Trim(const string& raw)
 	while(end > begin && isspace(static_cast<unsigned char>(raw[end - 1]))) --end;
 	return raw.substr(begin, end - begin);
 }
-string RemoveMarker(const string& raw)
+inline string RemoveMarker(const string& raw)
 {
 	const size_t colon = raw.find(':');
 	if(colon == string::npos) return raw;
 	const string prefix = raw.substr(0, colon);
-	if(prefix == "TT_IDENTIFIER" || prefix.compare(0, 3, "KW_") == 0 ||
+	if(prefix == "TT_IDENTIFIER" || prefix == "TT_LITERAL" ||
+		prefix.compare(0, 3, "KW_") == 0 ||
 		prefix.compare(0, 3, "OP_") == 0)
 		return raw.substr(colon + 1);
 	return raw;
 }
-string CanonicalSpelling(string raw)
+inline string CanonicalSpelling(string raw)
 {
 	raw = Trim(raw);
 	while(raw.compare(0, 7, "typename") == 0 &&
@@ -70,7 +71,7 @@ string CanonicalSpelling(string raw)
 	}
 	return result;
 }
-string NormalizeTypeArgument(string raw)
+inline string NormalizeTypeArgument(string raw)
 {
 	raw = CanonicalSpelling(raw);
 	// The PA10 parser preserves some adjacent fundamental tokens as one AST
@@ -79,9 +80,15 @@ string NormalizeTypeArgument(string raw)
 	// substitution or specialization key; treating it as an identifier would
 	// make an otherwise valid specialization unresolvable later.
 	static const char* const compact_fundamentals[][2] = {
+		{"short", "short int"},
+		{"long", "long int"},
+		{"unsigned", "unsigned int"},
+		{"signed", "signed int"},
 		{"unsignedlong", "unsigned long"},
 		{"unsignedlonglong", "unsigned long long"},
 		{"unsignedint", "unsigned int"},
+		{"unsignedlongint", "unsigned long int"},
+		{"unsignedlonglongint", "unsigned long long int"},
 		{"unsignedshort", "unsigned short"},
 		{"unsignedchar", "unsigned char"},
 		{"signedlong", "signed long"},
@@ -89,6 +96,7 @@ string NormalizeTypeArgument(string raw)
 		{"signedshort", "signed short"},
 		{"signedchar", "signed char"},
 		{"longlong", "long long"},
+		{"longlongint", "long long int"},
 		{"longdouble", "long double"}
 	};
 	for(size_t i = 0; i < sizeof(compact_fundamentals) / sizeof(compact_fundamentals[0]); ++i)
@@ -123,30 +131,38 @@ string NormalizeTypeArgument(string raw)
 		raw = "volatile " + raw.substr(0, raw.size() - 8);
 	return CanonicalSpelling(raw);
 }
-string JoinPath(const string& prefix, const string& name)
+inline string PA18ExplicitSpecializationKey(const string& qualified_name,
+	const vector<string>& arguments)
+{
+	string result = qualified_name;
+	for(size_t i = 0; i < arguments.size(); ++i)
+		result += "|" + NormalizeTypeArgument(arguments[i]);
+	return result;
+}
+inline string JoinPath(const string& prefix, const string& name)
 {
 	if(prefix.empty()) return name;
 	if(name.empty()) return prefix;
 	return prefix + "::" + name;
 }
-string LastComponent(const string& raw)
+inline string LastComponent(const string& raw)
 {
 	const size_t separator = raw.rfind("::");
 	return separator == string::npos ? raw : raw.substr(separator + 2);
 }
-string PrefixComponent(const string& raw)
+inline string PrefixComponent(const string& raw)
 {
 	const size_t separator = raw.rfind("::");
 	return separator == string::npos ? string() : raw.substr(0, separator);
 }
-bool IsInlineNamespace(const CPPGMAstNodePtr& node)
+inline bool IsInlineNamespace(const CPPGMAstNodePtr& node)
 {
 	if(!node || node->kind != "namespace-definition") return false;
 	for(size_t i = 0; i < node->children.size(); ++i)
 		if(node->children[i] && node->children[i]->kind == "inline") return true;
 	return false;
 }
-string FirstIdentifierLocal(const CPPGMAstNodePtr& node)
+inline string FirstIdentifierLocal(const CPPGMAstNodePtr& node)
 {
 	if(!node) return string();
 	if(node->kind == "identifier") return node->value;
@@ -156,14 +172,14 @@ string FirstIdentifierLocal(const CPPGMAstNodePtr& node)
 	}
 	return string();
 }
-CPPGMAstNodePtr ChildOfKindLocal(const CPPGMAstNodePtr& node, const string& kind)
+inline CPPGMAstNodePtr ChildOfKindLocal(const CPPGMAstNodePtr& node, const string& kind)
 {
 	if(!node) return CPPGMAstNodePtr();
 	for(size_t i = 0; i < node->children.size(); ++i)
 		if(node->children[i] && node->children[i]->kind == kind) return node->children[i];
 	return CPPGMAstNodePtr();
 }
-CPPGMAstNodePtr DescendantOfKind(const CPPGMAstNodePtr& node, const string& kind)
+inline CPPGMAstNodePtr DescendantOfKind(const CPPGMAstNodePtr& node, const string& kind)
 {
 	if(!node) return CPPGMAstNodePtr();
 	if(node->kind == kind) return node;
@@ -173,7 +189,7 @@ CPPGMAstNodePtr DescendantOfKind(const CPPGMAstNodePtr& node, const string& kind
 	}
 	return CPPGMAstNodePtr();
 }
-CPPGMAstNodePtr CloneNode(const CPPGMAstNodePtr& node)
+inline CPPGMAstNodePtr CloneNode(const CPPGMAstNodePtr& node)
 {
 	if(!node) return CPPGMAstNodePtr();
 	CPPGMAstNodePtr result(new CPPGMAstNode(node->kind, node->value));
@@ -181,13 +197,27 @@ CPPGMAstNodePtr CloneNode(const CPPGMAstNodePtr& node)
 	result->template_instantiation = node->template_instantiation;
 	result->explicit_instantiation = node->explicit_instantiation;
 	result->dependent_base_lookup = node->dependent_base_lookup;
+	result->materialize_object_address = node->materialize_object_address;
+	result->materialize_object_name = node->materialize_object_name;
 	result->template_primary = node->template_primary;
 	result->template_arguments = node->template_arguments;
 	for(size_t i = 0; i < node->children.size(); ++i)
 		result->children.push_back(CloneNode(node->children[i]));
 	return result;
 }
-string SpellNode(const CPPGMAstNodePtr& node)
+inline void ReplaceAstIdentifiers(const CPPGMAstNodePtr& node,
+	const map<string, string>& replacements)
+{
+	if(!node) return;
+	if(node->kind == "identifier" || node->kind == "id-expression") {
+		map<string, string>::const_iterator replacement = replacements.find(
+			RemoveMarker(node->value));
+		if(replacement != replacements.end()) node->value = replacement->second;
+	}
+	for(size_t i = 0; i < node->children.size(); ++i)
+		ReplaceAstIdentifiers(node->children[i], replacements);
+}
+inline string SpellNode(const CPPGMAstNodePtr& node)
 {
 	if(!node) return string();
 	if(node->children.empty()) return RemoveMarker(node->value);
@@ -203,13 +233,68 @@ string SpellNode(const CPPGMAstNodePtr& node)
 	}
 	return CanonicalSpelling(result);
 }
-string DefaultTypeSpelling(const CPPGMAstNodePtr& parameter)
+inline string TemplateArgumentSpelling(const CPPGMAstNodePtr& node)
+{
+	if(!node) return string();
+	if(node->kind == "literal" || node->kind == "keyword-literal" ||
+		node->kind == "id-expression" || node->kind == "template-id")
+		return RemoveMarker(node->value);
+	if(node->kind == "parenthesized-expression" && !node->children.empty())
+		return "(" + TemplateArgumentSpelling(node->children[0]) + ")";
+	if(node->kind == "unary-expression" && !node->children.empty())
+		return RemoveMarker(node->value) + TemplateArgumentSpelling(node->children[0]);
+	if((node->kind == "binary-expression" || node->kind == "assignment-expression") &&
+		node->children.size() >= 2)
+		return "(" + TemplateArgumentSpelling(node->children[0]) + " " +
+			RemoveMarker(node->value) + " " +
+			TemplateArgumentSpelling(node->children[1]) + ")";
+	if(node->kind == "conditional-expression" && node->children.size() >= 3)
+		return "(" + TemplateArgumentSpelling(node->children[0]) + " ? " +
+			TemplateArgumentSpelling(node->children[1]) + " : " +
+			TemplateArgumentSpelling(node->children[2]) + ")";
+	if((node->kind == "sizeof-expression" || node->kind == "type-trait-expression") &&
+		!node->children.empty())
+		return (node->kind == "sizeof-expression" ? "sizeof(" : "alignof(") +
+			SpellNode(node->children[0]) + ")";
+	if(node->kind == "delete-expression" && !node->children.empty())
+		return "delete " + TemplateArgumentSpelling(node->children[0]);
+	if(node->kind == "cast-expression" && node->children.size() >= 2)
+		return "static_cast<" + SpellNode(node->children[0]) + ">(" +
+			TemplateArgumentSpelling(node->children[1]) + ")";
+	if(node->kind == "subscript-expression" && node->children.size() >= 2)
+		return TemplateArgumentSpelling(node->children[0]) + "[" +
+			TemplateArgumentSpelling(node->children[1]) + "]";
+	if(node->kind == "call-expression" && !node->children.empty()) {
+		string result = TemplateArgumentSpelling(node->children[0]) + "(";
+		if(node->children.size() > 1 && node->children[1]) {
+			const CPPGMAstNodePtr arguments = node->children[1];
+			for(size_t i = 0; i < arguments->children.size(); ++i) {
+				if(i) result += ", ";
+				result += TemplateArgumentSpelling(arguments->children[i]);
+			}
+		}
+		return result + ")";
+	}
+	if(node->kind == "member-expression" && node->children.size() >= 2)
+		return TemplateArgumentSpelling(node->children[0]) +
+			RemoveMarker(node->value) + TemplateArgumentSpelling(node->children[1]);
+	return SpellNode(node);
+}
+inline string DefaultTypeSpelling(const CPPGMAstNodePtr& parameter)
 {
 	const CPPGMAstNodePtr argument = ChildOfKindLocal(parameter, "default-template-argument");
 	if(!argument || argument->children.empty()) return string();
-	return CanonicalSpelling(SpellNode(argument->children[0]));
+	// SpellNode intentionally flattens AST children with spaces, which loses
+	// the punctuation of a dependent `decltype(new T(declval<Args>()...))`.
+	// Keep the parser's complete decltype spelling so the later pack-aware
+	// rewriter can expand the operand before resolving nested template-ids.
+	const CPPGMAstNodePtr decltype_spec = DescendantOfKind(
+		argument->children[0], "decltype-specifier");
+	if(decltype_spec && !decltype_spec->value.empty())
+		return CanonicalSpelling(decltype_spec->value);
+	return CanonicalSpelling(TemplateArgumentSpelling(argument->children[0]));
 }
-string ReplaceIdentifiers(const string& raw, const map<string, string>& substitutions)
+inline string ReplaceIdentifiers(const string& raw, const map<string, string>& substitutions)
 {
 	string result;
 	for(size_t i = 0; i < raw.size();) {
@@ -220,7 +305,33 @@ string ReplaceIdentifiers(const string& raw, const map<string, string>& substitu
 			map<string, string>::const_iterator found = substitutions.find(word);
 			const bool already_qualified = i >= 2 && result.size() >= 2 &&
 				result.compare(result.size() - 2, 2, "::") == 0;
-			result += found == substitutions.end() || already_qualified ? word : found->second;
+			if(found != substitutions.end() && !already_qualified) result += found->second;
+			else if(found != substitutions.end()) result += word;
+			else {
+				bool compact_substitution = false;
+				for(map<string,string>::const_iterator it = substitutions.begin();
+					it != substitutions.end(); ++it) {
+					if(it->first.empty() || word.size() <= it->first.size()) continue;
+					if(word.compare(0, it->first.size(), it->first) == 0) {
+						const string suffix = word.substr(it->first.size());
+						if(suffix == "const" || suffix == "volatile") {
+							result += it->second + " " + suffix;
+							compact_substitution = true;
+							break;
+						}
+					}
+					if(word.compare(word.size() - it->first.size(), it->first.size(),
+						it->first) == 0) {
+						const string prefix = word.substr(0, word.size() - it->first.size());
+						if(prefix == "const" || prefix == "volatile") {
+							result += prefix + " " + it->second;
+							compact_substitution = true;
+							break;
+						}
+					}
+				}
+				if(!compact_substitution) result += word;
+			}
 			i = end;
 		} else {
 			result += raw[i++];
@@ -228,7 +339,7 @@ string ReplaceIdentifiers(const string& raw, const map<string, string>& substitu
 	}
 	return result;
 }
-string TypeSuffix(string raw)
+inline string TypeSuffix(string raw)
 {
 	raw = CanonicalSpelling(raw);
 	const bool array_type = raw.find('[') != string::npos;
@@ -251,7 +362,52 @@ string TypeSuffix(string raw)
 		result.erase(result.size() - 1);
 	return result.empty() ? "arg" : result;
 }
-vector<string> SplitTemplateArguments(const string& raw)
+inline bool IsTemplateAngleOpen(const string& raw, size_t position)
+{
+	if(position >= raw.size() || raw[position] != '<') return false;
+	if(position + 1 < raw.size() && raw[position + 1] == '<') return false;
+	size_t previous = position;
+	while(previous > 0 && isspace(static_cast<unsigned char>(raw[previous - 1]))) --previous;
+	if(previous == 0) return true;
+	const char prior = raw[previous - 1];
+	// A less-than following a literal, a closed expression, or another less
+	// than is an operator (including the first half of <<), not a nested
+	// template delimiter.
+	if(isalpha(static_cast<unsigned char>(prior)) || prior == '_' ||
+		prior == ':' || prior == '>') return true;
+	if(isdigit(static_cast<unsigned char>(prior))) {
+		size_t begin = previous - 1;
+		while(begin > 0 && IsIdentifierCharacter(raw[begin - 1])) --begin;
+		for(size_t i = begin; i < previous; ++i)
+			if(isalpha(static_cast<unsigned char>(raw[i])) || raw[i] == '_') return true;
+	}
+	return false;
+}
+inline bool IsTemplateAngleClose(const string& raw, size_t position)
+{
+	if(position >= raw.size() || raw[position] != '>') return false;
+	size_t previous = position;
+	while(previous > 0 && isspace(static_cast<unsigned char>(raw[previous - 1]))) --previous;
+	// `<>` is an empty template argument list.  It must close at this `>`;
+	// otherwise an adjacent outer `>>` is mistaken for the inner close and the
+	// first default argument is rewritten as the literal `>` token.
+	if(previous > 0 && raw[previous - 1] == '<') return true;
+	if(position + 1 < raw.size() && raw[position + 1] == '=') return false;
+	if(position + 1 < raw.size() && raw[position + 1] == '>') {
+		size_t after = position + 2;
+		while(after < raw.size() && isspace(static_cast<unsigned char>(raw[after]))) ++after;
+		if(after < raw.size() && (isalnum(static_cast<unsigned char>(raw[after])) ||
+			raw[after] == '_' || raw[after] == '(' || raw[after] == '\'')) return false;
+	}
+	if(position > 0 && raw[previous - 1] == '>') {
+		size_t after = position + 1;
+		while(after < raw.size() && isspace(static_cast<unsigned char>(raw[after]))) ++after;
+		if(after < raw.size() && (isalnum(static_cast<unsigned char>(raw[after])) ||
+			raw[after] == '_' || raw[after] == '(' || raw[after] == '\'')) return false;
+	}
+	return true;
+}
+inline vector<string> SplitTemplateArguments(const string& raw)
 {
 	vector<string> result;
 	string current;
@@ -260,8 +416,8 @@ vector<string> SplitTemplateArguments(const string& raw)
 	int brackets = 0;
 	for(size_t i = 0; i < raw.size(); ++i) {
 		const char ch = raw[i];
-		if(ch == '<') ++angle;
-		else if(ch == '>' && angle > 0) --angle;
+		if(ch == '<' && IsTemplateAngleOpen(raw, i)) ++angle;
+		else if(ch == '>' && angle > 0 && IsTemplateAngleClose(raw, i)) --angle;
 		else if(ch == '(') ++parentheses;
 		else if(ch == ')' && parentheses > 0) --parentheses;
 		else if(ch == '[') ++brackets;
@@ -295,9 +451,17 @@ struct TemplateDefinition
 	string lexical_owner;
 	CPPGMAstNodePtr declaration;
 	vector<TemplateParameter> parameters;
+	// Class partial specializations are kept alongside the primary definition.
+	// Their `parameters` are the primary template parameters used to build the
+	// concrete class name; the separate fields describe the specialization
+	// pattern and the names bound by its own template clause.
+	bool partial_specialization;
+	vector<string> specialization_parameters;
+	vector<string> specialization_pattern;
 	bool class_template;
 	bool alias_template;
 	TemplateDefinition() : qualified_name(), name(), owner(), lexical_owner(), declaration(), parameters(),
+		partial_specialization(false), specialization_parameters(), specialization_pattern(),
 		class_template(false), alias_template(false) {}
 };
 struct FunctionSignature
@@ -308,163 +472,30 @@ struct FunctionSignature
 class PA18TemplateExpander
 {
 public:
-	vector<CPPGMAstNodePtr> Run(const vector<CPPGMAstNodePtr>& input)
-	{
-		ValidateTemplateDiagnostics(input);
-		for(size_t i = 0; i < input.size(); ++i)
-			CollectLexical(input[i], string(), string());
-		for(size_t i = 0; i < input.size(); ++i) Collect(input[i], string());
-		vector<CPPGMAstNodePtr> result;
-		for(size_t i = 0; i < input.size(); ++i) {
-			CPPGMAstNodePtr tree = TransformTranslationUnit(input[i]);
-			if(tree) result.push_back(tree);
-		}
-		return result;
-	}
+	vector<CPPGMAstNodePtr> Run(const vector<CPPGMAstNodePtr>& input);
 private:
-	string StripTemplateArgumentsForValidation(const string& raw) const
-	{
-		string result;
-		int depth = 0;
-		for(size_t i = 0; i < raw.size(); ++i) {
-			if(raw[i] == '<') { ++depth; continue; }
-			if(raw[i] == '>') { if(depth > 0) --depth; continue; }
-			if(depth == 0) result += raw[i];
-		}
-		return result;
-	}
-	bool ValidationHasNoexcept(const CPPGMAstNodePtr& node) const
-	{
-		if(!node) return false;
-		if(node->kind == "function-qualifier" && node->value == "noexcept") return true;
-		for(size_t i = 0; i < node->children.size(); ++i)
-			if(ValidationHasNoexcept(node->children[i])) return true;
-		return false;
-	}
-	void CollectValidationNames(const CPPGMAstNodePtr& node,
-		set<string>& names) const
-	{
-		if(!node) return;
-		if(node->kind == "identifier" && !node->value.empty())
-			names.insert(LastComponent(RemoveMarker(node->value)));
-		if(node->kind == "class-specifier" ||
-			node->kind == "class-forward-declaration" ||
-			node->kind == "function-definition" ||
-			node->kind == "special-member-definition" ||
-			node->kind == "special-member-declaration" ||
-			node->kind == "alias-declaration") {
-			const string name = DeclarationName(node);
-			if(!name.empty()) names.insert(name);
-		}
-		if(node->kind == "simple-declaration") {
-			const CPPGMAstNodePtr list = ChildOfKindLocal(node, "init-declarator-list");
-			if(list) for(size_t i = 0; i < list->children.size(); ++i)
-				if(list->children[i] && !list->children[i]->children.empty()) {
-					const string name = FirstIdentifierLocal(list->children[i]->children[0]);
-					if(!name.empty()) names.insert(LastComponent(name));
-				}
-		}
-		if(node->kind == "parameter-declaration" && node->children.size() > 1) {
-			const string name = FirstIdentifierLocal(node->children[1]);
-			if(!name.empty()) names.insert(LastComponent(name));
-		}
-		if(node->kind == "enumerator" && !node->value.empty())
-			names.insert(LastComponent(node->value));
-		for(size_t i = 0; i < node->children.size(); ++i)
-			CollectValidationNames(node->children[i], names);
-	}
+	string StripTemplateArgumentsForValidation(const string& raw) const;
+	bool ValidationHasNoexcept(const CPPGMAstNodePtr& node) const;
+	void CollectValidationNames(const CPPGMAstNodePtr& node, set<string>& names) const;
 	bool ValidationDependentName(const string& raw,
-		const set<string>& parameters) const
-	{
-		if(raw.find("::") != string::npos || raw.find('<') != string::npos) {
-			for(set<string>::const_iterator parameter = parameters.begin();
-				parameter != parameters.end(); ++parameter) {
-				if(parameter->empty()) continue;
-				for(size_t position = raw.find(*parameter);
-					position != string::npos;
-					position = raw.find(*parameter, position + parameter->size())) {
-					const bool left = position == 0 ||
-						!IsIdentifierCharacter(raw[position - 1]);
-					const size_t end = position + parameter->size();
-					const bool right = end == raw.size() ||
-						!IsIdentifierCharacter(raw[end]);
-					if(left && right) return true;
-				}
-			}
-		}
-		return parameters.find(raw) != parameters.end();
-	}
+		const set<string>& parameters) const;
 	void ValidateTemplateNode(const CPPGMAstNodePtr& node,
 		const set<string>& parameters, const set<string>& known_names,
 		const string& current_class, bool in_function,
 		map<string, bool>& special_members,
 		const CPPGMAstNodePtr& parent = CPPGMAstNodePtr(),
-		size_t child_index = static_cast<size_t>(-1)) const
-	{
-		if(!node) return;
-		if(node->kind == "alias-declaration" &&
-			parameters.find(LastComponent(node->value)) != parameters.end())
-			throw logic_error("alias shadows a template parameter: " + node->value);
-		string member_key;
-		if(node->kind == "special-member-declaration" ||
-			node->kind == "special-member-definition") {
-			string owner = current_class;
-			if(owner.empty() && node->value.find("::") != string::npos)
-				owner = LastComponent(StripTemplateArgumentsForValidation(
-					PrefixComponent(node->value)));
-			member_key = owner.empty() ? LastComponent(node->value) :
-				owner + "::" + LastComponent(node->value);
-			const bool noexcept_specified = ValidationHasNoexcept(node);
-			map<string, bool>::const_iterator prior = special_members.find(member_key);
-			if(prior != special_members.end() && prior->second != noexcept_specified)
-				throw logic_error("special-member exception specification mismatch");
-			special_members[member_key] = noexcept_specified;
-		}
-		if(node->kind == "id-expression" && in_function) {
-			const bool member_name = parent && parent->kind == "member-expression" &&
-				child_index == 1;
-			if(!member_name && node->value.find("::") == string::npos &&
-				node->value.find('<') == string::npos &&
-				!ValidationDependentName(node->value, parameters) &&
-				known_names.find(node->value) == known_names.end() &&
-				node->value.compare(0, 8, "operator") != 0 &&
-				node->value.compare(0, 10, "__builtin_") != 0)
-				throw logic_error("unknown nondependent template name: " + node->value);
-		}
-		const bool class_node = node->kind == "class-specifier" ||
-			node->kind == "class-forward-declaration";
-		const string next_class = class_node ? LastComponent(node->value) : current_class;
-		const bool function_node = node->kind == "function-definition" ||
-			node->kind == "special-member-definition";
-		for(size_t i = 0; i < node->children.size(); ++i)
-			ValidateTemplateNode(node->children[i], parameters, known_names,
-				next_class, in_function || function_node, special_members, node, i);
-	}
-	void ValidateTemplateDiagnostics(const vector<CPPGMAstNodePtr>& input) const
-	{
-		set<string> known_names;
-		for(size_t i = 0; i < input.size(); ++i) CollectValidationNames(input[i], known_names);
-		map<string, bool> special_members;
-		for(size_t i = 0; i < input.size(); ++i)
-			ValidateTemplateDiagnosticsNode(input[i], known_names, special_members);
-	}
+		size_t child_index = static_cast<size_t>(-1)) const;
+	void ValidateTemplateDiagnostics(const vector<CPPGMAstNodePtr>& input) const;
 	void ValidateTemplateDiagnosticsNode(const CPPGMAstNodePtr& node,
-		const set<string>& known_names, map<string, bool>& special_members) const
-	{
-		if(!node) return;
-		if(node->kind == "template-declaration" && node->children.size() > 1) {
-			set<string> parameters;
-			const vector<TemplateParameter> values = Parameters(node->children[0]);
-			for(size_t i = 0; i < values.size(); ++i) parameters.insert(values[i].name);
-			ValidateTemplateNode(node->children[1], parameters, known_names,
-				string(), false, special_members);
-			return;
-		}
-		for(size_t i = 0; i < node->children.size(); ++i)
-			ValidateTemplateDiagnosticsNode(node->children[i], known_names, special_members);
-	}
+		const set<string>& known_names, map<string, bool>& special_members) const;
+	bool ValidationTypeArgument(const string& raw,
+		const map<string, bool>& parameters) const;
+	void ValidateTemplateArgumentKinds(const CPPGMAstNodePtr& node,
+		const string& inherited_context,
+		const map<string, bool>& inherited_parameters) const;
 	map<string, TemplateDefinition> definitions_;
 	map<string, vector<string> > definitions_by_name_;
+	map<string, vector<TemplateDefinition> > class_specializations_;
 	map<const CPPGMAstNode*, string> lexical_contexts_;
 	set<string> lexical_namespace_paths_;
 	map<string, string> lexical_namespace_logical_;
@@ -487,15 +518,28 @@ private:
 	map<string, PA19IntegralValue> constant_values_;
 	map<string, size_t> constant_type_sizes_, constant_type_alignments_;
 	map<string, PA19IntegralValue> active_integral_substitutions_;
+	// A template parameter pack is a collection of typed substitutions.  Keep
+	// the collection separate from the scalar substitution map so an expanded
+	// declaration or call can consume every element without losing the first
+	// one to ordinary identifier replacement.
+	map<string, vector<string> > active_pack_substitutions_;
+	map<string, vector<string> > active_pack_identifier_substitutions_;
 	map<string, string> type_aliases_;
 	map<string, vector<string> > type_aliases_by_name_;
 	map<string, FunctionSignature> function_signatures_;
 	map<string, vector<string> > function_signatures_by_name_;
+	map<string, vector<FunctionSignature> > function_overloads_;
 	map<string, string> specialization_bases_;
 	map<string, vector<string> > specialization_arguments_;
+	map<string, TemplateDefinition> explicit_function_specializations_;
+	map<const CPPGMAstNode*, vector<string> > explicit_function_arguments_;
 	map<string, set<string> > requested_nested_classes_;
 	set<string> materialized_nested_classes_, materialized_member_definitions_;
+	set<string> active_template_member_types_;
 	mutable map<string, string> function_markers_, function_marker_names_;
+	size_t EstimateTypeSize(string raw, const string& context) const;
+	void RecordClassTypeSize(const CPPGMAstNodePtr& node, const string& context,
+		const string& class_path);
 	string InheritedTypeName(const string& scope, const string& name,
 		set<string>* active) const;
 	string QualifyTypeArgument(string spelling, const string& context,
@@ -523,113 +567,8 @@ private:
 		const map<string, string>& substitutions, const string& context) const;
 	CPPGMAstNodePtr TransformCallExpression(const CPPGMAstNodePtr& input,
 		const string& context, const map<string, string>& substitutions);
-	string ResolveAlias(string spelling, const string& context) const
-	{
-		spelling = CanonicalSpelling(spelling);
-		string cv_prefix;
-		if(spelling.compare(0, 6, "const ") == 0) {
-			cv_prefix = "const ";
-			spelling = CanonicalSpelling(spelling.substr(6));
-		} else if(spelling.compare(0, 9, "volatile ") == 0) {
-			cv_prefix = "volatile ";
-			spelling = CanonicalSpelling(spelling.substr(9));
-		}
-		string suffix;
-		while(!spelling.empty() && (spelling[spelling.size() - 1] == '*' ||
-			spelling[spelling.size() - 1] == '&')) {
-			suffix = spelling[spelling.size() - 1] + suffix;
-			spelling.erase(spelling.size() - 1);
-			spelling = CanonicalSpelling(spelling);
-		}
-		string array_suffix;
-		while(!spelling.empty() && spelling[spelling.size() - 1] == ']') {
-			const size_t open = spelling.rfind('[');
-			if(open == string::npos) break;
-			array_suffix = spelling.substr(open) + array_suffix;
-			spelling.erase(open);
-			spelling = CanonicalSpelling(spelling);
-		}
-		set<string> seen;
-		for(size_t depth = 0; depth < 16; ++depth) {
-			if(!seen.insert(spelling).second) break;
-			map<string, string>::const_iterator direct = type_aliases_.find(spelling);
-			if(direct == type_aliases_.end()) {
-				for(string current = context; direct == type_aliases_.end(); ) {
-					const string candidate = JoinPath(current, spelling);
-					direct = type_aliases_.find(candidate);
-					const size_t separator = current.rfind("::");
-					if(separator == string::npos) break;
-					current.erase(separator);
-				}
-			}
-			if(direct == type_aliases_.end()) {
-				const string short_name = LastComponent(spelling);
-				map<string, vector<string> >::const_iterator candidates = type_aliases_by_name_.find(short_name);
-				if(spelling.find("::") == string::npos &&
-					candidates != type_aliases_by_name_.end() && candidates->second.size() == 1)
-					direct = type_aliases_.find(candidates->second[0]);
-			}
-			if(direct != type_aliases_.end()) {
-				string target = direct->second;
-				const size_t owner_separator = spelling.rfind("::");
-				if(owner_separator != string::npos) {
-					const string owner = spelling.substr(0, owner_separator);
-					const size_t target_open = target.find('<');
-					if(target_open != string::npos && target.find("::") == string::npos) {
-						const string target_base = target.substr(0, target_open);
-						const TemplateDefinition* target_definition =
-							FindDefinition(target_base, owner);
-						if(target_definition)
-							target = target_definition->qualified_name + target.substr(target_open);
-					}
-					map<string, CPPGMAstNodePtr>::const_iterator declaration =
-						class_declarations_.find(owner);
-					if(declaration != class_declarations_.end())
-						target = QualifyNestedMembers(target, owner, declaration->second);
-				}
-				spelling = CanonicalSpelling(target);
-				continue;
-			}
-			const size_t separator = spelling.rfind("::");
-			if(separator == string::npos) break;
-			string class_key = spelling.substr(0, separator);
-			const string member = spelling.substr(separator + 2);
-			string member_type = MemberAliasType(class_key, member);
-			if(member_type.empty()) {
-				for(string current = context; member_type.empty() && !current.empty(); ) {
-					member_type = MemberAliasType(JoinPath(current, class_key), member);
-					const size_t parent = current.rfind("::");
-					if(parent == string::npos) current.clear();
-					else current.erase(parent);
-				}
-			}
-			if(member_type.empty()) {
-				const size_t owner_separator = class_key.rfind("::");
-				if(owner_separator != string::npos) {
-					const string owner_key = class_key.substr(0, owner_separator);
-					const string owner_member = class_key.substr(owner_separator + 2);
-					const string owner_type = MemberAliasType(owner_key, owner_member);
-					if(!owner_type.empty()) {
-						spelling = owner_type + "::" + member;
-						continue;
-					}
-				}
-			}
-			if(member_type.empty()) break;
-			spelling = CanonicalSpelling(member_type);
-		}
-		return CanonicalSpelling(cv_prefix + spelling + suffix + array_suffix);
-	}
-	bool ContainsName(const CPPGMAstNodePtr& node, const string& name) const
-	{
-		if(!node || name.empty()) return false;
-		const string value = RemoveMarker(node->value);
-		if(value == name || LastComponent(value) == name ||
-			value.find(name + "::") != string::npos) return true;
-		for(size_t i = 0; i < node->children.size(); ++i)
-			if(ContainsName(node->children[i], name)) return true;
-		return false;
-	}
+	string ResolveAlias(string spelling, const string& context) const;
+	bool ContainsName(const CPPGMAstNodePtr& node, const string& name) const;
 	string DeclarationName(const CPPGMAstNodePtr& declaration) const
 	{
 		if(!declaration) return string();
@@ -672,6 +611,7 @@ private:
 		signature.result_specifiers = CloneNode(result_specs);
 		signature.parameters = CloneNode(DescendantOfKind(declarator, "parameter-clause"));
 		const string qualified = JoinPath(context, name);
+		function_overloads_[qualified].push_back(signature);
 		if(function_signatures_.find(qualified) == function_signatures_.end())
 			function_signatures_by_name_[name].push_back(qualified);
 		function_signatures_[qualified] = signature;
@@ -698,71 +638,10 @@ private:
 			names->second[0]);
 		return found == function_signatures_.end() ? 0 : &found->second;
 	}
-	string FunctionMarker(const string& raw_name, const string& context) const
-	{
-		const FunctionSignature* signature = FindFunctionSignature(raw_name, context);
-		if(!signature) return string();
-		const string qualified = JoinPath(context, raw_name);
-		map<string, string>::const_iterator existing = function_markers_.find(qualified);
-		if(existing != function_markers_.end()) return existing->second;
-		string marker = "__PA18_FUNCTION_TYPE_" + LastComponent(raw_name);
-		unsigned int suffix = 0;
-		for(;; ++suffix) {
-			bool collision = false;
-			for(map<string, string>::const_iterator it = function_markers_.begin();
-				it != function_markers_.end(); ++it)
-				if(it->second == marker) collision = true;
-			if(!collision) break;
-			ostringstream candidate;
-			candidate << "__PA18_FUNCTION_TYPE_" << LastComponent(raw_name) << "_" << suffix;
-			marker = candidate.str();
-		}
-		function_markers_[qualified] = marker;
-		function_marker_names_[marker] = qualified;
-		return marker;
-	}
+	string FunctionMarker(const string& raw_name, const string& context) const;
 	CPPGMAstNodePtr FunctionParameter(const CPPGMAstNodePtr& original,
-		const FunctionSignature& signature, const string& marker) const
-	{
-		if(!original || original->children.empty() || !signature.result_specifiers ||
-			!signature.parameters) return CPPGMAstNodePtr();
-		string parameter_name;
-		bool reference = false;
-		bool rvalue_reference = false;
-		if(original->children.size() > 1 && original->children[1]) {
-			parameter_name = FirstIdentifierLocal(original->children[1]);
-			for(size_t i = 0; i < original->children[1]->children.size(); ++i) {
-				const CPPGMAstNodePtr child = original->children[1]->children[i];
-				if(!child || child->kind != "ptr-operator") continue;
-				if(child->value.find("&") != string::npos) {
-					reference = true;
-					rvalue_reference = child->value.find("&&") != string::npos;
-				}
-			}
-		}
-		if(parameter_name.empty()) parameter_name = "function";
-		CPPGMAstNodePtr result(new CPPGMAstNode("parameter-declaration"));
-		result->children.push_back(CloneNode(signature.result_specifiers));
-		CPPGMAstNodePtr declarator(new CPPGMAstNode("declarator"));
-		CPPGMAstNodePtr nested(new CPPGMAstNode("nested-declarator"));
-		CPPGMAstNodePtr inner(new CPPGMAstNode("declarator"));
-		inner->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("ptr-operator",
-			reference ? (rvalue_reference ? "OP_LAND:&&" : "OP_AMP:&") : "OP_STAR:*")));
-		inner->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("identifier", parameter_name)));
-		nested->children.push_back(inner);
-		declarator->children.push_back(nested);
-		declarator->children.push_back(CloneNode(signature.parameters));
-		result->children.push_back(declarator);
-		(void)marker;
-		return result;
-	}
-	CPPGMAstNodePtr MakeForwardClass(const string& name) const
-	{
-		CPPGMAstNodePtr result(new CPPGMAstNode("class-forward-declaration", name));
-		result->children.push_back(CPPGMAstNodePtr(
-			new CPPGMAstNode("class-key", "KW_STRUCT:struct")));
-		return result;
-	}
+		const FunctionSignature& signature, const string& marker) const;
+	CPPGMAstNodePtr MakeForwardClass(const string& name) const;
 	CPPGMAstNodePtr MakeClassShell(const string& name) const
 	{
 		CPPGMAstNodePtr result(new CPPGMAstNode("class-specifier", name));
@@ -955,10 +834,29 @@ private:
 	{
 		if(!node || node->kind != "template-declaration" || node->children.size() < 2) return;
 		const CPPGMAstNodePtr declaration = node->children[1];
-		const string name = DeclarationName(declaration);
+		const string raw_declaration_name = DeclarationName(declaration);
+		string name = CanonicalSpelling(raw_declaration_name);
 		if(name.empty()) return;
 		TemplateDefinition item;
 		item.name = name;
+		item.partial_specialization = false;
+		if(declaration->kind == "class-specifier" ||
+			declaration->kind == "class-forward-declaration" ||
+			declaration->kind == "simple-declaration") {
+			const size_t open = name.find('<');
+			if(open != string::npos && name[name.size() - 1] == '>') {
+				item.partial_specialization = true;
+				const string pattern_text = name.substr(open + 1,
+					name.size() - open - 2);
+				name = name.substr(0, open);
+				item.name = name;
+				item.specialization_pattern = SplitTemplateArguments(pattern_text);
+				const vector<TemplateParameter> clause_parameters =
+					Parameters(node->children[0]);
+				for(size_t i = 0; i < clause_parameters.size(); ++i)
+					item.specialization_parameters.push_back(clause_parameters[i].name);
+			}
+		}
 		string declared_prefix;
 		if(declaration->kind == "class-specifier" ||
 			declaration->kind == "class-forward-declaration")
@@ -985,7 +883,100 @@ private:
 		item.class_template = declaration->kind == "class-specifier" ||
 			declaration->kind == "class-forward-declaration";
 		item.alias_template = declaration->kind == "alias-declaration";
+		// `template<>` function declarations are explicit specializations, not
+		// overloads of the primary template.  Keep their concrete body in typed
+		// state so a later call can select it after normal template deduction.
+		if(item.parameters.empty() && !item.class_template &&
+			(declaration->kind == "function-definition" ||
+			 declaration->kind == "simple-declaration")) {
+			string specialization_base;
+			vector<string> specialization_arguments;
+			const size_t open = name.find('<');
+			string argument_text;
+			size_t begin = 0, close = string::npos;
+			if(open != string::npos && TemplateBase(name, open, &begin,
+				&specialization_base) && TemplateRange(name, open, &argument_text, &close))
+				specialization_arguments = SplitTemplateArguments(argument_text);
+			else specialization_base = name;
+			const TemplateDefinition* primary = FindDefinition(specialization_base, context);
+			if(primary && !primary->class_template && !primary->parameters.empty()) {
+				if(specialization_arguments.empty()) {
+					const CPPGMAstNodePtr primary_declarator = FunctionDeclarator(primary->declaration);
+					const CPPGMAstNodePtr primary_parameters =
+						DescendantOfKind(primary_declarator, "parameter-clause");
+					const CPPGMAstNodePtr specialized_declarator = FunctionDeclarator(declaration);
+					const CPPGMAstNodePtr specialized_parameters =
+						DescendantOfKind(specialized_declarator, "parameter-clause");
+					set<string> parameter_names;
+					for(size_t parameter = 0; parameter < primary->parameters.size(); ++parameter)
+						parameter_names.insert(primary->parameters[parameter].name);
+					map<string, string> inferred;
+					if(primary_parameters && specialized_parameters &&
+						primary_parameters->children.size() == specialized_parameters->children.size())
+						for(size_t parameter = 0; parameter < primary_parameters->children.size(); ++parameter) {
+							const CPPGMAstNodePtr primary_parameter = primary_parameters->children[parameter];
+							const CPPGMAstNodePtr specialized_parameter = specialized_parameters->children[parameter];
+							if(!primary_parameter || !specialized_parameter ||
+								!MatchTypePattern(ParameterTypeSpelling(primary_parameter),
+									ParameterTypeSpelling(specialized_parameter), parameter_names,
+									&inferred, context)) {
+								inferred.clear();
+								break;
+							}
+						}
+					if(!inferred.empty()) for(size_t parameter = 0;
+						parameter < primary->parameters.size(); ++parameter) {
+							map<string, string>::const_iterator found = inferred.find(
+								primary->parameters[parameter].name);
+							if(found == inferred.end()) { inferred.clear(); break; }
+							specialization_arguments.push_back(found->second);
+						}
+				}
+				if(specialization_arguments.size() == primary->parameters.size()) {
+					item.name = primary->name;
+					item.owner = primary->owner;
+					item.lexical_owner = primary->lexical_owner;
+					item.qualified_name = primary->qualified_name;
+					item.parameters = primary->parameters;
+					item.declaration = CloneNode(declaration);
+					const CPPGMAstNodePtr primary_declarator = FunctionDeclarator(primary->declaration);
+					const CPPGMAstNodePtr specialized_declarator = FunctionDeclarator(declaration);
+					const CPPGMAstNodePtr primary_parameters =
+						DescendantOfKind(primary_declarator, "parameter-clause");
+					const CPPGMAstNodePtr specialized_parameters =
+						DescendantOfKind(specialized_declarator, "parameter-clause");
+					map<string, string> parameter_renames;
+					if(primary_parameters && specialized_parameters)
+						for(size_t parameter = 0; parameter < primary_parameters->children.size() &&
+							parameter < specialized_parameters->children.size(); ++parameter) {
+							const string primary_name = FirstIdentifierLocal(
+								primary_parameters->children[parameter]);
+							const string specialized_name = FirstIdentifierLocal(
+								specialized_parameters->children[parameter]);
+							if(!primary_name.empty() && !specialized_name.empty() &&
+								primary_name != specialized_name)
+								parameter_renames[specialized_name] = primary_name;
+						}
+					ReplaceAstIdentifiers(item.declaration, parameter_renames);
+					explicit_function_arguments_[declaration.get()] = specialization_arguments;
+					explicit_function_specializations_[PA18ExplicitSpecializationKey(
+						primary->qualified_name, specialization_arguments)] = item;
+					return;
+				}
+			}
+		}
 		map<string, TemplateDefinition>::iterator prior = definitions_.find(item.qualified_name);
+		if(item.partial_specialization) {
+			// A partial specialization is selected from the primary only after
+			// its concrete arguments are known.  Keep the primary's parameter
+			// contract for materialization, while retaining the specialization's
+			// own names/pattern for matching and body substitution.
+			if(prior != definitions_.end())
+				item.parameters = prior->second.parameters;
+			class_specializations_[item.qualified_name].push_back(item);
+			Collect(declaration, JoinPath(item.owner, item.name));
+			return;
+		}
 		if(prior != definitions_.end() && !item.class_template && !prior->second.class_template) {
 			ostringstream overload_key;
 			overload_key << item.qualified_name << "#overload" << definitions_by_name_[item.name].size();
@@ -1102,12 +1093,18 @@ private:
 		if(node->kind == "enum-specifier" && !node->value.empty())
 			named_type_contexts_.insert(JoinPath(context, LastComponent(node->value)));
 		for(size_t i = 0; i < node->children.size(); ++i) Collect(node->children[i], next_context);
+		if(node->kind == "class-specifier" || node->kind == "class-forward-declaration")
+			RecordClassTypeSize(node, context, JoinPath(context, LastComponent(node->value)));
 	}
 	void CollectVariables(const CPPGMAstNodePtr& node)
 	{
 		if(!node) return;
-		if(node->kind == "function-definition" && node->children.size() > 1) {
-			const CPPGMAstNodePtr parameters = ChildOfKindLocal(node->children[1], "parameter-clause");
+		if((node->kind == "function-definition" ||
+			node->kind == "special-member-definition") && node->children.size() > 1) {
+			const CPPGMAstNodePtr declarator = node->kind == "function-definition" ?
+				node->children[1] : ChildOfKindLocal(node, "declarator");
+			const CPPGMAstNodePtr parameters = DescendantOfKind(declarator,
+				"parameter-clause");
 			if(parameters) for(size_t i = 0; i < parameters->children.size(); ++i) {
 				const CPPGMAstNodePtr parameter = parameters->children[i];
 				if(!parameter || parameter->kind != "parameter-declaration" || parameter->children.size() < 2)
@@ -1150,7 +1147,10 @@ private:
 				const CPPGMAstNodePtr item = list->children[i];
 				if(!item || item->children.empty()) continue;
 				const string name = FirstIdentifierLocal(item->children[0]);
-				if(!name.empty() && !type.empty()) variable_types_[name] = CanonicalSpelling(type);
+				if(!name.empty() && !type.empty())
+					variable_types_[name] = CanonicalSpelling(type +
+						DeclaratorSuffix(item->children[0]) +
+						DeclaratorArraySuffix(item->children[0]));
 			}
 		}
 		for(size_t i = 0; i < node->children.size(); ++i) CollectVariables(node->children[i]);

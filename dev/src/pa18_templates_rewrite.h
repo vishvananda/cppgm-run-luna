@@ -4,92 +4,44 @@
 #include "pa18_templates_rewrite_instantiate.h"
 bool MatchTypePattern(string pattern, string actual,
 		const set<string>& parameter_names, map<string, string>* inferred,
+		const string& context) const;
+	bool MatchClassSpecializationPattern(const TemplateDefinition& definition,
+		const vector<string>& arguments, map<string, string>* inferred,
 		const string& context) const
 	{
-		pattern = CanonicalSpelling(pattern);
-		actual = ResolveAlias(actual, context);
-		pattern = CanonicalSpelling(pattern);
-		while(pattern.compare(0, 6, "const ") == 0) pattern = CanonicalSpelling(pattern.substr(6));
-		while(pattern.compare(0, 9, "volatile ") == 0) pattern = CanonicalSpelling(pattern.substr(9));
-		while(actual.compare(0, 6, "const ") == 0) actual = CanonicalSpelling(actual.substr(6));
-		while(actual.compare(0, 9, "volatile ") == 0) actual = CanonicalSpelling(actual.substr(9));
-		for(;;) {
-			bool removed = false;
-			if(pattern.size() > 6 && pattern.compare(pattern.size() - 6, 6, " const") == 0) {
-				pattern = CanonicalSpelling(pattern.substr(0, pattern.size() - 6));
-				removed = true;
-			} else if(pattern.size() > 9 &&
-				pattern.compare(pattern.size() - 9, 9, " volatile") == 0) {
-				pattern = CanonicalSpelling(pattern.substr(0, pattern.size() - 9));
-				removed = true;
-			}
-			if(!removed) break;
+		if(!definition.partial_specialization ||
+			definition.specialization_pattern.size() > arguments.size()) return false;
+		set<string> parameter_names;
+		for(size_t i = 0; i < definition.specialization_parameters.size(); ++i)
+			parameter_names.insert(definition.specialization_parameters[i]);
+		map<string, string> local;
+		for(size_t i = 0; i < definition.specialization_pattern.size(); ++i) {
+			const string pattern = CanonicalSpelling(definition.specialization_pattern[i]);
+			const string actual = CanonicalSpelling(arguments[i]);
+			if(pattern.size() > 2 && pattern.compare(pattern.size() - 2, 2, "&&") == 0 &&
+				(actual.size() < 2 || actual.compare(actual.size() - 2, 2, "&&") != 0)) return false;
+			const bool lvalue_reference_pattern = pattern.size() > 0 &&
+				pattern[pattern.size() - 1] == '&' &&
+				!(pattern.size() > 1 && pattern[pattern.size() - 2] == '&');
+			if(lvalue_reference_pattern &&
+				(actual.empty() || actual[actual.size() - 1] != '&')) return false;
+			if(!MatchTypePattern(pattern, actual, parameter_names, &local, context)) return false;
 		}
-		for(;;) {
-			bool removed = false;
-			if(actual.size() > 6 && actual.compare(actual.size() - 6, 6, " const") == 0) {
-				actual = CanonicalSpelling(actual.substr(0, actual.size() - 6));
-				removed = true;
-			} else if(actual.size() > 9 &&
-				actual.compare(actual.size() - 9, 9, " volatile") == 0) {
-				actual = CanonicalSpelling(actual.substr(0, actual.size() - 9));
-				removed = true;
-			}
-			if(!removed) break;
-		}
-		if(!pattern.empty() && pattern[pattern.size() - 1] == '&') {
-			pattern.erase(pattern.size() - 1);
-			if(!actual.empty() && actual[actual.size() - 1] == '&') actual.erase(actual.size() - 1);
-		}
-		if(!pattern.empty() && pattern[pattern.size() - 1] == '*') {
-			if(actual.empty() || actual[actual.size() - 1] != '*') return false;
-			pattern.erase(pattern.size() - 1);
-			actual.erase(actual.size() - 1);
-		}
-		pattern = CanonicalSpelling(pattern);
-		actual = CanonicalSpelling(actual);
-		while(pattern.size() > 6 && pattern.compare(pattern.size() - 6, 6, " const") == 0)
-			pattern = CanonicalSpelling(pattern.substr(0, pattern.size() - 6));
-		while(pattern.size() > 9 && pattern.compare(pattern.size() - 9, 9, " volatile") == 0)
-			pattern = CanonicalSpelling(pattern.substr(0, pattern.size() - 9));
-		while(actual.size() > 6 && actual.compare(actual.size() - 6, 6, " const") == 0)
-			actual = CanonicalSpelling(actual.substr(0, actual.size() - 6));
-		while(actual.size() > 9 && actual.compare(actual.size() - 9, 9, " volatile") == 0)
-			actual = CanonicalSpelling(actual.substr(0, actual.size() - 9));
-		if(parameter_names.find(pattern) != parameter_names.end()) {
-			(*inferred)[pattern] = actual;
-			return true;
-		}
-		const size_t pattern_open = pattern.find('<');
-		if(pattern_open != string::npos) {
-			string pattern_arguments;
-			size_t pattern_close = string::npos;
-			if(!TemplateRange(pattern, pattern_open, &pattern_arguments, &pattern_close)) return false;
-			const size_t actual_open = actual.find('<');
-			const vector<string> pattern_parts = SplitTemplateArguments(pattern_arguments);
-			vector<string> actual_parts;
-			if(actual_open == string::npos) {
-				map<string, vector<string> >::const_iterator specialization =
-					specialization_arguments_.find(LastComponent(actual));
-				map<string, string>::const_iterator base = specialization_bases_.find(LastComponent(actual));
-				if(specialization == specialization_arguments_.end() || base == specialization_bases_.end() ||
-					LastComponent(base->second) != LastComponent(pattern.substr(0, pattern_open))) return false;
-				actual_parts = specialization->second;
-			} else {
-				string actual_arguments;
-				size_t actual_close = string::npos;
-				if(!TemplateRange(actual, actual_open, &actual_arguments, &actual_close)) return false;
-				if(LastComponent(pattern.substr(0, pattern_open)) !=
-					LastComponent(actual.substr(0, actual_open))) return false;
-				actual_parts = SplitTemplateArguments(actual_arguments);
-			}
-			if(pattern_parts.size() != actual_parts.size()) return false;
-			for(size_t i = 0; i < pattern_parts.size(); ++i)
-				if(!MatchTypePattern(pattern_parts[i], actual_parts[i], parameter_names, inferred, context))
-					return false;
-			return true;
-		}
-		return pattern == actual;
+		if(inferred) *inferred = local;
+		return true;
+	}
+	const TemplateDefinition* SelectClassTemplateDefinition(
+		const TemplateDefinition* primary, const vector<string>& arguments,
+		const string& context) const
+	{
+		if(!primary) return primary;
+		map<string, vector<TemplateDefinition> >::const_iterator candidates =
+			class_specializations_.find(primary->qualified_name);
+		if(candidates == class_specializations_.end()) return primary;
+		for(size_t i = 0; i < candidates->second.size(); ++i)
+			if(MatchClassSpecializationPattern(candidates->second[i], arguments,
+				0, context)) return &candidates->second[i];
+		return primary;
 	}
 	CPPGMAstNodePtr FindClassDeclaration(string raw_class, const string& context) const
 	{
@@ -99,6 +51,13 @@ bool MatchTypePattern(string pattern, string actual,
 		raw_class = CanonicalSpelling(raw_class);
 		map<string, CPPGMAstNodePtr>::const_iterator concrete = class_declarations_.find(raw_class);
 		if(concrete != class_declarations_.end()) return concrete->second;
+		const size_t template_open = raw_class.find('<');
+		if(template_open != string::npos) {
+			const TemplateDefinition* template_definition = FindDefinition(
+				raw_class.substr(0, template_open), context);
+			if(template_definition && template_definition->class_template)
+				return template_definition->declaration;
+		}
 		map<string, string>::const_iterator specialization = specialization_bases_.find(
 			LastComponent(raw_class));
 		if(specialization != specialization_bases_.end()) raw_class = specialization->second;
@@ -230,160 +189,76 @@ bool MatchTypePattern(string pattern, string actual,
 		active->erase(active_key);
 		return false;
 	}
-	bool InferArgument(const CPPGMAstNodePtr& expression, string* result,
-		const map<string, string>& substitutions, const string& context) const
+bool InferArgument(const CPPGMAstNodePtr& expression, string* result,
+		const map<string, string>& substitutions, const string& context) const;
+	bool IsFunctionParameterPack(const CPPGMAstNodePtr& parameter) const
 	{
-		if(!expression || !result) return false;
-		if(expression->kind == "literal") {
-			const string value = expression->value;
-			if(value.find('"') != string::npos) *result = "const char*";
-			else if(value.find('\'') != string::npos) *result = "char";
-			else *result = InferLiteralArgumentType(value);
-			return true;
-		}
-		if(expression->kind == "keyword-literal") {
-			*result = "bool";
-			return true;
-		}
-		if(expression->kind == "member-expression" && expression->children.size() >= 2) {
-			string object_type;
-			if(expression->children[0] && expression->children[0]->kind == "keyword-literal" &&
-				RemoveMarker(expression->children[0]->value) == "this") object_type = context;
-			else InferArgument(expression->children[0], &object_type, substitutions, context);
-			const string member = expression->children[1] ?
-				LastComponent(expression->children[1]->value) : string();
-			set<string> active;
-			if(!object_type.empty() && !member.empty() && FindClassMemberType(
-				object_type, member, substitutions, context, result, &active)) return true;
-		}
-		if(expression->kind == "cast-expression" && !expression->children.empty()) {
-			const CPPGMAstNodePtr type_id = expression->children[0];
-			if(type_id && type_id->kind == "type-id") {
-				*result = NormalizeTypeArgument(SpellNode(type_id));
-				return !result->empty();
-			}
-		}
-		if(expression->kind == "id-expression") {
-			map<string, string>::const_iterator found = variable_types_.find(LastComponent(expression->value));
-			if(found != variable_types_.end()) {
-				*result = ReplaceIdentifiers(ResolveAlias(found->second, context), substitutions);
-				return true;
-			}
-			const string marker = FunctionMarker(expression->value, context);
-			if(!marker.empty()) {
-				*result = marker;
-				return true;
-			}
-		}
-		if(expression->kind == "call-expression" && !expression->children.empty() && expression->children[0] && expression->children[0]->kind == "member-expression") {
-			const CPPGMAstNodePtr callee = expression->children[0];
-			string object_type;
-			if(callee->children.size() >= 2) {
-				if(callee->children[0] && callee->children[0]->kind == "keyword-literal" &&
-					RemoveMarker(callee->children[0]->value) == "this") object_type = context;
-				else InferArgument(callee->children[0], &object_type, substitutions, context);
-			}
-			const string member = callee->children.size() > 1 && callee->children[1] ?
-				LastComponent(callee->children[1]->value) : string();
-			set<string> active;
-			if(!object_type.empty() && !member.empty() && FindClassMemberType(
-				object_type, member, substitutions, context, result, &active)) return true;
-		}
-		if(expression->kind == "call-expression" && !expression->children.empty() && expression->children[0] && expression->children[0]->kind == "id-expression") {
-			const string member = LastComponent(expression->children[0]->value);
-			string owner; for(string current = context; ; ) {
-				if(class_contexts_.find(current) != class_contexts_.end()) { owner = current; break; }
-				if(current.empty()) break;
-				const size_t separator = current.rfind("::");
-				if(separator == string::npos) current.clear(); else current.erase(separator);
-			}
-			set<string> active;
-			if(!owner.empty() && !member.empty() && FindClassMemberType(
-				owner, member, substitutions, context, result, &active)) return true;
-		}
-		if(expression->kind == "call-expression" && !expression->children.empty() &&
-			expression->children[0] && expression->children[0]->kind == "id-expression") {
-			const string callee = LastComponent(expression->children[0]->value);
-			string nested_class; for(string current = context; ; ) {
-				const string candidate = JoinPath(current, callee);
-				if(class_contexts_.find(candidate) != class_contexts_.end() || class_declarations_.find(candidate) != class_declarations_.end()) { nested_class = candidate; break; }
-				if(current.empty()) break;
-				const size_t separator = current.rfind("::");
-				if(separator == string::npos) current.clear(); else current.erase(separator);
-			}
-			*result = nested_class.empty() ?
-				ResolveAlias(expression->children[0]->value, context) : nested_class;
-			return true;
-		}
-		if(expression->kind == "binary-expression" &&
-			InferBinaryArgument(expression, result, substitutions, context)) return true;
-		if(expression->kind == "unary-expression" && !expression->children.empty()) {
-			const string op = RemoveMarker(expression->value);
-			if(op == "&" && InferArgument(expression->children[0], result, substitutions, context)) {
-				*result = CanonicalSpelling(*result + "*");
-				return true;
-			}
-		}
-		return false;
+		return parameter && DescendantOfKind(parameter, "parameter-pack");
 	}
-	bool InferFunctionArguments(const TemplateDefinition& definition,
+	string FunctionSignatureType(const FunctionSignature& signature) const
+	{
+		if(!signature.result_specifiers || !signature.parameters) return string();
+		string result = NodeTypeSpelling(signature.result_specifiers) + "(*) (";
+		for(size_t i = 0; i < signature.parameters->children.size(); ++i) {
+			const CPPGMAstNodePtr parameter = signature.parameters->children[i];
+			if(!parameter || parameter->kind != "parameter-declaration") continue;
+			if(result[result.size() - 1] != '(') result += ',';
+			const bool function_parameter = parameter->children.size() > 1 &&
+				parameter->children[1] &&
+				ChildOfKindLocal(parameter->children[1], "nested-declarator") &&
+				ChildOfKindLocal(parameter->children[1], "parameter-clause");
+			result += function_parameter ? FunctionTypeSpelling(parameter) :
+				ParameterTypeSpelling(parameter);
+		}
+		result += ')';
+		return CanonicalSpelling(result);
+	}
+	vector<string> FunctionExpressionTypes(const CPPGMAstNodePtr& expression,
+		const string& context) const
+	{
+		vector<string> result;
+		CPPGMAstNodePtr function = expression;
+		if(function && function->kind == "unary-expression" &&
+			RemoveMarker(function->value) == "&" && !function->children.empty())
+			function = function->children[0];
+		if(!function || function->kind != "id-expression") return result;
+		const string name = LastComponent(function->value);
+		map<string, vector<string> >::const_iterator names =
+			function_signatures_by_name_.find(name);
+		if(names != function_signatures_by_name_.end()) {
+			for(size_t i = 0; i < names->second.size(); ++i) {
+				map<string, vector<FunctionSignature> >::const_iterator overloads =
+					function_overloads_.find(names->second[i]);
+				if(overloads != function_overloads_.end())
+					for(size_t overload = 0; overload < overloads->second.size(); ++overload) {
+						const string type = FunctionSignatureType(overloads->second[overload]);
+						if(!type.empty() && find(result.begin(), result.end(), type) == result.end())
+							result.push_back(type);
+					}
+				else {
+					map<string, FunctionSignature>::const_iterator signature =
+						function_signatures_.find(names->second[i]);
+					if(signature == function_signatures_.end()) continue;
+					const string type = FunctionSignatureType(signature->second);
+					if(!type.empty() && find(result.begin(), result.end(), type) == result.end())
+						result.push_back(type);
+				}
+			}
+		}
+		if(result.empty()) {
+			const FunctionSignature* signature = FindFunctionSignature(function->value, context);
+			if(signature) {
+				const string type = FunctionSignatureType(*signature);
+				if(!type.empty()) result.push_back(type);
+			}
+		}
+		return result;
+	}
+bool InferFunctionArguments(const TemplateDefinition& definition,
 		const CPPGMAstNodePtr& call, vector<string>* result,
 		const map<string, string>& substitutions, const string& context,
-		const vector<string>* explicit_prefix = 0) const
-	{
-		if(!call || call->children.size() < 2 || !result) return false;
-		const CPPGMAstNodePtr declarator = FunctionDeclarator(definition.declaration);
-		const CPPGMAstNodePtr parameters = DescendantOfKind(declarator, "parameter-clause");
-		const CPPGMAstNodePtr arguments = call->children[1] &&
-			call->children[1]->kind == "argument-list" ? call->children[1] :
-			ChildOfKindLocal(call->children[1], "argument-list");
-		if(!parameters || !arguments) return false;
-		size_t parameter_count = 0;
-		size_t required_parameters = 0;
-		if(!FunctionParameterCounts(parameters, &parameter_count, &required_parameters)) return false;
-		if(arguments->children.size() < required_parameters || arguments->children.size() > parameter_count) return false;
-		map<string, string> inferred;
-		set<string> parameter_names;
-		for(size_t i = 0; i < definition.parameters.size(); ++i) {
-			parameter_names.insert(definition.parameters[i].name);
-			if(explicit_prefix && i < explicit_prefix->size())
-				inferred[definition.parameters[i].name] = (*explicit_prefix)[i];
-		}
-		size_t argument_index = 0;
-		for(size_t i = 0; i < parameters->children.size(); ++i) {
-			const CPPGMAstNodePtr parameter = parameters->children[i];
-			if(!parameter || parameter->kind != "parameter-declaration") continue;
-			if(argument_index >= arguments->children.size()) break;
-			string type;
-			const bool inferred_argument = InferArgument(arguments->children[argument_index], &type, substitutions, context);
-			if(inferred_argument) {
-				const string pattern = ParameterTypeSpelling(parameter);
-				bool dependent = false;
-				for(size_t p = 0; p < definition.parameters.size(); ++p) {
-					const string& name = definition.parameters[p].name;
-					for(size_t at = 0; at + name.size() <= pattern.size(); ++at)
-						if(pattern.compare(at, name.size(), name) == 0 &&
-							(at == 0 || !IsIdentifierCharacter(pattern[at - 1])) &&
-							(at + name.size() == pattern.size() ||
-							 !IsIdentifierCharacter(pattern[at + name.size()]))) {
-							dependent = true;
-							break;
-						}
-					if(dependent) break;
-				}
-				if(dependent && !MatchTypePattern(pattern, type, parameter_names, &inferred, context))
-					return false;
-			}
-			++argument_index;
-		}
-		for(size_t i = 0; i < definition.parameters.size(); ++i) {
-			map<string, string>::const_iterator found = inferred.find(definition.parameters[i].name);
-			if(found != inferred.end()) result->push_back(found->second);
-			else if(!definition.parameters[i].default_type.empty()) result->push_back(definition.parameters[i].default_type);
-			else return false;
-		}
-		return true;
-	}
+		const vector<string>* explicit_prefix = 0,
+		map<string, vector<string> >* inferred_pack_values = 0) const;
 	bool SplitFunctionPointerType(string raw, string* result_type,
 		vector<string>* parameters) const
 	{
@@ -501,7 +376,7 @@ bool MatchTypePattern(string pattern, string actual,
 		}
 		const vector<const TemplateDefinition*> candidates = FindFunctionDefinitions(
 			"operator" + operation, context);
-		if(candidates.empty()) return;
+			if(candidates.empty()) return;
 		CPPGMAstNodePtr call(new CPPGMAstNode("call-expression"));
 		call->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
 			"id-expression", "operator" + operation)));
@@ -511,9 +386,10 @@ bool MatchTypePattern(string pattern, string actual,
 		call->children.push_back(arguments);
 		for(size_t i = 0; i < candidates.size(); ++i) {
 			vector<string> inferred;
+			map<string, vector<string> > inferred_pack_values;
 			if(!InferFunctionArguments(*candidates[i], call, &inferred,
-				substitutions, context)) continue;
-			Instantiate(*candidates[i], inferred, context);
+				substitutions, context, 0, &inferred_pack_values)) continue;
+			Instantiate(*candidates[i], inferred, context, false, &inferred_pack_values);
 			return;
 		}
 	}
@@ -548,107 +424,40 @@ bool MatchTypePattern(string pattern, string actual,
 		}
 		return raw;
 	}
-	string RewriteText(string raw, const string& context, const map<string, string>& substitutions,
-		bool* template_replaced, bool resolve_alias = true, bool resolve_member = true)
+	string ExpandPackCallText(string raw,
+		const map<string, vector<string> >& packs) const
 	{
-		if(template_replaced) *template_replaced = false;
-		if(raw.compare(0, 8, "operator") == 0) {
-			const string suffix = raw.substr(8);
-			map<string, string>::const_iterator operator_substitution = substitutions.find(suffix);
-			if(operator_substitution != substitutions.end()) {
-				raw = "operator" + operator_substitution->second;
-				if(template_replaced) *template_replaced = true;
-			}
-		}
-		raw = RewriteDecltypeText(raw, context, substitutions, template_replaced);
+		// Textual unevaluated operands such as `declval<Args>()...` are
+		// encountered while resolving a default template argument, before the
+		// declaration AST is transformed.  Expand that complete call here so
+		// the ordinary template-id pass never tries to instantiate a dependent
+		// `declval<Args>` specialization.
 		for(size_t search = 0; search < raw.size(); ++search) {
 			if(raw[search] != '<') continue;
-			size_t begin = 0;
-			string base;
-			if(!TemplateBase(raw, search, &begin, &base)) continue;
-			string arguments_text;
-			size_t close = string::npos;
-			if(!TemplateRange(raw, search, &arguments_text, &close)) continue;
-			const TemplateDefinition* definition = FindDefinition(base, context);
-			string lookup_base = base;
-			map<string, string>::const_iterator qualified_alias = substitutions.find(base);
-			if(qualified_alias != substitutions.end() &&
-				qualified_alias->second.find("::") != string::npos)
-				lookup_base = qualified_alias->second;
-			if(!definition) {
-				const size_t separator = base.find("::");
-				if(separator != string::npos) {
-					const map<string, string>::const_iterator alias = substitutions.find(
-						base.substr(0, separator));
-					if(alias != substitutions.end()) {
-						lookup_base = alias->second + base.substr(separator);
-						definition = FindDefinition(lookup_base, context);
-					}
-				}
+			size_t begin = 0, close = string::npos;
+			string base, arguments;
+			if(!TemplateBase(raw, search, &begin, &base) ||
+				!TemplateRange(raw, search, &arguments, &close)) continue;
+			const vector<string> values = SplitTemplateArguments(arguments);
+			if(values.size() != 1) continue;
+			const string pack_name = CanonicalSpelling(values[0]);
+			map<string, vector<string> >::const_iterator pack = packs.find(pack_name);
+			if(pack == packs.end() || close + 5 >= raw.size() ||
+				raw[close + 1] != '(' || raw[close + 2] != ')' ||
+				raw.compare(close + 3, 3, "...") != 0) continue;
+			string expansion;
+			for(size_t value = 0; value < pack->second.size(); ++value) {
+				if(!expansion.empty()) expansion += ',';
+				expansion += base + "<" + pack->second[value] + ">()";
 			}
-			if(lookup_base != base) definition = FindDefinition(lookup_base, context);
-			if(!definition) continue;
-			vector<string> args = SplitTemplateArguments(arguments_text);
-			for(size_t i = 0; i < args.size(); ++i) {
-				args[i] = NormalizeTypeArgument(RewriteText(args[i], context, substitutions, 0));
-				args[i] = NormalizeTypeArgument(ReplaceIdentifiers(args[i], substitutions));
-				args[i] = ResolveAlias(args[i], context);
-				args[i] = NormalizeTypeArgument(RewriteText(args[i], context, substitutions, 0));
-				args[i] = ResolveAlias(args[i], context);
-				args[i] = QualifyTypeArgument(args[i], context, definition->owner);
-			}
-			if(args.size() < definition->parameters.size()) {
-				map<string, string> default_substitutions = substitutions;
-				for(size_t i = 0; i < args.size() && i < definition->parameters.size(); ++i)
-					default_substitutions[definition->parameters[i].name] = args[i];
-				for(size_t i = args.size(); i < definition->parameters.size(); ++i) {
-					string argument;
-					map<string, string>::const_iterator substituted = default_substitutions.find(
-						definition->parameters[i].name);
-					if(substituted != default_substitutions.end()) argument = substituted->second;
-					else if(!definition->parameters[i].default_type.empty())
-						argument = RewriteText(definition->parameters[i].default_type, context,
-							default_substitutions, 0);
-					if(argument.empty()) break;
-					argument = NormalizeTypeArgument(ReplaceIdentifiers(argument,
-						default_substitutions));
-					argument = ResolveAlias(argument, context);
-					argument = QualifyTypeArgument(argument, context, definition->owner);
-					args.push_back(argument);
-					default_substitutions[definition->parameters[i].name] = argument;
-				}
-			}
-				if(resolve_member && definition->class_template && close + 2 < raw.size() &&
-				raw.compare(close + 1, 2, "::") == 0) {
-				size_t nested_begin = close + 3;
-				while(nested_begin < raw.size() && IsIdentifierCharacter(raw[nested_begin])) ++nested_begin;
-				const string nested = raw.substr(close + 3, nested_begin - (close + 3));
-				if(!nested.empty()) {
-					const string member_type = TemplateMemberType(*definition, args, nested, context);
-					if(!member_type.empty()) {
-						raw.replace(begin, nested_begin - begin, member_type);
-						if(template_replaced) *template_replaced = true;
-						search = begin + member_type.size();
-						continue;
-					}
-					requested_nested_classes_[definition->qualified_name].insert(nested);
-					requested_nested_classes_[LastComponent(definition->qualified_name)].insert(nested);
-				}
-			}
-			const string local_name = Instantiate(*definition, args, context);
-			string replacement = local_name;
-			const string qualifier = PrefixComponent(lookup_base);
-			if(!qualifier.empty()) replacement = qualifier + "::" + local_name;
-			if(close + 1 < raw.size() && IsIdentifierCharacter(raw[close + 1]) &&
-				!replacement.empty() && IsIdentifierCharacter(replacement[replacement.size() - 1]))
-				replacement += ' ';
-			raw.replace(begin, close - begin + 1, replacement);
-			if(template_replaced) *template_replaced = true;
-			search = begin + replacement.size();
+			raw.replace(begin, close + 6 - begin, expansion);
+			search = begin + expansion.size();
 		}
-		raw = ReplaceIdentifiers(raw, substitutions);
-		return !resolve_alias || raw.find("::") == string::npos ? raw : ResolveAlias(raw, context);
+		return raw;
 	}
+	string RewriteText(string raw, const string& context,
+		const map<string, string>& substitutions, bool* template_replaced,
+		bool resolve_alias = true, bool resolve_member = true);
 	void ResolveFunctionArguments(const CPPGMAstNodePtr& result,
 		const FunctionSignature* signature, const string& context)
 	{
@@ -681,6 +490,59 @@ bool MatchTypePattern(string pattern, string actual,
 			++argument;
 		}
 	}
+	void ResolveClassConstructorFunctionArguments(const CPPGMAstNodePtr& result,
+		const string& context)
+	{
+		if(!result || result->children.size() < 2 || !result->children[0] ||
+			result->children[0]->kind != "id-expression" || !result->children[1] ||
+			result->children[1]->kind != "argument-list") return;
+		const CPPGMAstNodePtr declaration = FindClassDeclaration(
+			result->children[0]->value, context);
+		if(!declaration) return;
+		const CPPGMAstNodePtr arguments = result->children[1];
+		for(size_t member = 0; member < declaration->children.size(); ++member) {
+			const CPPGMAstNodePtr constructor = declaration->children[member];
+			if(!constructor || (constructor->kind != "special-member-definition" &&
+				constructor->kind != "special-member-declaration")) continue;
+			const CPPGMAstNodePtr clause = DescendantOfKind(
+				FunctionDeclarator(constructor), "parameter-clause");
+			if(!clause) continue;
+			size_t argument = 0;
+			for(size_t parameter = 0; parameter < clause->children.size() &&
+				argument < arguments->children.size(); ++parameter) {
+				const CPPGMAstNodePtr parameter_node = clause->children[parameter];
+				if(!parameter_node || parameter_node->kind != "parameter-declaration") continue;
+				const string expected = FunctionTypeSpelling(parameter_node);
+				CPPGMAstNodePtr original_argument = arguments->children[argument];
+				CPPGMAstNodePtr function_argument = original_argument;
+				if(function_argument && function_argument->kind == "unary-expression" &&
+					RemoveMarker(function_argument->value) == "&" &&
+					!function_argument->children.empty())
+					function_argument = function_argument->children[0];
+				if(function_argument && function_argument->kind == "id-expression" &&
+					!expected.empty()) {
+					const vector<const TemplateDefinition*> candidates =
+						FindFunctionDefinitions(function_argument->value, context);
+					for(size_t candidate = 0; candidate < candidates.size(); ++candidate) {
+						vector<string> inferred;
+						if(!InferFunctionFromExpected(*candidates[candidate], expected,
+							&inferred, context)) continue;
+						const string local_name = Instantiate(*candidates[candidate], inferred, context);
+						const string qualified_name = PrefixComponent(
+							candidates[candidate]->qualified_name).empty() ? local_name :
+							PrefixComponent(candidates[candidate]->qualified_name) + "::" + local_name;
+						if(original_argument && original_argument->kind == "unary-expression" &&
+							!original_argument->children.empty())
+							original_argument->children[0]->value = qualified_name;
+						else if(original_argument) original_argument->value = qualified_name;
+						break;
+					}
+				}
+				++argument;
+			}
+			return;
+		}
+	}
 	bool SkipUnusedNestedClass(const CPPGMAstNodePtr& input,
 		const CPPGMAstNodePtr& original_child, const string& child_context,
 		const map<string, string>& substitutions, size_t index) const
@@ -707,120 +569,191 @@ bool MatchTypePattern(string pattern, string actual,
 				input->children[sibling]->kind != "class-key") has_sibling = true;
 		return has_sibling;
 	}
-	void TransformRegularChildren(const CPPGMAstNodePtr& input,
-		const string& child_context, const string& function_context,
+	void RemoveParameterPackMarkers(const CPPGMAstNodePtr& node) const
+	{
+		if(!node) return;
+		for(size_t i = 0; i < node->children.size();) {
+			if(node->children[i] && (node->children[i]->kind == "parameter-pack" ||
+				node->children[i]->kind == "pack-expansion"))
+				node->children.erase(node->children.begin() + i);
+			else {
+				RemoveParameterPackMarkers(node->children[i]);
+				++i;
+			}
+		}
+	}
+	void CollapseForwardingReference(const CPPGMAstNodePtr& node) const
+	{
+		if(!node) return;
+		const string declarator_kind = node->kind == "parameter-declaration" ?
+			"declarator" : "abstract-declarator";
+		const CPPGMAstNodePtr declarator = ChildOfKindLocal(node, declarator_kind);
+		if(!declarator) return;
+		for(size_t i = 0; i < declarator->children.size(); ++i) {
+			const CPPGMAstNodePtr child = declarator->children[i];
+			if(child && child->kind == "ptr-operator" && child->value.find("&&") != string::npos) {
+				declarator->children.erase(declarator->children.begin() + i);
+				return;
+			}
+		}
+	}
+	bool RenameParameterIdentifier(const CPPGMAstNodePtr& node,
+		const string& name) const
+	{
+		if(!node) return false;
+		if(node->kind == "identifier") {
+			node->value = name;
+			return true;
+		}
+		for(size_t i = 0; i < node->children.size(); ++i)
+			if(RenameParameterIdentifier(node->children[i], name)) return true;
+		return false;
+	}
+	string ParameterIdentifier(const CPPGMAstNodePtr& parameter) const
+	{
+		if(!parameter) return string();
+		for(size_t i = 0; i < parameter->children.size(); ++i) {
+			const CPPGMAstNodePtr child = parameter->children[i];
+			if(!child || child->kind != "declarator") continue;
+			return FirstIdentifierLocal(child);
+		}
+		return string();
+	}
+	string PackExpansionIdentifier(const CPPGMAstNodePtr& node) const
+	{
+		if(!node) return string();
+		if(node->kind == "id-expression") {
+			const string value = RemoveMarker(node->value);
+			for(size_t i = 0; i < value.size();) {
+				if(!IsIdentifierCharacter(value[i])) { ++i; continue; }
+				const size_t begin = i;
+				while(i < value.size() && IsIdentifierCharacter(value[i])) ++i;
+				const string word = value.substr(begin, i - begin);
+				if(active_pack_substitutions_.find(word) != active_pack_substitutions_.end() ||
+					active_pack_identifier_substitutions_.find(word) !=
+						active_pack_identifier_substitutions_.end()) return word;
+			}
+			return LastComponent(value);
+		}
+		if(node->kind == "type-name" || node->kind == "decl-specifier" ||
+			node->kind == "type-specifier")
+			return LastComponent(RemoveMarker(node->value));
+		for(size_t i = 0; i < node->children.size(); ++i) {
+			const string found = PackExpansionIdentifier(node->children[i]);
+			if(!found.empty()) return found;
+		}
+		return string();
+	}
+	string UserDefinedIntegerSuffix(const string& raw) const
+	{
+		if(raw.empty() || !isdigit(static_cast<unsigned char>(raw[0]))) return string();
+		const size_t underscore = raw.find('_');
+		if(underscore == string::npos || underscore + 1 >= raw.size()) return string();
+		for(size_t i = underscore + 1; i < raw.size(); ++i)
+			if(!IsIdentifierCharacter(raw[i])) return string();
+		return raw.substr(underscore);
+	}
+	CPPGMAstNodePtr RewriteUserDefinedIntegerLiteral(
+		const CPPGMAstNodePtr& input, const string& context,
+		const map<string, string>& substitutions)
+	{
+		if(!input || input->kind != "literal") return CPPGMAstNodePtr();
+		const string suffix = UserDefinedIntegerSuffix(input->value);
+		if(suffix.empty()) return CPPGMAstNodePtr();
+		const string operator_name = "operator\"\"" + suffix;
+		const vector<const TemplateDefinition*> candidates =
+			FindFunctionDefinitions(operator_name, context);
+		const string core = input->value.substr(0, input->value.size() - suffix.size());
+		const TemplateDefinition* character_pack = 0;
+		for(size_t i = 0; i < candidates.size(); ++i) {
+			const TemplateDefinition* candidate = candidates[i];
+			if(candidate->parameters.size() != 1 || !candidate->parameters[0].pack ||
+				candidate->parameters[0].type ||
+				CanonicalSpelling(candidate->parameters[0].non_type_type) != "char") continue;
+			character_pack = candidate;
+			break;
+		}
+		string callee = operator_name;
+		if(character_pack) {
+			callee += "<";
+			for(size_t i = 0; i < core.size(); ++i) {
+				if(i) callee += ",";
+				callee += "'";
+				if(core[i] == '\\' || core[i] == '\'') callee += '\\';
+				callee += core[i];
+				callee += "'";
+			}
+			callee += ">";
+		}
+		CPPGMAstNodePtr call(new CPPGMAstNode("call-expression"));
+		call->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
+			"id-expression", callee)));
+		CPPGMAstNodePtr arguments(new CPPGMAstNode("argument-list"));
+		if(!character_pack)
+			arguments->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
+				"literal", core)));
+		call->children.push_back(arguments);
+		return TransformNode(call, context, substitutions);
+	}
+	void ExpandPackChild(const CPPGMAstNodePtr& input,
+		const CPPGMAstNodePtr& original_child, const string& child_context,
 		const map<string, string>& substitutions,
 		map<string, string>* local_substitutions,
 		const CPPGMAstNodePtr& result)
 	{
-		for(size_t i = 0; i < input->children.size(); ++i) {
-			const CPPGMAstNodePtr original_child = input->children[i];
-				if(input->kind == "decl-specifier" &&
-				input->value.find("decltype(") != string::npos &&
-				original_child && (original_child->kind == "call-expression" ||
-					original_child->kind == "binary-expression")) continue;
-				if(SkipUnusedNestedClass(input, original_child, child_context, substitutions, i)) continue;
-			if(original_child && original_child->kind == "namespace-alias-definition") {
-				const CPPGMAstNodePtr target = ChildOfKindLocal(original_child, "target");
-				if(target && !target->value.empty() && local_substitutions)
-					(*local_substitutions)[original_child->value] = RewriteText(
-						target->value, child_context, *local_substitutions, 0, false);
-				continue;
+		if(!original_child || original_child->kind != "pack-expansion-expression" ||
+			original_child->children.empty()) return;
+		const string name = PackExpansionIdentifier(original_child->children[0]);
+		map<string, vector<string> >::const_iterator typed_pack =
+			active_pack_substitutions_.find(name);
+		map<string, vector<string> >::const_iterator named_pack =
+			active_pack_identifier_substitutions_.find(name);
+		const vector<string>* values = typed_pack != active_pack_substitutions_.end() ?
+			&typed_pack->second : named_pack != active_pack_identifier_substitutions_.end() ?
+			&named_pack->second : 0;
+		if(!values) return;
+		if(named_pack != active_pack_identifier_substitutions_.end() &&
+			active_pack_substitutions_.find(name) == active_pack_substitutions_.end())
+			values = &named_pack->second;
+		const map<string, PA19IntegralValue> saved_integrals =
+			active_integral_substitutions_;
+		for(size_t i = 0; i < values->size(); ++i) {
+			map<string, string> one = substitutions;
+			one[name] = (*values)[i];
+			// A single expansion can depend on more than one pack, for
+			// example `identity<Args>(get<I>(value))...`.  Select the same
+			// element for every active integral pack before transforming the
+			// child, even when the syntactic expansion name is the type pack.
+			active_integral_substitutions_ = saved_integrals;
+			for(map<string, PA19IntegralValue>::const_iterator integral =
+				saved_integrals.begin(); integral != saved_integrals.end(); ++integral) {
+				map<string, vector<string> >::const_iterator integral_pack =
+					active_pack_substitutions_.find(integral->first);
+				if(integral_pack == active_pack_substitutions_.end() ||
+					i >= integral_pack->second.size()) continue;
+				PA19IntegralValue element;
+				if(PA19ParseInteger(integral_pack->second[i], &element))
+					active_integral_substitutions_[integral->first] =
+						PA19Convert(element, integral->second.type);
 			}
-			const string node_context = input->kind == "function-definition" && original_child &&
-				original_child->kind == "compound-statement" ? function_context : child_context;
-			const CPPGMAstNodePtr using_target = original_child && original_child->kind == "using-declaration" ?
-				ChildOfKindLocal(original_child, "target") : CPPGMAstNodePtr();
-			const bool drop_function_using = using_target && IsOrdinaryTemplateUsingTarget(
-				using_target->value, node_context) && class_contexts_.find(node_context) == class_contexts_.end();
-			CPPGMAstNodePtr child;
-			if(input->kind == "using-declaration" && original_child && original_child->kind == "target") {
-				child = CloneNode(original_child);
-				const string raw_target = original_child->value;
-				const size_t separator = raw_target.rfind("::");
-				if(separator != string::npos &&
-					raw_target.substr(0, separator) == raw_target.substr(separator + 2)) {
-					map<string, string>::const_iterator alias = local_substitutions->find(
-						raw_target.substr(0, separator));
-					if(alias != local_substitutions->end() && !alias->second.empty())
-						child->value = alias->second + "::" + LastComponent(alias->second);
-					else child->value = RewriteText(raw_target, node_context,
-						*local_substitutions, 0, false, false);
-				} else child->value = RewriteText(raw_target, node_context,
-					*local_substitutions, 0, false, false);
-				} else child = TransformNode(original_child, node_context, *local_substitutions);
-				if(!child && input->kind == "decl-specifier-seq" && original_child &&
-					(original_child->kind == "class-specifier" ||
-						original_child->kind == "class-forward-declaration")) {
-					map<string, string>::const_iterator promoted = local_class_names_.find(
-						JoinPath(child_context, LastComponent(original_child->value)));
-					if(promoted != local_class_names_.end())
-						result->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
-							"decl-specifier", "TT_IDENTIFIER:" + LastComponent(promoted->second))));
-				}
-				if(child && !drop_function_using && !(input->kind == "compound-statement" && !substitutions.empty() &&
-					(original_child->kind == "alias-declaration" || (original_child->kind == "simple-declaration" &&
-					SpellNode(original_child->children.empty() ? CPPGMAstNodePtr() : original_child->children[0]).find("typedef") != string::npos)))) result->children.push_back(child);
-			if(original_child && original_child->kind == "alias-declaration" && !original_child->value.empty() &&
-				!original_child->children.empty() && (!substitutions.empty() || input->value.find('<') != string::npos))
-				(*local_substitutions)[original_child->value] = RewriteText(
-					TypeIdSpelling(original_child->children[0]), child_context,
-					*local_substitutions, 0);
-			if(original_child && original_child->kind == "using-declaration") {
-				const CPPGMAstNodePtr target = ChildOfKindLocal(original_child, "target");
-				if(target && !target->value.empty()) {
-					const string target_name = LastComponent(target->value);
-					const string owner = PrefixComponent(target->value);
-					const CPPGMAstNodePtr rewritten = child ?
-						ChildOfKindLocal(child, "target") : CPPGMAstNodePtr();
-					bool function_target = false;
-					if(!owner.empty()) {
-						const string target_suffix = "::" + target->value;
-						for(map<string, TemplateDefinition>::const_iterator candidate = definitions_.begin();
-							candidate != definitions_.end(); ++candidate)
-							if(!candidate->second.class_template &&
-								(candidate->second.qualified_name == target->value ||
-									(candidate->second.qualified_name.size() > target_suffix.size() &&
-									 candidate->second.qualified_name.compare(
-										candidate->second.qualified_name.size() - target_suffix.size(),
-										target_suffix.size(), target_suffix) == 0))) {
-								function_target = true;
-								break;
-							}
-						const string signature_suffix = "::" + target->value;
-						for(map<string, FunctionSignature>::const_iterator candidate = function_signatures_.begin();
-							candidate != function_signatures_.end(); ++candidate)
-							if(candidate->first == target->value ||
-								(candidate->first.size() > signature_suffix.size() &&
-								 candidate->first.compare(candidate->first.size() - signature_suffix.size(),
-									signature_suffix.size(), signature_suffix) == 0)) {
-								function_target = true;
-								break;
-							}
-						const string rewritten_owner = rewritten ? PrefixComponent(rewritten->value) : owner;
-						const CPPGMAstNodePtr owner_declaration = FindClassDeclaration(rewritten_owner.empty() ? owner : rewritten_owner, child_context);
-						if(owner_declaration) for(size_t member = 0; member < owner_declaration->children.size(); ++member) {
-								const CPPGMAstNodePtr declaration = owner_declaration->children[member];
-								if(declaration && declaration->kind == "function-definition" &&
-									declaration->children.size() > 1 &&
-									LastComponent(FirstIdentifierLocal(declaration->children[1])) == target_name) {
-									function_target = true;
-									break;
-								}
-							}
-					}
-					if(!owner.empty() && !function_target)
-						(*local_substitutions)[target_name] = rewritten &&
-							!rewritten->value.empty() ? rewritten->value : target->value;
-				}
-				}
-			if(original_child && original_child->kind == "using-directive") RecordUsingDirective(original_child, local_substitutions);
-			if(original_child && original_child->kind == "simple-declaration" && !original_child->children.empty() &&
-				SpellNode(original_child->children[0]).find("typedef") != string::npos &&
-				(!substitutions.empty() || input->value.find('<') != string::npos))
-				RecordTypedefSubstitutions(original_child, child_context, local_substitutions);
+			CPPGMAstNodePtr child = TransformNode(original_child->children[0],
+				child_context, one);
+			if(child) result->children.push_back(child);
 		}
+		active_integral_substitutions_ = saved_integrals;
+		(void)input;
+		(void)local_substitutions;
 	}
+void TransformRegularChildren(const CPPGMAstNodePtr& input,
+		const string& child_context, const string& function_context,
+		const map<string, string>& substitutions,
+		map<string, string>* local_substitutions,
+		const CPPGMAstNodePtr& result);
+	bool TransformPackChild(const CPPGMAstNodePtr& input,
+		const CPPGMAstNodePtr& original_child, const string& child_context,
+		const map<string, string>& substitutions,
+		map<string, string>* local_substitutions,
+		const CPPGMAstNodePtr& result);
 	void RecordUsingDirective(const CPPGMAstNodePtr& original_child,
 		map<string, string>* local_substitutions)
 	{
@@ -916,126 +849,13 @@ bool MatchTypePattern(string pattern, string actual,
 		transformed_item->children.back()->children.push_back(call);
 	}
 	CPPGMAstNodePtr TransformRegularNode(const CPPGMAstNodePtr& input,
-		const string& context, const map<string, string>& substitutions)
-	{
-		CPPGMAstNodePtr template_call = RewriteTemplateCastCall(input, context, substitutions);
-		if(template_call) return template_call;
-		CPPGMAstNodePtr result(new CPPGMAstNode(input->kind, input->value));
-		result->initializer_form = input->initializer_form;
-		result->dependent_base_lookup = input->dependent_base_lookup;
-		bool template_replaced = false;
-		const bool type_spelling = input->kind == "decl-specifier" ||
-			input->kind == "type-name" || input->kind == "type-specifier";
-		result->value = RewriteText(input->value, context, substitutions,
-			&template_replaced, !type_spelling, true);
-		// Non-type template substitutions are semantic values, not names.  Keep
-		// them as literal AST nodes so PA11/lowering resolve the same typed fact
-		// that selected the specialization.
-		if(input->kind == "id-expression") {
-			map<string, PA19IntegralValue>::const_iterator typed =
-				active_integral_substitutions_.find(RemoveMarker(input->value));
-			if(typed != active_integral_substitutions_.end() && typed->second.known) {
-				const string spelling = IntegralValueSpelling(typed->second);
-				if(typed->second.type.name == "bool")
-					return CPPGMAstNodePtr(new CPPGMAstNode("keyword-literal",
-						PA19Raw(typed->second) ? "KW_TRUE:true" : "KW_FALSE:false"));
-				CPPGMAstNodePtr literal(new CPPGMAstNode("literal", spelling));
-				literal->initializer_form = input->initializer_form;
-				return literal;
-			}
-		}
-		if((type_spelling || input->kind == "id-expression") &&
-			result->value.find('<') != string::npos)
-			result->value = RewriteText(result->value, context, substitutions, &template_replaced);
-		if(input->kind == "target") {
-			const string raw_target = RemoveMarker(input->value);
-			const size_t separator = raw_target.rfind("::");
-			if(separator != string::npos && raw_target.substr(0, separator) ==
-				raw_target.substr(separator + 2)) {
-				map<string, string>::const_iterator alias = substitutions.find(
-					raw_target.substr(0, separator));
-				if(alias != substitutions.end() && !alias->second.empty())
-					result->value = alias->second + "::" + LastComponent(alias->second);
-			}
-		}
-		if(input->kind == "decl-specifier" || input->kind == "type-name" ||
-			input->kind == "type-specifier") {
-			const size_t marker_colon = result->value.find(':');
-			string marker;
-			if(marker_colon != string::npos) {
-				const string prefix = result->value.substr(0, marker_colon);
-				if(prefix == "TT_IDENTIFIER" || prefix.compare(0, 3, "KW_") == 0 ||
-					prefix.compare(0, 3, "OP_") == 0)
-					marker = result->value.substr(0, marker_colon + 1);
-			}
-			const string spelling = RemoveMarker(result->value);
-			string qualified = QualifyTypeArgument(spelling, context);
-			string resolved = ResolveAlias(qualified, context);
-			if(substitutions.empty() && input->value.find('<') == string::npos)
-				resolved = qualified;
-			if(resolved.find('<') != string::npos)
-				resolved = RewriteText(resolved, context, substitutions, 0);
-			if(resolved.find('(') != string::npos && resolved.find(')') != string::npos)
-				resolved = qualified;
-			if(resolved != qualified) qualified = resolved;
-			if(qualified != spelling) result->value = marker + qualified;
-			if(input->kind == "decl-specifier" && marker.empty() &&
-				qualified != spelling && result->value.find(':') == string::npos)
-				result->value = "TT_IDENTIFIER:" + qualified;
-			if(input->kind == "decl-specifier" && marker.empty() &&
-				qualified.find(' ') != string::npos)
-				result->value = "TT_IDENTIFIER:" + qualified;
-		}
-		string promoted_local_class;
-		if((input->kind == "class-specifier" || input->kind == "class-forward-declaration") &&
-			function_contexts_.find(context) != function_contexts_.end()) {
-			map<string, string>::const_iterator local = local_class_names_.find(
-				JoinPath(context, LastComponent(input->value)));
-			if(local != local_class_names_.end()) {
-				promoted_local_class = LastComponent(local->second);
-				result->value = promoted_local_class;
-			}
-		}
-		if(input->kind == "decl-specifier" && template_replaced &&
-			result->value.find(':') == string::npos)
-			result->value = "TT_IDENTIFIER:" + result->value;
-		string child_context = context;
-		if(input->kind == "class-specifier" || input->kind == "class-forward-declaration")
-			child_context = JoinPath(context, LastComponent(input->value));
-		string function_context = context;
-		if(input->kind == "function-definition") {
-			const string function_name = DeclarationName(input);
-			string function_owner;
-			if(input->children.size() > 1 && input->children[1]) {
-				const string qualified_name = RewriteText(
-					FirstIdentifierLocal(input->children[1]), context, substitutions, 0,
-					false, false);
-				function_owner = PrefixComponent(qualified_name);
-				if(!function_owner.empty()) function_owner = ResolveGeneratedFunctionOwner(
-					function_owner, context, &child_context);
-			}
-			function_context = JoinPath(function_owner.empty() ? context : function_owner,
-				function_name);
-			if(!function_name.empty() && LastComponent(context) == function_name)
-				function_context = context;
-		}
-		map<string, string> local_substitutions = substitutions;
-		TransformRegularChildren(input, child_context, function_context, substitutions,
-			&local_substitutions, result);
-		RewriteTemplateInitializer(input, context, substitutions, result);
-		if(input->kind == "simple-declaration") ReifyReferenceType(result);
-		if(input->kind == "binary-expression") {
-			InstantiateOperatorTemplate(result, context, substitutions);
-			RewriteOperatorFunctionArgument(result, context, substitutions);
-		}
-		if(!promoted_local_class.empty()) {
-			const map<string, string>::const_iterator owner = function_owners_.find(context);
-			generated_by_owner_[owner == function_owners_.end() ? PrefixComponent(context) :
-				owner->second].push_back(result);
-			return CPPGMAstNodePtr();
-		}
-		return result;
-	}
+		const string& context, const map<string, string>& substitutions);
+	CPPGMAstNodePtr RewriteRegularNodeValue(const CPPGMAstNodePtr& input,
+		const string& context, const map<string, string>& substitutions,
+		const CPPGMAstNodePtr& result, string* promoted_name);
+	CPPGMAstNodePtr FinishRegularNode(const CPPGMAstNodePtr& input,
+		const string& context, const map<string, string>& substitutions,
+		const CPPGMAstNodePtr& result, const string& promoted_local_class);
 	CPPGMAstNodePtr TransformNode(const CPPGMAstNodePtr& input, const string& context,
 		const map<string, string>& substitutions)
 	{
@@ -1061,6 +881,24 @@ bool MatchTypePattern(string pattern, string actual,
 			}
 		}
 		if(input->kind == "template-declaration") {
+			if(input->children.size() > 1 && input->children[0] && input->children[1] &&
+				Parameters(input->children[0]).empty()) {
+				map<const CPPGMAstNode*, vector<string> >::const_iterator explicit_arguments =
+					explicit_function_arguments_.find(input->children[1].get());
+				if(explicit_arguments != explicit_function_arguments_.end()) {
+					const string raw_name = DeclarationName(input->children[1]);
+					const size_t open = raw_name.find('<');
+					const string base = open == string::npos ? raw_name :
+						raw_name.substr(0, open);
+					const TemplateDefinition* specialization =
+						FindExplicitFunctionSpecialization(base,
+							explicit_arguments->second, context);
+					if(specialization) {
+						Instantiate(*specialization, explicit_arguments->second, context);
+						return CPPGMAstNodePtr();
+					}
+				}
+			}
 			if(input->children.size() > 1 && input->children[1] &&
 				(input->children[1]->kind == "class-specifier" ||
 					input->children[1]->kind == "class-forward-declaration"))
@@ -1096,4 +934,4 @@ bool MatchTypePattern(string pattern, string actual,
 		return TransformRegularNode(input, context, substitutions);
 	}
 };
-} // namespace
+} // namespace pa18_templates_internal
