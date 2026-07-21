@@ -152,3 +152,64 @@ None for PA19.
 
 PA19 is complete.  The next assignment may begin from the clean committed
 state produced by this checkpoint.
+
+## Architecture Review
+
+The completed stage follows the intended monotonic pipeline from PA10 through
+PA19:
+
+- The parser and AST remain the syntax boundary.  PA19 adds explicit AST
+  metadata for base/template pack expansions and `sizeof...`; it does not
+  encode LowIR answers in the parser.
+- `ExpandPA18Templates` is the integration seam.  `PA18TemplateExpander`
+  collects template declarations, aliases, defaults, dependent names, pack
+  facts, and explicit specializations, then rewrites only the needed source
+  into ordinary generated declarations.  `Instantiate` uses canonical typed
+  arguments, generated-name metadata, specialization caches, and an active
+  recursion set.  This keeps PA19 as an extension of PA18 materialization
+  rather than a replacement template backend.
+- `PA19IntegralType`/`PA19IntegralValue` in `pa19_constants.h` carry the
+  supported compile-time value facts.  `PA19ConstantExpressionParser`
+  resolves source-level integral expressions and `pa11_semantics_constants.cpp`
+  evaluates AST expressions.  `Binding::constant_value` and
+  `ConstantValue::integral` are the typed PA11 owners; signed compatibility
+  fields are projections for earlier consumers.
+- `Analyzer` owns scopes, lookup, types, layouts, constant bindings,
+  dependent assertion timing, and declaration validation.  `PA14Lowerer`
+  owns demand analysis, ABI names, object/lifetime operations, static storage,
+  vtables, and LowIR.  PA19-generated declarations enter these existing
+  responsibilities after expansion, so earlier procedural, class, value, and
+  polymorphic assignments remain on one backend path.
+- The lowerer uses stable semantic ownership: shared AST/type graphs,
+  unique-owned child scopes, deque-backed bindings, and deque-backed function
+  and global records.  Member bindings retain owner/index identity, and
+  template caches and demand fixed points bound repeated work while preserving
+  order-sensitive LowIR regions.
+- `dev/frontend_source_sets.mk` registers every added implementation unit for
+  `cppgm++`.  The file audit passes with only the documented warning-only
+  implementation-bearing headers.  No test, fixture, source-name, reference
+  binary, host compiler, or timeout shortcut is part of the PA19 path.
+
+## Final Architecture Review
+
+The final completion checkpoint is `af5a597`, with its complete-stage result
+recorded in `3b416e6`; the typed-constant checkpoint audit remains available
+in `pa19/audit.md`.  The integrated implementation now covers the complete
+PA19 boundary: typed integral literals and operators, dependent constant
+bindings, integral non-type arguments and defaults, type and non-type packs,
+supported pack expansions, explicit class/function specialization, stale
+primary refresh, static-member value/storage propagation, and deferred
+`static_assert`.
+
+The final review found no architectural regression against PA18.  Programs
+that do not need template expansion remain on the ordinary AST-to-PA11-to-
+PA14 path; programs that do need PA19 features are materialized into that
+same path.  Typed values cross the PA11/PA14 and PA18 materialization seams
+without recovering signedness or argument kind from generated text.  The
+existing PA14/PA17 ownership, call, lifetime, vtable, and LowIR contracts
+therefore remain the single source of truth for generated code.
+
+The stage is complete and ready for the next PA: the current PA suite is
+**134/134**, the through-stage report is **1564/1564** across **19/19**
+stages, the required file audit passes, and no required source registration,
+ownership, performance, correctness, or shortcut concern remains open.

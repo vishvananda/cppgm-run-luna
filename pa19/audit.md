@@ -84,3 +84,125 @@ an audit bypass.
 - `make -C dev cppgm++` and `git diff --check`: **PASS**.
 - Final handoff check: `git status --short` is empty after the cohesive audit
   commit.
+
+## Final Stage Audit
+
+### Audit Plan
+
+This final audit covers the PA19 completion checkpoint implemented by
+`af5a597` (`Implement PA19 template constants and lowering`) and recorded by
+`3b416e6` (`Record complete PA19 checkpoint inventory`).  The earlier typed
+constant checkpoint at `cab0747`, together with its audit repair commit
+`a93bae4`, is retained as historical evidence rather than treated as the
+stage result.  The integrated review starts at the PA18 handoff
+`3f6b3fa` and covers the complete PA19 source change set through the current
+tree.
+
+The review checked:
+
+1. `AGENTS.md`, `TESTING_AND_REFERENCES.md`, the PA19 README, the PA13 LowIR
+   contract, the complete PA19 plan, and the PA18 final audit;
+2. all 134 checked-in PA19 tests under `tests/general` and `tests/spec`, with
+   representative witnesses for typed non-type arguments, deferred
+   `static_assert`, packs, explicit specialization, stale-primary refresh,
+   dependent defaults, and weak inline specialization;
+3. the parser/AST changes, PA19 constant model, PA11 analyzer and semantic
+   model, PA18 collection/rewrite/materialization path, PA14 collection and
+   fixed-point lowering path, and `dev/frontend_source_sets.mk`;
+4. ownership and pointer stability for AST nodes, semantic types, bindings,
+   class-member records, function/global records, and template caches;
+5. deterministic declaration and LowIR order, recursion and specialization
+   caching, demand-driven emission, shortcut indicators, the required file
+   audit, build/diff checks, the through-stage report, and the primary stage
+   log at
+   `/home/vishvananda/work/.ralph/luna-gpt-5.6-luna-ultra/last-test.log`.
+
+### Findings
+
+The completed PA19 implementation preserves the staged compiler architecture.
+The PA10 parser remains the syntax boundary: pack expansions and `sizeof...`
+are represented as AST nodes, and template declarations are retained as
+source metadata.  `EmitPA14LowIR` invokes `ExpandPA18Templates` before
+constructing `PA14Lowerer`; it does not create a PA19-specific output path.
+
+- `PA18TemplateExpander` collects template parameters, defaults, explicit
+  specializations, aliases, dependent names, and pack facts.  Its rewrite
+  path materializes ordinary declarations and definitions, including
+  generated class/member records, before PA11 analysis.  Integral arguments
+  are normalized through `ResolveIntegralArgument` and typed substitution
+  maps; an already-materialized non-type identifier becomes a literal AST
+  value instead of being reparsed from rewritten LowIR text.
+- `PA19IntegralType` and `PA19IntegralValue` provide the compile-time value
+  model for signedness, width, rank, promotions, conversions, literals,
+  characters, arithmetic, comparisons, shifts, bitwise/logical operators,
+  conditional expressions, `sizeof`, `alignof`, and `sizeof...`.  The
+  `PA19ConstantExpressionParser` is used at the source-expression boundary
+  for template arguments and dependent defaults.  `Binding::constant_value`
+  and `ConstantValue::integral` own the typed facts; their legacy signed
+  fields are compatibility projections for earlier lowering code.
+- PA11 evaluates ordinary and generated constant bindings, defers dependent
+  assertions until materialization, and preserves static member and array
+  definition facts.  PA14 consumes those semantic results for value
+  inference, global folding, static-member storage, ABI naming, object
+  lifetime, and LowIR emission.  Existing PA14/PA17 call, class, vtable,
+  constructor, destructor, and initialization machinery remains the backend
+  for PA19-generated declarations.
+- Explicit class/function specialization tables, canonical integral
+  argument spellings, generated-specialization caches, active-recursion
+  guards, and late-specialization refresh logic keep one semantic identity
+  per supported specialization.  Pack expansion is handled in declarations,
+  calls, bases, initializers, and instantiated bodies; it does not require a
+  second evaluator or backend.
+- Ownership is stable across the handoff.  `CPPGMAstNodePtr` owns source and
+  generated trees, `TypePtr` owns semantic type graphs, scopes own child
+  scopes and deque-backed bindings, and PA14 stores function/global records
+  in deques.  Class bindings retain an owner plus member index rather than a
+  pointer into a relocatable member vector.  Lookup and demand records are
+  therefore non-owning views of stable owners, while specialization and
+  active-recursion sets bound repeated materialization.
+- The lowerer closes its ordinary, hidden-friend, member, constructor,
+  destructor, global-initializer, and generated-function demand frontiers in
+  fixed-point passes.  The source scan found no new unbounded repository walk,
+  reference-binary or host-compiler invocation, timeout-based success path,
+  fixture/source-name gate, embedded answer, dummy LowIR, skipped frontend
+  phase, or interpreter substitute in the PA19 path.
+- Source registration is complete for the structural split: the added
+  `pa11_semantics_constants.cpp`, `pa14_lowering_control_globals.cpp`,
+  `pa18_templates_collection.cpp`, and `pa18_templates_rewrite.cpp` are all
+  listed for `cppgm++` in `dev/frontend_source_sets.mk`.  The file audit
+  passes with eight warning-only header-division findings (the established
+  PA11/PA14/PA18/parser implementation headers plus `pa19_constants.h`),
+  and reports no fatal finding or unregistered implementation source.
+
+No correctness, ownership, performance, architecture, shortcut, or fatal
+file-audit blocker remains for the PA19 assignment boundary.  No PA19 tests,
+grammars, or reference fixtures were changed.  The residual warning-only
+header findings are documented because the repository audit treats them as a
+pass and the headers are still part of the established shared implementation
+layout.
+
+### Changes Made
+
+- Retained the completed implementation checkpoint at `af5a597`, including
+  typed integral constants, dependent/default argument resolution, packs and
+  expansions, explicit specialization, generated static-member state, and
+  ordinary PA14/PA17 LowIR lowering.
+- Consolidated the checkpoint evidence into this final-stage audit, covering
+  the completed checkpoint and the integrated PA18-to-PA19 implementation.
+- Added architecture and final architecture reviews to `pa19/plan.md`,
+  grounded in the actual parser, semantic, template, ownership, and lowering
+  units.
+- No compiler source, test, grammar, or reference fixture changes were
+  needed after the final implementation review.
+
+### Validation
+
+- `make test-pa19` — PASS, **134 / 134** PA19 tests.
+- `make test-report-through-pa19` — PASS, **1564 / 1564** tests across
+  **19 / 19** stages; the primary log records
+  `ALL TESTS PASSED SUCCESSFULLY! (1564 / 1564)`.
+- `perl scripts/cppgm_file_audit.pl --stage pa19 --paths dev/src` — PASS;
+  eight warning-only header-division findings and no fatal issue.
+- `make build` and `git diff --check` — PASS.
+- Final verification after the audit commit shows an empty `git status
+  --short`.
