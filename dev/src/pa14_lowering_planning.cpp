@@ -258,6 +258,7 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
           pure_virtual_dispatch = best.virtual_owner->virtual_methods[semantic_slot].pure;
       }
       if(selected && !pure_virtual_dispatch &&
+         (!state_ || !state_->unevaluated_context) &&
          !(best.binding && best.binding->is_pure)) {
         selected->needed = true;
         FunctionRecord* base_entry = BaseEntryFor(selected);
@@ -374,7 +375,7 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseOperatorCall(
         throw logic_error("ambiguous operator overload");
       }
     }
-    if(best.binding) {
+    if(best.binding && (!state_ || !state_->unevaluated_context)) {
       FunctionRecord* record = RecordForBinding(best.binding);
       if(record) {
         record->needed = true;
@@ -457,6 +458,37 @@ vector<string> PA14Lowerer::ParameterNames(const FunctionRecord& function) const
       (function.node->children.size() > 1 ? function.node->children[1] : CPPGMAstNodePtr());
     CPPGMAstNodePtr clause = declarator ? DescendantOfKind(declarator, "parameter-clause") :
       CPPGMAstNodePtr();
+    CPPGMAstNodePtr declaration_clause;
+    if(function.member && function.member_owner && function.source_type) {
+      const TypePtr source = function_target_type(function.source_type);
+      const vector<Binding*> candidates = MemberBindings(function.member_owner,
+        LastComponent(function.qualified_name));
+      for(size_t candidate = 0; candidate < candidates.size() && !declaration_clause;
+          ++candidate) {
+        Binding* binding = candidates[candidate];
+        TypePtr binding_type = binding ? function_target_type(binding->type) : TypePtr();
+        if(!binding || binding->kind != BIND_FUNCTION || !binding->declaration ||
+           !binding_type || !PA12SameType(binding_type, source, false)) continue;
+        CPPGMAstNodePtr binding_declarator;
+        if(binding->declaration->kind == "function-definition" &&
+           binding->declaration->children.size() > 1)
+          binding_declarator = binding->declaration->children[1];
+        else if(binding->declaration->kind == "simple-declaration") {
+          const CPPGMAstNodePtr list = ChildOfKind(binding->declaration,
+            "init-declarator-list");
+          if(list) for(size_t item = 0; item < list->children.size(); ++item)
+            if(list->children[item] && !list->children[item]->children.empty() &&
+               LastComponent(declarator_name(list->children[item]->children[0])) ==
+                 LastComponent(function.qualified_name)) {
+              binding_declarator = list->children[item]->children[0];
+              break;
+            }
+        }
+        declaration_clause = binding_declarator ?
+          DescendantOfKind(binding_declarator, "parameter-clause") :
+          CPPGMAstNodePtr();
+      }
+    }
     size_t index = function.member && !function.static_member ? 1 : 0;
     if(clause) {
       for(size_t i = 0; i < clause->children.size(); ++i) {
@@ -465,6 +497,16 @@ vector<string> PA14Lowerer::ParameterNames(const FunctionRecord& function) const
         CPPGMAstNodePtr declarator = parameter->children.size() > 1 ? parameter->children[1] : CPPGMAstNodePtr();
         const size_t parameter_index = index++;
         string name = parameter_name(declarator, parameter_index);
+        if(name.find("__param") == 0 && declaration_clause &&
+           i < declaration_clause->children.size()) {
+          const CPPGMAstNodePtr declaration_parameter = declaration_clause->children[i];
+          const CPPGMAstNodePtr declaration_declarator = declaration_parameter &&
+            declaration_parameter->children.size() > 1 ?
+            declaration_parameter->children[1] : CPPGMAstNodePtr();
+          const string declared_name = parameter_name(declaration_declarator,
+            parameter_index);
+          if(declared_name.find("__param") != 0) name = declared_name;
+        }
         if(function.builtin && name.find("__param") == 0)
           name = "arg" + integer_text(static_cast<long long>(parameter_index));
         result.push_back(name);

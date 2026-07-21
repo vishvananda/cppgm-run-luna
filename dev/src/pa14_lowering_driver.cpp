@@ -28,15 +28,46 @@ void PA14Lowerer::Lower(ostream& out)
     EmitGlobals(entries);
     EmitPolymorphicGlobals(entries);
     MarkHiddenFriendDependencies();
-    // Emit ordinary functions first so their calls establish the roots of
-    // the demand-driven member-function set.  Member bodies can in turn
-    // reach other member bodies, so walk that set to a fixed point.
+    // Emit non-template ordinary roots first.  Calls made while lowering
+    // those roots establish the demand-driven set of materialized template
+    // and inline free functions; those functions are emitted in the fixed
+    // point pass below.
     for(size_t i = 0; i < functions_.size(); ++i) {
       if(!functions_[i].definition || functions_[i].member ||
+         functions_[i].template_instantiation ||
+         (functions_[i].inline_definition && !functions_[i].needed) ||
          (functions_[i].hidden_friend && !functions_[i].needed)) continue;
       entries.push_back(EmitFunction(functions_[i]));
       functions_[i].emitted = true;
     }
+    bool added_ordinary = true;
+    while(added_ordinary) {
+      added_ordinary = false;
+      for(size_t i = 0; i < functions_.size(); ++i) {
+        FunctionRecord& function = functions_[i];
+        if(!function.definition || function.member || function.hidden_friend ||
+           function.emitted || !function.needed ||
+           !function.template_instantiation) continue;
+        entries.push_back(EmitFunction(function));
+        function.emitted = true;
+        added_ordinary = true;
+      }
+    }
+    const auto emit_needed_ordinary = [&]() {
+      bool added = true;
+      while(added) {
+        added = false;
+        for(size_t i = 0; i < functions_.size(); ++i) {
+          FunctionRecord& function = functions_[i];
+          if(!function.definition || function.member || function.hidden_friend ||
+             function.emitted || !function.needed ||
+             !function.template_instantiation) continue;
+          entries.push_back(EmitFunction(function));
+          function.emitted = true;
+          added = true;
+        }
+      }
+    };
     // Ordinary roots can demand a hidden friend while they are emitted.  A
     // second demand pass keeps those friends out of the ordinary-function
     // root set while still preserving their transitive call dependencies.
@@ -89,6 +120,7 @@ void PA14Lowerer::Lower(ostream& out)
     while(added_member) {
       added_member = false;
       const vector<size_t> order = member_emission_order();
+      bool restart = false;
       for(size_t phase = 0; phase < 2; ++phase) {
         for(size_t order_index = 0; order_index < order.size(); ++order_index) {
           const size_t i = order[order_index];
@@ -99,14 +131,29 @@ void PA14Lowerer::Lower(ostream& out)
           entries.push_back(EmitFunction(function));
           function.emitted = true;
           added_member = true;
+          // Emitting a member can immediately demand its constructor,
+          // destructor, or nested helper.  Restart the typed order at that
+          // frontier so dependencies are emitted before unrelated members
+          // that happened to be known earlier.
+          restart = true;
+          break;
         }
+        if(restart) break;
       }
     }
+    // Member bodies may demand free templates after the initial ordinary
+    // pass has completed.  Materialize that new ordinary frontier before
+    // lowering global lifetime helpers.
+    emit_needed_ordinary();
     EmitDynamicInitializers(entries);
+    // Dynamic initializer bodies can take the address of or call a free
+    // template as well.  Close that frontier before the final member pass.
+    emit_needed_ordinary();
     added_member = true;
     while(added_member) {
       added_member = false;
       const vector<size_t> order = member_emission_order();
+      bool restart = false;
       for(size_t phase = 0; phase < 2; ++phase) {
         for(size_t order_index = 0; order_index < order.size(); ++order_index) {
           const size_t i = order[order_index];
@@ -117,7 +164,10 @@ void PA14Lowerer::Lower(ostream& out)
           entries.push_back(EmitFunction(function));
           function.emitted = true;
           added_member = true;
+          restart = true;
+          break;
         }
+        if(restart) break;
       }
     }
     bool added_hidden = true;

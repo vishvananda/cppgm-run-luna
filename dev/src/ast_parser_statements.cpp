@@ -51,6 +51,13 @@ CPPGMAstNodePtr Parser::ParseStatement()
 	if (result) return result;
 	Restore(mark);
 	bool declaration_start = IsTypeStart();
+	// A template-name can also name a member function.  When it is followed
+	// directly by a call parenthesis, keep the expression form available so
+	// semantic lookup can prefer that function over the type declaration.
+	if(declaration_start && Peek().kind == AST_IDENTIFIER &&
+	   (Peek().names.template_name || templates_.find(Peek().text) != templates_.end()) &&
+	   Peek(1).text == "(")
+		declaration_start = false;
 	if (Peek().kind == AST_IDENTIFIER &&
 		(Peek(1).text == "::" || Peek(1).text == "<"))
 	{

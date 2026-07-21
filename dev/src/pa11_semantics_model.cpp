@@ -10,7 +10,8 @@ Type::Type(TypeKind type_kind, const string& type_name)
 	  member_owner(), owned_scope(0),
 	  underlying(), class_members(), direct_base(), direct_base_offset(0), object_size(0), object_alignment(1),
 	  explicit_alignment(0), layout_complete(false), layout_in_progress(false),
-	  is_union(false), enclosing_type(), friend_names(), virtual_methods(),
+	  is_union(false), enclosing_type(), dependent_base_lookup(false),
+	  friend_names(), virtual_methods(),
 	  polymorphic(false), has_vpointer(false), template_specialization(false),
 	  template_primary(), template_arguments() {}
 
@@ -20,7 +21,7 @@ Binding::Binding(BindingKind binding_kind, const string& binding_name,
 	  type_override(), qualified_name(), injected_member(false), injected_object_name(),
 	  injected_owner(), hidden_friend(false), friend_owner(), is_member(false),
 	  is_static(false), is_virtual(false), is_pure(false), is_override(false),
-	  is_final(false), member_owner(),
+	  is_final(false), noexcept_specified(false), member_owner(),
 	  member_index(static_cast<size_t>(-1)),
 	  access(), declaration() {}
 

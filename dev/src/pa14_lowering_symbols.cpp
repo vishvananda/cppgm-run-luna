@@ -160,8 +160,14 @@ string abi_type_text(const string& raw)
     value.erase(value.size() - 1);
     return "P" + abi_type_text(value);
   }
-  if(value.size() > 3 && value.substr(value.size() - 3) == " []")
-    return "A_" + abi_type_text(value.substr(0, value.size() - 3));
+  if(value[value.size() - 1] == ']') {
+    const size_t open = value.rfind('[');
+    if(open != string::npos) {
+      const string bound = abi_trim(value.substr(open + 1,
+        value.size() - open - 2));
+      return "A" + bound + "_" + abi_type_text(value.substr(0, open));
+    }
+  }
   if(value.compare(0, 6, "const ") == 0)
     return "K" + abi_type_text(value.substr(6));
   if(value.compare(0, 9, "volatile ") == 0)

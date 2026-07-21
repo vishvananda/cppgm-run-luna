@@ -19,10 +19,6 @@ bool Contains(const char* const* begin, const char* const* end,
 
 } // namespace
 
-CPPGMAstNode::CPPGMAstNode(const string& kind, const string& value)
-	: kind(kind), value(value), initializer_form(AST_INITIALIZER_NONE),
-	  template_instantiation(false), template_primary(), template_arguments(), children() {}
-
 namespace cppgm_pa10 {
 
 Parser::Parser(const vector<Token>& tokens)
@@ -282,39 +278,39 @@ void Parser::SkipAttributes(vector<CPPGMAstNodePtr>* captured)
 		{
 			++ordinary_depth_;
 			CPPGMAstNodePtr argument;
-			Mark type_mark = Save();
-			CPPGMAstNodePtr type = ParseTypeId();
-			if (type && Is(")")) argument = type;
-			else
+			// GNU's __alignof(T) is lexically an identifier, so a normal
+			// type-id parse would misclassify the whole call as a type named
+			// __alignof with a function declarator.  Preserve it as a typed
+			// alignment operand before trying the ordinary alignas forms.
+			Mark gnu_mark = Save();
+			if (Take("__alignof") && Take("("))
 			{
+				CPPGMAstNodePtr operand = ParseTypeId();
+				if (operand && Take(")"))
+				{
+					argument.reset(new CPPGMAstNode("gnu-alignof-expression", "__alignof"));
+					Add(argument, operand);
+				}
+				else Restore(gnu_mark);
+			}
+			if (!argument)
+			{
+				Mark type_mark = Save();
+				CPPGMAstNodePtr type = ParseTypeId();
+				if (type && Is(")")) argument = type;
+				else
+				{
 				// ParseTypeId may accept a prefix of an expression in an
 				// ambiguous named-type position.  The closing parenthesis is
 				// the disambiguating boundary for an alignment argument.
-				Restore(type_mark);
-				argument = ParseAssignmentExpression();
+					Restore(type_mark);
+					argument = ParseAssignmentExpression();
+				}
 			}
 			if (argument && Take(")"))
 			{
 				--ordinary_depth_;
-				// The PA10 grammar accepts vendor-dependent __alignof syntax,
-				// but the PA11/PA15 type model deliberately has no dependent
-				// alignment entity to attach to it.  Keep that unsupported
-				// extension syntactic-only while retaining standard alignas
-				// as a typed AST fact.
-				bool vendor_dependent = false;
-				vector<CPPGMAstNodePtr> work;
-				work.push_back(argument);
-				while (!work.empty())
-				{
-					CPPGMAstNodePtr current = work.back();
-					work.pop_back();
-					if (current && current->value.find("__alignof") != string::npos)
-						vendor_dependent = true;
-					if (!current) continue;
-					for (size_t i = 0; i < current->children.size(); ++i)
-						work.push_back(current->children[i]);
-				}
-				if (!vendor_dependent && captured)
+				if (captured)
 				{
 					CPPGMAstNodePtr attribute = Node("attribute");
 					Add(attribute, argument);
@@ -417,6 +413,9 @@ void PrintPA10Ast(const CPPGMAstNodePtr& node, ostream& output,
 	unsigned int indentation)
 {
 	if (!node) return;
+	// Attributes are syntax accepted and retained for later semantic stages,
+	// but PA10's public AST format intentionally omits them.
+	if (node->kind == "attribute") return;
 	for (unsigned int i = 0; i < indentation; ++i) output << "  ";
 	output << node->kind;
 	if (!node->value.empty()) output << " " << node->value;

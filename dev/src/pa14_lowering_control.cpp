@@ -259,7 +259,10 @@ PA14Lowerer::Value PA14Lowerer::EmitObjectValueArgument(
       const TypePtr source_type = expression_value_type(source_info);
       const TypePtr constructed = node && node->kind == "call-expression" &&
         !node->children.empty() ? ConstructorObjectType(node->children[0], scope) : TypePtr();
-      if(constructed && PA12SameType(constructed, object_type, true)) {
+      if((constructed && PA12SameType(constructed, object_type, true)) ||
+         (node && node->kind == "call-expression" && source_type &&
+          source_type->kind == TYPE_CLASS &&
+          PA12SameType(source_type, object_type, true))) {
         if(!EmitObjectTransferAt(object_type, address, node, scope, true))
           return EmitValue(node, scope, target);
       } else {
@@ -1212,10 +1215,22 @@ void PA14Lowerer::EmitStatement(const CPPGMAstNodePtr& node, Scope* scope)
                     !HasDefaultInitializationEffects(found->second->type))
               (void)EmitAddress(CPPGMAstNodePtr(new CPPGMAstNode(
                 "id-expression", found->second->source_name)), scope);
-            else if(!constructed && !HasConstructor(found->second->type) &&
-                    DestructorHasEffects(found->second->type))
-              (void)EmitAddress(CPPGMAstNodePtr(new CPPGMAstNode(
-                "id-expression", found->second->source_name)), scope);
+            else if(!constructed) {
+              TypePtr object_type = type_value(found->second->type);
+              const bool needs_address = object_type &&
+                ((!object_type->template_specialization &&
+                  !HasConstructor(found->second->type) &&
+                  DestructorHasEffects(found->second->type)) ||
+                 (object_type->template_specialization &&
+                  ((!HasConstructor(found->second->type) &&
+                    (DestructorHasEffects(found->second->type) ||
+                     HasClassArrayMember(found->second->type))) ||
+                   HasNonstaticMemberFunction(found->second->type) ||
+                   object_type->class_members.empty())));
+              if(needs_address)
+                (void)EmitAddress(CPPGMAstNodePtr(new CPPGMAstNode(
+                  "id-expression", found->second->source_name)), scope);
+            }
           }
           else if(found != state_->plans.end() && found->second->type->kind == TYPE_ARRAY &&
                   found->second->type->child &&
@@ -1385,7 +1400,6 @@ void PA14Lowerer::EmitGlobalInitializer(GlobalRecord& global, Scope* scope)
         arguments = expression->children;
       if(!expression && !HasConstructor(value_type)) return;
       if(!HasDefaultInitializationEffects(value_type) && !HasDestructor(value_type)) return;
-      plan.initialization_address = global_address(&global);
       bool declared_constructor = false;
       const vector<Binding*> constructors =
         MemberBindings(value_type, LastComponent(value_type->name));
@@ -1398,9 +1412,17 @@ void PA14Lowerer::EmitGlobalInitializer(GlobalRecord& global, Scope* scope)
         }
       }
       if(expression && expression->kind == "braced-init-list" && !declared_constructor) {
-        EmitAggregateAt(plan.initialization_address, value_type, expression, scope);
+        // Aggregate members of a global are projected from a fresh global
+        // address, just as ordinary global lvalue projections are.  Keeping
+        // the source node here lets the aggregate walker recompute that
+        // typed base for each member without changing local aggregate
+        // lowering.
+        CPPGMAstNodePtr object_node(new CPPGMAstNode(
+          "id-expression", plan.source_name));
+        EmitAggregateAt(string(), value_type, expression, scope, object_node);
         return;
       }
+      plan.initialization_address = global_address(&global);
       if(EmitObjectConstructor(&plan, value_type, arguments, scope)) return;
       return;
     }
@@ -1434,67 +1456,5 @@ void PA14Lowerer::EmitGlobalFinalizer(GlobalRecord& global, Scope* scope)
     }
     if(type->kind == TYPE_CLASS)
       (void)EmitDestructorAt(type, global_address(&global), scope);
-  }
-void PA14Lowerer::EmitDynamicInitializers(vector<string>& entries)
-{
-    vector<GlobalRecord*> initializers;
-    vector<GlobalRecord*> finalizers;
-    for(size_t i = 0; i < globals_.size(); ++i) {
-      if(globals_[i].dynamic_initializer) initializers.push_back(&globals_[i]);
-      if(globals_[i].dynamic_finalizer) finalizers.push_back(&globals_[i]);
-    }
-    if(initializers.empty() && finalizers.empty()) return;
-
-    const auto render = [](FunctionState& state, const string& name,
-                           const string& role) -> string {
-      ostringstream out;
-      out << "function @" << name << "() -> void [role=" << role << "] {\n";
-      for(size_t i = 0; i < state.special_slots.size(); ++i)
-        out << "  slot $" << state.special_slots[i] << " : " <<
-          state.special_slot_types[state.special_slots[i]] << "\n";
-      if(!state.special_slots.empty()) out << "\n";
-      for(size_t i = 0; i < state.blocks.size(); ++i) {
-        if(i != 0) out << "\n";
-        out << "  block ^" << state.blocks[i].label << ":\n";
-        for(size_t j = 0; j < state.blocks[i].lines.size(); ++j)
-          out << state.blocks[i].lines[j] << "\n";
-      }
-      out << "}";
-      return out.str();
-    };
-    if(!initializers.empty()) {
-      FunctionRecord helper;
-      helper.scope = analyzer_.global_.get();
-      helper.type = FunctionOf(vector<TypePtr>(), false, Fundamental("void"), false);
-      helper.qualified_name = "__cppgm_init";
-      helper.symbol = "__cppgm_init";
-      helper.definition = true;
-      FunctionState state(this, &helper);
-      state_ = &state;
-      state.environments.push_back(map<string, VariablePlan*>());
-      AddBlock("entry");
-      for(size_t i = 0; i < initializers.size() && !state.current->terminated; ++i)
-        EmitGlobalInitializer(*initializers[i], initializers[i]->scope);
-      if(!state.current->terminated) Terminate("return void");
-      entries.push_back(render(state, "__cppgm_init", "init"));
-      state_ = 0;
-    }
-    if(!finalizers.empty()) {
-      FunctionRecord helper;
-      helper.scope = analyzer_.global_.get();
-      helper.type = FunctionOf(vector<TypePtr>(), false, Fundamental("void"), false);
-      helper.qualified_name = "__cppgm_fini";
-      helper.symbol = "__cppgm_fini";
-      helper.definition = true;
-      FunctionState state(this, &helper);
-      state_ = &state;
-      state.environments.push_back(map<string, VariablePlan*>());
-      AddBlock("entry");
-      for(size_t i = finalizers.size(); i > 0 && !state.current->terminated; --i)
-        EmitGlobalFinalizer(*finalizers[i - 1], finalizers[i - 1]->scope);
-      if(!state.current->terminated) Terminate("return void");
-      entries.push_back(render(state, "__cppgm_fini", "fini"));
-      state_ = 0;
-    }
   }
 } // namespace cppgm_pa14_lowering

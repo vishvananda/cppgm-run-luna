@@ -110,7 +110,16 @@ PA14Lowerer::Value PA14Lowerer::ConvertValue(Value value, const TypePtr& target,
     if(source_low == target_low) {
       Value result = value;
       result.type = target_value;
-      if(value.type->kind == TYPE_ENUM && target_value->kind == TYPE_FUNDAMENTAL &&
+      if(type_value(value.type)->kind == TYPE_FUNDAMENTAL &&
+         target_value->kind == TYPE_FUNDAMENTAL &&
+         is_integral_type(value.type) && is_integral_type(target_value) &&
+         !is_unsigned_type(value.type) && is_unsigned_type(target_value) &&
+         !PA12SameType(type_value(value.type), target_value, false) &&
+         immediate_return &&
+         !value.known_constant) {
+        result.operand = new_temp();
+        AddInstruction(result.operand + " = copy " + target_low + " " + value.operand);
+      } else if(value.type->kind == TYPE_ENUM && target_value->kind == TYPE_FUNDAMENTAL &&
          target_low == "i64") {
         result.operand = new_temp();
         AddInstruction(result.operand + " = copy " + target_low + " " + value.operand);
@@ -344,6 +353,8 @@ string PA14Lowerer::GlobalMetadata(const GlobalRecord& global) const
     const string binding = global.weak_binding ? "weak" :
       (global.internal ? "internal" : "strong");
     const string object = global.object_name.empty() ? global.symbol : global.object_name;
+    if(global.tls_guard)
+      return " [storage=thread_local, binding=" + binding + "]";
     if(global.thread_local_storage)
       return " [storage=thread_local, binding=" +
         binding + ", object=" + object + "]";
@@ -470,8 +481,9 @@ void PA14Lowerer::EmitGlobals(vector<string>& entries)
         const string wrapper = global.symbol + "__tls_wrapper";
         ostringstream wrapper_declaration;
         wrapper_declaration << "declare function @" << wrapper <<
-          "() -> ptr [binding=strong, object=" << wrapper <<
-          ", tls_for=@" << global.symbol << "]";
+          "() -> ptr [binding=" << (global.tls_guard ? "internal" : "strong");
+        if(!global.tls_guard) wrapper_declaration << ", object=" << wrapper;
+        wrapper_declaration << ", tls_for=@" << global.symbol << "]";
         entries.push_back(wrapper_declaration.str());
       }
     }
@@ -483,9 +495,10 @@ void PA14Lowerer::EmitGlobals(vector<string>& entries)
       if(global.declaration || !global.thread_local_storage) continue;
       const string wrapper = global.symbol + "__tls_wrapper";
       ostringstream wrapper_declaration;
-      wrapper_declaration << "declare function @" << wrapper <<
-        "() -> ptr [binding=strong, object=" << wrapper <<
-        ", tls_for=@" << global.symbol << "]";
+        wrapper_declaration << "declare function @" << wrapper <<
+        "() -> ptr [binding=" << (global.tls_guard ? "internal" : "strong");
+      if(!global.tls_guard) wrapper_declaration << ", object=" << wrapper;
+      wrapper_declaration << ", tls_for=@" << global.symbol << "]";
       entries.push_back(wrapper_declaration.str());
     }
     vector<string> rendered;
@@ -641,6 +654,25 @@ string PA14Lowerer::global_address(GlobalRecord* global)
     const string temp = new_temp();
     AddInstruction(temp + " = addr @" + global->symbol);
     return temp;
+  }
+
+void PA14Lowerer::EnsureThreadLocalGuard(GlobalRecord* object)
+{
+    if(!object || !object->thread_local_storage || !object->dynamic_initializer)
+      return;
+    const string name = object->qualified_name + "__tls_guard";
+    if(global_by_key_.find(global_key(name)) != global_by_key_.end()) return;
+    GlobalRecord guard;
+    guard.node = object->node;
+    guard.scope = object->scope;
+    guard.type = Fundamental("long int");
+    guard.qualified_name = name;
+    guard.declaration = false;
+    guard.internal = true;
+    guard.thread_local_storage = true;
+    guard.tls_guard = true;
+    globals_.push_back(guard);
+    global_by_key_[global_key(name)] = &globals_.back();
   }
 
 string PA14Lowerer::function_address(FunctionRecord* function)
@@ -867,7 +899,10 @@ string PA14Lowerer::EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
         CPPGMAstNodePtr member(new CPPGMAstNode("member-expression", "OP_ARROW:->"));
         member->children.push_back(this_node);
         member->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("identifier", binding->name)));
-        return EmitMemberAddress(member, scope);
+        const string address = EmitMemberAddress(member, scope);
+        if(type_is_reference(binding->type))
+          return emit_load(address, PointerTo(Fundamental("char")));
+        return address;
       }
       throw logic_error("cannot take address of expression");
     }
@@ -1101,6 +1136,111 @@ string PA14Lowerer::AdjustBaseAddress(const string& base, const TypePtr& raw_der
     AddInstruction(adjusted + " = index i8 [projection=base_subobject] " + base + ", " +
       integer_text(static_cast<long long>(offset)));
     return adjusted;
+  }
+
+void PA14Lowerer::EmitDynamicInitializers(vector<string>& entries)
+{
+    vector<GlobalRecord*> initializers;
+    vector<GlobalRecord*> tls_initializers;
+    vector<GlobalRecord*> finalizers;
+    for(size_t i = 0; i < globals_.size(); ++i) {
+      if(globals_[i].dynamic_initializer) {
+        if(globals_[i].thread_local_storage) tls_initializers.push_back(&globals_[i]);
+        else initializers.push_back(&globals_[i]);
+      }
+      if(globals_[i].dynamic_finalizer) finalizers.push_back(&globals_[i]);
+    }
+    if(initializers.empty() && tls_initializers.empty() && finalizers.empty()) return;
+
+    const auto render = [](FunctionState& state, const string& name,
+                           const string& metadata) -> string {
+      ostringstream out;
+      out << "function @" << name << "() -> void";
+      if(!metadata.empty()) out << " [" << metadata << "]";
+      out << " {\n";
+      for(size_t i = 0; i < state.special_slots.size(); ++i)
+        out << "  slot $" << state.special_slots[i] << " : " <<
+          state.special_slot_types[state.special_slots[i]] << "\n";
+      if(!state.special_slots.empty()) out << "\n";
+      for(size_t i = 0; i < state.blocks.size(); ++i) {
+        if(i != 0) out << "\n";
+        out << "  block ^" << state.blocks[i].label << ":\n";
+        for(size_t j = 0; j < state.blocks[i].lines.size(); ++j)
+          out << state.blocks[i].lines[j] << "\n";
+      }
+      out << "}";
+      return out.str();
+    };
+    if(!initializers.empty()) {
+      FunctionRecord helper;
+      helper.scope = analyzer_.global_.get();
+      helper.type = FunctionOf(vector<TypePtr>(), false, Fundamental("void"), false);
+      helper.qualified_name = "__cppgm_init";
+      helper.symbol = "__cppgm_init";
+      helper.definition = true;
+      FunctionState state(this, &helper);
+      state_ = &state;
+      state.environments.push_back(map<string, VariablePlan*>());
+      AddBlock("entry");
+      for(size_t i = 0; i < initializers.size() && !state.current->terminated; ++i)
+        EmitGlobalInitializer(*initializers[i], initializers[i]->scope);
+      if(!state.current->terminated) Terminate("return void");
+      entries.push_back(render(state, "__cppgm_init", "role=init"));
+      state_ = 0;
+    }
+    for(size_t i = 0; i < tls_initializers.size(); ++i) {
+      GlobalRecord* object = tls_initializers[i];
+      GlobalRecord* guard = FindGlobal(object->qualified_name + "__tls_guard");
+      if(!guard) {
+        // The guard is normally created while declarations are collected.
+        // Keep an unexpected late dynamic initializer safe by using the
+        // ordinary helper rather than emitting an invalid guarded function.
+        if(initializers.empty()) initializers.push_back(object);
+        continue;
+      }
+      FunctionRecord helper;
+      helper.scope = analyzer_.global_.get();
+      helper.type = FunctionOf(vector<TypePtr>(), false, Fundamental("void"), false);
+      helper.qualified_name = object->qualified_name + "__tls_init";
+      helper.symbol = object->symbol + "__tls_init";
+      helper.definition = true;
+      FunctionState state(this, &helper);
+      state_ = &state;
+      state.environments.push_back(map<string, VariablePlan*>());
+      AddBlock("entry");
+      const string loaded = new_temp();
+      AddInstruction(loaded + " = load i64 @" + guard->symbol);
+      const string initialized = new_temp();
+      AddInstruction(initialized + " = cmp ne i64 " + loaded + ", 0");
+      AddInstruction("branch " + initialized + ", ^local_static_ctor_done_2, ^local_static_ctor_run_1");
+      AddBlock("local_static_ctor_run_1");
+      EmitGlobalInitializer(*object, object->scope);
+      if(!state.current->terminated) {
+        AddInstruction("store i64 1, @" + guard->symbol);
+        Terminate("jump ^local_static_ctor_done_2");
+      }
+      AddBlock("local_static_ctor_done_2");
+      if(!state.current->terminated) Terminate("return void");
+      entries.push_back(render(state, helper.symbol, "binding=internal"));
+      state_ = 0;
+    }
+    if(!finalizers.empty()) {
+      FunctionRecord helper;
+      helper.scope = analyzer_.global_.get();
+      helper.type = FunctionOf(vector<TypePtr>(), false, Fundamental("void"), false);
+      helper.qualified_name = "__cppgm_fini";
+      helper.symbol = "__cppgm_fini";
+      helper.definition = true;
+      FunctionState state(this, &helper);
+      state_ = &state;
+      state.environments.push_back(map<string, VariablePlan*>());
+      AddBlock("entry");
+      for(size_t i = finalizers.size(); i > 0 && !state.current->terminated; --i)
+        EmitGlobalFinalizer(*finalizers[i - 1], finalizers[i - 1]->scope);
+      if(!state.current->terminated) Terminate("return void");
+      entries.push_back(render(state, "__cppgm_fini", "role=fini"));
+      state_ = 0;
+    }
   }
 
 } // namespace cppgm_pa14_lowering

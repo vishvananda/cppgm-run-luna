@@ -173,6 +173,11 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 		if(class_declaration != class_declarations_.end() &&
 			specialization_bases_.find(LastComponent(current)) != specialization_bases_.end()) {
 			const CPPGMAstNodePtr& declaration = class_declaration->second;
+			const string member_alias = MemberAliasType(current, spelling);
+			if(!member_alias.empty()) {
+				spelling = member_alias;
+				break;
+			}
 			for(size_t i = 0; i < declaration->children.size(); ++i)
 				if(declaration->children[i] && declaration->children[i]->kind == "enum-specifier" &&
 					LastComponent(declaration->children[i]->value) == spelling) {
@@ -362,6 +367,9 @@ CPPGMAstNodePtr PA18TemplateExpander::FunctionDeclarator(const CPPGMAstNodePtr& 
 	if(!declaration) return CPPGMAstNodePtr();
 	if(declaration->kind == "function-definition" && declaration->children.size() > 1)
 		return declaration->children[1];
+	if(declaration->kind == "special-member-definition" ||
+		declaration->kind == "special-member-declaration")
+		return ChildOfKindLocal(declaration, "declarator");
 	if(declaration->kind == "simple-declaration") {
 		const CPPGMAstNodePtr list = ChildOfKindLocal(declaration, "init-declarator-list");
 		if(list && !list->children.empty() && list->children[0] &&
@@ -544,6 +552,8 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 	CPPGMAstNodePtr result(new CPPGMAstNode(input->kind, input->value));
 	result->initializer_form = input->initializer_form;
 	result->template_instantiation = input->template_instantiation;
+	result->explicit_instantiation = input->explicit_instantiation;
+	result->dependent_base_lookup = input->dependent_base_lookup;
 	result->template_primary = input->template_primary;
 	result->template_arguments = input->template_arguments;
 	CPPGMAstNodePtr input_callee = input->children.empty() ? CPPGMAstNodePtr() :

@@ -576,7 +576,7 @@ void PA14Lowerer::InstallBuiltins()
 bool PA14Lowerer::HasNoexcept(const CPPGMAstNodePtr& node) const
 {
     if(!node) return false;
-    if(node->kind == "function-qualifier" && node->value == "noexcept") return true;
+	if(node->kind == "function-qualifier" && node->value == "noexcept") return true;
     for(size_t i = 0; i < node->children.size(); ++i)
       if(HasNoexcept(node->children[i])) return true;
     return false;
@@ -735,13 +735,11 @@ void PA14Lowerer::CollectClassMembers(const CPPGMAstNodePtr& node, Scope* scope)
           record.declaration = true;
           record.internal = false;
           record.thread_local_storage = HasStorageSpecifier(child, "thread_local");
-          // An in-class integral const with an initializer is a value
-          // declaration, not a required out-of-class definition.  Its
-          // binding carries the constant used by member-expression
-          // lowering, so emitting a storage declaration here would create
-          // an unused LowIR global.
-          if(facts.is_const && record.initializer &&
-             is_integral_type(type_value(member_type))) continue;
+          const TypePtr member_value = type_value(member_type);
+          const bool integral_constant = is_integral_type(member_value) ||
+            (member_value && member_value->kind == TYPE_FUNDAMENTAL &&
+             member_value->name == "bool");
+          if(facts.is_const && record.initializer && integral_constant) continue;
           const string key = global_key(record.qualified_name);
           map<string, GlobalRecord*>::iterator global_found = global_by_key_.find(key);
           if(global_found == global_by_key_.end()) {
@@ -1049,10 +1047,6 @@ void PA14Lowerer::CollectSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* s
          (value_type->kind == TYPE_ARRAY && value_type->child &&
           type_value(value_type->child) && type_value(value_type->child)->kind == TYPE_CLASS));
       if(!is_extern && object) {
-        // Every namespace-scope class object has a construction phase, even
-        // when its implicit constructor has no executable body.  Keeping the
-        // phase explicit also gives later lifetime lowering a stable place to
-        // attach member initialization actions.
         const bool static_member_object = static_cast<bool>(record.template_owner);
         record.dynamic_initializer = !static_member_object ||
           HasDefaultConstructionEffects(value_type);
@@ -1063,9 +1057,11 @@ void PA14Lowerer::CollectSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* s
       }
       const string key = global_key(record.qualified_name);
       map<string, GlobalRecord*>::iterator found = global_by_key_.find(key);
+      GlobalRecord* stored = 0;
       if(found == global_by_key_.end()) {
         globals_.push_back(record);
         global_by_key_[key] = &globals_.back();
+        stored = &globals_.back();
       } else {
         GlobalRecord* prior = found->second;
         if(record.initializer) prior->initializer = record.initializer;
@@ -1080,7 +1076,10 @@ void PA14Lowerer::CollectSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* s
         prior->thread_local_storage = prior->thread_local_storage || record.thread_local_storage;
         prior->dynamic_initializer = prior->dynamic_initializer || record.dynamic_initializer;
         prior->dynamic_finalizer = prior->dynamic_finalizer || record.dynamic_finalizer;
+        stored = prior;
       }
+      if(stored && stored->thread_local_storage && stored->dynamic_initializer)
+        EnsureThreadLocalGuard(stored);
     }
   }
 

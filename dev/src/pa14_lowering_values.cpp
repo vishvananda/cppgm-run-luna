@@ -8,6 +8,185 @@ using namespace std;
 
 namespace cppgm_pa14_lowering {
 
+PA14Lowerer::Value PA14Lowerer::EmitIdentifier(const CPPGMAstNodePtr& node, Scope* scope,
+                       const TypePtr& expected)
+{
+    Value result;
+    VariablePlan* local = LocalForName(node->value);
+    if(local) {
+      if(local->type->kind == TYPE_ARRAY) {
+        result.type = local->type;
+        result.array = true;
+        result.operand = EmitArrayDecay(node, scope);
+        return result;
+      }
+      if(type_is_reference(local->type)) {
+        TypePtr referred = local->type->child;
+        const string address = local_address(local);
+        if(referred && referred->kind == TYPE_FUNCTION) {
+          result.type = referred;
+          result.function = true;
+          result.operand = address;
+          const string decay = new_temp();
+          AddInstruction(decay + " = unary decay ptr " + result.operand);
+          result.operand = decay;
+          return result;
+        }
+        result.type = referred;
+        result.operand = emit_load(address, referred);
+        return result;
+      }
+      if(local->parameter_address) {
+        result.type = local->type;
+        result.operand = local->parameter_operand;
+        result.lvalue = true;
+        return result;
+      }
+      result.type = local->type;
+      result.operand = emit_load(StorageForVariable(*local), local->type);
+      return result;
+    }
+    vector<Binding*> candidates = Lookup(node->value, scope);
+    if(candidates.empty()) throw logic_error("unknown identifier during lowering");
+    if(candidates.size() > 1) {
+      bool repeated_binding = true;
+      for(size_t i = 1; i < candidates.size(); ++i)
+        if(candidates[i] != candidates[0]) {
+          repeated_binding = false;
+          break;
+        }
+      if(repeated_binding) throw logic_error("ambiguous identifier during lowering");
+    }
+    Binding* binding = candidates.size() == 1 ? candidates[0] : 0;
+    if(!binding && candidates.size() > 1) {
+      bool duplicate_declarations = true;
+      for(size_t i = 1; i < candidates.size(); ++i)
+        if(candidates[i]->qualified_name != candidates[0]->qualified_name ||
+           !PA12SameType(candidates[i]->type, candidates[0]->type, false)) {
+          duplicate_declarations = false;
+          break;
+        }
+      if(duplicate_declarations) binding = candidates[0];
+    }
+    if(expected && !binding) {
+      TypePtr target = type_value(expected);
+      int best = 1000000;
+      for(size_t i = 0; i < candidates.size(); ++i) {
+        TypePtr function = function_target_type(candidates[i]->type);
+        if(!function) continue;
+        ExprInfo source;
+        source.type = function;
+        source.category = "lvalue";
+        const int rank = ConversionRank(source, target);
+        if(rank >= 0 && rank < best) { best = rank; binding = candidates[i]; }
+      }
+    }
+    if(!binding && candidates.size() == 1) binding = candidates[0];
+    if(!binding) throw logic_error("ambiguous identifier during lowering");
+    if(!IsAccessible(binding, scope)) throw logic_error("inaccessible member");
+    if(binding->kind == BIND_ENUMERATOR) {
+      result.type = binding->type;
+      result.operand = integer_text(binding->value);
+      result.known_constant = binding->has_value;
+      result.constant = binding->value;
+      return result;
+    }
+    if(binding->is_member && binding->member_owner) {
+      if(binding->kind == BIND_FUNCTION) {
+        FunctionRecord* function = RecordForBinding(binding);
+        if(!function) throw logic_error("unknown member function symbol during lowering");
+        if(function->member) function->needed = true;
+        result.type = function->type;
+        result.function = true;
+        result.operand = function_address(function);
+        return result;
+      }
+      result.type = binding->type;
+      if(binding->is_static) {
+        if(binding->has_value) {
+          result.known_constant = true;
+          result.constant = binding->value;
+          result.operand = integer_text(result.constant);
+          return result;
+        }
+        GlobalRecord* global_member = FindGlobal(binding->qualified_name);
+        if(!global_member) throw logic_error("unknown static member during lowering");
+        result.type = global_member->type;
+        result.operand = global_member->type->kind == TYPE_ARRAY ?
+          EmitArrayDecay(node, scope) : emit_load("@" + global_member->symbol, global_member->type);
+        result.array = global_member->type->kind == TYPE_ARRAY;
+        return result;
+      }
+      CPPGMAstNodePtr this_node(new CPPGMAstNode("keyword-literal", "KW_THIS:this"));
+      if(binding->name != node->value && node->value.find("::") != string::npos) {
+        Value this_value = EmitValue(this_node, scope);
+        TypePtr object = expression_value_type(Infer(this_node, scope));
+        if(object && object->kind == TYPE_POINTER) object = type_value(object->child);
+        string base = AdjustBaseAddress(this_value.operand, object, binding->member_owner);
+        if(binding->member_index == static_cast<size_t>(-1) || !binding->member_owner ||
+           binding->member_index >= binding->member_owner->class_members.size())
+          throw logic_error("member has no layout record");
+        const ClassMemberInfo& fact = binding->member_owner->class_members[binding->member_index];
+        const string address = new_temp();
+        const string projection = type_is_reference(fact.type) ?
+          "[projection=reference_field] " : "[projection=field] ";
+        AddInstruction(address + " = index i8 " + projection + base + ", " +
+          integer_text(fact.offset));
+        result.type = binding->type;
+        if(type_is_reference(result.type)) result.type = result.type->child;
+        if(object && object->is_const && !fact.is_mutable)
+          result.type = CloneWithCv(result.type, true, object->is_volatile);
+        if(IsBitField(binding)) {
+          TypePtr read_type = expected ? type_value(expected) : result.type;
+          result = EmitBitFieldLoad(binding, address, read_type, static_cast<bool>(expected));
+        } else if(type_is_reference(fact.type)) {
+          const string referred = emit_load(address, PointerTo(Fundamental("char")));
+          result.operand = emit_load(referred, result.type);
+        } else result.operand = emit_load(address, result.type);
+        result.lvalue = false;
+        return result;
+      }
+      CPPGMAstNodePtr member(new CPPGMAstNode("member-expression", "OP_ARROW:->"));
+      member->children.push_back(this_node);
+      member->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("identifier", binding->name)));
+      ExprInfo member_info = InferMember(member, scope);
+      result.type = member_info.type;
+      if(result.type && result.type->kind == TYPE_ARRAY) {
+        result.array = true;
+        result.operand = EmitArrayDecay(member, scope);
+        return result;
+      }
+      const string address = EmitMemberAddress(member, scope, true);
+      if(IsBitField(binding)) {
+        TypePtr read_type = expected ? type_value(expected) : result.type;
+        result = EmitBitFieldLoad(binding, address, read_type,
+          static_cast<bool>(expected));
+      } else if(type_is_reference(binding->type)) {
+        const string referred = emit_load(address, PointerTo(Fundamental("char")));
+        result.operand = emit_load(referred, result.type);
+      } else
+        result.operand = emit_load(address, result.type);
+      result.lvalue = false;
+      return result;
+    }
+    if(binding->kind == BIND_FUNCTION) {
+      FunctionRecord* function = RecordForBinding(binding);
+      if(!function) throw logic_error("unknown function symbol during lowering");
+      result.type = function->type;
+      result.function = true;
+      result.operand = function_address(function);
+      return result;
+    }
+    GlobalRecord* global = FindGlobal(binding->qualified_name);
+    if(!global) throw logic_error("unknown global during lowering");
+    result.type = global->type;
+    if(global->type->kind == TYPE_ARRAY) {
+      result.array = true;
+      result.operand = EmitArrayDecay(node, scope);
+    } else result.operand = emit_load("@" + global->symbol, global->type);
+    return result;
+  }
+
 bool PA14Lowerer::ClassHasDeclaredValueMember(const TypePtr& raw_type) const
 {
     TypePtr type = type_value(raw_type);

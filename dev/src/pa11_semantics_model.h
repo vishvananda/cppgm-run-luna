@@ -113,6 +113,9 @@ struct Type
 	bool layout_in_progress;
 	bool is_union;
 	TypePtr enclosing_type;
+	// True when this materialized class was defined with a dependent base.
+	// Unqualified lookup in its template body must not inspect that base.
+	bool dependent_base_lookup;
 	vector<string> friend_names;
 	vector<VirtualMethodInfo> virtual_methods;
 	bool polymorphic;
@@ -169,6 +172,10 @@ struct Binding
 	bool is_pure;
 	bool is_override;
 	bool is_final;
+	// Exception specifications are semantic facts of a declaration.  They are
+	// kept separately from the callable type so PA18 can compare an
+	// out-of-class definition with its earlier declaration.
+	bool noexcept_specified;
 	// ClassMemberInfo is the canonical owner of layout and member-kind facts.
 	// Bindings retain lookup identity and refer to that record through a stable
 	// owner/index pair rather than a pointer into a relocatable member vector.

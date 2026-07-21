@@ -19,6 +19,15 @@ string SpecialMemberName(const string& raw_name)
 
 } // namespace
 
+bool PA14Lowerer::HasInline(const CPPGMAstNodePtr& node) const
+{
+    if(!node) return false;
+    if(node->value == "KW_INLINE:inline" || node->value == "inline") return true;
+    for(size_t i = 0; i < node->children.size(); ++i)
+      if(HasInline(node->children[i])) return true;
+    return false;
+  }
+
 void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, bool definition)
 {
     if(!node || node->children.size() < 2) throw logic_error("invalid function declaration");
@@ -195,7 +204,10 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
     record->static_member = is_static;
 	record->template_instantiation = node->template_instantiation ||
 		(member_owner && member_owner->template_specialization);
+	record->object_root = record->object_root || node->explicit_instantiation;
+	if(node->explicit_instantiation) record->needed = true;
 	record->weak_binding = record->template_instantiation;
+	record->inline_definition = record->inline_definition || HasInline(node);
 	if(node->template_instantiation) {
 		record->template_primary = node->template_primary;
 		record->template_arguments = node->template_arguments;
@@ -358,14 +370,16 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
     if(definition) record->unwind_no = record->unwind_no || HasNoexcept(declarator);
     RememberDefaults(record, declarator);
     ClassifySpecialMember(record);
-    if(record->defaulted && record->value_special_member)
+	if(record->defaulted && record->value_special_member)
       record->unwind_no = record->unwind_no || IsTrivialValueStorage(owner);
     const bool out_of_class_definition = definition && node->value.find("::") != string::npos;
     if(out_of_class_definition && (record->constructor || record->destructor)) {
       record->needed = true;
     }
     const bool constructor_record = record->constructor;
-    if(constructor_record) {
+    if(constructor_record &&
+       (record->defaulted || (out_of_class_definition &&
+                              !record->template_instantiation))) {
       EnsureConstructorBaseEntry(record);
       if(definition && node->value.find("::") != string::npos) {
         FunctionRecord* base_entry = BaseEntryFor(record);

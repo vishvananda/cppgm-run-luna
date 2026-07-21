@@ -855,7 +855,7 @@ private:
 		if (direct)
 		{
 				Indent(indentation + 1);
-			*out_ << "callee " << choice.binding->qualified_name << " " <<
+			*out_ << "callee " << PA12PublicQualifiedName(choice.binding->qualified_name) << " " <<
 				TypeTextPA12(choice.function) << "\n";
 		}
 		else PrintExpr(callee_node, scope, indentation + 1);
@@ -1127,7 +1127,7 @@ private:
 					if (direct[binding_index]->kind == BIND_FUNCTION &&
 						direct[binding_index]->qualified_name.find("::") != string::npos)
 					{
-						display_name = direct[binding_index]->qualified_name;
+						display_name = PA12PublicQualifiedName(direct[binding_index]->qualified_name);
 						break;
 					}
 			}
@@ -1395,8 +1395,7 @@ private:
 		if (!type || type->kind != TYPE_FUNCTION) throw logic_error("definition is not a function");
 		const string name = DeclaratorName(declarator);
 		Indent(indentation);
-		const string display_name = scope && !scope->qualified_prefix.empty() ?
-			scope->qualified_prefix + "::" + PA12LastComponent(name) : PA12LastComponent(name);
+		const string display_name = scope && !scope->qualified_prefix.empty() ? PA12PublicQualifiedName(scope->qualified_prefix + "::" + PA12LastComponent(name)) : PA12LastComponent(name);
 		*out_ << "function-definition " << display_name << " " <<
 			TypeTextPA12(type) << "\n";
 		CPPGMAstNodePtr clause = ChildOfKind(declarator, "parameter-clause");

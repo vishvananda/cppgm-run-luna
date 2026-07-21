@@ -280,6 +280,18 @@ CPPGMAstNodePtr Parser::ParseTemplateDeclaration(bool member_context)
 		Restore(mark);
 		return CPPGMAstNodePtr();
 	}
+	// A class template's class-specifier spelling does not carry its
+	// parameter list (the parameters belong to the enclosing declaration),
+	// so ParseClassSpecifier cannot register the name as a template itself.
+	// Register it here for later declaration-versus-expression disambiguation
+	// in function bodies.
+	if (declaration->kind == "class-specifier" ||
+		declaration->kind == "class-forward-declaration") {
+		string name = declaration->value;
+		const size_t separator = name.rfind("::");
+		if (separator != string::npos) name.erase(0, separator + 2);
+		RegisterTemplate(name);
+	}
 	CPPGMAstNodePtr result = Node("template-declaration");
 	Add(result, parameters);
 	Add(result, declaration);

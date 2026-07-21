@@ -26,6 +26,11 @@ struct CPPGMAstNode
 	std::string value;
 	CPPGMAstInitializerForm initializer_form;
 	bool template_instantiation;
+	bool explicit_instantiation;
+	// PA18 preserves this source-level lookup fact on a materialized class
+	// specialization so PA14 can distinguish a dependent base from an
+	// ordinary concrete base during unqualified lookup.
+	bool dependent_base_lookup;
 	std::string template_primary;
 	std::vector<std::string> template_arguments;
 	std::vector<CPPGMAstNodePtr> children;

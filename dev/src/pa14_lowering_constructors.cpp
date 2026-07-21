@@ -79,6 +79,14 @@ bool PA14Lowerer::EmitValueSpecialMemberBody(FunctionRecord& function, Scope* sc
               EnsureImplicitAssignment(base, move) : EnsureImplicitCopyConstructor(base, move);
             if(!base_record || base_record->deleted)
               throw logic_error("value member has deleted base operation");
+            // A defaulted special member invokes the base-subobject
+            // constructor entry.  User-written constructors use the normal
+            // complete-object entry, even when they happen to initialize a
+            // base by delegation.
+            if(!assignment && function.defaulted &&
+               (function.copy_constructor || function.move_constructor) &&
+               !BaseEntryFor(base_record))
+              EnsureConstructorBaseEntry(base_record);
             base_record->needed = true;
             FunctionRecord* base_call = BaseEntryFor(base_record);
             if(base_call) base_call->needed = true;
@@ -470,7 +478,8 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
           // selected default constructor.  Keep this scoped to a real
           // constructor candidate; aggregate/base fallback below has its
           // own typed member initialization rules.
-          emit_store(Fundamental("long int"), "0", address);
+          if(!HasUserProvidedConstructor(field_type))
+            emit_store(Fundamental("long int"), "0", address);
           if(EmitConstructorAt(field_type, address, arguments, scope)) continue;
         }
         CPPGMAstNodePtr empty(new CPPGMAstNode("braced-init-list"));
@@ -486,7 +495,8 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
           } else EmitAggregateAt(base_address, nested_base, empty, scope,
                                  CPPGMAstNodePtr(), -1, true);
         }
-        EmitAggregateAt(address, field_type, empty, scope);
+        EmitAggregateAt(address, field_type, empty, scope,
+                        CPPGMAstNodePtr(), -1, true);
         continue;
       }
       if(field_type && field_type->kind == TYPE_CLASS &&
@@ -570,6 +580,9 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
       if(arguments.empty() && field_type && field_type->kind == TYPE_CLASS &&
          !empty_value_initializer && field_type->class_members.empty() &&
          MemberBindings(field_type, LastComponent(field_type->name)).empty()) continue;
+      if(arguments.empty() && field_type && field_type->kind == TYPE_CLASS &&
+         !empty_value_initializer && !HasDefaultConstructionEffects(field_type) &&
+         !HasExplicitConstructor(field_type)) continue;
       if(arguments.empty() && !empty_value_initializer && field_type &&
          field_type->kind == TYPE_CLASS && field_type->is_union &&
          !HasDefaultConstructionEffects(field_type)) {
@@ -688,6 +701,8 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
       if(member_type && member_type->kind == TYPE_ARRAY) {
         TypePtr element_type = type_value(member_type->child);
         if(!element_type || element_type->kind != TYPE_CLASS || member_type->bound < 0) continue;
+        if(!HasDefaultConstructionEffects(element_type) &&
+           !HasExplicitConstructor(element_type)) continue;
         if(element_type->class_members.empty() && !element_type->direct_base &&
            MemberBindings(element_type, LastComponent(element_type->name)).empty())
           continue;
@@ -728,6 +743,8 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
           }
           if(!has_user_constructor) continue;
         }
+        if(!HasDefaultConstructionEffects(member_type) &&
+           !HasExplicitConstructor(member_type)) continue;
         if(member_type->class_members.empty() && !member_type->direct_base &&
            MemberBindings(member_type, LastComponent(member_type->name)).empty())
           continue;

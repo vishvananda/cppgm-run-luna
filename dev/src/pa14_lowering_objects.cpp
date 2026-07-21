@@ -620,6 +620,13 @@ bool PA14Lowerer::EmitObjectTransferAt(const TypePtr& raw_target,
     }
     const bool same_type = PA12SameType(source_type, target, true);
     const bool move = source_info.category == "xvalue" || implicit_return_move;
+    const bool template_context = type_value(target)->template_specialization ||
+      (scope && scope->owner_type &&
+       type_value(scope->owner_type)->template_specialization) ||
+      (state_ && state_->record && state_->record->member_owner &&
+       state_->record->member_owner->template_specialization);
+    if(same_type && source_info.category == "lvalue" && template_context &&
+       IsEmptyBaseStorage(target) && IsTrivialValueStorage(target)) return true;
     if(source_type && source_type->kind == TYPE_CLASS &&
        IsDerivedFrom(source_type, target)) {
       FunctionRecord* target_copy = FindValueMember(target, false, false);
@@ -1121,7 +1128,19 @@ void PA14Lowerer::EmitAggregateConstructorBody(FunctionRecord& function, Scope* 
           value_member = EnsureImplicitCopyConstructor(member.type, false);
         if(value_member && !value_member->deleted) {
           value_member->needed = true;
-          AddInstruction("call void @" + value_member->symbol + "(" + address + ", %" +
+          FunctionRecord* call_member = value_member;
+          const bool need_base_entry = !BaseEntryFor(value_member) &&
+            !value_member->template_instantiation && !function.template_instantiation &&
+            !function.synthesized_value_member && !function.aggregate_constructor &&
+            (!function.member_owner || !function.member_owner->template_specialization);
+          if(need_base_entry)
+            EnsureConstructorBaseEntry(value_member);
+          FunctionRecord* base_member = BaseEntryFor(value_member);
+          if(base_member) {
+            base_member->needed = true;
+            call_member = base_member;
+          }
+          AddInstruction("call void @" + call_member->symbol + "(" + address + ", %" +
             names[parameter] + ")");
           ++parameter;
           continue;

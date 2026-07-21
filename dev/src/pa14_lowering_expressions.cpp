@@ -18,185 +18,6 @@ using namespace std;
 
 namespace cppgm_pa14_lowering {
 
-PA14Lowerer::Value PA14Lowerer::EmitIdentifier(const CPPGMAstNodePtr& node, Scope* scope,
-                       const TypePtr& expected)
-{
-    Value result;
-    VariablePlan* local = LocalForName(node->value);
-    if(local) {
-      if(local->type->kind == TYPE_ARRAY) {
-        result.type = local->type;
-        result.array = true;
-        result.operand = EmitArrayDecay(node, scope);
-        return result;
-      }
-      if(type_is_reference(local->type)) {
-        TypePtr referred = local->type->child;
-        const string address = local_address(local);
-        if(referred && referred->kind == TYPE_FUNCTION) {
-          result.type = referred;
-          result.function = true;
-          result.operand = address;
-          const string decay = new_temp();
-          AddInstruction(decay + " = unary decay ptr " + result.operand);
-          result.operand = decay;
-          return result;
-        }
-        result.type = referred;
-        result.operand = emit_load(address, referred);
-        return result;
-      }
-      if(local->parameter_address) {
-        result.type = local->type;
-        result.operand = local->parameter_operand;
-        result.lvalue = true;
-        return result;
-      }
-      result.type = local->type;
-      result.operand = emit_load(StorageForVariable(*local), local->type);
-      return result;
-    }
-    vector<Binding*> candidates = Lookup(node->value, scope);
-    if(candidates.empty()) throw logic_error("unknown identifier during lowering");
-    if(candidates.size() > 1) {
-      bool repeated_binding = true;
-      for(size_t i = 1; i < candidates.size(); ++i)
-        if(candidates[i] != candidates[0]) {
-          repeated_binding = false;
-          break;
-        }
-      if(repeated_binding) throw logic_error("ambiguous identifier during lowering");
-    }
-    Binding* binding = candidates.size() == 1 ? candidates[0] : 0;
-    if(!binding && candidates.size() > 1) {
-      bool duplicate_declarations = true;
-      for(size_t i = 1; i < candidates.size(); ++i)
-        if(candidates[i]->qualified_name != candidates[0]->qualified_name ||
-           !PA12SameType(candidates[i]->type, candidates[0]->type, false)) {
-          duplicate_declarations = false;
-          break;
-        }
-      if(duplicate_declarations) binding = candidates[0];
-    }
-    if(expected && !binding) {
-      TypePtr target = type_value(expected);
-      int best = 1000000;
-      for(size_t i = 0; i < candidates.size(); ++i) {
-        TypePtr function = function_target_type(candidates[i]->type);
-        if(!function) continue;
-        ExprInfo source;
-        source.type = function;
-        source.category = "lvalue";
-        const int rank = ConversionRank(source, target);
-        if(rank >= 0 && rank < best) { best = rank; binding = candidates[i]; }
-      }
-    }
-    if(!binding && candidates.size() == 1) binding = candidates[0];
-    if(!binding) throw logic_error("ambiguous identifier during lowering");
-    if(!IsAccessible(binding, scope)) throw logic_error("inaccessible member");
-    if(binding->kind == BIND_ENUMERATOR) {
-      result.type = binding->type;
-      result.operand = integer_text(binding->value);
-      result.known_constant = binding->has_value;
-      result.constant = binding->value;
-      return result;
-    }
-    if(binding->is_member && binding->member_owner) {
-      if(binding->kind == BIND_FUNCTION) {
-        FunctionRecord* function = RecordForBinding(binding);
-        if(!function) throw logic_error("unknown member function symbol during lowering");
-        if(function->member) function->needed = true;
-        result.type = function->type;
-        result.function = true;
-        result.operand = function_address(function);
-        return result;
-      }
-      result.type = binding->type;
-      if(binding->is_static) {
-        if(binding->has_value) {
-          result.known_constant = true;
-          result.constant = binding->value;
-          result.operand = integer_text(result.constant);
-          return result;
-        }
-        GlobalRecord* global_member = FindGlobal(binding->qualified_name);
-        if(!global_member) throw logic_error("unknown static member during lowering");
-        result.type = global_member->type;
-        result.operand = global_member->type->kind == TYPE_ARRAY ?
-          EmitArrayDecay(node, scope) : emit_load("@" + global_member->symbol, global_member->type);
-        result.array = global_member->type->kind == TYPE_ARRAY;
-        return result;
-      }
-      CPPGMAstNodePtr this_node(new CPPGMAstNode("keyword-literal", "KW_THIS:this"));
-      if(binding->name != node->value && node->value.find("::") != string::npos) {
-        Value this_value = EmitValue(this_node, scope);
-        TypePtr object = expression_value_type(Infer(this_node, scope));
-        if(object && object->kind == TYPE_POINTER) object = type_value(object->child);
-        string base = AdjustBaseAddress(this_value.operand, object, binding->member_owner);
-        if(binding->member_index == static_cast<size_t>(-1) || !binding->member_owner ||
-           binding->member_index >= binding->member_owner->class_members.size())
-          throw logic_error("member has no layout record");
-        const ClassMemberInfo& fact = binding->member_owner->class_members[binding->member_index];
-        const string address = new_temp();
-        const string projection = type_is_reference(fact.type) ?
-          "[projection=reference_field] " : "[projection=field] ";
-        AddInstruction(address + " = index i8 " + projection + base + ", " +
-          integer_text(fact.offset));
-        result.type = binding->type;
-        if(type_is_reference(result.type)) result.type = result.type->child;
-        if(object && object->is_const && !fact.is_mutable)
-          result.type = CloneWithCv(result.type, true, object->is_volatile);
-        if(IsBitField(binding)) {
-          TypePtr read_type = expected ? type_value(expected) : result.type;
-          result = EmitBitFieldLoad(binding, address, read_type, static_cast<bool>(expected));
-        } else if(type_is_reference(fact.type)) {
-          const string referred = emit_load(address, PointerTo(Fundamental("char")));
-          result.operand = emit_load(referred, result.type);
-        } else result.operand = emit_load(address, result.type);
-        result.lvalue = false;
-        return result;
-      }
-      CPPGMAstNodePtr member(new CPPGMAstNode("member-expression", "OP_ARROW:->"));
-      member->children.push_back(this_node);
-      member->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("identifier", binding->name)));
-      ExprInfo member_info = InferMember(member, scope);
-      result.type = member_info.type;
-      if(result.type && result.type->kind == TYPE_ARRAY) {
-        result.array = true;
-        result.operand = EmitArrayDecay(member, scope);
-        return result;
-      }
-      const string address = EmitMemberAddress(member, scope, true);
-      if(IsBitField(binding)) {
-        TypePtr read_type = expected ? type_value(expected) : result.type;
-        result = EmitBitFieldLoad(binding, address, read_type,
-          static_cast<bool>(expected));
-      } else if(type_is_reference(binding->type)) {
-        const string referred = emit_load(address, PointerTo(Fundamental("char")));
-        result.operand = emit_load(referred, result.type);
-      } else
-        result.operand = emit_load(address, result.type);
-      result.lvalue = false;
-      return result;
-    }
-    if(binding->kind == BIND_FUNCTION) {
-      FunctionRecord* function = RecordForBinding(binding);
-      if(!function) throw logic_error("unknown function symbol during lowering");
-      result.type = function->type;
-      result.function = true;
-      result.operand = function_address(function);
-      return result;
-    }
-    GlobalRecord* global = FindGlobal(binding->qualified_name);
-    if(!global) throw logic_error("unknown global during lowering");
-    result.type = global->type;
-    if(global->type->kind == TYPE_ARRAY) {
-      result.array = true;
-      result.operand = EmitArrayDecay(node, scope);
-    } else result.operand = emit_load("@" + global->symbol, global->type);
-    return result;
-  }
-
 PA14Lowerer::Value PA14Lowerer::EmitUnary(const CPPGMAstNodePtr& node, Scope* scope,
                   const TypePtr& expected)
 {
@@ -509,6 +330,19 @@ PA14Lowerer::Value PA14Lowerer::EmitAssignment(const CPPGMAstNodePtr& node, Scop
     ExprInfo left_info = Infer(node->children[0], scope);
     TypePtr left_type = expression_value_type(left_info);
     if(!left_type) throw logic_error("assignment has no target type");
+    Binding* target_binding = node->children[0] &&
+      node->children[0]->kind == "member-expression" ?
+      MemberBinding(node->children[0], scope) : left_info.binding;
+    FunctionRecord* target_function = target_binding &&
+      target_binding->kind == BIND_FUNCTION ? RecordForBinding(target_binding) : 0;
+    const bool template_assignment =
+      (target_binding && target_binding->member_owner &&
+       target_binding->member_owner->template_specialization) ||
+      (target_function && target_function->template_instantiation);
+    const bool union_member = target_binding && target_binding->member_owner &&
+      target_binding->member_owner->is_union;
+    const bool byte_array_element = node->children[0] &&
+      node->children[0]->kind == "subscript-expression";
     Value right;
     if(op == "=") {
       ExprInfo right_info = Infer(node->children[1], scope, left_type);
@@ -526,15 +360,8 @@ PA14Lowerer::Value PA14Lowerer::EmitAssignment(const CPPGMAstNodePtr& node, Scop
       const bool target_integral = target_type &&
         (is_integral_type(target_type) ||
          (target_type->kind == TYPE_FUNDAMENTAL && target_type->name == "bool"));
-      Binding* left_binding = node->children[0] &&
-        node->children[0]->kind == "member-expression" ?
-        MemberBinding(node->children[0], scope) : 0;
-      const bool union_member = left_binding && left_binding->member_owner &&
-        left_binding->member_owner->is_union;
-      const bool byte_array_element = node->children[0] &&
-        node->children[0]->kind == "subscript-expression";
-      if((byte_array_element || union_member) && right.known_constant &&
-         right_integral && target_integral) {
+      if((template_assignment || union_member || byte_array_element) &&
+         right.known_constant && right_integral && target_integral) {
         right.type = left_type;
         right.operand = integer_text(right.constant);
       }
@@ -708,10 +535,22 @@ PA14Lowerer::Value PA14Lowerer::EmitCompare(const CPPGMAstNodePtr& node, Scope* 
     const bool right_bit_field = node->children[1] &&
       node->children[1]->kind == "member-expression" &&
       IsBitField(MemberBinding(node->children[1], scope));
+    const bool left_class_operand = left_info.type &&
+      left_info.type->kind == TYPE_CLASS;
+    const bool right_class_operand = right_info.type &&
+      right_info.type->kind == TYPE_CLASS;
+    const bool left_template_class = left_class_operand &&
+      left_info.type->template_specialization;
+    const bool right_template_class = right_class_operand &&
+      right_info.type->template_specialization;
+    const TypePtr left_expected = left_class_operand && !left_template_class ?
+      common : TypePtr();
+    const TypePtr right_expected = right_class_operand && !right_template_class ?
+      common : TypePtr();
     Value left = left_bit_field ? EmitValue(node->children[0], scope) :
-      EmitValue(node->children[0], scope, common);
+      EmitValue(node->children[0], scope, left_expected);
     Value right = right_bit_field ? EmitValue(node->children[1], scope) :
-      EmitValue(node->children[1], scope, common);
+      EmitValue(node->children[1], scope, right_expected);
     if(left.known_constant &&
        is_integral_type(left.type) &&
        is_integral_type(common) &&
@@ -943,8 +782,17 @@ PA14Lowerer::Value PA14Lowerer::EmitConditionalValue(const CPPGMAstNodePtr& node
     // The condition of ?: is a value context.  Logical operators therefore
     // materialize their short-circuit result before selecting the arm; direct
     // statement conditions use EmitCondition and keep the branch-only form.
-    Value condition = EmitValue(node->children[0], scope);
-    TypePtr condition_type = type_value(condition.type);
+    ExprInfo condition_info = Infer(node->children[0], scope);
+    TypePtr condition_type = expression_value_type(condition_info);
+    Value condition = condition_type && condition_type->kind == TYPE_CLASS &&
+      FindContextConversionOperator(condition_type, true, true) ?
+      EmitContextConversion(node->children[0], scope, true, true) :
+      EmitValue(node->children[0], scope);
+    if(condition.lvalue && condition.type) {
+      condition.operand = emit_load(condition.operand, condition.type);
+      condition.lvalue = false;
+    }
+    condition_type = type_value(condition.type);
     if(is_floating_type(condition_type))
       condition.operand = EmitTruthValue(condition);
     Terminate("branch " + condition.operand + ", ^" + then_label + ", ^" + else_label);
@@ -1268,7 +1116,15 @@ PA14Lowerer::Value PA14Lowerer::EmitValue(const CPPGMAstNodePtr& node, Scope* sc
             value.lvalue = false;
           }
         } else value = EmitValue(argument, scope, builtin_type);
-        return ConvertValue(value, builtin_type);
+        if(value.known_constant && is_integral_type(value.type) &&
+           is_integral_type(builtin_type) &&
+           !(type_value(builtin_type)->kind == TYPE_FUNDAMENTAL &&
+             type_value(builtin_type)->name == "bool")) {
+          value.type = builtin_type;
+          value.operand = integer_text(value.constant);
+          return value;
+        }
+        return ConvertValue(value, builtin_type, true);
       }
       TypePtr constructor_type = node->children.empty() ? TypePtr() :
         ConstructorObjectType(node->children[0], scope);
@@ -1371,6 +1227,15 @@ PA14Lowerer::Value PA14Lowerer::EmitValue(const CPPGMAstNodePtr& node, Scope* sc
         result.constant = info.binding->value;
         return result;
       }
+      if(info.binding && info.binding->kind == BIND_FUNCTION &&
+         info.binding->is_static) {
+        result.operand = EmitMemberAddress(node, scope);
+        result.function = true;
+        const string decay = new_temp();
+        AddInstruction(decay + " = unary decay ptr " + result.operand);
+        result.operand = decay;
+        return result;
+      }
       if(info.type && info.type->kind == TYPE_ARRAY) {
         result.array = true;
         result.operand = EmitArrayDecay(node, scope);
@@ -1435,12 +1300,26 @@ PA14Lowerer::Value PA14Lowerer::EmitValue(const CPPGMAstNodePtr& node, Scope* sc
     if(node->kind == "sizeof-expression" || node->kind == "type-trait-expression") {
       ExprInfo info = Infer(node, scope);
       const CPPGMAstNodePtr operand = node->children.empty() ? CPPGMAstNodePtr() : node->children[0];
-      if(node->kind == "sizeof-expression" && operand && operand->kind != "type-id" &&
+      if(node->kind == "sizeof-expression" && operand &&
          operand->kind == "id-expression") {
         VariablePlan* local = LocalForName(operand->value);
         if(local && type_value(local->type) &&
-           type_value(local->type)->kind == TYPE_CLASS)
+           type_value(local->type)->kind == TYPE_CLASS &&
+           !type_value(local->type)->template_specialization)
           (void)EmitAddress(operand, scope);
+      } else if(node->kind == "sizeof-expression" && operand &&
+         operand->kind == "member-expression" && !operand->children.empty()) {
+        // A member sizeof-expression needs the base object address so the
+        // member projection remains visible in LowIR.  A direct sizeof(x)
+        // does not: its object lifetime lowering has already emitted any
+        // address that is semantically required.
+        CPPGMAstNodePtr address_operand = operand->children[0];
+        if(address_operand && address_operand->kind == "id-expression") {
+          VariablePlan* local = LocalForName(address_operand->value);
+          if(local && type_value(local->type) &&
+             type_value(local->type)->kind == TYPE_CLASS)
+            (void)EmitAddress(address_operand, scope);
+        }
       }
       Value result;
       result.type = Fundamental("long int");

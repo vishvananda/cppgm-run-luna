@@ -1,5 +1,59 @@
 #include "pa11_semantics_analyzer.h"
 
+namespace {
+
+string StripTemplateArgumentsFromPath(const string& raw)
+{
+	string result;
+	int depth = 0;
+	for (size_t i = 0; i < raw.size(); ++i) {
+		const char c = raw[i];
+		if (c == '<') { ++depth; continue; }
+		if (c == '>') { if (depth > 0) --depth; continue; }
+		if (depth == 0) result += c;
+	}
+	return result;
+}
+
+}
+
+bool Analyzer::HasTemplateParameterScope(Scope* scope) const
+	{
+		for (Scope* current = scope; current; current = current->parent)
+			if (current->kind == SCOPE_TEMPLATE_PARAMETERS) return true;
+		return false;
+	}
+
+bool Analyzer::IsDependentTemplateName(Scope* scope, const string& raw) const
+	{
+		string name = raw;
+		while (name.compare(0, 2, "::") == 0) name.erase(0, 2);
+		for (Scope* current = scope; current; current = current->parent) {
+			if (current->kind == SCOPE_TEMPLATE_PARAMETERS)
+				for (size_t i = 0; i < current->bindings.size(); ++i) {
+					const string& parameter = current->bindings[i].name;
+					for (size_t position = name.find(parameter);
+						position != string::npos;
+						position = name.find(parameter, position + parameter.size())) {
+						const bool left = position == 0 ||
+							(!isalnum(static_cast<unsigned char>(name[position - 1])) &&
+							 name[position - 1] != '_');
+						const size_t end = position + parameter.size();
+						const bool right = end == name.size() ||
+							(!isalnum(static_cast<unsigned char>(name[end])) &&
+							 name[end] != '_');
+						if (left && right) return true;
+					}
+				}
+			if (current->kind == SCOPE_CLASS && current->owner_type)
+				for (TypePtr base = current->owner_type->direct_base; base;
+					base = base->direct_base)
+					if (base->kind == TYPE_TEMPLATE_PARAMETER ||
+						base->kind == TYPE_TEMPLATE_TEMPLATE_PARAMETER ||
+						base->dependent_base_lookup) return true;
+		}
+		return false;
+	}
 
 void Analyzer::ProcessUsingDeclaration(const CPPGMAstNodePtr& node, Scope* scope)
 	{
@@ -57,6 +111,21 @@ void Analyzer::ProcessNamespace(const CPPGMAstNodePtr& node, Scope* scope)
 		{
 			namespace_scope = NewChild(scope, SCOPE_NAMESPACE, name);
 			if (name != "<unnamed>") scope->namespace_children[name] = namespace_scope;
+		}
+		if (name == "<unnamed>") {
+			// Keep anonymous-namespace identity in the typed scope path.  The
+			// enclosing namespace still exposes the scope through its using path,
+			// while symbol lowering needs the stable internal namespace component.
+			size_t occurrence = 0;
+			for (size_t child = 0; child < scope->children.size(); ++child)
+				if (scope->children[child] &&
+					scope->children[child]->kind == SCOPE_NAMESPACE &&
+					scope->children[child]->name == "<unnamed>") ++occurrence;
+			ostringstream suffix;
+			suffix << occurrence;
+			const string component = "_GLOBAL__N_" + suffix.str();
+			namespace_scope->qualified_prefix = scope->qualified_prefix.empty() ?
+				component : scope->qualified_prefix + "::" + component;
 		}
 		if (name == "<unnamed>") scope->using_directives.push_back(namespace_scope);
 		namespace_scopes_[node.get()] = namespace_scope;
@@ -399,6 +468,34 @@ void Analyzer::ProcessFunctionDefinition(const CPPGMAstNodePtr& node, Scope* sco
 	function_scopes_[node.get()] = function_scope;
 	AddFunctionParameters(function_scope, declarator, declaration_scope);
 	ProcessCompound(node->children[2], function_scope);
+	if (HasTemplateParameterScope(scope))
+		ValidateNondependentTemplateNode(node->children[2], function_scope);
+}
+
+void Analyzer::ValidateNondependentTemplateNode(const CPPGMAstNodePtr& node,
+	Scope* scope, const CPPGMAstNodePtr& parent, size_t child_index)
+{
+	if (!node) return;
+	if (node->kind == "class-specifier" || node->kind == "class-forward-declaration")
+		return;
+	Scope* current = scope;
+	if (node->kind == "compound-statement") {
+		map<const CPPGMAstNode*, Scope*>::const_iterator found =
+			compound_scopes_.find(node.get());
+		if (found != compound_scopes_.end()) current = found->second;
+	}
+	if (node->kind == "id-expression") {
+		const bool member_name = parent && parent->kind == "member-expression" &&
+			child_index == 1;
+		const bool type_name = parent && (parent->kind == "type-id" ||
+			parent->kind == "type-specifier" || parent->kind == "base-name" ||
+			parent->kind == "mem-initializer-id");
+		if (!member_name && !type_name && !IsDependentTemplateName(current, node->value) &&
+			!ResolveBinding(current, node->value))
+			throw logic_error("unknown nondependent template name: " + node->value);
+	}
+	for (size_t i = 0; i < node->children.size(); ++i)
+		ValidateNondependentTemplateNode(node->children[i], current, node, i);
 }
 
 void Analyzer::ProcessSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* scope)
@@ -492,7 +589,16 @@ size_t Analyzer::AttributeAlignment(const CPPGMAstNodePtr& attribute, Scope* sco
 		throw logic_error("invalid alignment attribute");
 	const CPPGMAstNodePtr argument = attribute->children[0];
 	size_t alignment = 0;
-	if (argument && argument->kind == "type-id")
+	if (argument && argument->kind == "gnu-alignof-expression")
+	{
+		if (argument->children.size() != 1 || !argument->children[0] ||
+			argument->children[0]->kind != "type-id")
+			throw logic_error("invalid GNU alignment operand");
+		TypePtr type = TypeFromTypeId(argument->children[0], scope);
+		alignment = TypeAlignment(type);
+		if (alignment == 0) throw logic_error("alignment type has no alignment");
+	}
+	else if (argument && argument->kind == "type-id")
 	{
 		TypePtr type = TypeFromTypeId(argument, scope);
 		alignment = TypeAlignment(type);
@@ -520,7 +626,8 @@ void Analyzer::ProcessSpecialMember(const CPPGMAstNodePtr& node, Scope* scope)
 		const string owner_name = SpecialMemberOwner(node->value);
 		if (!owner_name.empty())
 		{
-			PathTarget owner = ResolvePath(scope, owner_name);
+			PathTarget owner = ResolvePath(scope,
+				StripTemplateArgumentsFromPath(owner_name));
 			if (owner.binding) member_owner = owner.binding->type;
 			else if (owner.scope) member_owner = owner.scope->owner_type;
 			if (member_owner && member_owner->kind == TYPE_CLASS && member_owner->owned_scope)
@@ -533,11 +640,16 @@ void Analyzer::ProcessSpecialMember(const CPPGMAstNodePtr& node, Scope* scope)
 		TypePtr conversion_type = ConversionTypeFromName(*this, name, declaration_scope);
 		TypePtr function = BuildDeclarator(declarator,
 			conversion_type ? conversion_type : Fundamental("void"), declaration_scope);
+		const bool noexcept_specified = HasNodeValue(declarator,
+			"function-qualifier", "noexcept");
 		for (size_t i = 0; i < declaration_scope->bindings.size(); ++i)
 		{
 			Binding& existing = declaration_scope->bindings[i];
 			if (existing.kind != BIND_FUNCTION || existing.name != name ||
 				TypeText(existing.type, true) != TypeText(function, true)) continue;
+			if (existing.noexcept_specified != noexcept_specified)
+				throw logic_error("special-member exception specification mismatch");
+			existing.noexcept_specified = noexcept_specified;
 			existing.is_member = true;
 			existing.is_static = false;
 			existing.member_owner = member_owner;
@@ -557,6 +669,7 @@ void Analyzer::ProcessSpecialMember(const CPPGMAstNodePtr& node, Scope* scope)
 		binding.is_virtual = HasNodeValue(node, "specifier", "virtual");
 		binding.is_override = HasNodeValue(declarator, "virt-specifier", "override");
 		binding.is_final = HasNodeValue(declarator, "virt-specifier", "final");
+		binding.noexcept_specified = noexcept_specified;
 		binding.access = member_owner->tag == "class" ? "private" : "public";
 		binding.declaration = node;
 		declaration_scope->add(binding);
@@ -571,7 +684,8 @@ void Analyzer::ProcessSpecialMember(const CPPGMAstNodePtr& node, Scope* scope)
 	const string owner_name = SpecialMemberOwner(node->value);
 	if (!owner_name.empty())
 	{
-		PathTarget owner = ResolvePath(scope, owner_name);
+		PathTarget owner = ResolvePath(scope,
+			StripTemplateArgumentsFromPath(owner_name));
 		if (owner.binding) member_owner = owner.binding->type;
 		else if (owner.scope) member_owner = owner.scope->owner_type;
 		if (member_owner && member_owner->kind == TYPE_CLASS && member_owner->owned_scope)
@@ -582,6 +696,16 @@ void Analyzer::ProcessSpecialMember(const CPPGMAstNodePtr& node, Scope* scope)
 	TypePtr conversion_type = ConversionTypeFromName(*this, name, declaration_scope);
 	TypePtr function = BuildDeclarator(declarator,
 		conversion_type ? conversion_type : Fundamental("void"), declaration_scope);
+	const bool noexcept_specified = HasNodeValue(declarator,
+		"function-qualifier", "noexcept");
+	for (size_t i = 0; i < declaration_scope->bindings.size(); ++i)
+	{
+		Binding& existing = declaration_scope->bindings[i];
+		if (existing.kind != BIND_FUNCTION || existing.name != name ||
+			TypeText(existing.type, true) != TypeText(function, true)) continue;
+		if (existing.noexcept_specified != noexcept_specified)
+			throw logic_error("special-member exception specification mismatch");
+	}
 	Binding* binding = declaration_scope->add(Binding(BIND_FUNCTION, name, function));
 	binding->is_member = static_cast<bool>(member_owner);
 	binding->is_static = false;
@@ -589,6 +713,7 @@ void Analyzer::ProcessSpecialMember(const CPPGMAstNodePtr& node, Scope* scope)
 	binding->is_virtual = HasNodeValue(node, "specifier", "virtual");
 	binding->is_override = HasNodeValue(declarator, "virt-specifier", "override");
 	binding->is_final = HasNodeValue(declarator, "virt-specifier", "final");
+	binding->noexcept_specified = noexcept_specified;
 	binding->access = member_owner && member_owner->tag == "class" ? "private" : "public";
 	binding->declaration = node;
 	Scope* function_scope = NewChild(declaration_scope, SCOPE_FUNCTION, name);
@@ -1079,6 +1204,7 @@ TypePtr Analyzer::ProcessClass(const CPPGMAstNodePtr& node, Scope* scope)
 		type->template_primary = node->template_primary;
 		type->template_arguments = node->template_arguments;
 	}
+	type->dependent_base_lookup = node->dependent_base_lookup;
 	type->complete = true;
 	type->layout_complete = false;
 	type->direct_base.reset();

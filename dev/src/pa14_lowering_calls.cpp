@@ -140,22 +140,23 @@ string PA14Lowerer::EmitReferenceArgument(const CPPGMAstNodePtr& node, Scope* sc
       }
     }
     if(referred && referred->kind == TYPE_CLASS && source.category == "prvalue" &&
-       PA12SameType(source_type, referred, true)) {
-      // An indirect class result is already materialized by the call.  Bind
-      // the reference to that result instead of recursively invoking a copy
-      // constructor on the same call expression.
-      Value value = EmitValue(node, scope, referred);
-      FunctionRecord* source_record = source.binding ? RecordForBinding(source.binding) : 0;
-      if(source_record && source_record->indirect_result) {
-        RegisterTemporaryObject(referred, value.operand);
-        return value.operand;
-      }
-      const string slot = new_special_slot("refarg", low_type(referred));
-      emit_store(referred, value.operand, "$" + slot);
+       source_type && source_type->kind == TYPE_CLASS &&
+       (PA12SameType(source_type, referred, true) ||
+        IsDerivedFrom(source_type, type_value(referred)))) {
+      // A direct class return is an object value.  A reference to that
+      // prvalue needs a real temporary object, and a derived result needs its
+      // typed base projection; storing the value into a refarg slot loses
+      // both lifetime and base-subobject shape.
+      const string slot = new_special_slot("tmpobj", low_type(source_type));
       const string address = new_temp();
       AddInstruction(address + " = addr $" + slot);
-      RegisterTemporaryObject(referred, address);
-      return address;
+      Value value = EmitValue(node, scope);
+      AddInstruction("copyobj " + integer_text(static_cast<long long>(type_size(source_type))) +
+        "x" + integer_text(static_cast<long long>(type_alignment(source_type))) +
+        " " + value.operand + ", " + address);
+      RegisterTemporaryObject(source_type, address);
+      return PA12SameType(source_type, referred, true) ? address :
+        AdjustBaseAddress(address, source_type, type_value(referred));
     }
     if(referred && referred->kind == TYPE_CLASS) {
       const string slot = new_special_slot("arg", low_type(referred));
@@ -320,9 +321,12 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
       }
       const size_t low_index = (function_record && function_record->indirect_result ? 1 : 0) +
         (choice.member && !choice.static_member ? 1 : 0) + i;
-      if(function_record && target && type_value(target) &&
-         type_value(target)->kind == TYPE_CLASS &&
-         LowParameterIsByAddress(*function_record, low_index)) {
+      const bool class_value = target && type_value(target) &&
+        type_value(target)->kind == TYPE_CLASS;
+      const bool indirect_class_value = class_value &&
+        ((!function_record && ClassValueNeedsIndirect(target)) ||
+         (function_record && LowParameterIsByAddress(*function_record, low_index)));
+      if(indirect_class_value) {
         const string slot = new_special_slot("arg", low_type(type_value(target)));
         const string address = new_temp();
         AddInstruction(address + " = addr $" + slot);
@@ -387,8 +391,14 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
       signature << " as (";
       for(size_t i = 0; i < choice.function->parameters.size(); ++i) {
         if(i != 0) signature << ", ";
-        signature << "%arg" << i << " : " << low_type(choice.function->parameters[i]);
-        if(type_is_reference(choice.function->parameters[i])) signature << " [pass=reference]";
+        const TypePtr parameter = choice.function->parameters[i];
+        const bool by_address = parameter && !type_is_reference(parameter) &&
+          type_value(parameter) && type_value(parameter)->kind == TYPE_CLASS &&
+          !function_record && ClassValueNeedsIndirect(parameter);
+        signature << "%arg" << i << " : " <<
+          (by_address ? low_type(PointerTo(type_value(parameter))) : low_type(parameter));
+        if(type_is_reference(parameter)) signature << " [pass=reference]";
+        else if(by_address) signature << " [pass=by_address]";
       }
       signature << ") -> " << low_type(choice.function->child);
     }

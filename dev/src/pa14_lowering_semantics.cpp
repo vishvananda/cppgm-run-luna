@@ -73,7 +73,12 @@ vector<Binding*> PA14Lowerer::LookupUnqualifiedAll(Scope* from, const string& na
       if(!imported.empty()) return imported;
       if(scope->kind == SCOPE_CLASS && scope->owner_type) {
         vector<Binding*> inherited = MemberBindings(scope->owner_type, name);
-        if(!inherited.empty()) return inherited;
+        // Members of a dependent base are not visible to an ordinary
+        // unqualified call during template definition lookup.  PA18 carries
+        // that fact on the materialized class so namespace lookup can still
+        // find a non-member declaration with the same spelling.
+        if(!inherited.empty() && !scope->owner_type->dependent_base_lookup)
+          return inherited;
       }
     }
     return vector<Binding*>();
@@ -944,8 +949,7 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferUncached(const CPPGMAstNodePtr& node, Sc
     if(node->kind == "literal") return InferLiteral(node, expected, scope);
     if(node->kind == "keyword-literal") return InferKeyword(node);
     if(node->kind == "id-expression") return InferIdentifier(node, scope, expected);
-    if(node->kind == "parenthesized-expression")
-      return node->children.empty() ? ExprInfo() : Infer(node->children[0], scope, expected);
+    if(node->kind == "parenthesized-expression") return node->children.empty() ? ExprInfo() : Infer(node->children[0], scope, expected);
     if(node->kind == "new-expression" || node->kind == "delete-expression")
       return InferAllocation(node, scope);
     if(node->kind == "call-expression") return InferCall(node, scope);
@@ -1025,7 +1029,29 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferUncached(const CPPGMAstNodePtr& node, Sc
         VariablePlan* local = local_name.empty() ? 0 : FindLocalPlan(local_name);
         type = local ? type_value(local->type) : analyzer_.TypeFromTypeId(child, scope);
       }
-      else if(child) type = Infer(child, scope).type;
+      else if(child) {
+        bool template_operand = false;
+        CPPGMAstNodePtr object = child;
+        if(object->kind == "member-expression" && !object->children.empty())
+          object = object->children[0];
+        if(object && object->kind == "id-expression") {
+          VariablePlan* local = LocalForName(object->value);
+          TypePtr local_type = local ? type_value(local->type) : TypePtr();
+          template_operand = local_type && local_type->kind == TYPE_CLASS &&
+            local_type->template_specialization;
+        }
+        const bool unevaluated_operand = template_operand ||
+          (child && child->kind != "id-expression");
+        const bool prior_unevaluated = state_ && state_->unevaluated_context;
+        if(state_ && unevaluated_operand) state_->unevaluated_context = true;
+        try {
+          type = Infer(child, scope).type;
+        } catch(...) {
+          if(state_) state_->unevaluated_context = prior_unevaluated;
+          throw;
+        }
+        if(state_ && unevaluated_operand) state_->unevaluated_context = prior_unevaluated;
+      }
       result.constant = node->kind == "type-trait-expression" ?
         static_cast<long long>(type_alignment(type)) : static_cast<long long>(type_size(type));
       return result;
@@ -1061,6 +1087,69 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferAllocation(const CPPGMAstNodePtr& node,
     }
     result.category = "prvalue";
     return result;
+  }
+
+bool PA14Lowerer::HasExplicitConstructor(const TypePtr& raw_type) const
+{
+    TypePtr type = type_value(raw_type);
+    if(type && type->kind == TYPE_ARRAY) return HasExplicitConstructor(type->child);
+    if(!type || type->kind != TYPE_CLASS) return false;
+    const vector<Binding*> candidates = MemberBindings(type, LastComponent(type->name));
+    for(size_t i = 0; i < candidates.size(); ++i) {
+      Binding* binding = candidates[i];
+      FunctionRecord* record = RecordForBinding(binding);
+      if(binding->kind == BIND_FUNCTION && binding->is_member && !binding->is_static &&
+         record && record->constructor && !record->implicit_constructor &&
+         !record->defaulted) return true;
+    }
+    return false;
+  }
+
+bool PA14Lowerer::HasUserProvidedConstructor(const TypePtr& raw_type) const
+{
+    TypePtr type = type_value(raw_type);
+    if(type && type->kind == TYPE_ARRAY) return HasUserProvidedConstructor(type->child);
+    if(!type || type->kind != TYPE_CLASS) return false;
+    const vector<Binding*> candidates = MemberBindings(type, LastComponent(type->name));
+    for(size_t i = 0; i < candidates.size(); ++i) {
+      Binding* binding = candidates[i];
+      FunctionRecord* record = RecordForBinding(binding);
+      if(binding->kind == BIND_FUNCTION && binding->is_member && !binding->is_static &&
+         record && record->constructor && !record->implicit_constructor &&
+         !record->defaulted && !record->aggregate_constructor) return true;
+    }
+    return false;
+  }
+
+bool PA14Lowerer::HasClassArrayMember(const TypePtr& raw_type) const
+{
+    TypePtr type = type_value(raw_type);
+    if(!type || type->kind != TYPE_CLASS) return false;
+    for(size_t i = 0; i < type->class_members.size(); ++i) {
+      const ClassMemberInfo& member = type->class_members[i];
+      if(member.is_static || !member.type) continue;
+      TypePtr member_type = type_value(member.type);
+      bool array_member = false;
+      while(member_type && member_type->kind == TYPE_ARRAY) {
+        array_member = true;
+        member_type = type_value(member_type->child);
+      }
+      if(array_member && member_type && member_type->kind == TYPE_CLASS)
+        return true;
+    }
+    return false;
+  }
+
+bool PA14Lowerer::HasNonstaticMemberFunction(const TypePtr& raw_type) const
+{
+    TypePtr type = type_value(raw_type);
+    if(!type || type->kind != TYPE_CLASS || !type->owned_scope) return false;
+    for(size_t i = 0; i < type->owned_scope->bindings.size(); ++i) {
+      const Binding& binding = type->owned_scope->bindings[i];
+      if(binding.kind == BIND_FUNCTION && binding.is_member && !binding.is_static)
+        return true;
+    }
+    return false;
   }
 
 } // namespace cppgm_pa14_lowering

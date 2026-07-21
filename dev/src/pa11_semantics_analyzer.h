@@ -1108,6 +1108,11 @@ public:
 	void ProcessFunctionDefinition(const CPPGMAstNodePtr& node, Scope* scope);
 	void ProcessSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* scope);
 	void ProcessSpecialMember(const CPPGMAstNodePtr& node, Scope* scope);
+	bool HasTemplateParameterScope(Scope* scope) const;
+	bool IsDependentTemplateName(Scope* scope, const string& raw) const;
+	void ValidateNondependentTemplateNode(const CPPGMAstNodePtr& node,
+		Scope* scope, const CPPGMAstNodePtr& parent = CPPGMAstNodePtr(),
+		size_t child_index = static_cast<size_t>(-1));
 	void ProcessTemplate(const CPPGMAstNodePtr& node, Scope* scope)
 	{
 		if (node->children.size() < 2) throw logic_error("invalid template declaration");
@@ -1149,6 +1154,9 @@ public:
 		if (node->kind == "alias-declaration")
 		{
 			if (node->children.empty()) throw logic_error("invalid alias declaration");
+			for (Scope* current = scope; current; current = current->parent)
+				if (current->kind == SCOPE_TEMPLATE_PARAMETERS && current->local(node->value))
+					throw logic_error("alias shadows a template parameter: " + node->value);
 			AddTypeBinding(scope, node->value, TypeFromTypeId(node->children[0], scope), true);
 			return;
 		}

@@ -86,8 +86,10 @@ class PA14Lowerer
     bool synthesized_value_member;
     bool hidden_friend;
     bool explicit_constructor;
-    bool builtin;
+	bool builtin;
 	bool template_instantiation;
+	bool inline_definition;
+	bool object_root;
 	bool weak_binding;
 	bool defaulted;
 	bool deleted;
@@ -120,7 +122,7 @@ class PA14Lowerer
         hidden_friend(false),
         explicit_constructor(false),
         builtin(false),
-		template_instantiation(false), weak_binding(false),
+		template_instantiation(false), inline_definition(false), object_root(false), weak_binding(false),
         defaulted(false), deleted(false),
 		destructor(false), deleting_entry(false), needed(false),
         emitted(false), variadic(false), unwind_no(false), noreturn(false), base_entry(false),
@@ -144,13 +146,14 @@ class PA14Lowerer
     bool declaration;
     bool internal;
     bool thread_local_storage;
+    bool tls_guard;
     bool dynamic_initializer;
     bool dynamic_finalizer;
 
     GlobalRecord()
       : node(), scope(), type(), qualified_name(), symbol(), object_name(), template_owner(),
         template_instantiation(false), weak_binding(false), initializer(),
-        declaration(false), internal(false), thread_local_storage(false),
+        declaration(false), internal(false), thread_local_storage(false), tls_guard(false),
         dynamic_initializer(false), dynamic_finalizer(false) {}
   };
 
@@ -264,6 +267,7 @@ class PA14Lowerer
     vector<string> switch_end_targets;
     vector<string> break_targets;
     vector<string> continue_targets;
+	    bool unevaluated_context;
 
     FunctionState(PA14Lowerer* lowerer, FunctionRecord* function)
       : owner(lowerer), record(function), variables(), plans(), special_slots(),
@@ -271,7 +275,8 @@ class PA14Lowerer
         next_special(1), environments(), return_slot_plan(0), return_object_slot(),
         variable_name_counts(),
         reserved_value_names(), case_labels(), emitted_cases(), named_labels(),
-        switch_end_targets(), break_targets(), continue_targets() {}
+        switch_end_targets(), break_targets(), continue_targets(),
+        unevaluated_context(false) {}
   };
 
   struct GlobalDataItem
@@ -333,6 +338,8 @@ TypePtr function_type(const TypePtr& raw) const;
 void InstallBuiltins();
 
 bool HasNoexcept(const CPPGMAstNodePtr& node) const;
+
+bool HasInline(const CPPGMAstNodePtr& node) const;
 
 void CollectClassMembers(const CPPGMAstNodePtr& node, Scope* scope);
 
@@ -408,6 +415,8 @@ void CollectStringLiterals(const CPPGMAstNodePtr& node, unsigned int braced_dept
 FunctionRecord* FindFunction(const string& qname, const TypePtr& type) const;
 
 GlobalRecord* FindGlobal(const string& qname) const;
+
+void EnsureThreadLocalGuard(GlobalRecord* object);
 
 void AppendBindings(Scope* scope, const string& name,
                     vector<Binding*>& result, set<Scope*>& visited) const;
@@ -536,9 +545,17 @@ bool HasDefaultArgument(Binding* binding, size_t index) const;
 
 bool HasConstructor(const TypePtr& type) const;
 
+bool HasExplicitConstructor(const TypePtr& type) const;
+
+bool HasUserProvidedConstructor(const TypePtr& type) const;
+
 bool HasDefaultInitializationEffects(const TypePtr& type) const;
 
 bool HasDefaultConstructionEffects(const TypePtr& type) const;
+
+bool HasClassArrayMember(const TypePtr& type) const;
+
+bool HasNonstaticMemberFunction(const TypePtr& type) const;
 
 bool HasDestructor(const TypePtr& type) const;
 

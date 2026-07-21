@@ -922,6 +922,7 @@ bool MatchTypePattern(string pattern, string actual,
 		if(template_call) return template_call;
 		CPPGMAstNodePtr result(new CPPGMAstNode(input->kind, input->value));
 		result->initializer_form = input->initializer_form;
+		result->dependent_base_lookup = input->dependent_base_lookup;
 		bool template_replaced = false;
 		const bool type_spelling = input->kind == "decl-specifier" ||
 			input->kind == "type-name" || input->kind == "type-specifier";
@@ -1023,6 +1024,26 @@ bool MatchTypePattern(string pattern, string actual,
 		const map<string, string>& substitutions)
 	{
 		if(!input) return CPPGMAstNodePtr();
+		if(input->kind == "explicit-instantiation-declaration" &&
+			!input->children.empty() && input->children[0]) {
+			const CPPGMAstNodePtr target = input->children[0];
+			if(target->kind == "class-forward-declaration" ||
+				target->kind == "class-specifier") {
+				const string raw = RemoveMarker(target->value);
+				const size_t open = raw.find('<');
+				string base, arguments;
+				size_t begin = 0, close = string::npos;
+				if(open != string::npos && TemplateBase(raw, open, &begin, &base) &&
+					TemplateRange(raw, open, &arguments, &close)) {
+					const TemplateDefinition* definition = FindDefinition(base, context);
+					if(definition && definition->class_template) {
+						Instantiate(*definition, SplitTemplateArguments(arguments),
+							context, true);
+						return CPPGMAstNodePtr();
+					}
+				}
+			}
+		}
 		if(input->kind == "template-declaration") {
 			if(input->children.size() > 1 && input->children[1] &&
 				(input->children[1]->kind == "class-specifier" ||
