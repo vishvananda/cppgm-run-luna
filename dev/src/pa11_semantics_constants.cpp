@@ -1,6 +1,5 @@
 #include "pa11_semantics_analyzer.h"
 #include <cstdlib>
-
 namespace {
 
 CPPGMAstNodePtr ConstantInitializer(const CPPGMAstNodePtr& node)
@@ -1140,6 +1139,19 @@ ConstantValue Analyzer::Evaluate(const CPPGMAstNodePtr& expression, Scope* scope
 	{
 		ConstantValue frame_value;
 		if (ConstantFrameValue(expression->value, &frame_value)) return frame_value;
+		// A qualified namespace variable is a complete typed lookup path.
+		if (expression->value.find("::") != string::npos)
+		{
+			Binding* qualified = ResolveBinding(scope, expression->value);
+			if (qualified)
+			{
+				map<const Binding*, ConstantValue>::const_iterator stored =
+					constant_binding_values_.find(qualified);
+				if (stored != constant_binding_values_.end()) return stored->second;
+				if (qualified->constant_value.known)
+					return FromIntegralValue(qualified->constant_value);
+			}
+		}
 		if (expression->value.find("::") != string::npos)
 		{
 			const size_t separator = expression->value.rfind("::");

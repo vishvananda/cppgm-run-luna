@@ -5,6 +5,96 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
+string NormalizeTypeArgument(string raw)
+{
+	raw = CanonicalSpelling(raw);
+	static const char* const cv_words[] = {"const", "volatile"};
+	for(size_t word_index = 0; word_index < 2; ++word_index) {
+		const string word = cv_words[word_index];
+		for(size_t at = raw.find(word); at != string::npos;
+			at = raw.find(word, at + word.size() + 1)) {
+			if(at > 0 && IsIdentifierCharacter(raw[at - 1])) {
+				const size_t end = at + word.size();
+				if(end == raw.size() || !IsIdentifierCharacter(raw[end])) {
+					size_t next = end;
+					while(next < raw.size() && isspace(static_cast<unsigned char>(raw[next]))) ++next;
+					const bool followed_by_cv = next < raw.size() &&
+						((raw.compare(next, 5, "const") == 0 &&
+							(next + 5 == raw.size() || !IsIdentifierCharacter(raw[next + 5]))) ||
+						 (raw.compare(next, 8, "volatile") == 0 &&
+							(next + 8 == raw.size() || !IsIdentifierCharacter(raw[next + 8]))));
+					if(end == raw.size() || raw[end] == '*' || raw[end] == '&' || followed_by_cv) {
+						raw.insert(at, " ");
+						at += 1;
+					}
+				}
+			}
+		}
+	}
+	raw = CanonicalSpelling(raw);
+	for(size_t k = 0; k < 2; ++k) { const string keyword = k ? "volatile" : "const";
+		for(size_t p = raw.find(keyword); p != string::npos; p = raw.find(keyword, p + keyword.size() + 1))
+			if(p > 0 && IsIdentifierCharacter(raw[p - 1]) && (p < 2 || !IsIdentifierCharacter(raw[p - 2]))) raw.insert(p, " "); }
+	raw = CanonicalSpelling(raw);
+	static const char* const compact_fundamentals[][2] = {
+		{"short", "short int"}, {"long", "long int"}, {"unsigned", "unsigned int"},
+		{"signed", "signed int"}, {"unsignedlong", "unsigned long"},
+		{"unsignedlonglong", "unsigned long long"}, {"unsignedint", "unsigned int"},
+		{"unsignedlongint", "unsigned long int"}, {"unsignedlonglongint", "unsigned long long int"},
+		{"unsignedshort", "unsigned short"}, {"unsignedchar", "unsigned char"},
+		{"signedlong", "signed long"}, {"signedint", "signed int"},
+		{"signedshort", "signed short"}, {"signedchar", "signed char"},
+		{"longlong", "long long"}, {"longlongint", "long long int"}, {"longdouble", "long double"}
+	};
+	for(size_t i = 0; i < sizeof(compact_fundamentals) / sizeof(compact_fundamentals[0]); ++i)
+		if(raw == compact_fundamentals[i][0]) { raw = compact_fundamentals[i][1]; break; }
+	const size_t duplicate_const = raw.find("const const ");
+	if(duplicate_const != string::npos) { raw.erase(duplicate_const + 6, 6);
+		const size_t pointer = raw.rfind('*');
+		if(pointer != string::npos && raw.rfind("const") < pointer) raw += " const"; }
+	const size_t duplicate_volatile = raw.find("volatile volatile ");
+	if(duplicate_volatile != string::npos) { raw.erase(duplicate_volatile + 9, 9);
+		const size_t pointer = raw.rfind('*');
+		if(pointer != string::npos && raw.rfind("volatile") < pointer) raw += " volatile"; }
+	if(raw.size() > 5 && raw.compare(raw.size() - 5, 5, "const") == 0 &&
+		raw.find(' ') == string::npos && raw.find('_') == string::npos)
+		raw = "const " + raw.substr(0, raw.size() - 5);
+	else if(raw.size() > 8 && raw.compare(raw.size() - 8, 8, "volatile") == 0 &&
+		raw.find(' ') == string::npos && raw.find('_') == string::npos)
+		raw = "volatile " + raw.substr(0, raw.size() - 8);
+	return CanonicalSpelling(raw);
+}
+
+vector<string> SplitTemplateArguments(const string& raw)
+{
+	vector<string> result;
+	string current;
+	int angle = 0;
+	vector<int> angle_parentheses;
+	int parentheses = 0, brackets = 0;
+	for(size_t i = 0; i < raw.size(); ++i) {
+		const char ch = raw[i];
+		if(ch == '(') ++parentheses;
+		else if(ch == ')' && parentheses > 0) --parentheses;
+		if(ch == '[') ++brackets;
+		else if(ch == ']' && brackets > 0) --brackets;
+		if(ch == '<' && IsTemplateAngleOpen(raw, i)) {
+			++angle; angle_parentheses.push_back(parentheses);
+		} else if(ch == '>' && angle > 0 && IsTemplateAngleClose(raw, i)) {
+			const int opener_parentheses = angle_parentheses.empty() ? 0 : angle_parentheses.back();
+			if(parentheses > opener_parentheses) continue;
+			--angle;
+			if(!angle_parentheses.empty()) angle_parentheses.pop_back();
+		}
+		if(ch == ',' && angle == 0 && parentheses == 0 && brackets == 0) {
+			result.push_back(CanonicalSpelling(current)); current.clear();
+		} else current += ch;
+	}
+	if(!current.empty() || !result.empty()) result.push_back(CanonicalSpelling(current));
+	if(result.size() == 1 && result[0].empty()) result.clear();
+	return result;
+}
+
 string PA18TemplateExpander::FunctionMarker(const string& raw_name,
 	const string& context) const
 {

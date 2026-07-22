@@ -1,10 +1,7 @@
 #include "pa18_templates_collection.h"
 #include "pa18_templates_rewrite.h"
-
 using namespace std;
-
 namespace pa18_templates_internal {
-
 bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 	const set<string>& parameter_names, map<string, string>* inferred,
 	const string& context, bool class_pattern) const
@@ -33,6 +30,9 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 	pattern = separate_compact_cv(pattern);
 	actual = separate_compact_cv(actual);
 	pattern = CanonicalSpelling(pattern);
+	const int object_cv_match = MatchObjectCvPattern(pattern, actual,
+		parameter_names, inferred, context);
+	if(object_cv_match >= 0) return object_cv_match != 0;
 	// Array types are part of a specialization key, not an expression suffix
 	// to be discarded.  Match the element type and the bound independently so
 	// `T[N]` can bind both a type and a typed non-type parameter.  This also
@@ -275,7 +275,7 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 					(parameter_names.find(pattern_base) == parameter_names.end() &&
 					LastComponent(base->second) != pattern_base)) return false;
 				if(parameter_names.find(pattern_base) != parameter_names.end())
-					(*inferred)[pattern_base] = LastComponent(base->second);
+					(*inferred)[pattern_base] = base->second;
 				if(pattern_parts.empty()) return true;
 				actual_parts = specialization->second;
 			} else {
@@ -285,7 +285,7 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 				const string pattern_base = LastComponent(pattern.substr(0, pattern_open));
 				const string actual_base = LastComponent(actual.substr(0, actual_open));
 				if(parameter_names.find(pattern_base) != parameter_names.end()) {
-					(*inferred)[pattern_base] = actual_base;
+					(*inferred)[pattern_base] = CanonicalSpelling(actual.substr(0, actual_open));
 				} else if(pattern_base != actual_base) {
 					// A pointer to a derived class can bind to a dependent base
 					// pointer.  Recover the concrete base spelling from the actual
@@ -343,6 +343,14 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 				}
 				return true;
 			}
+			if(!pattern_parts.empty() && pattern_parts.back().size() > 3 &&
+				pattern_parts.back().compare(pattern_parts.back().size() - 3, 3, "...") == 0) {
+				const string pack_pattern = CanonicalSpelling(pattern_parts.back().substr(
+					0, pattern_parts.back().size() - 3));
+				if(parameter_names.find(pack_pattern) != parameter_names.end())
+					return MatchTrailingTypePack(pattern_parts, actual_parts, parameter_names,
+						inferred, context, class_pattern);
+			}
 			if(pattern_parts.size() != actual_parts.size()) return false;
 			for(size_t i = 0; i < pattern_parts.size(); ++i)
 				if(!MatchTypePattern(pattern_parts[i], actual_parts[i], parameter_names,
@@ -351,8 +359,7 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 			return true;
 		}
 		return pattern == actual;
-}
-
+	}
 bool PA18TemplateExpander::InferArgument(const CPPGMAstNodePtr& expression,
 	string* result, const map<string, string>& substitutions,
 	const string& context) const
@@ -523,8 +530,7 @@ bool PA18TemplateExpander::InferArgument(const CPPGMAstNodePtr& expression,
 			}
 		}
 		return false;
-}
-
+	}
 bool PA18TemplateExpander::InferFunctionArguments(const TemplateDefinition& definition,
 	const CPPGMAstNodePtr& call, vector<string>* result,
 	const map<string, string>& substitutions, const string& context,
@@ -718,8 +724,7 @@ bool PA18TemplateExpander::InferFunctionArguments(const TemplateDefinition& defi
 			else return false;
 		}
 		return true;
-}
-
+	}
 string PA18TemplateExpander::RewriteText(string raw, const string& context,
 	const map<string, string>& substitutions, bool* template_replaced,
 	bool resolve_alias, bool resolve_member)
@@ -946,6 +951,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 					source_argument.compare(source_argument.size() - 3, 3, "...") == 0) {
 					const string prefix = source_argument.substr(0, source_argument.size() - 3);
 					string pack_name;
+					bool known_pack = false;
 					for(size_t character = 0; character < prefix.size();) {
 						if(!IsIdentifierCharacter(prefix[character])) { ++character; continue; }
 						const size_t begin_name = character;
@@ -955,6 +961,26 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 							pack_name = word;
 							break;
 						}
+						for(map<string, TemplateDefinition>::const_iterator candidate = definitions_.begin();
+							candidate != definitions_.end() && !known_pack; ++candidate)
+							for(size_t parameter = 0; parameter < candidate->second.parameters.size(); ++parameter)
+								if(candidate->second.parameters[parameter].pack &&
+									candidate->second.parameters[parameter].name == word) {
+									pack_name = word;
+									known_pack = true;
+									break;
+								}
+						for(map<string, vector<TemplateDefinition> >::const_iterator candidate =
+							class_specializations_.begin(); candidate != class_specializations_.end() &&
+							!known_pack; ++candidate)
+							for(size_t specialization = 0; specialization < candidate->second.size() &&
+								!known_pack; ++specialization)
+								for(size_t pack = 0; pack < candidate->second[specialization].specialization_pack_names.size(); ++pack)
+									if(candidate->second[specialization].specialization_pack_names[pack] == prefix) {
+										pack_name = prefix;
+										known_pack = true;
+										break;
+									}
 					}
 					map<string, vector<string> >::const_iterator pack =
 						active_pack_substitutions_.find(pack_name);
@@ -966,11 +992,21 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 								ReplaceIdentifiers(prefix, one)));
 						}
 						continue;
-					}
+						}
+					if(known_pack) continue;
 				}
 				args.push_back(raw_template_args[raw_argument]);
 			}
 			for(size_t i = 0; i < args.size(); ++i) {
+				if(i < definition->parameters.size() &&
+					definition->parameters[i].template_template) {
+					string normalized;
+					if(!CompatibleTemplateTemplateArgument(definition->parameters[i], args[i],
+						context, substitutions, &normalized))
+						throw logic_error("template-template argument does not match");
+					args[i] = normalized;
+					continue;
+				}
 				args[i] = NormalizeTypeArgument(RewriteText(args[i], context, substitutions, 0));
 				args[i] = CollapseReferenceSpelling(ReplaceIdentifiers(args[i], substitutions));
 				args[i] = ResolveAlias(args[i], context);
@@ -994,6 +1030,14 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 					argument = NormalizeTypeArgument(ReplaceIdentifiers(argument,
 						default_substitutions));
 					argument = ResolveAlias(argument, context);
+					if(i < definition->parameters.size() &&
+						definition->parameters[i].template_template) {
+						string normalized;
+						if(!CompatibleTemplateTemplateArgument(definition->parameters[i], argument,
+							context, default_substitutions, &normalized))
+							throw logic_error("template-template argument does not match");
+						argument = normalized;
+					}
 					argument = QualifyTypeArgument(argument, context, definition->owner);
 					args.push_back(argument);
 					default_substitutions[definition->parameters[i].name] = argument;
@@ -1012,8 +1056,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				}
 				argument_substitutions[definition->parameters[i].name] = args[i];
 			}
-			if(!definition->alias_template)
-				definition = SelectClassTemplateDefinition(definition, args, context);
+			definition = SelectClassTemplateDefinition(definition, args, context);
 			// Resolve a concrete nested owner before the generic member lookup so
 			// dependent outer packs remain represented by the materialized class.
 			if(resolve_member && definition->class_template && close + 2 < raw.size() &&
@@ -1056,8 +1099,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 		// default can be evaluated by the typed constant table.
 		if(constant_values_.find(raw) != constant_values_.end()) return raw;
 		return ResolveAlias(raw, context);
-}
-
+	}
 bool PA18TemplateExpander::TransformPackChild(
 	const CPPGMAstNodePtr& input, const CPPGMAstNodePtr& original_child,
 	const string& child_context,

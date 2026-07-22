@@ -87,9 +87,13 @@ PA14Lowerer::Value PA14Lowerer::EmitIdentifier(const CPPGMAstNodePtr& node, Scop
     if(!binding && candidates.size() == 1) binding = candidates[0];
 	if(!binding) throw logic_error("ambiguous identifier during lowering");
 	if(!IsAccessible(binding, scope)) throw logic_error("inaccessible member");
+	const TypePtr binding_value_type = type_value(binding->type);
+	const bool binding_integral = binding_value_type &&
+		(is_integral_type(binding_value_type) ||
+			(binding_value_type->kind == TYPE_FUNDAMENTAL &&
+			 binding_value_type->name == "bool"));
 	if(binding->kind == BIND_VARIABLE && binding->has_value && binding->declaration &&
-		binding->declaration->template_instantiation &&
-		is_integral_type(type_value(binding->type))) {
+		binding->declaration->template_instantiation && binding_integral) {
 		if(binding->is_member && binding->is_static)
 			EnsureStaticMemberStorage(binding);
 		result.type = binding->type;

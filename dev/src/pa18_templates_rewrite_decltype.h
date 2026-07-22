@@ -430,6 +430,42 @@
 			}
 			return left;
 		}
+		// Preserve the historical member-shift path above, then handle the
+		// other top-level binary operators with the typed operator and builtin
+		// rules.  Keeping the shift path separate avoids treating the first `<`
+		// of `<<` as a template delimiter in the compact PA10 spelling.
+		angle = parentheses = brackets = 0;
+		for(size_t i = 0; i < expression.size(); ++i) {
+			const char ch = expression[i];
+			if(ch == '(') ++parentheses;
+			else if(ch == ')' && parentheses > 0) --parentheses;
+			else if(ch == '[') ++brackets;
+			else if(ch == ']' && brackets > 0) --brackets;
+			else if(ch == '<' && IsTemplateAngleOpen(expression, i)) ++angle;
+			else if(ch == '>' && angle > 0 && IsTemplateAngleClose(expression, i)) --angle;
+			if(angle != 0 || parentheses != 0 || brackets != 0) continue;
+			static const char* const operators[] = {"||", "&&", "==", "!=", "<=", ">=",
+				">>", "<", ">", "+", "-", "*", "/", "%", "&"};
+			string operation;
+			for(size_t candidate = 0; candidate < sizeof(operators) / sizeof(*operators); ++candidate)
+				if(expression.compare(i, string(operators[candidate]).size(), operators[candidate]) == 0) {
+					operation = operators[candidate]; break;
+				}
+			if(operation.empty() || (operation == "+" || operation == "-" || operation == "*" ||
+				operation == "&") && (i == 0 || string("([{,=!?+-*/%<>&|").find(expression[i - 1]) != string::npos))
+				continue;
+			const string left = ExpressionTypeSpelling(expression.substr(0, i), context, substitutions);
+			const string right = ExpressionTypeSpelling(expression.substr(i + operation.size()), context, substitutions);
+			if(left.empty() || right.empty()) return string();
+			string result;
+			if((operation == "&&" || operation == "||" || operation == "==" || operation == "!=" ||
+				operation == "<" || operation == ">" || operation == "<=" || operation == ">=") &&
+				IsBuiltinLogicalType(left) && IsBuiltinLogicalType(right)) return "bool";
+			if(InferOperatorResult(operation, left, right, context, &result)) return result;
+			if(IsBuiltinArithmeticType(left) && IsBuiltinArithmeticType(right))
+				return CommonBuiltinArithmeticType(left, right);
+			return left;
+		}
 		return string();
 	}
 
@@ -440,6 +476,32 @@
 		string comma_tail;
 		if(SplitTopLevelComma(expression, &comma_tail))
 			return ExpressionTypeSpelling(comma_tail, context, substitutions);
+		// Member access in a decltype operand is an expression type, not a
+		// qualified type spelling.  Infer the object first so a dependent or
+		// C-style-cast object can use the normal typed member lookup path.
+		int angle = 0, parentheses = 0, brackets = 0;
+		for(size_t i = 0; i < expression.size(); ++i) {
+			const char ch = expression[i];
+			if(ch == '(') ++parentheses;
+			else if(ch == ')' && parentheses > 0) --parentheses;
+			else if(ch == '[') ++brackets;
+			else if(ch == ']' && brackets > 0) --brackets;
+			else if(ch == '<' && IsTemplateAngleOpen(expression, i)) ++angle;
+			else if(ch == '>' && angle > 0 && IsTemplateAngleClose(expression, i)) --angle;
+			if(angle != 0 || parentheses != 0 || brackets != 0) continue;
+			string operator_text;
+			if(expression.compare(i, 2, "->") == 0) operator_text = "->";
+			else if(expression[i] == '.') operator_text = ".";
+			if(operator_text.empty()) continue;
+			const string left = ExpressionTypeSpelling(expression.substr(0, i),
+				context, substitutions);
+			const string member = Trim(expression.substr(i + operator_text.size()));
+			if(left.empty() || member.empty()) continue;
+			set<string> active;
+			string member_type;
+			if(FindClassMemberType(left, LastComponent(member), substitutions, context,
+				&member_type, &active)) return member_type;
+		}
 		if(expression.compare(0, 9, "decltype(") == 0 && expression.size() > 10 &&
 			expression[expression.size() - 1] == ')') {
 			string nested;
@@ -461,6 +523,24 @@
 					return CanonicalSpelling(inner + "&");
 				}
 				return CanonicalSpelling(inner + "*");
+			}
+		}
+		// The PA10 expression tree is intentionally compact and retains a C-style
+		// cast as text.  Recover `(T)operand` before falling back to identifier
+		// and call lookup; this is needed for `decltype(((A*)0)->member)`.
+		if(!expression.empty() && expression[0] == '(') {
+			int depth = 0;
+			for(size_t close = 0; close < expression.size(); ++close) {
+				if(expression[close] == '(') ++depth;
+				else if(expression[close] == ')' && --depth == 0 && close + 1 < expression.size()) {
+					const string cast = Trim(expression.substr(1, close - 1));
+					const string resolved = NormalizeTypeArgument(ResolveAlias(
+						ReplaceIdentifiers(cast, substitutions), context));
+					if(!resolved.empty() && (FindClassDeclaration(resolved, context) ||
+						IsBuiltinArithmeticType(resolved) || resolved.find('*') != string::npos ||
+						resolved.find('&') != string::npos)) return resolved;
+					break;
+				}
 			}
 		}
 		const size_t open = expression.find('(');
@@ -505,7 +585,7 @@
 		}
 		if(FunctionCallResultType(normalized, context, substitutions, result)) return true;
 		const size_t open = normalized.find('(');
-		if(open != string::npos && normalized[normalized.size() - 1] == ')') {
+		if(open != string::npos && open > 0 && normalized[normalized.size() - 1] == ')') {
 			*result = NormalizeTypeArgument(ResolveAlias(ReplaceIdentifiers(
 				Trim(normalized.substr(0, open)), substitutions), context));
 			return !result->empty();

@@ -332,12 +332,11 @@ public:
 		bool is_virtual;
 		vector<string> fundamental_words;
 		TypePtr named_type;
-		SpecFacts()
-			: is_typedef(false), is_constexpr(false), is_const(false),
-			  is_volatile(false), is_static(false), is_mutable(false), is_friend(false),
-			  is_virtual(false),
-			  fundamental_words(), named_type() {}
+		SpecFacts() : is_typedef(false), is_constexpr(false), is_const(false),
+			is_volatile(false), is_static(false), is_mutable(false), is_friend(false),
+			is_virtual(false), fundamental_words(), named_type() {}
 	};
+	TypePtr ResolveFunctionSpelledType(const string& spelling, Scope* scope, SpecFacts& info);
 	TypePtr TypeFromDecltype(const CPPGMAstNodePtr& node, Scope* scope)
 	{
 		if (!node || node->children.empty()) throw logic_error("invalid decltype");
@@ -379,6 +378,7 @@ public:
 		while (!spelling.empty() && isspace(static_cast<unsigned char>(spelling[0]))) spelling.erase(0, 1);
 		while (!spelling.empty() && isspace(static_cast<unsigned char>(spelling[spelling.size() - 1])))
 			spelling.erase(spelling.size() - 1, 1);
+		spelling = StripTypeMarker(spelling); TypePtr function_type = ResolveFunctionSpelledType(spelling, scope, info); if (function_type) return function_type;
 		if (spelling.compare(0, 8, "typename ") == 0) spelling = spelling.substr(8);
 		bool leading_const = false;
 		bool leading_volatile = false;

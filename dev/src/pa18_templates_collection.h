@@ -72,66 +72,7 @@ inline string CanonicalSpelling(string raw)
 	return result;
 }
 string CollapseRepeatedQualifier(string raw);
-inline string NormalizeTypeArgument(string raw)
-{
-	raw = CanonicalSpelling(raw);
-	for(size_t k = 0; k < 2; ++k) { const string keyword = k ? "volatile" : "const";
-		for(size_t p = raw.find(keyword); p != string::npos; p = raw.find(keyword, p + keyword.size() + 1))
-			if(p > 0 && IsIdentifierCharacter(raw[p - 1]) && (p < 2 || !IsIdentifierCharacter(raw[p - 2]))) raw.insert(p, " "); }
-	raw = CanonicalSpelling(raw);
-	// Preserve compact PA10 fundamental-type spellings before semantic substitution.
-	static const char* const compact_fundamentals[][2] = {
-		{"short", "short int"},
-		{"long", "long int"},
-		{"unsigned", "unsigned int"},
-		{"signed", "signed int"},
-		{"unsignedlong", "unsigned long"},
-		{"unsignedlonglong", "unsigned long long"},
-		{"unsignedint", "unsigned int"},
-		{"unsignedlongint", "unsigned long int"},
-		{"unsignedlonglongint", "unsigned long long int"},
-		{"unsignedshort", "unsigned short"},
-		{"unsignedchar", "unsigned char"},
-		{"signedlong", "signed long"},
-		{"signedint", "signed int"},
-		{"signedshort", "signed short"},
-		{"signedchar", "signed char"},
-		{"longlong", "long long"},
-		{"longlongint", "long long int"},
-		{"longdouble", "long double"}
-	};
-	for(size_t i = 0; i < sizeof(compact_fundamentals) / sizeof(compact_fundamentals[0]); ++i)
-		if(raw == compact_fundamentals[i][0]) {
-			raw = compact_fundamentals[i][1];
-			break;
-		}
-	const size_t duplicate_const = raw.find("const const ");
-	if(duplicate_const != string::npos) {
-		raw.erase(duplicate_const + 6, 6);
-		const size_t pointer = raw.rfind('*');
-		if(pointer != string::npos && raw.rfind("const") < pointer)
-			raw += " const";
-	}
-	const size_t duplicate_volatile = raw.find("volatile volatile ");
-	if(duplicate_volatile != string::npos) {
-		raw.erase(duplicate_volatile + 9, 9);
-		const size_t pointer = raw.rfind('*');
-		if(pointer != string::npos && raw.rfind("volatile") < pointer)
-			raw += " volatile";
-	}
-	// The PA10 name parser intentionally keeps a compact spelling for a
-	// qualified template argument in a few contexts (`T const` becomes
-	// `Tconst`).  Recover the cv suffix before it reaches semantic type
-	// substitution.  This is limited to the two cv words and therefore does
-	// not affect ordinary identifiers.
-	if(raw.size() > 5 && raw.compare(raw.size() - 5, 5, "const") == 0 &&
-		raw.find(' ') == string::npos && raw.find('_') == string::npos)
-		raw = "const " + raw.substr(0, raw.size() - 5);
-	else if(raw.size() > 8 && raw.compare(raw.size() - 8, 8, "volatile") == 0 &&
-		raw.find(' ') == string::npos && raw.find('_') == string::npos)
-		raw = "volatile " + raw.substr(0, raw.size() - 8);
-	return CanonicalSpelling(raw);
-}
+string NormalizeTypeArgument(string raw);
 inline string PA18ExplicitSpecializationKey(const string& qualified_name,
 	const vector<string>& arguments)
 {
@@ -411,30 +352,7 @@ inline bool IsTemplateAngleClose(const string& raw, size_t position)
 	}
 	return true;
 }
-inline vector<string> SplitTemplateArguments(const string& raw)
-{
-	vector<string> result;
-	string current;
-	int angle = 0;
-	int parentheses = 0;
-	int brackets = 0;
-	for(size_t i = 0; i < raw.size(); ++i) {
-		const char ch = raw[i];
-		if(ch == '<' && IsTemplateAngleOpen(raw, i)) ++angle;
-		else if(ch == '>' && angle > 0 && IsTemplateAngleClose(raw, i)) --angle;
-		else if(ch == '(') ++parentheses;
-		else if(ch == ')' && parentheses > 0) --parentheses;
-		else if(ch == '[') ++brackets;
-		else if(ch == ']' && brackets > 0) --brackets;
-		if(ch == ',' && angle == 0 && parentheses == 0 && brackets == 0) {
-			result.push_back(CanonicalSpelling(current));
-			current.clear();
-		} else current += ch;
-	}
-	if(!current.empty() || !result.empty()) result.push_back(CanonicalSpelling(current));
-	if(result.size() == 1 && result[0].empty()) result.clear();
-	return result;
-}
+vector<string> SplitTemplateArguments(const string& raw);
 struct TemplateParameter
 {
 	string name;
@@ -445,7 +363,14 @@ struct TemplateParameter
 	string non_type_type;
 	bool type;
 	bool pack;
-	TemplateParameter() : name(), default_type(), non_type_type(), type(false), pack(false) {}
+	// A type parameter whose declaration contains a nested template-parameter
+	// clause is a template-template parameter.  Keep that clause typed so
+	// argument matching can validate arity, defaults, and packs instead of
+	// treating the argument as an ordinary class type.
+	bool template_template;
+	vector<TemplateParameter> template_parameters;
+	TemplateParameter() : name(), default_type(), non_type_type(), type(false), pack(false),
+		template_template(false), template_parameters() {}
 };
 struct TemplateDefinition
 {
@@ -461,13 +386,16 @@ struct TemplateDefinition
 	// pattern and the names bound by its own template clause.
 	bool partial_specialization;
 	vector<string> specialization_parameters;
+	vector<TemplateParameter> specialization_parameter_details;
 	vector<string> specialization_pack_names;
 	vector<string> specialization_pattern;
 	bool class_template;
 	bool alias_template;
+	bool variable_template;
 	TemplateDefinition() : qualified_name(), name(), owner(), lexical_owner(), declaration(), parameters(),
-		partial_specialization(false), specialization_parameters(), specialization_pack_names(), specialization_pattern(),
-		class_template(false), alias_template(false) {}
+		partial_specialization(false), specialization_parameters(), specialization_parameter_details(),
+		specialization_pack_names(), specialization_pattern(),
+		class_template(false), alias_template(false), variable_template(false) {}
 };
 struct FunctionSignature
 {
@@ -791,7 +719,15 @@ private:
 			const CPPGMAstNodePtr parameter = list->children[i];
 			if(!parameter) continue;
 			TemplateParameter item;
-			if(parameter->kind == "type-parameter") item.name = FirstIdentifierLocal(parameter);
+			if(parameter->kind == "type-parameter") {
+				for(size_t child = parameter->children.size(); child > 0; --child)
+					if(parameter->children[child - 1] &&
+						parameter->children[child - 1]->kind == "identifier") {
+						item.name = parameter->children[child - 1]->value;
+						break;
+					}
+				if(item.name.empty()) item.name = FirstIdentifierLocal(parameter);
+			}
 			else {
 				for(size_t child = 0; child < parameter->children.size(); ++child)
 					if(parameter->children[child] &&
@@ -805,6 +741,10 @@ private:
 			item.default_type = DefaultTypeSpelling(parameter);
 			item.type = parameter->kind == "type-parameter";
 			item.pack = ChildOfKindLocal(parameter, "parameter-pack") != CPPGMAstNodePtr();
+			const CPPGMAstNodePtr nested_clause = ChildOfKindLocal(parameter,
+				"template-parameter-clause");
+			item.template_template = nested_clause != CPPGMAstNodePtr();
+			if(item.template_template) item.template_parameters = Parameters(nested_clause);
 			if(!item.type && !parameter->children.empty()) {
 				item.non_type_type = NodeTypeSpelling(parameter->children[0]);
 				for(size_t child = 0; child < parameter->children.size(); ++child)
@@ -864,6 +804,7 @@ private:
 				item.specialization_pattern = SplitTemplateArguments(pattern_text);
 				const vector<TemplateParameter> clause_parameters =
 					Parameters(node->children[0]);
+				item.specialization_parameter_details = clause_parameters;
 				for(size_t i = 0; i < clause_parameters.size(); ++i) {
 					item.specialization_parameters.push_back(clause_parameters[i].name);
 					if(clause_parameters[i].pack)
@@ -897,6 +838,8 @@ private:
 		item.class_template = declaration->kind == "class-specifier" ||
 			declaration->kind == "class-forward-declaration";
 		item.alias_template = declaration->kind == "alias-declaration";
+		item.variable_template = declaration->kind == "simple-declaration" &&
+			DescendantOfKind(declaration, "parameter-clause") == CPPGMAstNodePtr();
 		// `template<>` function declarations are explicit specializations, not
 		// overloads of the primary template.  Keep their concrete body in typed
 		// state so a later call can select it after normal template deduction.

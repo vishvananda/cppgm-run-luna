@@ -52,10 +52,23 @@
 		size_t* close_out) const
 	{
 		int depth = 0;
+		int parentheses = 0;
+		int brackets = 0;
+		vector<int> angle_parentheses;
 		for(size_t i = open; i < raw.size(); ++i) {
-			if(raw[i] == '<' && IsTemplateAngleOpen(raw, i)) ++depth;
-			else if(raw[i] == '>' && IsTemplateAngleClose(raw, i)) {
+			if(raw[i] == '(') ++parentheses;
+			else if(raw[i] == ')' && parentheses > 0) --parentheses;
+			else if(raw[i] == '[') ++brackets;
+			else if(raw[i] == ']' && brackets > 0) --brackets;
+			if(raw[i] == '<' && IsTemplateAngleOpen(raw, i)) {
+				++depth;
+				angle_parentheses.push_back(parentheses);
+			} else if(raw[i] == '>' && IsTemplateAngleClose(raw, i)) {
+				const int opener_parentheses = angle_parentheses.empty() ? 0 :
+					angle_parentheses.back();
+				if(parentheses > opener_parentheses) continue;
 				--depth;
+				if(!angle_parentheses.empty()) angle_parentheses.pop_back();
 				if(depth == 0) {
 					if(arguments) *arguments = raw.substr(open + 1, i - open - 1);
 					if(close_out) *close_out = i;

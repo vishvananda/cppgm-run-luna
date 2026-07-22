@@ -94,6 +94,34 @@ void PA18TemplateExpander::PrepareTemplateMemberSubstitutions(
 	if(!local) return;
 	for(size_t i = 0; i < definition.parameters.size() && i < arguments.size(); ++i)
 		(*local)[definition.parameters[i].name] = arguments[i];
+	// `arguments` is flattened, so a primary parameter pack cannot be
+	// represented by the scalar substitution above.  Template member lookup
+	// rewrites the base specialization before TransformInstantiatedNode has a
+	// chance to install its pack map; install the same typed collection here so
+	// `Base<Args...>::member` preserves every argument.
+	size_t argument_index = 0;
+	for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter) {
+		const TemplateParameter& detail = definition.parameters[parameter];
+		if(detail.pack) {
+			size_t trailing_fixed = 0;
+			for(size_t later = parameter + 1; later < definition.parameters.size(); ++later)
+				if(!definition.parameters[later].pack) ++trailing_fixed;
+			const size_t available = arguments.size() > argument_index ?
+				arguments.size() - argument_index : 0;
+			const size_t count = available > trailing_fixed ? available - trailing_fixed : 0;
+			vector<string> values;
+			for(size_t value = 0; value < count; ++value)
+				values.push_back(arguments[argument_index + value]);
+			active_pack_substitutions_[detail.name] = values;
+			if(values.empty()) local->erase(detail.name);
+			else (*local)[detail.name] = values[0];
+			argument_index += count;
+		} else {
+			if(argument_index < arguments.size())
+				(*local)[detail.name] = arguments[argument_index];
+			++argument_index;
+		}
+	}
 	if(definition.partial_specialization) {
 		map<string, string> specialized;
 		if(MatchClassSpecializationPattern(definition, arguments, &specialized, context)) {
@@ -239,16 +267,55 @@ bool PA18TemplateExpander::FindInheritedTemplateMemberType(
 		for(size_t base_index = 0; base_index < clause->children.size(); ++base_index) {
 			const CPPGMAstNodePtr base_name = ChildOfKindLocal(clause->children[base_index], "base-name");
 			if(!base_name) continue;
-			string base_spelling = CanonicalSpelling(ReplaceIdentifiers(base_name->value, local));
+			// Keep a pack marker intact until the base argument list has been
+			// split.  Replacing `B` in `Base<B...>` first turns it into
+			// `Base<first...>`, losing the collection needed by inherited member
+			// lookup.
+			const string source_base = CanonicalSpelling(base_name->value);
+			const size_t source_open = source_base.find('<');
+			string base_spelling = source_open == string::npos ?
+				CanonicalSpelling(ReplaceIdentifiers(source_base, local)) : source_base;
 			const size_t open = base_spelling.find('<');
 			if(open == string::npos) continue;
 			string argument_text;
 			size_t close = string::npos;
 			if(!TemplateRange(base_spelling, open, &argument_text, &close)) continue;
-			const string base_name_spelling = CanonicalSpelling(base_spelling.substr(0, open));
+			const string base_name_spelling = CanonicalSpelling(ReplaceIdentifiers(
+				base_spelling.substr(0, open), local));
 			const TemplateDefinition* base_definition = FindDefinition(base_name_spelling, definition.owner);
 			if(!base_definition || !base_definition->class_template) continue;
-			vector<string> base_arguments = SplitTemplateArguments(argument_text);
+			const vector<string> raw_base_arguments = SplitTemplateArguments(argument_text);
+			vector<string> base_arguments;
+			for(size_t raw_argument = 0; raw_argument < raw_base_arguments.size(); ++raw_argument) {
+				const string source_argument = CanonicalSpelling(raw_base_arguments[raw_argument]);
+				if(source_argument.size() > 3 &&
+					source_argument.compare(source_argument.size() - 3, 3, "...") == 0) {
+					const string prefix = source_argument.substr(0, source_argument.size() - 3);
+					string pack_name;
+					for(size_t character = 0; character < prefix.size();) {
+						if(!IsIdentifierCharacter(prefix[character])) { ++character; continue; }
+						const size_t begin = character;
+						while(character < prefix.size() && IsIdentifierCharacter(prefix[character])) ++character;
+						const string word = prefix.substr(begin, character - begin);
+						if(active_pack_substitutions_.find(word) != active_pack_substitutions_.end()) {
+							pack_name = word;
+							break;
+						}
+					}
+					map<string, vector<string> >::const_iterator pack =
+						active_pack_substitutions_.find(pack_name);
+					if(pack != active_pack_substitutions_.end()) {
+						for(size_t element = 0; element < pack->second.size(); ++element) {
+							map<string, string> one = local;
+							one[pack_name] = pack->second[element];
+							base_arguments.push_back(CollapseReferenceSpelling(
+								ReplaceIdentifiers(prefix, one)));
+						}
+						continue;
+					}
+				}
+				base_arguments.push_back(raw_base_arguments[raw_argument]);
+			}
 			for(size_t argument = 0; argument < base_arguments.size(); ++argument) {
 				base_arguments[argument] = NormalizeTypeArgument(RewriteText(
 					base_arguments[argument], context, local, 0, false, false));

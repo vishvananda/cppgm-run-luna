@@ -210,6 +210,234 @@ const vector<PA19IntegralValue>* PA18TemplateExpander::FindConstantArray(
 	return 0;
 }
 
+string PA18TemplateExpander::NormalizeIntegralExpression(string raw) const
+{
+	raw = CanonicalSpelling(raw);
+	for(;;) {
+		while(raw.size() >= 2 && raw[0] == '(') {
+			int depth = 0; size_t matching = string::npos;
+			for(size_t position = 0; position < raw.size(); ++position) {
+				if(raw[position] == '(') ++depth;
+				else if(raw[position] == ')' && --depth == 0) { matching = position; break; }
+			}
+			if(matching != raw.size() - 1) break;
+			raw = CanonicalSpelling(raw.substr(1, raw.size() - 2));
+		}
+		int parentheses = 0, brackets = 0; size_t comma = string::npos;
+		for(size_t position = 0; position < raw.size(); ++position) {
+			if(raw[position] == '(') ++parentheses;
+			else if(raw[position] == ')' && parentheses > 0) --parentheses;
+			else if(raw[position] == '[') ++brackets;
+			else if(raw[position] == ']' && brackets > 0) --brackets;
+			else if(raw[position] == ',' && parentheses == 0 && brackets == 0) {
+				comma = position; break;
+			}
+		}
+		if(comma == string::npos) return CanonicalSpelling(raw);
+		const string left = CanonicalSpelling(raw.substr(0, comma));
+		if(left.find("(void)") == string::npos &&
+			left.find("static_cast<void>") == string::npos) return CanonicalSpelling(raw);
+		raw = CanonicalSpelling(raw.substr(comma + 1));
+	}
+}
+
+bool PA18TemplateExpander::EvaluateActivePackSize(string raw,
+	PA19IntegralValue* result) const
+{
+	raw = CanonicalSpelling(raw);
+	if(raw.compare(0, 9, "sizeof...") != 0 || raw.size() < 11 ||
+		raw[9] != '(' || raw[raw.size() - 1] != ')') return false;
+	const string operand = CanonicalSpelling(raw.substr(10, raw.size() - 11));
+	const vector<string>* selected = 0;
+	for(map<string, vector<string> >::const_iterator pack = active_pack_substitutions_.begin();
+		pack != active_pack_substitutions_.end(); ++pack) {
+		if(operand == pack->first || (!pack->second.empty() &&
+			NormalizeTypeArgument(operand) == NormalizeTypeArgument(pack->second[0]))) {
+			selected = &pack->second; break;
+		}
+	}
+	if(!selected) for(map<string, vector<string> >::const_iterator pack =
+		active_pack_substitutions_.begin(); pack != active_pack_substitutions_.end(); ++pack) {
+		for(size_t value = 0; value < pack->second.size(); ++value)
+			if(NormalizeTypeArgument(operand) == NormalizeTypeArgument(pack->second[value])) {
+				selected = &pack->second; break;
+			}
+		if(selected) break;
+	}
+	if(!selected && active_pack_substitutions_.size() == 1)
+		selected = &active_pack_substitutions_.begin()->second;
+	if(!selected) return false;
+	*result = PA19IntegralValue::Unsigned(
+		static_cast<unsigned long long>(selected->size()), "unsigned long", 64);
+	return true;
+}
+
+string PA18TemplateExpander::RewriteActivePackSizes(string raw) const
+{
+	for(size_t search = raw.find("sizeof..."); search != string::npos; ) {
+		const size_t open = search + 9;
+		if(open >= raw.size() || raw[open] != '(') {
+			search = raw.find("sizeof...", search + 9); continue;
+		}
+		int depth = 0; size_t close = string::npos;
+		for(size_t position = open; position < raw.size(); ++position) {
+			if(raw[position] == '(') ++depth;
+			else if(raw[position] == ')' && --depth == 0) { close = position; break; }
+		}
+		if(close == string::npos) break;
+		PA19IntegralValue count;
+		const string expression = raw.substr(search, close - search + 1);
+		if(EvaluateActivePackSize(expression, &count)) {
+			const string replacement = IntegralValueSpelling(count);
+			raw.replace(search, close - search + 1, replacement);
+			search += replacement.size();
+		} else search = raw.find("sizeof...", close + 1);
+	}
+	return raw;
+}
+
+bool PA18TemplateExpander::EvaluateIntegralText(string raw, const string& context,
+	const map<string, string>& substitutions, PA19IntegralValue* result)
+{
+	raw = CanonicalSpelling(ReplaceIdentifiers(raw, substitutions));
+	raw = NormalizeIntegralExpression(raw);
+	raw = CanonicalSpelling(RewriteActivePackSizes(raw));
+	if(EvaluateActivePackSize(raw, result)) return true;
+	const size_t subscript_open = raw.find('[');
+	if(subscript_open != string::npos && raw[raw.size() - 1] == ']' && subscript_open > 0) {
+		PA19IntegralValue index;
+		const string index_text = raw.substr(subscript_open + 1, raw.size() - subscript_open - 2);
+		if(EvaluateIntegralText(index_text, context, substitutions, &index)) {
+			const vector<PA19IntegralValue>* values = FindConstantArray(
+				raw.substr(0, subscript_open), context);
+			const long long offset = PA19Signed(index);
+			if(values && offset >= 0 && static_cast<size_t>(offset) < values->size()) {
+				*result = (*values)[static_cast<size_t>(offset)]; return result->known;
+			}
+		}
+	}
+	const size_t value_separator = raw.rfind("::value");
+	if(value_separator != string::npos) {
+		const string owner = raw.substr(0, value_separator);
+		const string resolved_owner = CanonicalSpelling(ResolveAlias(owner, context));
+		if(!resolved_owner.empty() && resolved_owner != owner) {
+			PA19IntegralValue aliased_value;
+			if(EvaluateIntegralText(resolved_owner + "::value", context,
+				substitutions, &aliased_value)) {
+				*result = aliased_value; return result->known;
+			}
+		}
+	}
+	const size_t functional_open = raw.find('(');
+	const bool functional_cast = functional_open != string::npos &&
+		!raw.empty() && raw[raw.size() - 1] == ')' && functional_open > 0;
+	const size_t braced_open = raw.find('{');
+	const bool braced_cast = braced_open != string::npos &&
+		!raw.empty() && raw[raw.size() - 1] == '}' && braced_open > 0;
+	if(functional_cast || braced_cast) {
+		const size_t open = functional_cast ? functional_open : braced_open;
+		const string target = ResolveAlias(CanonicalSpelling(raw.substr(0, open)), context);
+		const PA19IntegralType target_type = PA19Type(target);
+		if(target_type.integral) {
+			const string operand = raw.substr(open + 1, raw.size() - open - 2);
+			PA19IntegralValue converted;
+			if(EvaluateIntegralText(operand, context, substitutions, &converted)) {
+				*result = PA19Convert(converted, target_type); return result->known;
+			}
+		}
+	}
+	if(raw.compare(0, 2, "::") == 0) {
+		string unscoped = raw;
+		while(unscoped.compare(0, 2, "::") == 0) unscoped.erase(0, 2);
+		map<string, PA19IntegralValue>::const_iterator known = constant_values_.find(unscoped);
+		if(known != constant_values_.end()) { *result = known->second; return result->known; }
+	}
+	PA19ConstantExpressionParser parser(constant_values_, substitutions,
+		constant_type_sizes_, constant_type_alignments_, type_aliases_);
+	const bool qualified_value_expression = raw.find("::value") != string::npos;
+	if((!qualified_value_expression || constant_values_.find(raw) != constant_values_.end()) &&
+		parser.Evaluate(raw, result)) return true;
+	if(EvaluateSourceIntegralExpression(raw, context, substitutions, result)) return true;
+	if(EvaluateMaterializedTemplateValue(raw, context, substitutions, result)) return true;
+	if(ExpandIntegralValueOperands(raw, context, substitutions, result)) return true;
+	if(EvaluateInheritedIntegralValue(raw, context, substitutions, result)) return true;
+	if(class_contexts_.find(raw) != class_contexts_.end()) {
+		map<string, PA19IntegralValue>::const_iterator object_value =
+			constant_values_.find(raw + "::value");
+		if(object_value != constant_values_.end()) { *result = object_value->second; return result->known; }
+	}
+	if(raw.find("::") == string::npos && !context.empty())
+		for(string current = context; ; ) {
+			const string qualified = JoinPath(current, raw);
+			if(parser.Evaluate(qualified, result)) return true;
+			const size_t separator = current.rfind("::");
+			if(separator == string::npos) break;
+			current.erase(separator);
+		}
+	string owner = context, member = raw;
+	const size_t separator = raw.rfind("::");
+	if(separator != string::npos) { owner = raw.substr(0, separator); member = raw.substr(separator + 2); }
+	CPPGMAstNodePtr declaration = FindClassDeclaration(owner, context);
+	if(declaration) for(size_t i = 0; i < declaration->children.size(); ++i) {
+		const CPPGMAstNodePtr child = declaration->children[i];
+		if(!child || child->kind != "simple-declaration" || child->children.empty()) continue;
+		const string specifiers = SpellNode(child->children[0]);
+		if(specifiers.find("const") == string::npos && specifiers.find("constexpr") == string::npos) continue;
+		const CPPGMAstNodePtr list = ChildOfKindLocal(child, "init-declarator-list");
+		if(!list) continue;
+		for(size_t j = 0; j < list->children.size(); ++j) {
+			const CPPGMAstNodePtr item = list->children[j];
+			if(!item || item->children.size() < 2 ||
+				LastComponent(FirstIdentifierLocal(item->children[0])) != LastComponent(member)) continue;
+			const CPPGMAstNodePtr initializer = item->children[1];
+			if(!initializer || initializer->children.empty()) continue;
+			PA19IntegralValue value;
+			if(!EvaluateIntegralText(ConstantExpressionSpelling(initializer->children[0]),
+				owner, substitutions, &value)) continue;
+			const PA19IntegralType type = PA19Type(ResolveAlias(NodeTypeSpelling(
+				child->children[0]), owner));
+			if(type.integral) value = PA19Convert(value, type);
+			*result = value; return result->known;
+		}
+	}
+	if(raw.find("::") == string::npos) for(map<string, CPPGMAstNodePtr>::const_iterator candidate =
+		class_declarations_.begin(); candidate != class_declarations_.end(); ++candidate) {
+		const CPPGMAstNodePtr owner_declaration = candidate->second;
+		if(!owner_declaration) continue;
+		for(size_t child = 0; child < owner_declaration->children.size(); ++child) {
+			const CPPGMAstNodePtr member_declaration = owner_declaration->children[child];
+			if(!member_declaration || member_declaration->kind != "simple-declaration" ||
+				member_declaration->children.empty()) continue;
+			const CPPGMAstNodePtr list = ChildOfKindLocal(member_declaration, "init-declarator-list");
+			if(!list) continue;
+			for(size_t item = 0; item < list->children.size(); ++item) {
+				const CPPGMAstNodePtr declarator = list->children[item];
+				if(!declarator || declarator->children.size() < 2 ||
+					LastComponent(FirstIdentifierLocal(declarator->children[0])) != raw) continue;
+				map<string, string> member_substitutions = substitutions;
+				map<string, string>::const_iterator base = specialization_bases_.find(
+					LastComponent(candidate->first));
+				map<string, vector<string> >::const_iterator arguments =
+					specialization_arguments_.find(LastComponent(candidate->first));
+				if(base != specialization_bases_.end() && arguments != specialization_arguments_.end()) {
+					const TemplateDefinition* owner_definition = FindDefinition(base->second, context);
+					if(owner_definition) for(size_t parameter = 0;
+						parameter < owner_definition->parameters.size() &&
+						parameter < arguments->second.size(); ++parameter)
+						if(!owner_definition->parameters[parameter].name.empty())
+							member_substitutions[owner_definition->parameters[parameter].name] =
+								arguments->second[parameter];
+				}
+				const CPPGMAstNodePtr initializer = declarator->children[1];
+				if(!initializer || initializer->children.empty()) continue;
+				if(EvaluateIntegralText(ConstantExpressionSpelling(initializer->children[0]),
+					candidate->first, member_substitutions, result)) return true;
+			}
+		}
+	}
+	return false;
+}
+
 bool PA18TemplateExpander::EvaluateSourceArrayFunction(
 	string raw, const string& context,
 	const map<string, string>& substitutions, PA19IntegralValue* result)
@@ -986,6 +1214,8 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 	if(!definition.class_template && !definition.alias_template)
 		RenameGeneratedFunction(generated, local_name);
 	if(definition.class_template || definition.alias_template) generated->value = local_name;
+	if(definition.alias_template)
+		RegisterGeneratedTypeAlias(generated, generated_owner);
 	if(definition.class_template) {
 		const string generated_path = JoinPath(definition.owner, local_name);
 		class_declarations_[generated_path] = generated;

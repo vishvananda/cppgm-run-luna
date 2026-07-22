@@ -5,6 +5,12 @@
 bool MatchTypePattern(string pattern, string actual,
 		const set<string>& parameter_names, map<string, string>* inferred,
 		const string& context, bool class_pattern = false) const;
+	int MatchObjectCvPattern(const string& pattern, const string& actual,
+		const set<string>& parameter_names, map<string, string>* inferred,
+		const string& context) const;
+	bool MatchTrailingTypePack(const vector<string>& pattern_parts,
+		const vector<string>& actual_parts, const set<string>& parameter_names,
+		map<string, string>* inferred, const string& context, bool class_pattern) const;
 	bool MatchOrderingTypePattern(const string& raw_pattern, const string& raw_actual,
 		const set<string>& parameter_names, map<string, string>* inferred) const
 	{
@@ -141,6 +147,21 @@ bool MatchTypePattern(string pattern, string actual,
 	{
 		(void)context;
 		if(!lhs.partial_specialization || !rhs.partial_specialization) return false;
+		const auto template_head = [](const TemplateDefinition& definition) {
+			if(definition.specialization_pattern.empty()) return false;
+			const string pattern = CanonicalSpelling(definition.specialization_pattern[0]);
+			const size_t open = pattern.find('<');
+			const string name = open == string::npos ? pattern : pattern.substr(0, open);
+			for(size_t parameter = 0; parameter < definition.specialization_parameters.size() &&
+				parameter < definition.specialization_parameter_details.size(); ++parameter)
+				if(definition.specialization_parameters[parameter] == name &&
+					definition.specialization_parameter_details[parameter].template_template)
+					return true;
+			return false;
+		};
+		const bool lhs_template_head = template_head(lhs);
+		const bool rhs_template_head = template_head(rhs);
+		if(lhs_template_head != rhs_template_head) return !lhs_template_head;
 		const auto renamed_definition = [](const TemplateDefinition& definition,
 			const string& side) {
 			map<string, string> renames;
@@ -241,6 +262,8 @@ bool MatchTypePattern(string pattern, string actual,
 		const string& context) const
 	{
 		if(!primary) return primary;
+		if(!primary->class_template && !primary->alias_template &&
+			!primary->variable_template) return primary;
 		map<string, vector<TemplateDefinition> >::const_iterator candidates =
 			class_specializations_.find(primary->qualified_name);
 		if(candidates == class_specializations_.end()) return primary;
@@ -1141,7 +1164,8 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 				(input->children[1]->kind == "class-specifier" ||
 					input->children[1]->kind == "class-forward-declaration"))
 				return PrefixComponent(input->children[1]->value).find('<') == string::npos ?
-					MakeClassShell(LastComponent(input->children[1]->value)) :
+					MakeClassShell(LastComponent(input->children[1]->value).substr(0,
+						LastComponent(input->children[1]->value).find('<'))) :
 					CPPGMAstNodePtr();
 			return CPPGMAstNodePtr();
 		}

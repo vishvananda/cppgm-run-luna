@@ -322,92 +322,11 @@
 		const map<string, string>& substitutions, PA19IntegralValue* result);
 	bool EvaluateSourceIntegralExpression(string raw, const string& context,
 		const map<string, string>& substitutions, PA19IntegralValue* result);
-		bool EvaluateIntegralText(string raw, const string& context,
-		const map<string, string>& substitutions, PA19IntegralValue* result)
-	{
-		raw = CanonicalSpelling(ReplaceIdentifiers(raw, substitutions));
-		if(raw.compare(0, 2, "::") == 0) {
-			string unscoped = raw;
-			while(unscoped.compare(0, 2, "::") == 0) unscoped.erase(0, 2);
-			map<string, PA19IntegralValue>::const_iterator known =
-				constant_values_.find(unscoped);
-			if(known != constant_values_.end()) {
-				*result = known->second;
-				return result->known;
-			}
-		}
-		PA19ConstantExpressionParser parser(constant_values_, substitutions,
-			constant_type_sizes_, constant_type_alignments_, type_aliases_);
-		const bool qualified_value_expression = raw.find("::value") != string::npos;
-		if((!qualified_value_expression || constant_values_.find(raw) != constant_values_.end()) &&
-			parser.Evaluate(raw, result)) return true;
-		if(EvaluateSourceIntegralExpression(raw, context, substitutions, result)) return true;
-		if(EvaluateMaterializedTemplateValue(raw, context, substitutions, result)) return true;
-		if(ExpandIntegralValueOperands(raw, context, substitutions, result)) return true;
-		if(EvaluateInheritedIntegralValue(raw, context, substitutions, result)) return true;
-		// Some transformed dependent defaults retain the generated class spelling
-		// but lose the explicit `::value` member suffix while the alias is being
-		// replayed.  Recover that integral-constant object only for a materialized
-		// class whose typed value is already registered.
-		if(class_contexts_.find(raw) != class_contexts_.end()) {
-			map<string, PA19IntegralValue>::const_iterator object_value =
-				constant_values_.find(raw + "::value");
-			if(object_value != constant_values_.end()) {
-				*result = object_value->second;
-				return result->known;
-			}
-		}
-		if(raw.find("::") == string::npos && !context.empty()) {
-			for(string current = context; ; ) {
-				const string qualified = JoinPath(current, raw);
-				if(parser.Evaluate(qualified, result)) return true;
-				const size_t separator = current.rfind("::");
-				if(separator == string::npos) break;
-				current.erase(separator);
-			}
-		}
-		// A member constant of the class currently being materialized may be
-		// referenced by a later member type before the generated class has been
-		// registered in constant_values_.  Evaluate its source initializer with
-		// the active template substitutions so aliases such as `ratio1<num>` can
-		// be resolved during the same transformation pass.
-		string owner = context;
-		string member = raw;
-		const size_t separator = raw.rfind("::");
-		if(separator != string::npos) {
-			owner = raw.substr(0, separator);
-			member = raw.substr(separator + 2);
-		}
-		CPPGMAstNodePtr declaration = FindClassDeclaration(owner, context);
-		if(declaration) {
-			for(size_t i = 0; i < declaration->children.size(); ++i) {
-				const CPPGMAstNodePtr child = declaration->children[i];
-				if(!child || child->kind != "simple-declaration" || child->children.empty()) continue;
-				const string specifiers = SpellNode(child->children[0]);
-				if(specifiers.find("const") == string::npos &&
-					specifiers.find("constexpr") == string::npos) continue;
-				const CPPGMAstNodePtr list = ChildOfKindLocal(child, "init-declarator-list");
-				if(!list) continue;
-				for(size_t j = 0; j < list->children.size(); ++j) {
-					const CPPGMAstNodePtr item = list->children[j];
-					if(!item || item->children.size() < 2) continue;
-					if(LastComponent(FirstIdentifierLocal(item->children[0])) != LastComponent(member)) continue;
-					const CPPGMAstNodePtr initializer = item->children[1];
-					if(!initializer || initializer->children.empty()) continue;
-					PA19IntegralValue value;
-					const string member_expression = ConstantExpressionSpelling(initializer->children[0]);
-					if(!EvaluateIntegralText(member_expression, owner, substitutions, &value))
-						continue;
-					const PA19IntegralType type = PA19Type(ResolveAlias(
-						NodeTypeSpelling(child->children[0]), owner));
-					if(type.integral) value = PA19Convert(value, type);
-					*result = value;
-					return result->known;
-				}
-			}
-		}
-		return false;
-	}
+	string NormalizeIntegralExpression(string raw) const;
+	bool EvaluateActivePackSize(string raw, PA19IntegralValue* result) const;
+	string RewriteActivePackSizes(string raw) const;
+	bool EvaluateIntegralText(string raw, const string& context,
+		const map<string, string>& substitutions, PA19IntegralValue* result);
 	void RecordTemplateArrayValues(const TemplateDefinition& definition,
 		const vector<string>& arguments, const string& context,
 		const map<string, string>& substitutions);
@@ -820,6 +739,12 @@
 	{
 		raw = RemoveMarker(RewriteText(raw, context, substitutions, 0));
 		raw = ReplaceIdentifiers(raw, substitutions);
+		// When a non-type expression contains a nested template-id followed by
+		// a parenthesized comparison, the compact PA10 spelling can retain the
+		// enclosing template delimiter (`(expr)>`).  The delimiter is not part
+		// of the integral expression once this argument is isolated.
+		while(raw.size() >= 2 && raw[raw.size() - 1] == '>' &&
+			raw[raw.size() - 2] == ')') raw.erase(raw.size() - 1);
 		PA19IntegralValue value;
 		if(!EvaluateIntegralText(raw, context, substitutions, &value)) {
 			throw logic_error("non-type template argument is not an integral constant");
@@ -939,6 +864,15 @@
 		for(map<string, vector<string> >::const_iterator pack = pack_substitutions.begin();
 			pack != pack_substitutions.end(); ++pack)
 			active_pack_substitutions_[pack->first] = pack->second;
+		for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter)
+			if(definition.parameters[parameter].pack &&
+				active_pack_substitutions_.find(definition.parameters[parameter].name) ==
+				active_pack_substitutions_.end())
+				active_pack_substitutions_[definition.parameters[parameter].name] = vector<string>();
+		for(size_t pack = 0; pack < definition.specialization_pack_names.size(); ++pack)
+			if(active_pack_substitutions_.find(definition.specialization_pack_names[pack]) ==
+				active_pack_substitutions_.end())
+				active_pack_substitutions_[definition.specialization_pack_names[pack]] = vector<string>();
 		active_pack_identifier_substitutions_.clear();
 		try {
 			CPPGMAstNodePtr result = TransformNode(definition.declaration, context, substitutions);
@@ -952,6 +886,79 @@
 			active_pack_identifier_substitutions_ = previous_pack_identifiers;
 			throw;
 		}
+	}
+	string NormalizeTemplateTemplateArgument(string raw, const string& context,
+		const map<string, string>& substitutions) const
+	{
+		raw = CanonicalSpelling(ReplaceIdentifiers(raw, substitutions));
+		if(raw.compare(0, 9, "template ") == 0)
+			raw = CanonicalSpelling(raw.substr(9));
+		for(size_t position = raw.find("::template "); position != string::npos;
+			position = raw.find("::template ", position + 2))
+			raw.erase(position + 2, 9);
+		const TemplateDefinition* definition = FindDefinition(raw, context);
+		return definition ? definition->qualified_name : string();
+	}
+	bool CompatibleTemplateParameter(const TemplateParameter& expected,
+		const TemplateParameter& actual) const
+	{
+		if(expected.type != actual.type) return false;
+		if(expected.template_template != actual.template_template) return false;
+		if(!expected.type) {
+			const string left = NormalizeTypeArgument(expected.non_type_type);
+			const string right = NormalizeTypeArgument(actual.non_type_type);
+			if(!left.empty() && !right.empty() && left != right) return false;
+		}
+		if(expected.template_template && !CompatibleTemplateParameterList(
+			expected.template_parameters, actual.template_parameters)) return false;
+		return true;
+	}
+	bool CompatibleTemplateParameterList(const vector<TemplateParameter>& expected,
+		const vector<TemplateParameter>& actual) const
+	{
+		size_t expected_index = 0;
+		size_t actual_index = 0;
+		while(expected_index < expected.size()) {
+			const TemplateParameter& wanted = expected[expected_index];
+			if(wanted.pack) {
+				const TemplateParameter* element = wanted.template_parameters.empty() ?
+					&wanted : &wanted.template_parameters[0];
+				while(actual_index < actual.size()) {
+					if(!CompatibleTemplateParameter(*element, actual[actual_index])) return false;
+					++actual_index;
+				}
+				return true;
+			}
+			if(actual_index >= actual.size()) return false;
+			if(actual[actual_index].pack) {
+				// A candidate pack can supply every remaining fixed parameter when
+				// the parameter kinds agree.
+				for(size_t remaining = expected_index; remaining < expected.size(); ++remaining)
+					if(!CompatibleTemplateParameter(expected[remaining], actual[actual_index]))
+						return false;
+				return true;
+			}
+			if(!CompatibleTemplateParameter(wanted, actual[actual_index])) return false;
+			++expected_index;
+			++actual_index;
+		}
+		for(; actual_index < actual.size(); ++actual_index)
+			if(!actual[actual_index].pack && actual[actual_index].default_type.empty()) return false;
+		return true;
+	}
+	bool CompatibleTemplateTemplateArgument(const TemplateParameter& parameter,
+		const string& raw, const string& context,
+		const map<string, string>& substitutions, string* normalized) const
+	{
+		const string argument = NormalizeTemplateTemplateArgument(raw, context, substitutions);
+		if(argument.empty()) return false;
+		const TemplateDefinition* definition = FindDefinition(argument, context);
+		if(!definition || (!definition->class_template && !definition->alias_template &&
+			!definition->variable_template)) return false;
+		if(!CompatibleTemplateParameterList(parameter.template_parameters,
+			definition->parameters)) return false;
+		if(normalized) *normalized = argument;
+		return true;
 	}
 	void ResolveTemplateArguments(const TemplateDefinition& definition,
 		const vector<string>& raw_args, const string& context,
@@ -983,7 +990,13 @@
 					for(size_t element = 0; element < count; ++element) {
 						string argument = raw_args[raw_index++];
 						PA19IntegralValue integral_value;
-						if(parameter.type) {
+						if(parameter.template_template) {
+							string normalized;
+							if(!CompatibleTemplateTemplateArgument(parameter, argument, context,
+								*substitutions, &normalized))
+								throw logic_error("template-template argument does not match");
+							argument = normalized;
+						} else if(parameter.type) {
 						argument = RewriteText(argument, context, *substitutions, 0);
 						argument = NormalizeTypeArgument(argument);
 						argument = NormalizeTypeArgument(ReplaceIdentifiers(argument, *substitutions));
@@ -1020,7 +1033,13 @@
 					argument = TemplateIntegralValueSpelling(integral->second);
 			}
 			if(argument.empty()) argument = parameter.default_type;
-			if(parameter.type) {
+			if(parameter.template_template) {
+				string normalized;
+				if(!CompatibleTemplateTemplateArgument(parameter, argument, context,
+					*substitutions, &normalized))
+					throw logic_error("template-template argument does not match");
+				argument = normalized;
+			} else if(parameter.type) {
 				argument = ExpandPackCallText(argument, *pack_substitutions);
 				argument = RewriteText(argument, context, *substitutions, 0);
 				argument = NormalizeTypeArgument(argument);
@@ -1048,7 +1067,7 @@
 		const map<string, string>& substitutions, const string& context)
 	{
 		string local_name = definition.name;
-		if(definition.class_template || definition.alias_template) {
+		if(definition.class_template || definition.alias_template || definition.variable_template) {
 			for(size_t i = 0; i < args.size(); ++i) {
 				local_name += i == 0 ? "_" : "__";
 				if(i < definition.parameters.size() && !definition.parameters[i].type) {
