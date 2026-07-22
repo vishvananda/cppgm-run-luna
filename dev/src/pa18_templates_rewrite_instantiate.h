@@ -738,7 +738,7 @@
 		PA19IntegralValue* typed_result = 0)
 	{
 		raw = RemoveMarker(RewriteText(raw, context, substitutions, 0));
-		raw = ReplaceIdentifiers(raw, substitutions);
+		raw = ReplaceIdentifiersPreservingPackSizes(raw, substitutions);
 		// When a non-type expression contains a nested template-id followed by
 		// a parenthesized comparison, the compact PA10 spelling can retain the
 		// enclosing template delimiter (`(expr)>`).  The delimiter is not part
@@ -825,6 +825,9 @@
 		const CPPGMAstNodePtr& generated, const string& generated_path)
 	{
 		if(!generated) return;
+		if((generated->kind == "class-specifier" ||
+			generated->kind == "class-forward-declaration") && !generated_path.empty())
+			IndexConstantMembers(generated, generated_path);
 		RegisterGeneratedTypeAlias(generated, generated_path);
 		if(generated->kind == "class-specifier" ||
 			generated->kind == "class-forward-declaration")

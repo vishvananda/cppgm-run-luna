@@ -95,6 +95,64 @@ vector<string> SplitTemplateArguments(const string& raw)
 	return result;
 }
 
+string ReplaceIdentifiersPreservingPackSizes(const string& raw,
+	const map<string, string>& substitutions)
+{
+	string result;
+	size_t cursor = 0;
+	for(size_t search = raw.find("sizeof..."); search != string::npos; ) {
+		const size_t open = search + 9;
+		if(open >= raw.size() || raw[open] != '(') {
+			search = raw.find("sizeof...", search + 9);
+			continue;
+		}
+		int depth = 0;
+		size_t close = string::npos;
+		for(size_t position = open; position < raw.size(); ++position) {
+			if(raw[position] == '(') ++depth;
+			else if(raw[position] == ')' && --depth == 0) {
+				close = position;
+				break;
+			}
+		}
+		if(close == string::npos) break;
+		result += ReplaceIdentifiers(raw.substr(cursor, search - cursor), substitutions);
+		result += raw.substr(search, close - search + 1);
+		cursor = close + 1;
+		search = raw.find("sizeof...", cursor);
+	}
+	result += ReplaceIdentifiers(raw.substr(cursor), substitutions);
+	return result;
+}
+
+void PA18TemplateExpander::IndexConstantMembers(const CPPGMAstNodePtr& node,
+	const string& owner)
+{
+	if(!node || owner.empty() ||
+		(node->kind != "class-specifier" && node->kind != "class-forward-declaration")) return;
+	for(size_t child = 0; child < node->children.size(); ++child) {
+		const CPPGMAstNodePtr declaration = node->children[child];
+		if(!declaration || declaration->kind != "simple-declaration" ||
+			declaration->children.empty()) continue;
+		const string specifiers = SpellNode(declaration->children[0]);
+		if(specifiers.find("const") == string::npos &&
+			specifiers.find("constexpr") == string::npos) continue;
+		const CPPGMAstNodePtr list = ChildOfKindLocal(declaration,
+			"init-declarator-list");
+		if(!list) continue;
+		for(size_t item = 0; item < list->children.size(); ++item) {
+			const CPPGMAstNodePtr declarator = list->children[item];
+			if(!declarator || declarator->children.empty()) continue;
+			const string name = LastComponent(FirstIdentifierLocal(
+				declarator->children[0]));
+			if(name.empty()) continue;
+			vector<string>& owners = constant_member_owners_[name];
+			if(find(owners.begin(), owners.end(), owner) == owners.end())
+				owners.push_back(owner);
+		}
+	}
+}
+
 string PA18TemplateExpander::FunctionMarker(const string& raw_name,
 	const string& context) const
 {

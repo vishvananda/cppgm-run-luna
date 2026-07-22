@@ -11,6 +11,7 @@ bool MatchTypePattern(string pattern, string actual,
 	bool MatchTrailingTypePack(const vector<string>& pattern_parts,
 		const vector<string>& actual_parts, const set<string>& parameter_names,
 		map<string, string>* inferred, const string& context, bool class_pattern) const;
+	bool IsTemplatePackName(const TemplateDefinition& definition, const string& name) const;
 	bool MatchOrderingTypePattern(const string& raw_pattern, const string& raw_actual,
 		const set<string>& parameter_names, map<string, string>* inferred) const
 	{

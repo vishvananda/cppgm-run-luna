@@ -3,10 +3,12 @@
 ## Latest checkpoint and next scope
 
 The required report after the template-entity and typed-integral increments is
-**82/215 passing**, an improvement of 20 tests over the turn-start baseline of
-62.  Earlier PAs still pass.  The complete refreshed failure set was inspected
-from the report and grouped by behavior: **117** exit-status mismatches and
-**16** relaxed-LowIR mismatches, with no invalid-LowIR result.
+**82/215 passing**, an improvement of 20 tests over the implementation
+turn-start baseline of 62.  Earlier PAs still pass.  The complete refreshed
+failure set was inspected
+from the report and grouped by behavior: **117** exit-status mismatches,
+**15** relaxed-LowIR mismatches, and **one** invalid-LowIR result.  There are
+no timeout failures.
 
 Checkpoint result: the shared pack-aware member replay now preserves primary
 parameter packs, `sizeof...(pack)` values, typed functional/braced casts,
@@ -22,8 +24,11 @@ non-type set converted six fixtures to passing:
 
 Validation also retains the earlier PA18 `decltype`/`operator<<` behavior after
 the generalized binary-expression handling: the exact through-PA20 report is
-**1635/1635**, the PA21 file audit exits cleanly, and the refreshed full report
-remains **82/215**.
+**1635/1635**, the focused checkpoint/regression set is **7/7**, the PA21 file
+audit exits cleanly, and the refreshed full report remains **82/215**.
+The audit fixes preserve that current-PA baseline while removing the unsafe
+pack fallback, protecting `sizeof...` operands, and replacing repeated global
+registry/class walks with collection-time indexes.
 
 ### Remaining Work Map
 
@@ -47,7 +52,7 @@ remains **82/215**.
   need canonical owner and argument replay.
 - **Parsing, layout, and lowering:** extern-template syntax, function/member
   declaration forms, incomplete bases/layout, constructor/operator lowering,
-  and the 15 already-isolated LowIR mismatches remain.
+  and the 15 relaxed plus one invalid LowIR mismatches remain.
 
 ### Completed Checkpoint Scope
 
@@ -64,18 +69,17 @@ result above.
 Resolve the remaining dependent constant/member replay group: source static
 members such as `last_idx`/`num`, qualified trait values, alias/template-
 template value expressions, and the remaining function/array pack replay.  The
-next validation set is the 13 residual non-type fixtures listed in the report,
-followed by the full PA21 report.
+next validation set is the 13 direct non-type/constant replay fixtures listed
+in the report, followed by the full PA21 report.
 
-## Current-turn failure map and checkpoint scope
+## Historical 62/215 failure map and prior checkpoint scope
 
 The superseded pre-entity report was **62/215 passing** with assignments
 through PA20 passing.  Its complete **153-test** failure set was inspected
 before implementation: 138 exit-status mismatches, 14 relaxed-LowIR
-mismatches, and one invalid-LowIR result.  There are no timeout failures.
-The paths below are the current report, grouped once by the shared compiler
-behavior they expose; the two final entries are additions to the historical
-inventory below.
+mismatches, and one invalid-LowIR result.  There were no timeout failures.  The
+paths below are retained as historical provenance for that earlier checkpoint,
+not as the current PA21 result.
 
 ### A — remaining class partial-specialization matching and ordering (34)
 

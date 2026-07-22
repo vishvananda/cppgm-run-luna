@@ -2,6 +2,16 @@
 #include "pa18_templates_rewrite.h"
 using namespace std;
 namespace pa18_templates_internal {
+
+bool PA18TemplateExpander::IsTemplatePackName(const TemplateDefinition& definition,
+	const string& name) const
+{
+	for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter)
+		if(definition.parameters[parameter].pack &&
+			definition.parameters[parameter].name == name) return true;
+	return template_pack_names_.find(name) != template_pack_names_.end();
+}
+
 bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 	const set<string>& parameter_names, map<string, string>* inferred,
 	const string& context, bool class_pattern) const
@@ -961,26 +971,11 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 							pack_name = word;
 							break;
 						}
-						for(map<string, TemplateDefinition>::const_iterator candidate = definitions_.begin();
-							candidate != definitions_.end() && !known_pack; ++candidate)
-							for(size_t parameter = 0; parameter < candidate->second.parameters.size(); ++parameter)
-								if(candidate->second.parameters[parameter].pack &&
-									candidate->second.parameters[parameter].name == word) {
-									pack_name = word;
-									known_pack = true;
-									break;
-								}
-						for(map<string, vector<TemplateDefinition> >::const_iterator candidate =
-							class_specializations_.begin(); candidate != class_specializations_.end() &&
-							!known_pack; ++candidate)
-							for(size_t specialization = 0; specialization < candidate->second.size() &&
-								!known_pack; ++specialization)
-								for(size_t pack = 0; pack < candidate->second[specialization].specialization_pack_names.size(); ++pack)
-									if(candidate->second[specialization].specialization_pack_names[pack] == prefix) {
-										pack_name = prefix;
-										known_pack = true;
-										break;
-									}
+						if(IsTemplatePackName(*definition, word)) {
+							pack_name = word;
+							known_pack = true;
+							break;
+						}
 					}
 					map<string, vector<string> >::const_iterator pack =
 						active_pack_substitutions_.find(pack_name);
@@ -1092,7 +1087,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			if(template_replaced) *template_replaced = true;
 			search = begin + replacement.size();
 		}
-	raw = ReplaceIdentifiers(raw, substitutions);
+	raw = ReplaceIdentifiersPreservingPackSizes(raw, substitutions);
 	if(!resolve_alias || raw.find("::") == string::npos) return raw;
 		// A qualified static integral member is an expression here, not a type
 		// alias.  Keep its registered spelling intact so a dependent non-type

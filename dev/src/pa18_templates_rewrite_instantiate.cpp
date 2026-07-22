@@ -249,23 +249,33 @@ bool PA18TemplateExpander::EvaluateActivePackSize(string raw,
 		raw[9] != '(' || raw[raw.size() - 1] != ')') return false;
 	const string operand = CanonicalSpelling(raw.substr(10, raw.size() - 11));
 	const vector<string>* selected = 0;
-	for(map<string, vector<string> >::const_iterator pack = active_pack_substitutions_.begin();
-		pack != active_pack_substitutions_.end(); ++pack) {
-		if(operand == pack->first || (!pack->second.empty() &&
-			NormalizeTypeArgument(operand) == NormalizeTypeArgument(pack->second[0]))) {
-			selected = &pack->second; break;
-		}
+	map<string, vector<string> >::const_iterator typed =
+		active_pack_substitutions_.find(operand);
+	if(typed != active_pack_substitutions_.end()) selected = &typed->second;
+	if(!selected) {
+		map<string, vector<string> >::const_iterator named =
+			active_pack_identifier_substitutions_.find(operand);
+		if(named != active_pack_identifier_substitutions_.end()) selected = &named->second;
 	}
+	// Some older AST rewrite nodes have already replaced the pack identifier
+	// with the scalar substitution used for its first element.  Recover that
+	// identity only when the scalar is an exact member of a typed pack; never
+	// infer a pack merely because it happens to be the sole active pack.
 	if(!selected) for(map<string, vector<string> >::const_iterator pack =
-		active_pack_substitutions_.begin(); pack != active_pack_substitutions_.end(); ++pack) {
-		for(size_t value = 0; value < pack->second.size(); ++value)
-			if(NormalizeTypeArgument(operand) == NormalizeTypeArgument(pack->second[value])) {
-				selected = &pack->second; break;
-			}
-		if(selected) break;
-	}
-	if(!selected && active_pack_substitutions_.size() == 1)
-		selected = &active_pack_substitutions_.begin()->second;
+		active_pack_substitutions_.begin(); pack != active_pack_substitutions_.end(); ++pack)
+		if(!pack->second.empty() && NormalizeTypeArgument(operand) ==
+			NormalizeTypeArgument(pack->second[0])) {
+			selected = &pack->second;
+			break;
+		}
+	if(!selected) for(map<string, vector<string> >::const_iterator pack =
+		active_pack_identifier_substitutions_.begin();
+		pack != active_pack_identifier_substitutions_.end(); ++pack)
+		if(!pack->second.empty() && NormalizeTypeArgument(operand) ==
+			NormalizeTypeArgument(pack->second[0])) {
+			selected = &pack->second;
+			break;
+		}
 	if(!selected) return false;
 	*result = PA19IntegralValue::Unsigned(
 		static_cast<unsigned long long>(selected->size()), "unsigned long", 64);
@@ -299,9 +309,15 @@ string PA18TemplateExpander::RewriteActivePackSizes(string raw) const
 bool PA18TemplateExpander::EvaluateIntegralText(string raw, const string& context,
 	const map<string, string>& substitutions, PA19IntegralValue* result)
 {
+	// Expand pack sizes while the operand still carries its source identifier.
+	// The ordinary scalar substitution map intentionally keeps the first pack
+	// element for compatibility with older rewrite paths; applying it first
+	// would make `sizeof...(Args)` indistinguishable from a size query on that
+	// element and would require a guessed pack or a registry-wide search.
+	raw = CanonicalSpelling(raw);
+	raw = CanonicalSpelling(RewriteActivePackSizes(raw));
 	raw = CanonicalSpelling(ReplaceIdentifiers(raw, substitutions));
 	raw = NormalizeIntegralExpression(raw);
-	raw = CanonicalSpelling(RewriteActivePackSizes(raw));
 	if(EvaluateActivePackSize(raw, result)) return true;
 	const size_t subscript_open = raw.find('[');
 	if(subscript_open != string::npos && raw[raw.size() - 1] == ']' && subscript_open > 0) {
@@ -400,40 +416,48 @@ bool PA18TemplateExpander::EvaluateIntegralText(string raw, const string& contex
 			*result = value; return result->known;
 		}
 	}
-	if(raw.find("::") == string::npos) for(map<string, CPPGMAstNodePtr>::const_iterator candidate =
-		class_declarations_.begin(); candidate != class_declarations_.end(); ++candidate) {
-		const CPPGMAstNodePtr owner_declaration = candidate->second;
-		if(!owner_declaration) continue;
-		for(size_t child = 0; child < owner_declaration->children.size(); ++child) {
-			const CPPGMAstNodePtr member_declaration = owner_declaration->children[child];
-			if(!member_declaration || member_declaration->kind != "simple-declaration" ||
-				member_declaration->children.empty()) continue;
-			const CPPGMAstNodePtr list = ChildOfKindLocal(member_declaration, "init-declarator-list");
-			if(!list) continue;
-			for(size_t item = 0; item < list->children.size(); ++item) {
-				const CPPGMAstNodePtr declarator = list->children[item];
-				if(!declarator || declarator->children.size() < 2 ||
-					LastComponent(FirstIdentifierLocal(declarator->children[0])) != raw) continue;
-				map<string, string> member_substitutions = substitutions;
-				map<string, string>::const_iterator base = specialization_bases_.find(
-					LastComponent(candidate->first));
-				map<string, vector<string> >::const_iterator arguments =
-					specialization_arguments_.find(LastComponent(candidate->first));
-				if(base != specialization_bases_.end() && arguments != specialization_arguments_.end()) {
-					const TemplateDefinition* owner_definition = FindDefinition(base->second, context);
-					if(owner_definition) for(size_t parameter = 0;
-						parameter < owner_definition->parameters.size() &&
-						parameter < arguments->second.size(); ++parameter)
-						if(!owner_definition->parameters[parameter].name.empty())
-							member_substitutions[owner_definition->parameters[parameter].name] =
-								arguments->second[parameter];
+	if(raw.find("::") == string::npos) {
+		map<string, vector<string> >::const_iterator owners =
+			constant_member_owners_.find(raw);
+		if(owners != constant_member_owners_.end())
+			for(size_t owner_index = 0; owner_index < owners->second.size(); ++owner_index) {
+				const string& owner_name = owners->second[owner_index];
+				map<string, CPPGMAstNodePtr>::const_iterator candidate =
+					class_declarations_.find(owner_name);
+				if(candidate == class_declarations_.end() || !candidate->second) continue;
+				const CPPGMAstNodePtr owner_declaration = candidate->second;
+				for(size_t child = 0; child < owner_declaration->children.size(); ++child) {
+					const CPPGMAstNodePtr member_declaration = owner_declaration->children[child];
+					if(!member_declaration || member_declaration->kind != "simple-declaration" ||
+						member_declaration->children.empty()) continue;
+					const CPPGMAstNodePtr list = ChildOfKindLocal(member_declaration,
+						"init-declarator-list");
+					if(!list) continue;
+					for(size_t item = 0; item < list->children.size(); ++item) {
+						const CPPGMAstNodePtr declarator = list->children[item];
+						if(!declarator || declarator->children.size() < 2 ||
+							LastComponent(FirstIdentifierLocal(declarator->children[0])) != raw) continue;
+						map<string, string> member_substitutions = substitutions;
+						map<string, string>::const_iterator base = specialization_bases_.find(
+							LastComponent(candidate->first));
+						map<string, vector<string> >::const_iterator arguments =
+							specialization_arguments_.find(LastComponent(candidate->first));
+						if(base != specialization_bases_.end() && arguments != specialization_arguments_.end()) {
+							const TemplateDefinition* owner_definition = FindDefinition(base->second, context);
+							if(owner_definition) for(size_t parameter = 0;
+								parameter < owner_definition->parameters.size() &&
+								parameter < arguments->second.size(); ++parameter)
+								if(!owner_definition->parameters[parameter].name.empty())
+									member_substitutions[owner_definition->parameters[parameter].name] =
+										arguments->second[parameter];
+						}
+						const CPPGMAstNodePtr initializer = declarator->children[1];
+						if(!initializer || initializer->children.empty()) continue;
+						if(EvaluateIntegralText(ConstantExpressionSpelling(initializer->children[0]),
+							candidate->first, member_substitutions, result)) return true;
+					}
 				}
-				const CPPGMAstNodePtr initializer = declarator->children[1];
-				if(!initializer || initializer->children.empty()) continue;
-				if(EvaluateIntegralText(ConstantExpressionSpelling(initializer->children[0]),
-					candidate->first, member_substitutions, result)) return true;
 			}
-		}
 	}
 	return false;
 }

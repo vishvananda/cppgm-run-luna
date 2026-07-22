@@ -451,8 +451,8 @@
 				if(expression.compare(i, string(operators[candidate]).size(), operators[candidate]) == 0) {
 					operation = operators[candidate]; break;
 				}
-			if(operation.empty() || (operation == "+" || operation == "-" || operation == "*" ||
-				operation == "&") && (i == 0 || string("([{,=!?+-*/%<>&|").find(expression[i - 1]) != string::npos))
+			if(operation.empty() || ((operation == "+" || operation == "-" || operation == "*" ||
+				operation == "&") && (i == 0 || string("([{,=!?+-*/%<>&|").find(expression[i - 1]) != string::npos)))
 				continue;
 			const string left = ExpressionTypeSpelling(expression.substr(0, i), context, substitutions);
 			const string right = ExpressionTypeSpelling(expression.substr(i + operation.size()), context, substitutions);

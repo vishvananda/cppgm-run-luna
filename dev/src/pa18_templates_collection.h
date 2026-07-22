@@ -284,6 +284,8 @@ inline string ReplaceIdentifiers(const string& raw, const map<string, string>& s
 	}
 	return result;
 }
+string ReplaceIdentifiersPreservingPackSizes(const string& raw,
+	const map<string, string>& substitutions);
 inline string TypeSuffix(string raw)
 {
 	raw = CanonicalSpelling(raw);
@@ -428,6 +430,10 @@ private:
 		const map<string, bool>& inherited_parameters) const;
 	map<string, TemplateDefinition> definitions_;
 	map<string, vector<string> > definitions_by_name_;
+	// Pack names can remain in a dependent argument while the target template
+	// is being resolved in another declaration scope.  Keep the fact indexed at
+	// collection time instead of rediscovering it by walking every definition.
+	set<string> template_pack_names_;
 	map<string, vector<TemplateDefinition> > class_specializations_;
 	map<const CPPGMAstNode*, string> lexical_contexts_;
 	set<string> lexical_namespace_paths_;
@@ -448,6 +454,10 @@ private:
 	map<string, string> function_owners_;
 	map<string, string> local_class_names_;
 	map<string, CPPGMAstNodePtr> class_declarations_;
+	// Source constant members are indexed once during collection so dependent
+	// non-type replay can look up a named member without rescanning every class
+	// declaration and reparsing unrelated ASTs on each argument.
+	map<string, vector<string> > constant_member_owners_;
 	set<string> named_type_contexts_;
 	map<string, string> variable_types_;
 	map<string, PA19IntegralValue> constant_values_;
@@ -835,6 +845,11 @@ private:
 		item.qualified_name = JoinPath(item.owner, name);
 		item.declaration = declaration;
 		item.parameters = Parameters(node->children[0]);
+		for(size_t parameter = 0; parameter < item.parameters.size(); ++parameter)
+			if(item.parameters[parameter].pack)
+				template_pack_names_.insert(item.parameters[parameter].name);
+		for(size_t parameter = 0; parameter < item.specialization_pack_names.size(); ++parameter)
+			template_pack_names_.insert(item.specialization_pack_names[parameter]);
 		item.class_template = declaration->kind == "class-specifier" ||
 			declaration->kind == "class-forward-declaration";
 		item.alias_template = declaration->kind == "alias-declaration";
@@ -967,6 +982,7 @@ private:
 		// is still useful to register its lexical spelling now.
 		Collect(declaration, item.class_template ? JoinPath(item.owner, name) : item.owner);
 	}
+	void IndexConstantMembers(const CPPGMAstNodePtr& node, const string& owner);
 	void Collect(const CPPGMAstNodePtr& node, const string& context)
 	{
 		if(!node) return;
@@ -1038,7 +1054,9 @@ private:
 			const string class_name = LastComponent(node->value);
 			next_context = JoinPath(context, class_name);
 			class_declarations_[next_context] = node;
+			IndexConstantMembers(node, next_context);
 			if(LastComponent(context) == class_name) class_declarations_[context] = node;
+			if(LastComponent(context) == class_name) IndexConstantMembers(node, context);
 			if(function_contexts_.find(context) != function_contexts_.end()) {
 				const map<string, string>::const_iterator owner = function_owners_.find(context);
 				const string function_owner = owner == function_owners_.end() ? PrefixComponent(context) : owner->second;
