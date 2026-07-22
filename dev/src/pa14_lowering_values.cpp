@@ -143,7 +143,7 @@ PA14Lowerer::Value PA14Lowerer::EmitIdentifier(const CPPGMAstNodePtr& node, Scop
         }
         GlobalRecord* global_member = demanded_global ? demanded_global :
           FindGlobal(binding->qualified_name);
-        if(!global_member) throw logic_error("unknown static member during lowering");
+		if(!global_member) throw logic_error("unknown static member during lowering");
         result.type = global_member->type;
         result.operand = global_member->type->kind == TYPE_ARRAY ?
           EmitArrayDecay(node, scope) : emit_load("@" + global_member->symbol, global_member->type);

@@ -354,6 +354,15 @@ inline bool IsTemplateAngleClose(const string& raw, size_t position)
 	}
 	return true;
 }
+inline bool HasDependentVariableTemplateSpelling(const string& raw)
+{
+	for(size_t position = raw.find("_v"); position != string::npos;
+		position = raw.find("_v", position + 2)) {
+		const size_t after = position + 2;
+		if(after == raw.size() || !IsIdentifierCharacter(raw[after])) return true;
+	}
+	return false;
+}
 vector<string> SplitTemplateArguments(const string& raw);
 struct TemplateParameter
 {
@@ -1005,7 +1014,15 @@ private:
 		if(node->kind == "function-definition") {
 			RecordFunctionSignature(node, context);
 			const string function_name = DeclarationName(node);
-			if(!function_name.empty()) function_definitions_[JoinPath(context, function_name)] = node;
+			if(!function_name.empty()) {
+				const string qualified_name = JoinPath(context, function_name);
+				// Keep the first ordinary overload available to the constexpr source
+				// evaluator.  A templated overload is collected through its template
+				// declaration afterwards and must not hide a zero-argument/base-case
+				// function under the same spelling.
+				if(function_definitions_.find(qualified_name) == function_definitions_.end())
+					function_definitions_[qualified_name] = node;
+			}
 			string function_context = JoinPath(context, function_name);
 			if(!function_name.empty() && LastComponent(context) == function_name)
 				function_context = context;

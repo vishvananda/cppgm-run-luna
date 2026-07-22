@@ -144,62 +144,7 @@ bool MatchTypePattern(string pattern, string actual,
 		return actual_index == actual.size();
 	}
 	bool ClassPartialMoreSpecialized(const TemplateDefinition& lhs,
-		const TemplateDefinition& rhs, const string& context) const
-	{
-		(void)context;
-		if(!lhs.partial_specialization || !rhs.partial_specialization) return false;
-		const auto template_head = [](const TemplateDefinition& definition) {
-			if(definition.specialization_pattern.empty()) return false;
-			const string pattern = CanonicalSpelling(definition.specialization_pattern[0]);
-			const size_t open = pattern.find('<');
-			const string name = open == string::npos ? pattern : pattern.substr(0, open);
-			for(size_t parameter = 0; parameter < definition.specialization_parameters.size() &&
-				parameter < definition.specialization_parameter_details.size(); ++parameter)
-				if(definition.specialization_parameters[parameter] == name &&
-					definition.specialization_parameter_details[parameter].template_template)
-					return true;
-			return false;
-		};
-		const bool lhs_template_head = template_head(lhs);
-		const bool rhs_template_head = template_head(rhs);
-		if(lhs_template_head != rhs_template_head) return !lhs_template_head;
-		const auto renamed_definition = [](const TemplateDefinition& definition,
-			const string& side) {
-			map<string, string> renames;
-			for(size_t i = 0; i < definition.specialization_parameters.size(); ++i) {
-				if(definition.specialization_parameters[i].empty()) continue;
-				ostringstream fresh_name;
-				fresh_name << "__pa21_order_" << side << "_" << i;
-				renames[definition.specialization_parameters[i]] = fresh_name.str();
-			}
-			TemplateDefinition result = definition;
-			for(size_t i = 0; i < result.specialization_parameters.size(); ++i) {
-				map<string, string>::const_iterator rename = renames.find(
-					result.specialization_parameters[i]);
-				if(rename != renames.end()) result.specialization_parameters[i] = rename->second;
-			}
-			for(size_t i = 0; i < definition.specialization_pattern.size(); ++i)
-				result.specialization_pattern[i] = ReplaceIdentifiers(
-					definition.specialization_pattern[i], renames);
-			return result;
-		};
-		const TemplateDefinition lhs_ordered = renamed_definition(lhs, "lhs");
-		const TemplateDefinition rhs_ordered = renamed_definition(rhs, "rhs");
-		set<string> rhs_names;
-		set<string> lhs_names;
-		for(size_t i = 0; i < rhs_ordered.specialization_parameters.size(); ++i)
-			if(!rhs_ordered.specialization_parameters[i].empty()) rhs_names.insert(
-				rhs_ordered.specialization_parameters[i]);
-		for(size_t i = 0; i < lhs_ordered.specialization_parameters.size(); ++i)
-			if(!lhs_ordered.specialization_parameters[i].empty()) lhs_names.insert(
-				lhs_ordered.specialization_parameters[i]);
-		map<string, string> rhs_inferred;
-		map<string, string> lhs_inferred;
-		return MatchOrderingPatternList(rhs_ordered.specialization_pattern,
-			lhs_ordered.specialization_pattern, rhs_names, &rhs_inferred) &&
-			!MatchOrderingPatternList(lhs_ordered.specialization_pattern,
-				rhs_ordered.specialization_pattern, lhs_names, &lhs_inferred);
-	}
+		const TemplateDefinition& rhs, const string& context) const;
 	bool MatchClassSpecializationPattern(const TemplateDefinition& definition,
 		const vector<string>& arguments, map<string, string>* inferred,
 		const string& context) const
@@ -231,7 +176,32 @@ bool MatchTypePattern(string pattern, string actual,
 				}
 			}
 			if(argument_index >= arguments.size()) return false;
-			const string actual = CanonicalSpelling(arguments[argument_index++]);
+			string actual = CanonicalSpelling(arguments[argument_index++]);
+			// A template-template parameter is an entity, not a type alias.  In
+			// particular, a member alias such as `quote<T>::fn` must remain the
+			// qualified alias-template spelling while matching `P`; resolving it
+			// here would expose its still-dependent target (`defer<F,...>`) and
+			// lose the owner binding needed when the member is replayed.
+			bool template_parameter = false;
+			for(size_t detail = 0; detail < definition.specialization_parameter_details.size(); ++detail)
+				if(definition.specialization_parameter_details[detail].name == pattern &&
+					definition.specialization_parameter_details[detail].template_template) {
+					template_parameter = true;
+					break;
+				}
+			// Selection can be reached from a dependent base lookup before the
+			// normal argument resolver has folded an arithmetic non-type spelling.
+			// Compare partial-specialization patterns against its typed value so
+			// `Index - 1` can select the `0` specialization instead of replaying
+			// the recursive branch and wrapping unsigned arithmetic.
+			if(argument_index > 0 && argument_index - 1 < definition.parameters.size() &&
+				!definition.parameters[argument_index - 1].type) {
+				PA19IntegralValue normalized_value;
+				PA19ConstantExpressionParser parser(constant_values_, map<string,string>(),
+					constant_type_sizes_, constant_type_alignments_, type_aliases_);
+				if(parser.Evaluate(actual, &normalized_value))
+					actual = TemplateIntegralValueSpelling(normalized_value);
+			}
 			if(pattern.size() > 2 && pattern.compare(pattern.size() - 2, 2, "&&") == 0 &&
 				(actual.size() < 2 || actual.compare(actual.size() - 2, 2, "&&") != 0)) return false;
 			const bool lvalue_reference_pattern = pattern.size() > 0 &&
@@ -239,7 +209,11 @@ bool MatchTypePattern(string pattern, string actual,
 				!(pattern.size() > 1 && pattern[pattern.size() - 2] == '&');
 			if(lvalue_reference_pattern &&
 				(actual.empty() || actual[actual.size() - 1] != '&')) return false;
-			if(!MatchTypePattern(pattern, actual, parameter_names, &local, context, true)) return false;
+			if(template_parameter) {
+				map<string, string>::const_iterator prior = local.find(pattern);
+				if(prior != local.end() && CanonicalSpelling(prior->second) != actual) return false;
+				local[pattern] = actual;
+			} else if(!MatchTypePattern(pattern, actual, parameter_names, &local, context, true)) return false;
 		}
 		// A partial specialization may omit trailing primary parameters whose
 		// defaults are part of the concrete specialization-id.  For example,
@@ -258,7 +232,7 @@ bool MatchTypePattern(string pattern, string actual,
 		if(inferred) *inferred = local;
 		return true;
 	}
-	const TemplateDefinition* SelectClassTemplateDefinition(
+		const TemplateDefinition* SelectClassTemplateDefinition(
 		const TemplateDefinition* primary, const vector<string>& arguments,
 		const string& context) const
 	{
@@ -270,7 +244,8 @@ bool MatchTypePattern(string pattern, string actual,
 		if(candidates == class_specializations_.end()) return primary;
 		vector<const TemplateDefinition*> matched;
 		for(size_t i = 0; i < candidates->second.size(); ++i) {
-			if(MatchClassSpecializationPattern(candidates->second[i], arguments, 0, context))
+			const bool matches = MatchClassSpecializationPattern(candidates->second[i], arguments, 0, context);
+			if(matches)
 				matched.push_back(&candidates->second[i]);
 		}
 		if(matched.empty()) return primary;
@@ -634,7 +609,7 @@ bool InferFunctionArguments(const TemplateDefinition& definition,
 		}
 		const vector<const TemplateDefinition*> candidates = FindFunctionDefinitions(
 			"operator" + operation, context);
-			if(candidates.empty()) return;
+		if(candidates.empty()) return;
 		CPPGMAstNodePtr call(new CPPGMAstNode("call-expression"));
 		call->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
 			"id-expression", "operator" + operation)));

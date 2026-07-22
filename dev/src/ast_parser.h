@@ -112,6 +112,7 @@ private:
 	std::set<std::string> namespaces_;
 	std::set<std::string> value_names_;
 	std::string current_class_;
+	bool in_template_declaration_;
 
 	Mark Save() const;
 	void Restore(const Mark& mark);

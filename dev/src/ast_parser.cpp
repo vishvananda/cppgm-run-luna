@@ -23,7 +23,8 @@ namespace cppgm_pa10 {
 
 Parser::Parser(const vector<Token>& tokens)
 	: tokens_(tokens), position_(0), angle_depth_(0), ordinary_depth_(0),
-	  angle_floors_(), types_(), templates_(), namespaces_(), value_names_()
+	  angle_floors_(), types_(), templates_(), namespaces_(), value_names_(),
+	  in_template_declaration_(false)
 {
 	const char* const fundamentals[] = {
 		"bool", "char", "char16_t", "char32_t", "double", "float", "int",

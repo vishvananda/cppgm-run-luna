@@ -168,12 +168,28 @@ string PA18TemplateExpander::RewriteTemplateMemberSpelling(
 	const TemplateDefinition& definition, const vector<string>& arguments, string spelling,
 	const string& context, const map<string, string>& local)
 {
-	ostringstream count_stream;
-	count_stream << arguments.size();
-	const string count = count_stream.str();
+	map<string, string> pack_counts;
+	size_t argument_index = 0;
+	for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter) {
+		if(!definition.parameters[parameter].pack) {
+			if(argument_index < arguments.size()) ++argument_index;
+			continue;
+		}
+		size_t trailing_fixed = 0;
+		for(size_t later = parameter + 1; later < definition.parameters.size(); ++later)
+			if(!definition.parameters[later].pack) ++trailing_fixed;
+		const size_t available = arguments.size() > argument_index ?
+			arguments.size() - argument_index : 0;
+		const size_t count_value = available > trailing_fixed ? available - trailing_fixed : 0;
+		ostringstream count_stream;
+		count_stream << count_value;
+		pack_counts[definition.parameters[parameter].name] = count_stream.str();
+		argument_index += count_value;
+	}
 	for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter) {
 		if(!definition.parameters[parameter].pack) continue;
 		const string token = "sizeof...(" + definition.parameters[parameter].name + ")";
+		const string count = pack_counts[definition.parameters[parameter].name];
 		for(size_t position = spelling.find(token); position != string::npos;
 			position = spelling.find(token, position + count.size()))
 			spelling.replace(position, token.size(), count);

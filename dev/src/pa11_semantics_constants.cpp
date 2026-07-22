@@ -579,7 +579,6 @@ Analyzer::ConstantFlow Analyzer::EvaluateStatement(
 	}
 	return ConstantFlow();
 }
-
 ConstantValue Analyzer::EvaluateFunctionCall(Binding* function,
 	const CPPGMAstNodePtr& call, Scope* caller_scope,
 	const ConstantValue& receiver, const TypePtr& expected_type)
@@ -652,6 +651,7 @@ ConstantValue Analyzer::EvaluateFunctionCall(Binding* function,
 	if (body_scope_found != compound_scopes_.end()) body_scope = body_scope_found->second;
 	ConstantFlow flow = EvaluateCompound(body, body_scope);
 	ConstantValue result = flow.kind == ConstantFlow::RETURN ? flow.value : ConstantValue();
+	if (flow.kind == ConstantFlow::RETURN && !ConstantKnown(result) && function->type && function->type->child && function->type->child->kind == TYPE_CLASS) { const CPPGMAstNodePtr returned = ConstantReturnStatement(body); if (returned && !returned->children.empty() && returned->children[0] && returned->children[0]->kind == "braced-init-list" && returned->children[0]->children.empty()) result = DefaultConstantValue(function->type->child, caller_scope); }
 	if (result.kind != ConstantValue::CONSTANT_UNKNOWN && function->type && function->type->child)
 		result = ConvertConstantValue(result, expected_type ? expected_type : function->type->child,
 			caller_scope);

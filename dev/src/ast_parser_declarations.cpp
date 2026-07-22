@@ -84,14 +84,17 @@ CPPGMAstNodePtr Parser::ParseDeclaration(bool member_context)
 		Is("static") || (Peek().kind == AST_IDENTIFIER &&
 			(Peek(1).text == "::" || Peek(1).text == "<")))
 	{
+		const std::set<std::string> saved_value_names = value_names_;
 		Mark mark = Save();
 		CPPGMAstNodePtr special = ParseSpecialMember(false, member_context);
 		if (special) return special;
 		Restore(mark);
+		value_names_ = saved_value_names;
 		mark = Save();
 		CPPGMAstNodePtr special_definition = ParseSpecialMember(true, member_context);
 		if (special_definition) return special_definition;
 		Restore(mark);
+		value_names_ = saved_value_names;
 		if (!member_context && Peek().kind == AST_IDENTIFIER &&
 			Peek(1).text == "::" && Peek(2).text == "operator")
 			return CPPGMAstNodePtr();
@@ -274,7 +277,10 @@ CPPGMAstNodePtr Parser::ParseTemplateDeclaration(bool member_context)
 		Restore(mark);
 		return CPPGMAstNodePtr();
 	}
+	const bool previous_template_declaration = in_template_declaration_;
+	in_template_declaration_ = true;
 	CPPGMAstNodePtr declaration = ParseDeclaration(member_context);
+	in_template_declaration_ = previous_template_declaration;
 	if (!declaration)
 	{
 		Restore(mark);
@@ -497,21 +503,32 @@ CPPGMAstNodePtr Parser::ParseClassMember()
 		return Node("access-specifier", TokenLabel(access) + ":" + access);
 	}
 	if (Is("template")) return ParseTemplateDeclaration(true);
+	const std::set<std::string> before_bit_value_names = value_names_;
 	{
 		Mark mark = Save();
 		CPPGMAstNodePtr bit = ParseBitFieldDeclaration();
 		if (bit) return bit;
+		const std::set<std::string> speculative_value_names = value_names_;
 		Restore(mark);
+		if (in_template_declaration_)
+			value_names_ = before_bit_value_names;
+		for (std::set<std::string>::const_iterator it = speculative_value_names.begin();
+			it != speculative_value_names.end(); ++it)
+			if (before_bit_value_names.find(*it) == before_bit_value_names.end() &&
+				types_.find(*it) != types_.end()) value_names_.erase(*it);
 	}
+	const std::set<std::string> saved_value_names = value_names_;
 	{
 		Mark mark = Save();
 		CPPGMAstNodePtr special = ParseSpecialMember(false, true);
 		if (special) return special;
 		Restore(mark);
+		value_names_ = saved_value_names;
 		mark = Save();
 		special = ParseSpecialMember(true, true);
 		if (special) return special;
 		Restore(mark);
+		value_names_ = saved_value_names;
 	}
 	return ParseDeclaration(true);
 }

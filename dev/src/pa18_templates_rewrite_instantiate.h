@@ -98,219 +98,16 @@
 		const map<string, string>& substitutions, PA19IntegralValue* result);
 	bool EvaluateMaterializedTemplateValue(const string& raw,
 		const string& context, const map<string, string>& substitutions,
-		PA19IntegralValue* result)
-	{
-		// A transformed dependent expression can retain the source template-id
-		// (`Trait<Arg>::value`) even though its concrete class has already been
-		// materialized under a generated name.  Redirect that spelling before
-		// resolving inherited members.
-		const size_t template_value_separator = raw.rfind("::");
-		if(template_value_separator != string::npos &&
-			raw.substr(template_value_separator + 2) == "value" &&
-			raw.find("&&") == string::npos && raw.find("||") == string::npos &&
-			raw.find("!") == string::npos) {
-			const string template_owner = raw.substr(0, template_value_separator);
-			const size_t open = template_owner.find('<');
-			if(open != string::npos) {
-				string argument_text;
-				size_t close = string::npos;
-				if(TemplateRange(template_owner, open, &argument_text, &close)) {
-					const string primary = CanonicalSpelling(template_owner.substr(0, open));
-					const vector<string> arguments = SplitTemplateArguments(argument_text);
-					for(map<string,vector<string> >::const_iterator candidate =
-						specialization_arguments_.begin(); candidate != specialization_arguments_.end();
-						++candidate) {
-						map<string,string>::const_iterator candidate_base =
-							specialization_bases_.find(candidate->first);
-						if(candidate_base == specialization_bases_.end() ||
-							(candidate_base->second != primary &&
-							 LastComponent(candidate_base->second) != LastComponent(primary)) ||
-							candidate->second.size() != arguments.size()) continue;
-						bool same = true;
-						for(size_t argument = 0; argument < arguments.size(); ++argument)
-							if(NormalizeTypeArgument(CanonicalSpelling(arguments[argument])) !=
-								NormalizeTypeArgument(CanonicalSpelling(candidate->second[argument]))) {
-								same = false;
-								break;
-							}
-						if(same && candidate->first + "::value" != raw &&
-							EvaluateIntegralText(candidate->first + "::value", context,
-								substitutions, result)) return true;
-					}
-				}
-			}
-		}
-	return false;
-	}
+		PA19IntegralValue* result);
 	bool ExpandIntegralValueOperands(const string& raw,
 		const string& context, const map<string, string>& substitutions,
-		PA19IntegralValue* result)
-	{
-		// Resolve qualified generated `::value` operands independently before
-		// parsing the surrounding boolean/arithmetic expression.  `rfind("::")`
-		// cannot identify the owner of a compound expression such as
-		// `A::value && B::value`.
-		string expanded = raw;
-		bool expanded_any = false;
-		for(size_t marker = expanded.find("::value"); marker != string::npos; ) {
-			size_t begin = marker;
-			while(begin > 0 && (IsIdentifierCharacter(expanded[begin - 1]) ||
-				expanded[begin - 1] == ':')) --begin;
-			const size_t length = marker + 7 - begin;
-			const string operand = expanded.substr(begin, length);
-			PA19IntegralValue operand_value;
-			if(operand.empty() || operand == expanded ||
-				!EvaluateIntegralText(operand, context, substitutions, &operand_value)) {
-				marker = expanded.find("::value", marker + 7);
-				continue;
-			}
-			expanded.replace(begin, length, IntegralValueSpelling(operand_value));
-			expanded_any = true;
-			marker = expanded.find("::value", begin);
-		}
-		if(expanded_any) {
-			PA19ConstantExpressionParser expanded_parser(constant_values_, substitutions,
-				constant_type_sizes_, constant_type_alignments_, type_aliases_);
-			if(expanded_parser.Evaluate(expanded, result)) return true;
-		}
-	return false;
-	}
+		PA19IntegralValue* result);
 	bool EvaluateInheritedBaseValue(const TemplateDefinition& definition,
 		const string& context, const map<string, string>& member_substitutions,
-		PA19IntegralValue* result)
-	{
-					for(size_t child_index = 0;
-						child_index < definition.declaration->children.size(); ++child_index) {
-						const CPPGMAstNodePtr clause = definition.declaration->children[child_index];
-						if(!clause || clause->kind != "base-clause") continue;
-						for(size_t base_index = 0; base_index < clause->children.size(); ++base_index) {
-							const CPPGMAstNodePtr base_name = ChildOfKindLocal(
-								clause->children[base_index], "base-name");
-							if(!base_name) continue;
-							string base_spelling = CanonicalSpelling(ReplaceIdentifiers(
-								base_name->value, member_substitutions));
-							base_spelling = ResolveAlias(base_spelling, context);
-							string base_primary = base_spelling;
-							vector<string> base_arguments;
-							const size_t open = base_spelling.find('<');
-							if(open != string::npos) {
-								string argument_text;
-								size_t close = string::npos;
-								if(!TemplateRange(base_spelling, open, &argument_text, &close)) continue;
-								base_primary = CanonicalSpelling(base_spelling.substr(0, open));
-								base_arguments = SplitTemplateArguments(argument_text);
-								const TemplateDefinition* base_definition = FindDefinition(
-									base_primary, context);
-								for(size_t argument = 0; argument < base_arguments.size(); ++argument) {
-									base_arguments[argument] = RewriteText(base_arguments[argument], context,
-										member_substitutions, 0, false, false);
-									base_arguments[argument] = CanonicalSpelling(ReplaceIdentifiers(
-										base_arguments[argument], member_substitutions));
-									if(base_definition && argument < base_definition->parameters.size() &&
-										!base_definition->parameters[argument].type) {
-										PA19IntegralValue argument_value;
-										const bool evaluated_argument = EvaluateIntegralText(
-											base_arguments[argument], context, member_substitutions,
-											&argument_value);
-										if(evaluated_argument) {
-											PA19IntegralValue normalized_value = argument_value;
-											map<string,string> expected_substitutions = member_substitutions;
-											for(size_t parameter = 0;
-												parameter < base_definition->parameters.size() &&
-												parameter < base_arguments.size(); ++parameter)
-												if(base_definition->parameters[parameter].type)
-													expected_substitutions[base_definition->parameters[parameter].name] =
-														base_arguments[parameter];
-											string expected_type = ReplaceIdentifiers(
-												base_definition->parameters[argument].non_type_type,
-												expected_substitutions);
-											expected_type = ResolveAlias(expected_type, context);
-											const PA19IntegralType typed = PA19Type(expected_type);
-											if(typed.integral) normalized_value = PA19Convert(
-												normalized_value, typed);
-											base_arguments[argument] = IntegralValueSpelling(normalized_value);
-										} else base_arguments[argument] = ResolveAlias(
-											base_arguments[argument], context);
-									}
-								}
-							}
-							const TemplateDefinition* base_definition = FindDefinition(
-								base_primary, context);
-							if(base_definition) base_primary = base_definition->qualified_name;
-							string materialized_base;
-							for(map<string, vector<string> >::const_iterator candidate =
-								specialization_arguments_.begin();
-								candidate != specialization_arguments_.end(); ++candidate) {
-								map<string, string>::const_iterator candidate_base =
-									specialization_bases_.find(candidate->first);
-								if(candidate_base == specialization_bases_.end() ||
-									candidate_base->second != base_primary ||
-									candidate->second.size() != base_arguments.size()) continue;
-								bool same = true;
-								for(size_t argument = 0; argument < base_arguments.size(); ++argument)
-									if(CanonicalSpelling(candidate->second[argument]) !=
-										CanonicalSpelling(base_arguments[argument])) {
-										same = false;
-										break;
-									}
-								if(same) {
-									materialized_base = candidate->first;
-									break;
-								}
-							}
-							if(materialized_base.empty() &&
-								class_contexts_.find(base_spelling) != class_contexts_.end())
-								materialized_base = base_spelling;
-							if(!materialized_base.empty()) {
-								const string member_key = materialized_base + "::value";
-								map<string,PA19IntegralValue>::const_iterator direct_value =
-									constant_values_.find(member_key);
-								if(direct_value != constant_values_.end()) {
-									*result = direct_value->second;
-									return result->known;
-								}
-								const string suffix = "::" + member_key;
-								for(map<string,PA19IntegralValue>::const_iterator value =
-									constant_values_.begin(); value != constant_values_.end(); ++value)
-									if(value->first.size() >= suffix.size() &&
-										value->first.compare(value->first.size() - suffix.size(),
-											suffix.size(), suffix) == 0) {
-										*result = value->second;
-										return result->known;
-									}
-							}
-							if(!materialized_base.empty() && EvaluateIntegralText(
-								materialized_base + "::value", context, member_substitutions, result))
-								return true;
-						}
-					}
-		return false;
-	}
+		PA19IntegralValue* result);
 	bool EvaluateInheritedIntegralValue(const string& raw,
 		const string& context, const map<string, string>& substitutions,
-		PA19IntegralValue* result)
-	{
-		const size_t value_separator = raw.rfind("::");
-		if(value_separator == string::npos || raw.substr(value_separator + 2) != "value" ||
-			raw.find_first_of("&|+-*/%!<>=?,") != string::npos) return false;
-		const string owner = raw.substr(0, value_separator);
-		map<string, string>::const_iterator specialized = specialization_bases_.find(
-			LastComponent(owner));
-		if(specialized == specialization_bases_.end()) return false;
-		const TemplateDefinition* definition = FindDefinition(specialized->second, context);
-		if(!definition || !definition->declaration) return false;
-		map<string,string> member_substitutions = substitutions;
-		map<string,vector<string> >::const_iterator member_arguments =
-			specialization_arguments_.find(LastComponent(owner));
-		if(member_arguments != specialization_arguments_.end())
-			for(size_t parameter = 0; parameter < definition->parameters.size() &&
-				parameter < member_arguments->second.size(); ++parameter)
-				if(!definition->parameters[parameter].name.empty())
-					member_substitutions[definition->parameters[parameter].name] =
-						member_arguments->second[parameter];
-		return EvaluateInheritedBaseValue(*definition, context,
-			member_substitutions, result);
-	}
+		PA19IntegralValue* result);
 	CPPGMAstNodePtr FindSourceConstantFunction(string raw, const string& context) const;
 	CPPGMAstNodePtr SourceReturnExpression(const CPPGMAstNodePtr& function) const;
 	bool EvaluateSourceFunctionReturn(const CPPGMAstNodePtr& function,
@@ -321,6 +118,13 @@
 	bool EvaluateSourceClassTruth(string raw, const string& context,
 		const map<string, string>& substitutions, PA19IntegralValue* result);
 	bool EvaluateSourceIntegralExpression(string raw, const string& context,
+		const map<string, string>& substitutions, PA19IntegralValue* result);
+	bool ExpandIntegralPackExpression(const string& raw, const string& context,
+		const map<string, string>& substitutions, string* expanded);
+	bool EvaluateUnqualifiedConstantMember(const string& raw,
+		const string& context, const map<string, string>& substitutions,
+		PA19IntegralValue* result);
+	bool ExpandNamedIntegralOperands(const string& raw, const string& context,
 		const map<string, string>& substitutions, PA19IntegralValue* result);
 	string NormalizeIntegralExpression(string raw) const;
 	bool EvaluateActivePackSize(string raw, PA19IntegralValue* result) const;
@@ -584,9 +388,23 @@
 					continue;
 				}
 				if(owner_value != owner_substitutions.end())
-					substitutions[member_parameter.name] = owner_value->second;
+				{
+					string value = owner_value->second;
+					if(member_parameter.type && value.size() > 1 &&
+						(value.compare(value.size() - 2, 2, "&&") == 0 ||
+						 value[value.size() - 1] == '&'))
+						value.erase(value.size() - (value.compare(value.size() - 2, 2, "&&") == 0 ? 2 : 1));
+					substitutions[member_parameter.name] = CanonicalSpelling(value);
+				}
 				else if(parent_argument < parent_args.size())
-					substitutions[member_parameter.name] = parent_args[parent_argument++];
+				{
+					string value = parent_args[parent_argument++];
+					if(member_parameter.type && value.size() > 1 &&
+						(value.compare(value.size() - 2, 2, "&&") == 0 ||
+						 value[value.size() - 1] == '&'))
+						value.erase(value.size() - (value.compare(value.size() - 2, 2, "&&") == 0 ? 2 : 1));
+					substitutions[member_parameter.name] = CanonicalSpelling(value);
+				}
 			}
 			substitutions[parent.name] = parent_local_name;
 			const string generated_context = JoinPath(
@@ -640,8 +458,9 @@
 			}
 			MarkGeneratedNode(generated, parent.qualified_name, parent_args,
 				explicit_instantiation);
-			generated_by_owner_[parent.lexical_owner.empty() ? parent.owner :
-				parent.lexical_owner].push_back(generated);
+			const string generated_owner = parent.lexical_owner.empty() ? parent.owner :
+				parent.lexical_owner;
+			generated_by_owner_[generated_owner].push_back(generated);
 		}
 	}
 	void InstantiateNestedClass(const TemplateDefinition& parent,
@@ -737,6 +556,11 @@
 		string raw, const string& context, const map<string, string>& substitutions,
 		PA19IntegralValue* typed_result = 0)
 	{
+		const string source_raw = raw;
+		string expanded_pack;
+		if(ExpandIntegralPackExpression(source_raw, context, substitutions,
+			&expanded_pack)) raw = expanded_pack;
+		else raw = ReplaceIdentifiersPreservingPackSizes(raw, substitutions);
 		raw = RemoveMarker(RewriteText(raw, context, substitutions, 0));
 		raw = ReplaceIdentifiersPreservingPackSizes(raw, substitutions);
 		// When a non-type expression contains a nested template-id followed by
@@ -746,8 +570,22 @@
 		while(raw.size() >= 2 && raw[raw.size() - 1] == '>' &&
 			raw[raw.size() - 2] == ')') raw.erase(raw.size() - 1);
 		PA19IntegralValue value;
-		if(!EvaluateIntegralText(raw, context, substitutions, &value)) {
-			throw logic_error("non-type template argument is not an integral constant");
+		const bool evaluated = EvaluateIntegralText(raw, context, substitutions, &value);
+		if(!evaluated) {
+			string details = "non-type template argument is not an integral constant: " +
+				parameter.name + "=" + raw + " context=" + context + " substitutions=";
+			for(map<string, string>::const_iterator it = substitutions.begin();
+				it != substitutions.end(); ++it) details += it->first + "->" + it->second + ";";
+			map<string, vector<string> >::const_iterator owner_names = constant_member_owners_.find(raw);
+			if(owner_names != constant_member_owners_.end()) {
+				details += " owners=";
+				for(size_t owner = 0; owner < owner_names->second.size(); ++owner) {
+					details += owner_names->second[owner] + "[" +
+						(class_declarations_.find(owner_names->second[owner]) == class_declarations_.end() ?
+							"no-decl" : "decl") + "];";
+				}
+			}
+			throw logic_error(details);
 		}
 		string expected = RewriteText(parameter.non_type_type, context, substitutions, 0);
 		expected = ResolveAlias(ReplaceIdentifiers(expected, substitutions), context);
@@ -900,7 +738,22 @@
 			position = raw.find("::template ", position + 2))
 			raw.erase(position + 2, 9);
 		const TemplateDefinition* definition = FindDefinition(raw, context);
-		return definition ? definition->qualified_name : string();
+		if(!definition) return string();
+		// Keep the concrete owner on a member template entity.  The registry
+		// definition is keyed by its source owner (`quote::quote::fn`), but a
+		// template-template argument such as `quote<X>::fn` also carries the
+		// specialization that binds the outer `F` parameter.  Canonicalizing it
+		// to the source member alone would make that binding unrecoverable when
+		// the alias is instantiated later.
+		const size_t owner_separator = raw.rfind("::");
+		if(owner_separator != string::npos) {
+			const string owner = raw.substr(0, owner_separator);
+			if(specialization_bases_.find(LastComponent(owner)) !=
+				specialization_bases_.end() &&
+				specialization_arguments_.find(LastComponent(owner)) !=
+				specialization_arguments_.end()) return raw;
+		}
+		return definition->qualified_name;
 	}
 	bool CompatibleTemplateParameter(const TemplateParameter& expected,
 		const TemplateParameter& actual) const
@@ -1008,8 +861,13 @@
 						argument = NormalizeTypeArgument(argument);
 						argument = QualifyTypeArgument(argument, context, definition.owner);
 						} else {
-							argument = ResolveIntegralArgument(parameter, argument, context,
-							*substitutions, &integral_value);
+							try {
+								argument = ResolveIntegralArgument(parameter, argument, context,
+									*substitutions, &integral_value);
+							} catch(const logic_error& error) {
+								throw logic_error("definition=" + definition.qualified_name +
+									" " + error.what());
+							}
 						(*integral_substitutions)[parameter.name] = integral_value;
 					}
 				if(argument.empty()) throw logic_error("missing template argument");
@@ -1052,8 +910,13 @@
 				argument = NormalizeTypeArgument(argument);
 				argument = QualifyTypeArgument(argument, context, definition.owner);
 			} else {
-				argument = ResolveIntegralArgument(parameter, argument, context, *substitutions,
-					&integral_value);
+				try {
+					argument = ResolveIntegralArgument(parameter, argument, context, *substitutions,
+						&integral_value);
+				} catch(const logic_error& error) {
+					throw logic_error("definition=" + definition.qualified_name +
+						" " + error.what());
+				}
 				(*integral_substitutions)[parameter.name] = integral_value;
 			}
 			if(argument.empty()) throw logic_error("missing template argument");
@@ -1105,7 +968,8 @@
 	}
 	string Instantiate(const TemplateDefinition& definition, const vector<string>& raw_args,
 		const string& context, bool explicit_instantiation = false,
-		const map<string, vector<string> >* pack_hints = 0);
+		const map<string, vector<string> >* pack_hints = 0,
+		const map<string, string>* outer_substitutions = 0);
 	string MaterializeInstantiation(const TemplateDefinition& definition,
 		const vector<string>& args, const vector<string>& metadata_args,
 		map<string, string> substitutions,

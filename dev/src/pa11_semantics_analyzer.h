@@ -267,8 +267,8 @@ public:
 					}
 		}
 		Binding* binding = ResolveBinding(from, name);
-		if (!binding || (binding->kind != BIND_TYPE &&
-			binding->kind != BIND_TYPE_ALIAS) || !AccessibleType(*binding, from)) {
+	if (!binding || (binding->kind != BIND_TYPE &&
+		binding->kind != BIND_TYPE_ALIAS) || !AccessibleType(*binding, from)) {
 			throw logic_error("unknown type: " + raw);
 		}
 		return binding->type;
@@ -380,8 +380,8 @@ public:
 			spelling.erase(spelling.size() - 1, 1);
 		spelling = StripTypeMarker(spelling); TypePtr function_type = ResolveFunctionSpelledType(spelling, scope, info); if (function_type) return function_type;
 		if (spelling.compare(0, 8, "typename ") == 0) spelling = spelling.substr(8);
-		bool leading_const = false;
-		bool leading_volatile = false;
+		while (spelling.compare(0, 7, "static ") == 0) { info.is_static = true; spelling = spelling.substr(7); } while (spelling.compare(0, 10, "constexpr ") == 0) { info.is_constexpr = true; spelling = spelling.substr(10); }
+		bool leading_const = false; bool leading_volatile = false;
 		if (spelling.compare(0, 6, "const ") == 0) {
 			leading_const = true;
 			spelling = spelling.substr(6);

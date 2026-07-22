@@ -1,6 +1,7 @@
 #include "pa18_templates_collection.h"
 #include "pa18_templates_rewrite.h"
 
+
 using namespace pa18_templates_internal;
 
 namespace {
@@ -34,6 +35,15 @@ bool MentionsQualifiedGeneratedType(const CPPGMAstNodePtr& node,
 	if(spelling.find(type_name + "::") != string::npos) return true;
 	for(size_t i = 0; i < node->children.size(); ++i)
 		if(MentionsQualifiedGeneratedType(node->children[i], type_name)) return true;
+	return false;
+}
+
+bool ContainsStaticAssert(const CPPGMAstNodePtr& node)
+{
+	if(!node) return false;
+	if(node->kind == "static-assert-declaration") return true;
+	for(size_t i = 0; i < node->children.size(); ++i)
+		if(ContainsStaticAssert(node->children[i])) return true;
 	return false;
 }
 
@@ -220,6 +230,15 @@ void PA18TemplateExpander::RecordClassTypeSize(const CPPGMAstNodePtr& node,
 	offset = (offset + alignment - 1) / alignment * alignment;
 	constant_type_sizes_[class_path] = offset;
 	constant_type_alignments_[class_path] = alignment;
+	// Function-local classes are promoted before the template rewriter sees
+	// their uses.  Keep the computed layout under that promoted identity too,
+	// so a deferred `sizeof(Local)` in a template default observes the same
+	// complete type as the generated class declaration.
+	map<string, string>::const_iterator promoted = local_class_names_.find(class_path);
+	if(promoted != local_class_names_.end() && !promoted->second.empty()) {
+		constant_type_sizes_[promoted->second] = offset;
+		constant_type_alignments_[promoted->second] = alignment;
+	}
 	const string short_name = LastComponent(class_path);
 	if(constant_type_sizes_.find(short_name) == constant_type_sizes_.end()) {
 		constant_type_sizes_[short_name] = offset;
@@ -345,8 +364,17 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 	}
 	if(!template_owner.empty()) {
 	const string owner_prefix = template_owner + "::";
-	if(spelling.compare(0, owner_prefix.size(), owner_prefix) == 0)
-		spelling.erase(0, owner_prefix.size());
+	if(spelling.compare(0, owner_prefix.size(), owner_prefix) == 0) {
+		// Keep a fully-qualified generated specialization when it is used as a
+		// type argument in a different lexical owner.  Stripping `std::` from
+		// `std::pair_X*` is only valid inside `std`; a generated class emitted
+		// before a dependent class in another namespace still needs that owner.
+		const bool generated_specialization =
+			class_contexts_.find(spelling) != class_contexts_.end() &&
+			specialization_bases_.find(LastComponent(spelling)) !=
+				specialization_bases_.end();
+		if(!generated_specialization) spelling.erase(0, owner_prefix.size());
+	}
 	}
 	if(spelling.find("::") == string::npos && spelling.find('<') == string::npos) {
 	const bool direct_global_class = class_declarations_.find(spelling) !=
@@ -1260,6 +1288,23 @@ void PA18TemplateExpander::InsertGenerated(vector<CPPGMAstNodePtr>* children,
 			kind == "special-member-definition") {
 			function_position = i;
 			break;
+		}
+	}
+	// A generated constexpr function can be referenced by a static assertion
+	// nested in a materialized class.  The ordinary top-level scan above cannot
+	// see that use, so make the generated definition visible before its first
+	// lexical caller as well.  Class bodies that only contain ordinary function
+	// calls remain in their original order so dependent nested types are visible
+	// before a generated function signature names them.
+	for(size_t child = 0; child < children->size(); ++child) {
+		if((*children)[child] && (*children)[child]->kind == "class-specifier" &&
+			!ContainsStaticAssert((*children)[child])) continue;
+		for(size_t function = 0; function < generated_functions.size(); ++function) {
+			const string name = DeclarationName(generated_functions[function]);
+			if(!name.empty() && ContainsName((*children)[child], name)) {
+				function_position = min(function_position, child);
+				break;
+			}
 		}
 	}
 	if(!generated_functions.empty())

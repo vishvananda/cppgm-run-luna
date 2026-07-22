@@ -709,8 +709,12 @@ void PA14Lowerer::EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr&
         value.lvalue = false;
       }
     } else value = EmitValue(expression, scope, type_value(variable->type));
+    const bool preserve_sizeof_type = expression->kind == "sizeof-expression" ||
+      expression->kind == "sizeof-pack-expression" ||
+      expression->kind == "type-trait-expression";
     if(value.known_constant && is_integral_type(value.type) &&
        is_integral_type(variable->type) &&
+       !preserve_sizeof_type &&
        (type_size(variable->type) <= type_size(value.type) ||
         (!is_unsigned_type(variable->type) &&
          type_size(variable->type) > type_size(value.type)))) {
