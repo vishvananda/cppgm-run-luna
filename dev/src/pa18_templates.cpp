@@ -59,6 +59,91 @@ bool NeedsPA18Expansion(const CPPGMAstNodePtr& node)
 
 namespace pa18_templates_internal {
 
+string PA18TemplateExpander::NormalizeElaboratedSpelling(string raw,
+	const string& context) const
+{
+	raw = CanonicalSpelling(raw);
+	const char* const keys[] = {"struct", "class", "union"};
+	for(size_t position = 0; position < raw.size();) {
+		if(position > 0 && IsIdentifierCharacter(raw[position - 1])) {
+			++position;
+			continue;
+		}
+		bool separated = false;
+		for(size_t key = 0; key < sizeof(keys) / sizeof(keys[0]); ++key) {
+			const string keyword = keys[key];
+			if(raw.compare(position, keyword.size(), keyword) != 0 ||
+				position + keyword.size() >= raw.size() ||
+				!IsIdentifierCharacter(raw[position + keyword.size()])) continue;
+			size_t end = position + keyword.size();
+			while(end < raw.size() && IsIdentifierCharacter(raw[end])) ++end;
+			const string candidate = raw.substr(position + keyword.size(),
+				end - position - keyword.size());
+			bool known = class_contexts_.find(candidate) != class_contexts_.end();
+			for(string current = context; !known && !current.empty();) {
+				if(class_contexts_.find(JoinPath(current, candidate)) != class_contexts_.end())
+					known = true;
+				const size_t separator = current.rfind("::");
+				if(separator == string::npos) current.clear();
+				else current.erase(separator);
+			}
+			if(known) {
+				raw.insert(position + keyword.size(), " ");
+				position += keyword.size() + 1;
+				separated = true;
+				break;
+			}
+		}
+		if(!separated) ++position;
+	}
+	return raw;
+}
+
+void PA18TemplateExpander::CountNamespaceOccurrences(const CPPGMAstNodePtr& node,
+	const string& context)
+{
+	if(!node) return;
+	if(node->kind == "namespace-definition") {
+		const string child_context = node->value.empty() ? context : JoinPath(context, node->value);
+		++namespace_occurrences_[child_context];
+		for(size_t i = 0; i < node->children.size(); ++i)
+			if(node->children[i] && node->children[i]->kind != "inline")
+				CountNamespaceOccurrences(node->children[i], child_context);
+		return;
+	}
+	for(size_t i = 0; i < node->children.size(); ++i)
+		CountNamespaceOccurrences(node->children[i], context);
+}
+
+CPPGMAstNodePtr PA18TemplateExpander::TransformTranslationUnit(
+	const CPPGMAstNodePtr& input)
+{
+	if(!input || input->kind != "translation-unit") return CPPGMAstNodePtr();
+	namespace_occurrences_.clear();
+	CountNamespaceOccurrences(input, string());
+	CollectVariables(input);
+	CPPGMAstNodePtr result(new CPPGMAstNode("translation-unit"));
+	for(size_t i = 0; i < input->children.size(); ++i) {
+		CPPGMAstNodePtr child = TransformNode(input->children[i], string(), map<string, string>());
+		if(child) result->children.push_back(child);
+	}
+	InjectGenerated(result, string(), string());
+	vector<CPPGMAstNodePtr> generated_forwards;
+	vector<CPPGMAstNodePtr> other_children;
+	for(size_t child = 0; child < result->children.size(); ++child) {
+		const CPPGMAstNodePtr& item = result->children[child];
+		if(item && item->kind == "class-forward-declaration" &&
+			specialization_bases_.find(LastComponent(item->value)) != specialization_bases_.end())
+			generated_forwards.push_back(item);
+		else other_children.push_back(item);
+	}
+	if(!generated_forwards.empty()) {
+		generated_forwards.insert(generated_forwards.end(), other_children.begin(), other_children.end());
+		result->children.swap(generated_forwards);
+	}
+	return result;
+}
+
 size_t PA18TemplateExpander::EstimateTypeSize(string raw, const string& context) const
 {
 	raw = CanonicalSpelling(raw);
@@ -232,6 +317,16 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 	spelling = CanonicalSpelling(spelling.substr(0, spelling.size() - 5));
 	prefix = "const ";
 	}
+	const size_t template_open = spelling.find('<');
+	if(template_open != string::npos &&
+		spelling.substr(0, template_open).find("::") == string::npos) {
+		{
+			const TemplateDefinition* definition = FindDefinition(
+				spelling.substr(0, template_open), context);
+			if(definition && !definition->qualified_name.empty())
+				spelling = definition->qualified_name + spelling.substr(template_open);
+		}
+	}
 	if(spelling.find("::") != string::npos && spelling[0] != ':') {
 	const size_t separator = spelling.find("::");
 	const string first = spelling.substr(0, separator);
@@ -254,6 +349,9 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 		spelling.erase(0, owner_prefix.size());
 	}
 	if(spelling.find("::") == string::npos && spelling.find('<') == string::npos) {
+	const bool direct_global_class = class_declarations_.find(spelling) !=
+		class_declarations_.end() || named_type_contexts_.find(spelling) !=
+		named_type_contexts_.end();
 	string current = context;
 	for(;;) {
 		map<string, CPPGMAstNodePtr>::const_iterator class_declaration =
@@ -276,6 +374,15 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 		const string candidate = JoinPath(current, spelling);
 		if(class_contexts_.find(candidate) != class_contexts_.end() ||
 			named_type_contexts_.find(candidate) != named_type_contexts_.end()) {
+			const bool candidate_declared = class_declarations_.find(candidate) !=
+				class_declarations_.end();
+			if(direct_global_class && !candidate_declared) {
+				if(current.empty()) break;
+				const size_t parent = current.rfind("::");
+				if(parent == string::npos) current.clear();
+				else current.erase(parent);
+				continue;
+			}
 			const bool function_scope = function_contexts_.find(context) !=
 				function_contexts_.end();
 			const bool same_template_owner = !template_owner.empty() &&
@@ -296,7 +403,8 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 		if(!inherited.empty()) spelling = inherited;
 	}
 	}
-	return CanonicalSpelling(prefix + spelling + suffix);
+	const string result = CollapseRepeatedQualifier(CanonicalSpelling(prefix + spelling + suffix));
+	return result;
 }
 string PA18TemplateExpander::DeclaratorSuffix(const CPPGMAstNodePtr& declarator) const
 {
@@ -328,30 +436,47 @@ string PA18TemplateExpander::DeclaratorArraySuffix(const CPPGMAstNodePtr& declar
 }
 string PA18TemplateExpander::MemberAliasType(const string& class_key, const string& member) const
 {
-	map<string, CPPGMAstNodePtr>::const_iterator found = class_declarations_.find(class_key);
-	if(found == class_declarations_.end() || !found->second) return string();
-	const CPPGMAstNodePtr& declaration = found->second;
-	for(size_t i = 0; i < declaration->children.size(); ++i) {
-		const CPPGMAstNodePtr child = declaration->children[i];
-		if(!child) continue;
-		if(child->kind == "alias-declaration" && child->value == member &&
-			!child->children.empty())
-			return QualifyNestedMembers(TypeIdSpelling(child->children[0]),
-				class_key, declaration);
-		if(child->kind != "simple-declaration" || child->children.empty() ||
-			SpellNode(child->children[0]).find("typedef") == string::npos) continue;
-		const CPPGMAstNodePtr list = ChildOfKindLocal(child, "init-declarator-list");
-		if(!list) continue;
-		for(size_t j = 0; j < list->children.size(); ++j) {
-			const CPPGMAstNodePtr item = list->children[j];
-			if(!item || item->children.empty() ||
-				LastComponent(FirstIdentifierLocal(item->children[0])) != member) continue;
-			if(!DeclaratorArraySuffix(item->children[0]).empty()) return string();
-			return QualifyNestedMembers(NodeTypeSpelling(child->children[0]) +
-				DeclaratorSuffix(item->children[0]) +
-				DeclaratorArraySuffix(item->children[0]), class_key, declaration);
+	const string owner_key = CanonicalSpelling(RemoveMarker(class_key));
+	const string member_name = CanonicalSpelling(RemoveMarker(member));
+	if(owner_key.empty() || member_name.empty()) return string();
+	for(size_t i = 0; i < member_name.size(); ++i)
+		if(!IsIdentifierCharacter(member_name[i])) return string();
+	map<string, CPPGMAstNodePtr>::const_iterator declaration_it =
+		class_declarations_.find(owner_key);
+	if(declaration_it == class_declarations_.end() || !declaration_it->second)
+		return string();
+	const CPPGMAstNodePtr& declaration = declaration_it->second;
+	if(declaration) {
+		for(size_t i = 0; i < declaration->children.size(); ++i) {
+			const CPPGMAstNodePtr child = declaration->children[i];
+			if(!child) continue;
+			if(child->kind == "alias-declaration" &&
+				LastComponent(RemoveMarker(child->value)) == member_name &&
+				!child->children.empty())
+				return QualifyNestedMembers(TypeIdSpelling(child->children[0]),
+					owner_key, declaration);
+			if(child->kind != "simple-declaration" || child->children.empty() ||
+				SpellNode(child->children[0]).find("typedef") == string::npos) continue;
+			const CPPGMAstNodePtr list = ChildOfKindLocal(child, "init-declarator-list");
+			if(!list) continue;
+			for(size_t j = 0; j < list->children.size(); ++j) {
+				const CPPGMAstNodePtr item = list->children[j];
+				if(!item || item->children.empty() ||
+					LastComponent(RemoveMarker(FirstIdentifierLocal(item->children[0]))) != member_name)
+					continue;
+				if(!DeclaratorArraySuffix(item->children[0]).empty()) return string();
+				return QualifyNestedMembers(NodeTypeSpelling(child->children[0]) +
+					DeclaratorSuffix(item->children[0]) +
+					DeclaratorArraySuffix(item->children[0]), owner_key, declaration);
+			}
 		}
 	}
+	map<string, string> substitutions;
+	set<string> active;
+	string inherited;
+	if(FindClassMemberType(owner_key, member_name, substitutions, PrefixComponent(owner_key),
+		&inherited, &active, true))
+		return QualifyNestedMembers(inherited, owner_key, declaration);
 	return string();
 }
 string PA18TemplateExpander::QualifyNestedMembers(string spelling, const string& class_key,
@@ -949,12 +1074,89 @@ vector<CPPGMAstNodePtr> PA18TemplateExpander::OrderGeneratedClasses(
 	return result;
 }
 
+bool PA18TemplateExpander::HasExternalCompleteDependency(
+	const CPPGMAstNodePtr& node, const string& owner, set<string>* dependencies) const
+{
+	if(!node || !dependencies) return false;
+	for(map<string, CPPGMAstNodePtr>::const_iterator declaration =
+		class_declarations_.begin(); declaration != class_declarations_.end(); ++declaration) {
+		const CPPGMAstNodePtr& source = declaration->second;
+		if(!source || source->kind != "class-specifier" || source->children.size() <= 1)
+			continue;
+		const string qualified = declaration->first;
+		map<string, TemplateDefinition>::const_iterator source_template =
+			definitions_.find(qualified);
+		if(source_template != definitions_.end() && source_template->second.class_template)
+			continue;
+		if(!PrefixComponent(qualified).empty() &&
+			PrefixComponent(qualified) == owner) continue;
+		if(specialization_bases_.find(LastComponent(qualified)) != specialization_bases_.end()) continue;
+		const string name = LastComponent(qualified);
+		if(!name.empty() && ContainsName(node, name)) dependencies->insert(name);
+	}
+	return !dependencies->empty();
+}
+
+bool PA18TemplateExpander::DeclaresSourceType(const CPPGMAstNodePtr& node,
+	const set<string>& names) const
+{
+	if(!node) return false;
+	if(node->kind == "class-specifier" || node->kind == "class-forward-declaration")
+		return names.find(LastComponent(node->value)) != names.end();
+	for(size_t i = 0; i < node->children.size(); ++i)
+		if(DeclaresSourceType(node->children[i], names)) return true;
+	return false;
+}
+
+void PA18TemplateExpander::InsertDeferredGenerated(const CPPGMAstNodePtr& node)
+{
+	if(!node || node->kind != "translation-unit" || deferred_generated_by_owner_.empty()) return;
+	vector<vector<CPPGMAstNodePtr> > insertions(node->children.size() + 1);
+	for(map<string, vector<CPPGMAstNodePtr> >::iterator deferred =
+		deferred_generated_by_owner_.begin(); deferred != deferred_generated_by_owner_.end(); ++deferred) {
+		vector<CPPGMAstNodePtr> generated = OrderGeneratedClasses(deferred->second);
+		if(generated.empty()) continue;
+		CPPGMAstNodePtr wrapper = MakeNamespaceForward(deferred->first, generated);
+		if(!wrapper) continue;
+		set<string> dependencies = deferred_generated_dependencies_[deferred->first];
+		size_t position = 0;
+		for(size_t child = 0; child < node->children.size(); ++child)
+			if(DeclaresSourceType(node->children[child], dependencies))
+				position = child + 1;
+		insertions[position].push_back(wrapper);
+	}
+	vector<CPPGMAstNodePtr> reordered;
+	reordered.reserve(node->children.size() + insertions.size());
+	for(size_t i = 0; i <= node->children.size(); ++i) {
+		reordered.insert(reordered.end(), insertions[i].begin(), insertions[i].end());
+		if(i < node->children.size()) reordered.push_back(node->children[i]);
+	}
+	node->children.swap(reordered);
+	deferred_generated_by_owner_.clear();
+	deferred_generated_dependencies_.clear();
+}
+
 void PA18TemplateExpander::InsertGenerated(vector<CPPGMAstNodePtr>* children,
 	const string& owner)
 {
 	if(!children) return;
 	map<string, vector<CPPGMAstNodePtr> >::iterator found = generated_by_owner_.find(owner);
 	if(found == generated_by_owner_.end() || found->second.empty()) return;
+	if(!owner.empty() && class_contexts_.find(owner) == class_contexts_.end()) {
+		vector<CPPGMAstNodePtr> retained;
+		for(size_t i = 0; i < found->second.size(); ++i) {
+			const CPPGMAstNodePtr& generated = found->second[i];
+			set<string> dependencies;
+			if(generated && generated->kind == "class-specifier" &&
+				HasExternalCompleteDependency(generated, owner, &dependencies)) {
+				vector<CPPGMAstNodePtr>& deferred = deferred_generated_by_owner_[owner];
+				deferred.push_back(generated);
+				deferred_generated_dependencies_[owner].insert(dependencies.begin(), dependencies.end());
+			} else retained.push_back(generated);
+		}
+		found->second.swap(retained);
+		if(found->second.empty()) return;
+	}
 	vector<CPPGMAstNodePtr> generated_classes;
 	vector<CPPGMAstNodePtr> generated_variables;
 	vector<CPPGMAstNodePtr> generated_functions;
@@ -1125,6 +1327,7 @@ void PA18TemplateExpander::InjectGenerated(const CPPGMAstNodePtr& node,
 			}
 			InjectGenerated(node->children[i], context, context);
 		}
+		InsertDeferredGenerated(node);
 		return;
 	}
 	if(node->kind == "namespace-definition") {

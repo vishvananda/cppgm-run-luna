@@ -11,6 +11,27 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 {
 	pattern = NormalizeTypeArgument(pattern);
 	actual = NormalizeTypeArgument(ResolveAlias(actual, context));
+	const auto separate_compact_cv = [](string spelling) {
+		static const char* const qualifiers[] = {"const", "volatile"};
+		for(size_t qualifier = 0; qualifier < 2; ++qualifier) {
+			const string word = qualifiers[qualifier];
+			for(size_t at = spelling.find(word); at != string::npos;
+				at = spelling.find(word, at + word.size() + 1)) {
+				if(at == 0 || !IsIdentifierCharacter(spelling[at - 1])) continue;
+				const size_t end = at + word.size();
+				if(end < spelling.size() && IsIdentifierCharacter(spelling[end])) continue;
+				size_t next = end;
+				while(next < spelling.size() && isspace(static_cast<unsigned char>(spelling[next]))) ++next;
+				if(next == spelling.size() || spelling[next] == '&' || spelling[next] == '*') {
+					spelling.insert(at, " ");
+					at += 1;
+				}
+			}
+		}
+		return CanonicalSpelling(spelling);
+	};
+	pattern = separate_compact_cv(pattern);
+	actual = separate_compact_cv(actual);
 	pattern = CanonicalSpelling(pattern);
 	// Array types are part of a specialization key, not an expression suffix
 	// to be discarded.  Match the element type and the bound independently so
@@ -96,6 +117,8 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 	const int actual_effective_cv = actual_has_pointer ? actual_trailing_cv :
 		actual_object_cv;
 	const bool direct_parameter = parameter_names.find(pattern) != parameter_names.end();
+	const bool bare_reference_parameter = reference_pattern && pattern.size() > 1 &&
+		parameter_names.find(pattern.substr(0, pattern.size() - 1)) != parameter_names.end();
 	// A cv qualifier on a reference parameter is part of the binding rule, not
 	// a requirement that the argument spelling carry the same top-level cv.
 	// Keep the stricter comparison for pointer pointee patterns, where
@@ -137,7 +160,7 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 				parameter_names.find(cv_parameter) != parameter_names.end()));
 		while(pattern.compare(0, 6, "const ") == 0) pattern = CanonicalSpelling(pattern.substr(6));
 		while(pattern.compare(0, 9, "volatile ") == 0) pattern = CanonicalSpelling(pattern.substr(9));
-		if(!preserve_pointee_cv && !direct_parameter) {
+			if(!preserve_pointee_cv && !direct_parameter && !bare_reference_parameter) {
 			while(actual.compare(0, 6, "const ") == 0) actual = CanonicalSpelling(actual.substr(6));
 			while(actual.compare(0, 9, "volatile ") == 0) actual = CanonicalSpelling(actual.substr(9));
 		}
@@ -701,7 +724,8 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 	const map<string, string>& substitutions, bool* template_replaced,
 	bool resolve_alias, bool resolve_member)
 {
-		if(template_replaced) *template_replaced = false;
+	if(template_replaced) *template_replaced = false;
+	raw = NormalizeElaboratedSpelling(raw, context);
 		if(raw.compare(0, 8, "operator") == 0) {
 			const string suffix = raw.substr(8);
 			map<string, string>::const_iterator operator_substitution = substitutions.find(suffix);
@@ -711,6 +735,74 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			}
 		}
 		raw = RewriteDecltypeText(raw, context, substitutions, template_replaced);
+	if(resolve_member) for(map<string, string>::const_iterator current = substitutions.begin();
+		current != substitutions.end(); ++current) {
+		if(current->first.empty() || current->second.empty() ||
+			current->second.find('<') != string::npos) continue;
+		map<string, string>::const_iterator base = specialization_bases_.find(
+			LastComponent(current->second));
+		map<string, vector<string> >::const_iterator arguments = specialization_arguments_.find(
+			LastComponent(current->second));
+		if(base == specialization_bases_.end() || arguments == specialization_arguments_.end()) continue;
+		const TemplateDefinition* definition = FindDefinition(base->second, context);
+		if(!definition || !definition->class_template) continue;
+		const string token = current->first + "::";
+		for(size_t at = raw.find(token); at != string::npos; at = raw.find(token, at)) {
+			size_t end = at + token.size();
+		while(end < raw.size() && IsIdentifierCharacter(raw[end])) ++end;
+			if(end == at + token.size()) break;
+			const string member = raw.substr(at + token.size(), end - at - token.size());
+			const string member_type = TemplateMemberType(*definition, arguments->second,
+				member, context);
+			if(member_type.empty()) break;
+			size_t replacement_begin = at;
+			size_t word_begin = at;
+			while(word_begin > 0 && isspace(static_cast<unsigned char>(raw[word_begin - 1]))) --word_begin;
+			if(word_begin >= 8 && raw.compare(word_begin - 8, 8, "typename") == 0 &&
+				(word_begin == 8 || !IsIdentifierCharacter(raw[word_begin - 9])))
+				replacement_begin = word_begin - 8;
+			// The substituted alias can be reached through a materialized owner,
+			// e.g. `tree_int_::traits_type::base_ptr`.  TemplateMemberType returns
+			// the actual member type (`node_base*`); retaining the generated owner
+			// would manufacture the unrelated nested type `tree_int_::node_base`.
+			// Drop that owner only when it is a known materialized specialization.
+			if(at >= 2 && raw.compare(at - 2, 2, "::") == 0) {
+				size_t owner_begin = at - 2;
+				int owner_angle = 0;
+				while(owner_begin > 0) {
+					const char ch = raw[owner_begin - 1];
+					if(ch == '>') ++owner_angle;
+					else if(ch == '<' && owner_angle > 0) --owner_angle;
+					else if(owner_angle == 0 && (isspace(static_cast<unsigned char>(ch)) ||
+						ch == ',' || ch == '(')) break;
+					--owner_begin;
+				}
+				const string owner_spelling = raw.substr(owner_begin, at - 2 - owner_begin);
+				bool materialized_owner = specialization_bases_.find(
+					LastComponent(owner_spelling)) != specialization_bases_.end();
+				if(!materialized_owner && owner_spelling.find('<') != string::npos) {
+					string owner_base;
+					size_t owner_begin_marker = 0;
+					const size_t owner_open = owner_spelling.find('<');
+					if(TemplateBase(owner_spelling, owner_open, &owner_begin_marker, &owner_base)) {
+						const TemplateDefinition* owner_definition = FindDefinition(owner_base, context);
+						materialized_owner = owner_definition && owner_definition->class_template;
+					}
+				}
+				if(materialized_owner) {
+					replacement_begin = owner_begin;
+					while(replacement_begin > 0 &&
+						isspace(static_cast<unsigned char>(raw[replacement_begin - 1]))) --replacement_begin;
+					if(replacement_begin >= 8 && raw.compare(replacement_begin - 8, 8,
+						"typename") == 0 && (replacement_begin == 8 ||
+						!IsIdentifierCharacter(raw[replacement_begin - 9])))
+						replacement_begin -= 8;
+				}
+			}
+			raw.replace(replacement_begin, end - replacement_begin, member_type);
+			at = replacement_begin + member_type.size();
+		}
+	}
 		for(size_t search = 0; search < raw.size(); ++search) {
 			if(raw[search] != '<') continue;
 			size_t begin = 0;
@@ -727,14 +819,19 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 		// the same instantiation again.
 		const vector<string> current_arguments = SplitTemplateArguments(arguments_text);
 		bool replaced_current_specialization = false;
-		for(map<string, vector<string> >::const_iterator generated =
-			specialization_arguments_.begin(); generated != specialization_arguments_.end();
-			++generated) {
+		map<string, vector<string> >::const_iterator generated_names =
+			specialization_names_by_base_.find(LastComponent(base));
+		if(generated_names != specialization_names_by_base_.end())
+		for(size_t generated_index = 0; generated_index < generated_names->second.size();
+			++generated_index) {
+			const string& generated_name = generated_names->second[generated_index];
 			map<string, string>::const_iterator generated_base =
-				specialization_bases_.find(generated->first);
+				specialization_bases_.find(generated_name);
+			map<string, vector<string> >::const_iterator generated =
+				specialization_arguments_.find(generated_name);
 			if(generated_base == specialization_bases_.end() ||
-				class_contexts_.find(generated->first) == class_contexts_.end() ||
-				LastComponent(generated_base->second) != LastComponent(base) ||
+				class_contexts_.find(generated_name) == class_contexts_.end() ||
+				generated == specialization_arguments_.end() ||
 				generated->second.size() != current_arguments.size()) continue;
 			bool same_arguments = true;
 			for(size_t argument = 0; argument < current_arguments.size(); ++argument) {
@@ -750,7 +847,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			const bool qualified_member = close + 2 < raw.size() &&
 				raw.compare(close + 1, 2, "::") == 0;
 			if(same_arguments && !qualified_member) {
-				raw.replace(begin, close - begin + 1, generated->first);
+				raw.replace(begin, close - begin + 1, generated_name);
 				if(template_replaced) *template_replaced = true;
 				replaced_current_specialization = true;
 				break;
@@ -778,10 +875,35 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				specialization_arguments_.find(LastComponent(current_name));
 			if(current_class && current_key != specialization_arguments_.end() &&
 				current_key->second.size() == current_arguments.size()) {
-				same_current_specialization = true;
+				map<string, string> current_bindings = substitutions;
+				map<string, string>::const_iterator current_base =
+					specialization_bases_.find(LastComponent(current_name));
+				const TemplateDefinition* current_primary = current_base ==
+					specialization_bases_.end() ? 0 : FindDefinition(current_base->second, context);
+				if(current_primary) for(size_t parameter = 0;
+					parameter < current_primary->parameters.size() &&
+					parameter < current_key->second.size(); ++parameter)
+					if(!current_primary->parameters[parameter].name.empty())
+						current_bindings[current_primary->parameters[parameter].name] =
+							current_key->second[parameter];
+				if(current_primary) {
+					map<string, vector<TemplateDefinition> >::const_iterator partials =
+						class_specializations_.find(current_primary->qualified_name);
+					if(partials != class_specializations_.end())
+						for(size_t partial = 0; partial < partials->second.size(); ++partial) {
+							map<string, string> partial_bindings;
+							if(MatchClassSpecializationPattern(partials->second[partial],
+								current_key->second, &partial_bindings, context))
+								for(map<string, string>::const_iterator binding = partial_bindings.begin();
+									binding != partial_bindings.end(); ++binding)
+									current_bindings[binding->first] = binding->second;
+						}
+				}
+			same_current_specialization = true;
 				for(size_t argument = 0; argument < current_arguments.size(); ++argument) {
-					const string actual = NormalizeTypeArgument(ReplaceIdentifiers(
-						CanonicalSpelling(current_arguments[argument]), substitutions));
+					const string actual = QualifyTypeArgument(NormalizeTypeArgument(
+						ReplaceIdentifiers(CanonicalSpelling(current_arguments[argument]),
+							current_bindings)), context);
 					const string expected = NormalizeTypeArgument(
 						CanonicalSpelling(current_key->second[argument]));
 					if(actual != expected) {
@@ -816,11 +938,11 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			}
 			if(lookup_base != base) definition = FindDefinition(lookup_base, context);
 			if(!definition) continue;
-			const vector<string> raw_template_args = SplitTemplateArguments(arguments_text);
-			vector<string> args;
-			for(size_t raw_argument = 0; raw_argument < raw_template_args.size(); ++raw_argument) {
-				const string source_argument = CanonicalSpelling(raw_template_args[raw_argument]);
-				if(source_argument.size() > 3 &&
+				const vector<string> raw_template_args = SplitTemplateArguments(arguments_text);
+				vector<string> args;
+				for(size_t raw_argument = 0; raw_argument < raw_template_args.size(); ++raw_argument) {
+					const string source_argument = CanonicalSpelling(raw_template_args[raw_argument]);
+					if(source_argument.size() > 3 &&
 					source_argument.compare(source_argument.size() - 3, 3, "...") == 0) {
 					const string prefix = source_argument.substr(0, source_argument.size() - 3);
 					string pack_name;
@@ -850,7 +972,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			}
 			for(size_t i = 0; i < args.size(); ++i) {
 				args[i] = NormalizeTypeArgument(RewriteText(args[i], context, substitutions, 0));
-				args[i] = NormalizeTypeArgument(ReplaceIdentifiers(args[i], substitutions));
+				args[i] = CollapseReferenceSpelling(ReplaceIdentifiers(args[i], substitutions));
 				args[i] = ResolveAlias(args[i], context);
 				args[i] = NormalizeTypeArgument(RewriteText(args[i], context, substitutions, 0));
 				args[i] = ResolveAlias(args[i], context);
@@ -892,6 +1014,12 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			}
 			if(!definition->alias_template)
 				definition = SelectClassTemplateDefinition(definition, args, context);
+			// Resolve a concrete nested owner before the generic member lookup so
+			// dependent outer packs remain represented by the materialized class.
+			if(resolve_member && definition->class_template && close + 2 < raw.size() &&
+				raw.compare(close + 1, 2, "::") == 0 && RewriteConcreteNestedMember(
+				&raw, begin, close, base, context, substitutions, template_replaced, &search))
+				continue;
 			if(resolve_member && definition->class_template && close + 2 < raw.size() &&
 				raw.compare(close + 1, 2, "::") == 0) {
 				RecordTemplateArrayValues(*definition, args, context, substitutions);
@@ -921,8 +1049,8 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			if(template_replaced) *template_replaced = true;
 			search = begin + replacement.size();
 		}
-		raw = ReplaceIdentifiers(raw, substitutions);
-		if(!resolve_alias || raw.find("::") == string::npos) return raw;
+	raw = ReplaceIdentifiers(raw, substitutions);
+	if(!resolve_alias || raw.find("::") == string::npos) return raw;
 		// A qualified static integral member is an expression here, not a type
 		// alias.  Keep its registered spelling intact so a dependent non-type
 		// default can be evaluated by the typed constant table.
@@ -1186,7 +1314,8 @@ CPPGMAstNodePtr PA18TemplateExpander::RewriteRegularNodeValue(
 				qualified != spelling && result->value.find(':') == string::npos)
 				result->value = "TT_IDENTIFIER:" + qualified;
 			if(input->kind == "decl-specifier" && marker.empty() &&
-				qualified.find(' ') != string::npos)
+				(qualified.find(' ') != string::npos || qualified.find('*') != string::npos ||
+					qualified.find('&') != string::npos || qualified.find('[') != string::npos))
 				result->value = "TT_IDENTIFIER:" + qualified;
 		}
 		string promoted_local_class;

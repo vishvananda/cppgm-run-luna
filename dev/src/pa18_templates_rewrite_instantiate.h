@@ -326,6 +326,16 @@
 		const map<string, string>& substitutions, PA19IntegralValue* result)
 	{
 		raw = CanonicalSpelling(ReplaceIdentifiers(raw, substitutions));
+		if(raw.compare(0, 2, "::") == 0) {
+			string unscoped = raw;
+			while(unscoped.compare(0, 2, "::") == 0) unscoped.erase(0, 2);
+			map<string, PA19IntegralValue>::const_iterator known =
+				constant_values_.find(unscoped);
+			if(known != constant_values_.end()) {
+				*result = known->second;
+				return result->known;
+			}
+		}
 		PA19ConstantExpressionParser parser(constant_values_, substitutions,
 			constant_type_sizes_, constant_type_alignments_, type_aliases_);
 		const bool qualified_value_expression = raw.find("::value") != string::npos;
@@ -583,8 +593,10 @@
 			const TemplateDefinition& candidate = it->second;
 			if(!candidate.class_template || candidate.name != nested_name) continue;
 			const size_t angle = candidate.owner.find('<');
-			if(angle == string::npos || candidate.owner.substr(0, angle) !=
-				parent.qualified_name) continue;
+			if(angle == string::npos) continue;
+			const string owner_prefix = candidate.owner.substr(0, angle);
+			if(owner_prefix != parent.qualified_name && owner_prefix !=
+				JoinPath(parent.qualified_name, parent.qualified_name)) continue;
 			return &candidate;
 		}
 		return 0;
@@ -598,15 +610,16 @@
 			const TemplateDefinition& candidate = it->second;
 			if(!candidate.class_template) continue;
 			const size_t angle = candidate.owner.find('<');
-			if(angle != string::npos && candidate.owner.substr(0, angle) ==
-				parent.qualified_name)
+			if(angle != string::npos && (candidate.owner.substr(0, angle) ==
+				parent.qualified_name || candidate.owner.substr(0, angle) ==
+				JoinPath(parent.qualified_name, parent.qualified_name)))
 				result.push_back(&candidate);
 		}
 		return result;
 	}
 	bool MemberOwnerPattern(const TemplateDefinition& candidate,
 		const TemplateDefinition& parent, const vector<string>& parent_args,
-		map<string, string>* inferred, int* specificity) const;
+		map<string, string>* inferred) const;
 	string MemberSignatureKey(const TemplateDefinition& candidate) const;
 	vector<const TemplateDefinition*> MemberDefinitions(
 		const TemplateDefinition& parent, const vector<string>& parent_args) const;
@@ -627,7 +640,7 @@
 				if(!parent.parameters[parameter].name.empty())
 					substitutions[parent.parameters[parameter].name] = parent_args[parameter];
 			map<string, string> owner_substitutions;
-			MemberOwnerPattern(member, parent, parent_args, &owner_substitutions, 0);
+			MemberOwnerPattern(member, parent, parent_args, &owner_substitutions);
 			size_t parent_argument = 0;
 			for(size_t parameter = 0; parameter < member.parameters.size(); ++parameter) {
 				const TemplateParameter& member_parameter = member.parameters[parameter];
@@ -737,8 +750,44 @@
 		const string generated_context = JoinPath(
 			parent.lexical_owner.empty() ? parent.owner : parent.lexical_owner,
 			parent_local_name);
-		CPPGMAstNodePtr generated = TransformNode(nested->declaration,
-			generated_context, substitutions);
+		const map<string, vector<string> > previous_packs = active_pack_substitutions_;
+		map<string, vector<string> > parent_packs;
+		if(parent.partial_specialization) {
+			map<string, string> specialized;
+			if(MatchClassSpecializationPattern(parent, parent_args, &specialized, context)) {
+				for(map<string, string>::const_iterator binding = specialized.begin();
+					binding != specialized.end(); ++binding)
+					substitutions[binding->first] = binding->second;
+				for(size_t pack = 0; pack < parent.specialization_pack_names.size(); ++pack) {
+					const string& name = parent.specialization_pack_names[pack];
+					map<string, string>::const_iterator binding = specialized.find(name);
+					parent_packs[name] = binding == specialized.end() || binding->second.empty() ?
+						vector<string>() : SplitTemplateArguments(binding->second);
+					if(parent_packs[name].empty()) substitutions.erase(name);
+					else substitutions[name] = parent_packs[name][0];
+				}
+			}
+		} else {
+			size_t argument = 0;
+			for(size_t parameter = 0; parameter < parent.parameters.size(); ++parameter) {
+				if(parent.parameters[parameter].pack) {
+					vector<string>& values = parent_packs[parent.parameters[parameter].name];
+					while(argument < parent_args.size()) values.push_back(parent_args[argument++]);
+				} else if(argument < parent_args.size()) ++argument;
+			}
+		}
+		active_pack_substitutions_ = previous_packs;
+		for(map<string, vector<string> >::const_iterator pack = parent_packs.begin();
+			pack != parent_packs.end(); ++pack)
+			active_pack_substitutions_[pack->first] = pack->second;
+		CPPGMAstNodePtr generated;
+		try {
+			generated = TransformNode(nested->declaration, generated_context, substitutions);
+		} catch(...) {
+			active_pack_substitutions_ = previous_packs;
+			throw;
+		}
+		active_pack_substitutions_ = previous_packs;
 		if(!generated) return;
 		MarkGeneratedNode(generated, parent.qualified_name, parent_args);
 		generated->value = nested_name;
@@ -886,7 +935,10 @@
 		const map<string, vector<string> > previous_pack_identifiers =
 			active_pack_identifier_substitutions_;
 		active_integral_substitutions_ = integral_substitutions;
-		active_pack_substitutions_ = pack_substitutions;
+		active_pack_substitutions_ = previous_packs;
+		for(map<string, vector<string> >::const_iterator pack = pack_substitutions.begin();
+			pack != pack_substitutions.end(); ++pack)
+			active_pack_substitutions_[pack->first] = pack->second;
 		active_pack_identifier_substitutions_.clear();
 		try {
 			CPPGMAstNodePtr result = TransformNode(definition.declaration, context, substitutions);
@@ -1031,107 +1083,23 @@
 	}
 	string Instantiate(const TemplateDefinition& definition, const vector<string>& raw_args,
 		const string& context, bool explicit_instantiation = false,
-		const map<string, vector<string> >* pack_hints = 0)
-	{
-		if(definition.parameters.empty()) throw logic_error("template has no type parameters");
-		vector<string> args, metadata_args;
-		map<string, string> substitutions;
-		map<string, PA19IntegralValue> integral_substitutions;
-		map<string, vector<string> > pack_substitutions;
-		ResolveTemplateArguments(definition, raw_args, context, &args, &metadata_args,
-			&substitutions, &integral_substitutions, &pack_substitutions, pack_hints);
-		if(definition.partial_specialization) {
-			map<string, string> specialized;
-			if(!MatchClassSpecializationPattern(definition, args, &specialized,
-				context)) throw logic_error("class partial specialization does not match");
-			for(map<string, string>::const_iterator it = specialized.begin();
-				it != specialized.end(); ++it)
-				substitutions[it->first] = it->second;
-		}
-		ostringstream definition_key;
-		definition_key << definition.qualified_name << "@" << definition.declaration.get();
-		string key = definition_key.str();
-		for(size_t i = 0; i < args.size(); ++i) key += "|" + CanonicalSpelling(args[i]);
-		map<string, string>::const_iterator cached = specializations_.find(key);
-		if(cached != specializations_.end()) {
-			if(definition.class_template) {
-				InstantiateRequestedNestedClasses(definition, args, cached->second, context);
-				InstantiateMemberDefinitions(definition, args, cached->second,
-					explicit_instantiation);
-			}
-			return cached->second;
-		}
-		string local_name = GeneratedSpecializationName(definition, args,
-			metadata_args, substitutions, context);
-	const string generated_owner = definition.lexical_owner.empty() ?
-		definition.owner : definition.lexical_owner;
-	if(definition.class_template) {
-		specialization_bases_[local_name] = definition.qualified_name;
-			specialization_arguments_[local_name] = metadata_args;
-		const string forward_owner = generated_owner;
-			if(class_contexts_.find(forward_owner) == class_contexts_.end()) {
-				vector<CPPGMAstNodePtr>& forwards = generated_namespace_forwards_[forward_owner];
-				bool already_forwarded = false;
-				for(size_t i = 0; i < forwards.size(); ++i)
-					if(forwards[i] && LastComponent(forwards[i]->value) == local_name)
-						already_forwarded = true;
-				if(!already_forwarded) forwards.push_back(MakeForwardClass(local_name));
-			}
-		}
-		if(definition.class_template) substitutions[definition.name] = local_name;
-		specializations_[key] = local_name;
-		if(!active_specializations_.insert(key).second) return local_name;
-		if(definition.class_template) {
-			class_contexts_.insert(JoinPath(definition.owner, local_name));
-			class_contexts_.insert(JoinPath(
-				definition.lexical_owner.empty() ? definition.owner : definition.lexical_owner,
-				local_name));
-		}
-		CPPGMAstNodePtr generated = TransformInstantiatedNode(definition,
-			definition.owner, substitutions, integral_substitutions,
-			pack_substitutions);
-		if(!generated) throw logic_error("unable to instantiate template");
-		MarkGeneratedNode(generated, definition.qualified_name, metadata_args,
-			explicit_instantiation);
-		if(generated->kind == "simple-declaration") {
-			const CPPGMAstNodePtr identifier = DescendantOfKind(generated, "identifier");
-			if(identifier) identifier->value = local_name;
-		}
-		if(generated->kind == "simple-declaration")
-			RecordConstantDeclaration(generated, generated_owner);
-		if(definition.class_template)
-			generated->dependent_base_lookup = DefinitionHasDependentBase(definition);
-		if(!definition.class_template && !definition.alias_template)
-			RenameGeneratedFunction(generated, local_name);
-		if(definition.class_template || definition.alias_template) generated->value = local_name;
-		if(definition.class_template) {
-			const string generated_path = JoinPath(definition.owner, local_name);
-			class_declarations_[generated_path] = generated;
-			const string lexical_path = JoinPath(
-				definition.lexical_owner.empty() ? definition.owner : definition.lexical_owner,
-				local_name);
-			class_declarations_[lexical_path] = generated;
-			class_contexts_.insert(generated_path);
-			RegisterGeneratedConstants(generated, generated_path);
-			InstantiateRequestedNestedClasses(definition, args, local_name, context);
-			InstantiateMemberDefinitions(definition, args, local_name,
-				explicit_instantiation);
-		}
-		EnsureDeclarationDependencies(generated, definition.owner, generated_owner);
-		for(size_t i = 0; i < args.size(); ++i)
-			EnsureForwardClass(args[i], context, generated_owner);
-		bool recursive_context_argument = false;
-		for(size_t i = 0; i < args.size(); ++i)
-			if(LastComponent(args[i]) == LastComponent(context) && !context.empty())
-				recursive_context_argument = true;
-		if(class_contexts_.find(context) != class_contexts_.end() && context != definition.owner &&
-			!recursive_context_argument)
-			generated_before_class_[context].push_back(generated);
-		else if(recursive_context_argument && definition.owner.empty() &&
-			!PrefixComponent(context).empty())
-			generated_before_class_[PrefixComponent(context)].push_back(generated);
-		else generated_by_owner_[generated_owner].push_back(generated);
-		active_specializations_.erase(key);
-		(void)context;
-		return local_name;
-	}
+		const map<string, vector<string> >* pack_hints = 0);
+	string MaterializeInstantiation(const TemplateDefinition& definition,
+		const vector<string>& args, const vector<string>& metadata_args,
+		map<string, string> substitutions,
+		const map<string, PA19IntegralValue>& integral_substitutions,
+		const map<string, vector<string> >& pack_substitutions,
+		const string& context, bool explicit_instantiation, const string& key);
+	void ReplayCachedInstantiation(const TemplateDefinition& definition,
+		const vector<string>& args, const string& cached, const string& context,
+		bool explicit_instantiation,
+		const map<string, vector<string> >& pack_substitutions);
+	void RegisterGeneratedSpecialization(const TemplateDefinition& definition,
+		const vector<string>& metadata_args, const string& local_name);
+	string EmitInstantiation(const TemplateDefinition& definition,
+		const vector<string>& args, const vector<string>& metadata_args,
+		map<string, string> substitutions,
+		const map<string, PA19IntegralValue>& integral_substitutions,
+		const map<string, vector<string> >& pack_substitutions,
+		const string& context, bool explicit_instantiation, const string& key,
+		const string& local_name);

@@ -245,33 +245,42 @@ supports repeated nested packs, template-template base bindings, and
 defaulted trailing primary arguments.  Candidate partials are ranked by
 structural specificity; the selected class declaration and its out-of-class
 member owner are then used for materialization, with current-specialization
-identity preserved during qualified rewrites.
+identity preserved during qualified rewrites, aliases, and nested declarations.
 
-Validation is green for the six targeted Group A probes (6/6), the full
-through-PA20 report (1635/1635), and the PA21 file audit.  The final PA21
-report is 57/215, up from the turn-start 47/215.  Its remaining 158 failures
-are grouped as 139 exit-status mismatches, 16 LowIR differences, 1 invalid
-LowIR result, and 2 timeouts.  The fixed cases are removed from the active
-failure set; the original complete fixture inventory above remains the
-baseline map for the still-open groups.
+Validation is green for the six targeted Group A probes (6/6), the exact
+through-PA20 report (1635/1635), and the PA21 file audit.  The required full
+PA21 report is now 62/215, above the checkpoint baseline of 57/215.  Its 153
+failures are 135 expected-success exit mismatches, three expected-failure
+exit mismatches, 14 relaxed-LowIR mismatches, and one invalid-LowIR result.
+There are no timeout failures.  The audit refactor also preserves the two
+additional semantic passes already present after the checkpoint:
+general/300-dependent-friend-alias-private-constructor-access and
+general/300-dependent-friend-self-private-constructor-access.
 
 ## Refreshed Remaining Work Map
 
-- Group A still contains the unresolved function/reference deduction, nested
-  pack expansion, partial-specialization pack/value ordering, and recursive
-  owner/replay cases.
-- Group B remains the alias/variable-template and template-template-parameter
-  entity path, including defaulted and dependent argument normalization.
-- Group C remains member-template, friend-template, inherited lookup, and
-  active-owner replay/materialization behavior.
-- Group D remains explicit specialization/instantiation and extern-template
-  ownership and ordering.
-- Group E remains dependent expression/constant replay, object layout, and
-  ordinary lowering/LowIR ownership.
+The complete current-PA21 report has 153 failing paths, classified exhaustively
+by the next semantic owner:
+
+- Group A — 34: remaining partial-specialization matching and ordering,
+  function/reference/cv patterns, pack/value tails, and nested current-owner
+  replay.
+- Group B — 34: alias and variable-template entities, template-template
+  binding/arity, dependent non-type expressions, and argument normalization.
+- Group C — 60: member/friend templates, inherited lookup, overload/ADL
+  selection, nested owners, and out-of-class definition replay.  This includes
+  the two friend/private-typedef paths that were absent from the historical
+  inventory.
+- Group D — 12: explicit specialization, explicit instantiation, and
+  extern-template ownership/order.
+- Group E — 13: dependent constant/expression replay, layout, and ordinary
+  lowering/LowIR ownership.
+
+The failure counts include every path in the required report; no timeout or
+architecture/audit blocker is being carried forward as assignment work.
 
 ## Next Checkpoint Group
 
-After this checkpoint, re-read the refreshed failure set.  The next group is
-the alias/variable-template and template-template-parameter entity path (B),
-bundled with any small remaining partial-specialization cases that still share
-its typed argument normalization.
+The next substantial checkpoint is Group B: alias/variable-template entities
+and template-template-parameter binding, with the shared typed argument
+normalization and dependent non-type expression paths.

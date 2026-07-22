@@ -9,7 +9,7 @@ namespace pa18_templates_internal {
 
 bool PA18TemplateExpander::MemberOwnerPattern(const TemplateDefinition& candidate,
 	const TemplateDefinition& parent, const vector<string>& parent_args,
-	map<string, string>* inferred, int* specificity) const
+	map<string, string>* inferred) const
 {
 	size_t angle = string::npos;
 	for(size_t search = 0; ; ) {
@@ -54,42 +54,6 @@ bool PA18TemplateExpander::MemberOwnerPattern(const TemplateDefinition& candidat
 	}
 	if(argument_index != parent_args.size()) return false;
 	if(inferred) *inferred = local;
-	if(specificity) {
-		map<string, int> occurrences;
-		int score = 0;
-		for(size_t i = 0; i < patterns.size(); ++i) {
-			const string pattern = CanonicalSpelling(patterns[i]);
-			string identifier;
-			bool in_identifier = false;
-			for(size_t character = 0; character <= pattern.size(); ++character) {
-				const bool identifier_character = character < pattern.size() &&
-					IsIdentifierCharacter(pattern[character]);
-				if(identifier_character) {
-					identifier += pattern[character];
-					in_identifier = true;
-					continue;
-				}
-				if(!in_identifier) continue;
-				if(parameter_names.find(identifier) != parameter_names.end())
-					++occurrences[identifier];
-				else if(identifier == "const" || identifier == "volatile") score += 2;
-				else if(identifier != "typename" && identifier != "class") score += 4;
-				identifier.clear();
-				in_identifier = false;
-			}
-			for(size_t character = 0; character < pattern.size(); ++character)
-				if(pattern[character] == '*' || pattern[character] == '&' ||
-					pattern[character] == '[' || pattern[character] == ']' ||
-					pattern[character] == '<' || pattern[character] == '>' ||
-					pattern[character] == ',') ++score;
-			if(pattern.size() >= 3 && pattern.compare(pattern.size() - 3, 3, "...") == 0)
-				score -= 8;
-		}
-		for(map<string, int>::const_iterator occurrence = occurrences.begin();
-			occurrence != occurrences.end(); ++occurrence)
-			if(occurrence->second > 1) score += (occurrence->second - 1) * 7;
-		*specificity = score;
-	}
 	return true;
 }
 
@@ -116,21 +80,61 @@ vector<const TemplateDefinition*> PA18TemplateExpander::MemberDefinitions(
 				candidate.declaration->kind != "function-definition" &&
 				candidate.declaration->kind != "special-member-definition")) continue;
 		map<string, string> inferred;
-		const bool matched = MemberOwnerPattern(candidate, parent, parent_args, &inferred, 0);
+		const bool matched = MemberOwnerPattern(candidate, parent, parent_args, &inferred);
 		if(matched)
 			matches.push_back(&candidate);
 	}
 	vector<const TemplateDefinition*> result;
+	vector<string> signatures;
+	vector<vector<string> > owner_patterns_by_match;
+	vector<bool> comparable;
+	signatures.reserve(matches.size());
+	owner_patterns_by_match.reserve(matches.size());
+	comparable.reserve(matches.size());
+	const auto extract_owner_patterns = [&](const TemplateDefinition& candidate,
+		vector<string>* patterns) {
+		size_t angle = string::npos;
+		for(size_t search = 0; ; ) {
+			const size_t candidate_angle = candidate.owner.find('<', search);
+			if(candidate_angle == string::npos) break;
+			if(candidate.owner.substr(0, candidate_angle) == parent.qualified_name) {
+				angle = candidate_angle;
+				break;
+			}
+			search = candidate_angle + 1;
+		}
+		if(angle == string::npos) return false;
+		string owner_arguments;
+		size_t close = string::npos;
+		if(!TemplateRange(candidate.owner, angle, &owner_arguments, &close)) return false;
+		if(patterns) *patterns = SplitTemplateArguments(owner_arguments);
+		return true;
+	};
 	for(size_t i = 0; i < matches.size(); ++i) {
-		int candidate_score = 0;
-		map<string, string> ignored;
-		MemberOwnerPattern(*matches[i], parent, parent_args, &ignored, &candidate_score);
+		signatures.push_back(MemberSignatureKey(*matches[i]));
+		vector<string> patterns;
+		const bool parsed = extract_owner_patterns(*matches[i], &patterns);
+		owner_patterns_by_match.push_back(patterns);
+		comparable.push_back(parsed);
+	}
+	for(size_t i = 0; i < matches.size(); ++i) {
+		if(!comparable[i]) {
+			result.push_back(matches[i]);
+			continue;
+		}
 		bool dominated = false;
 		for(size_t j = 0; j < matches.size(); ++j) {
-			if(i == j || MemberSignatureKey(*matches[i]) != MemberSignatureKey(*matches[j])) continue;
-			int other_score = 0;
-			MemberOwnerPattern(*matches[j], parent, parent_args, &ignored, &other_score);
-			if(other_score > candidate_score) {
+			if(i == j || signatures[i] != signatures[j] || !comparable[j]) continue;
+			map<string, string> ignored;
+			const bool other_more_specialized = MemberOwnerPattern(*matches[j], parent,
+				owner_patterns_by_match[i], &ignored);
+			ignored.clear();
+			const bool candidate_more_specialized = MemberOwnerPattern(*matches[i], parent,
+				owner_patterns_by_match[j], &ignored);
+			// If this candidate accepts the other candidate's owner pattern while
+			// the other candidate does not accept this one, the other pattern is
+			// the more specialized member owner and this candidate is dominated.
+			if(candidate_more_specialized && !other_more_specialized) {
 				dominated = true;
 				break;
 			}
@@ -916,6 +920,166 @@ void PA18TemplateExpander::RecordTemplateArrayValues(
 			constant_arrays_[JoinPath(context, name)] = values;
 		}
 	}
+}
+
+void PA18TemplateExpander::ReplayCachedInstantiation(const TemplateDefinition& definition,
+	const vector<string>& args, const string& cached, const string& context,
+	bool explicit_instantiation, const map<string, vector<string> >& pack_substitutions)
+{
+	if(!definition.class_template) return;
+	const map<string, vector<string> > previous_packs = active_pack_substitutions_;
+	active_pack_substitutions_ = pack_substitutions;
+	try {
+		InstantiateRequestedNestedClasses(definition, args, cached, context);
+		InstantiateMemberDefinitions(definition, args, cached, explicit_instantiation);
+	} catch(...) {
+		active_pack_substitutions_ = previous_packs;
+		throw;
+	}
+	active_pack_substitutions_ = previous_packs;
+}
+
+void PA18TemplateExpander::RegisterGeneratedSpecialization(
+	const TemplateDefinition& definition, const vector<string>& metadata_args,
+	const string& local_name)
+{
+	if(!definition.class_template) return;
+	specialization_bases_[local_name] = definition.qualified_name;
+	specialization_arguments_[local_name] = metadata_args;
+	vector<string>& indexed_names = specialization_names_by_base_[
+		LastComponent(definition.qualified_name)];
+	if(find(indexed_names.begin(), indexed_names.end(), local_name) == indexed_names.end())
+		indexed_names.push_back(local_name);
+	const string generated_owner = definition.lexical_owner.empty() ?
+		definition.owner : definition.lexical_owner;
+	if(class_contexts_.find(generated_owner) != class_contexts_.end()) return;
+	vector<CPPGMAstNodePtr>& forwards = generated_namespace_forwards_[generated_owner];
+	for(size_t i = 0; i < forwards.size(); ++i)
+		if(forwards[i] && LastComponent(forwards[i]->value) == local_name) return;
+	forwards.push_back(MakeForwardClass(local_name));
+}
+
+string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definition,
+	const vector<string>& args, const vector<string>& metadata_args,
+	map<string, string> substitutions,
+	const map<string, PA19IntegralValue>& integral_substitutions,
+	const map<string, vector<string> >& pack_substitutions, const string& context,
+	bool explicit_instantiation, const string& key, const string& local_name)
+{
+	const string generated_owner = definition.lexical_owner.empty() ?
+		definition.owner : definition.lexical_owner;
+	if(definition.class_template) {
+		class_contexts_.insert(JoinPath(definition.owner, local_name));
+		class_contexts_.insert(JoinPath(generated_owner, local_name));
+	}
+	CPPGMAstNodePtr generated = TransformInstantiatedNode(definition, definition.owner,
+		substitutions, integral_substitutions, pack_substitutions);
+	if(!generated) throw logic_error("unable to instantiate template");
+	MarkGeneratedNode(generated, definition.qualified_name, metadata_args, explicit_instantiation);
+	if(generated->kind == "simple-declaration") {
+		const CPPGMAstNodePtr identifier = DescendantOfKind(generated, "identifier");
+		if(identifier) identifier->value = local_name;
+		RecordConstantDeclaration(generated, generated_owner);
+	}
+	if(definition.class_template)
+		generated->dependent_base_lookup = DefinitionHasDependentBase(definition);
+	if(!definition.class_template && !definition.alias_template)
+		RenameGeneratedFunction(generated, local_name);
+	if(definition.class_template || definition.alias_template) generated->value = local_name;
+	if(definition.class_template) {
+		const string generated_path = JoinPath(definition.owner, local_name);
+		class_declarations_[generated_path] = generated;
+		const string lexical_path = JoinPath(generated_owner, local_name);
+		class_declarations_[lexical_path] = generated;
+		class_contexts_.insert(generated_path);
+		RegisterGeneratedConstants(generated, generated_path);
+		const map<string, vector<string> > previous_packs = active_pack_substitutions_;
+		active_pack_substitutions_ = pack_substitutions;
+		try {
+			InstantiateRequestedNestedClasses(definition, args, local_name, context);
+			InstantiateMemberDefinitions(definition, args, local_name, explicit_instantiation);
+		} catch(...) {
+			active_pack_substitutions_ = previous_packs;
+			throw;
+		}
+		active_pack_substitutions_ = previous_packs;
+	}
+	EnsureDeclarationDependencies(generated, definition.owner, generated_owner);
+	for(size_t i = 0; i < args.size(); ++i)
+		EnsureForwardClass(args[i], context, generated_owner);
+	bool recursive_context_argument = false;
+	for(size_t i = 0; i < args.size(); ++i)
+		if(LastComponent(args[i]) == LastComponent(context) && !context.empty())
+			recursive_context_argument = true;
+	if(class_contexts_.find(context) != class_contexts_.end() && context != definition.owner &&
+		!recursive_context_argument)
+		generated_before_class_[context].push_back(generated);
+	else if(recursive_context_argument && definition.owner.empty() &&
+		!PrefixComponent(context).empty())
+		generated_before_class_[PrefixComponent(context)].push_back(generated);
+	else generated_by_owner_[generated_owner].push_back(generated);
+	active_specializations_.erase(key);
+	return local_name;
+}
+
+string PA18TemplateExpander::MaterializeInstantiation(const TemplateDefinition& definition,
+	const vector<string>& args, const vector<string>& metadata_args,
+	map<string, string> substitutions,
+	const map<string, PA19IntegralValue>& integral_substitutions,
+	const map<string, vector<string> >& pack_substitutions, const string& context,
+	bool explicit_instantiation, const string& key)
+{
+	map<string, string>::const_iterator cached = specializations_.find(key);
+	if(cached != specializations_.end()) {
+		ReplayCachedInstantiation(definition, args, cached->second, context,
+			explicit_instantiation, pack_substitutions);
+		return cached->second;
+	}
+	const string local_name = GeneratedSpecializationName(definition, args,
+		metadata_args, substitutions, context);
+	RegisterGeneratedSpecialization(definition, metadata_args, local_name);
+	if(definition.class_template) substitutions[definition.name] = local_name;
+	specializations_[key] = local_name;
+	if(!active_specializations_.insert(key).second) return local_name;
+	return EmitInstantiation(definition, args, metadata_args, substitutions,
+		integral_substitutions, pack_substitutions, context, explicit_instantiation,
+		key, local_name);
+}
+
+string PA18TemplateExpander::Instantiate(const TemplateDefinition& definition,
+	const vector<string>& raw_args, const string& context, bool explicit_instantiation,
+	const map<string, vector<string> >* pack_hints)
+{
+	if(definition.parameters.empty()) throw logic_error("template has no type parameters");
+	vector<string> args, metadata_args;
+	map<string, string> substitutions;
+	map<string, PA19IntegralValue> integral_substitutions;
+	map<string, vector<string> > pack_substitutions;
+	ResolveTemplateArguments(definition, raw_args, context, &args, &metadata_args,
+		&substitutions, &integral_substitutions, &pack_substitutions, pack_hints);
+	if(definition.partial_specialization) {
+		map<string, string> specialized;
+		if(!MatchClassSpecializationPattern(definition, args, &specialized, context))
+			throw logic_error("class partial specialization does not match");
+		for(map<string, string>::const_iterator it = specialized.begin(); it != specialized.end(); ++it)
+			substitutions[it->first] = it->second;
+		for(size_t pack_index = 0; pack_index < definition.specialization_pack_names.size(); ++pack_index) {
+			const string& pack_name = definition.specialization_pack_names[pack_index];
+			map<string, string>::const_iterator binding = specialized.find(pack_name);
+			vector<string> values;
+			if(binding != specialized.end() && !binding->second.empty())
+				values = SplitTemplateArguments(binding->second);
+			pack_substitutions[pack_name] = values;
+			if(values.empty()) substitutions.erase(pack_name);
+			else substitutions[pack_name] = values[0];
+		}
+	}
+	ostringstream definition_key;
+	definition_key << definition.qualified_name << "@" << definition.declaration.get();
+	string key = definition_key.str();
+	for(size_t i = 0; i < args.size(); ++i) key += "|" + CanonicalSpelling(args[i]);
+	return MaterializeInstantiation(definition, args, metadata_args, substitutions,
+		integral_substitutions, pack_substitutions, context, explicit_instantiation, key);
 }
 
 } // namespace pa18_templates_internal

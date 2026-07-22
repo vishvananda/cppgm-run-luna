@@ -515,127 +515,21 @@
 	}
 
 	string TemplateMemberType(const TemplateDefinition& definition,
-		const vector<string>& arguments, const string& member, const string& context)
-	{
-			if(!definition.declaration) return string();
-			ostringstream active_key;
-			active_key << definition.qualified_name; for(size_t argument = 0; argument < arguments.size(); ++argument)
-				active_key << "|" << CanonicalSpelling(arguments[argument]);
-			active_key << "|" << member; if(!active_template_member_types_.insert(active_key.str()).second) return string();
-		map<string, string> local;
-		for(size_t i = 0; i < definition.parameters.size() && i < arguments.size(); ++i)
-			local[definition.parameters[i].name] = arguments[i];
-			for(map<string, vector<string> >::const_iterator generated =
-			specialization_arguments_.begin(); generated != specialization_arguments_.end();
-			++generated) {
-			map<string, string>::const_iterator generated_base =
-				specialization_bases_.find(generated->first);
-			if(generated_base == specialization_bases_.end() ||
-				LastComponent(generated_base->second) != LastComponent(definition.qualified_name) ||
-				generated->second.size() != arguments.size()) continue;
-			bool same_arguments = true;
-			for(size_t argument = 0; argument < arguments.size(); ++argument)
-				if(NormalizeTypeArgument(CanonicalSpelling(generated->second[argument])) !=
-					NormalizeTypeArgument(CanonicalSpelling(arguments[argument]))) {
-					same_arguments = false;
-					break;
-				}
-			if(same_arguments) {
-				local[definition.name] = generated->first;
-				break;
-			}
-		}
-		for(size_t i = 0; i < definition.declaration->children.size(); ++i) {
-			const CPPGMAstNodePtr child = definition.declaration->children[i];
-			if(!child) continue;
-			string spelling;
-			if(child->kind == "alias-declaration" && !child->children.empty()) {
-				spelling = TypeIdSpelling(child->children[0]);
-				for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter)
-					if(definition.parameters[parameter].pack) {
-						const string token = "sizeof...(" + definition.parameters[parameter].name + ")";
-						ostringstream count;
-						count << arguments.size();
-						for(size_t position = spelling.find(token); position != string::npos;
-							position = spelling.find(token, position + count.str().size()))
-							spelling.replace(position, token.size(), count.str());
-					}
-				spelling = RewriteText(spelling, context, local, 0);
-				for(size_t open = spelling.find('['); open != string::npos; ) {
-					const size_t close = spelling.find(']', open + 1);
-					if(close == string::npos) break;
-					const string bound = CanonicalSpelling(spelling.substr(open + 1,
-						close - open - 1));
-					PA19IntegralValue bound_value;
-					if(!bound.empty() && EvaluateIntegralText(bound, context, local,
-						&bound_value)) {
-						const string replacement = IntegralValueSpelling(bound_value);
-						spelling.replace(open + 1, close - open - 1, replacement);
-						open += replacement.size() + 2;
-					} else open = spelling.find('[', close + 1);
-				}
-				spelling = ResolveAlias(ReplaceIdentifiers(spelling, local), context);
-				local[child->value] = NormalizeTypeArgument(spelling);
-				if(child->value != member) continue;
-			}
-			else if(child->kind == "simple-declaration" && !child->children.empty() &&
-				SpellNode(child->children[0]).find("typedef") != string::npos) {
-				const CPPGMAstNodePtr list = ChildOfKindLocal(child, "init-declarator-list");
-				if(list) for(size_t j = 0; j < list->children.size(); ++j) {
-					const CPPGMAstNodePtr item = list->children[j];
-					if(!item || item->children.empty() ||
-						LastComponent(FirstIdentifierLocal(item->children[0])).empty()) continue;
-					spelling = NodeTypeSpelling(child->children[0]) +
-						DeclaratorSuffix(item->children[0]) +
-						DeclaratorArraySuffix(item->children[0]);
-					for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter)
-						if(definition.parameters[parameter].pack) {
-							const string token = "sizeof...(" + definition.parameters[parameter].name + ")";
-							ostringstream count;
-							count << arguments.size();
-							for(size_t position = spelling.find(token); position != string::npos;
-								position = spelling.find(token, position + count.str().size()))
-								spelling.replace(position, token.size(), count.str());
-						}
-					spelling = RewriteText(spelling, context, local, 0);
-					for(size_t open = spelling.find('['); open != string::npos; ) {
-						const size_t close = spelling.find(']', open + 1);
-						if(close == string::npos) break;
-						const string bound = CanonicalSpelling(spelling.substr(open + 1,
-							close - open - 1));
-						PA19IntegralValue bound_value;
-						if(!bound.empty() && EvaluateIntegralText(bound, context, local,
-							&bound_value)) {
-							const string replacement = IntegralValueSpelling(bound_value);
-							spelling.replace(open + 1, close - open - 1, replacement);
-							open += replacement.size() + 2;
-						} else open = spelling.find('[', close + 1);
-					}
-					spelling = ResolveAlias(ReplaceIdentifiers(spelling, local), context);
-					local[LastComponent(FirstIdentifierLocal(item->children[0]))] =
-						NormalizeTypeArgument(spelling);
-					if(LastComponent(FirstIdentifierLocal(item->children[0])) == member)
-						break;
-				}
-			}
-			if(!spelling.empty()) {
-				map<string, string>::const_iterator found = local.find(member);
-				if(found != local.end()) {
-					const string result = NormalizeTypeArgument(found->second);
-					active_template_member_types_.erase(active_key.str());
-					return result;
-				}
-			}
-		}
-		map<string, string>::const_iterator found = local.find(member);
-		if(found != local.end()) {
-			const string result = NormalizeTypeArgument(found->second);
-			active_template_member_types_.erase(active_key.str());
-			return result;
-		}
-		active_template_member_types_.erase(active_key.str());
-		return string();
-	}
+		const vector<string>& arguments, const string& member, const string& context);
+	string FinishTemplateMemberType(const string& active_key,
+		const map<string, vector<string> >& previous_packs, const string& value);
+	void PrepareTemplateMemberSubstitutions(const TemplateDefinition& definition,
+		const vector<string>& arguments, const string& context,
+		map<string, string>* local);
+	string RewriteTemplateMemberSpelling(const TemplateDefinition& definition,
+		const vector<string>& arguments, string spelling, const string& context,
+		const map<string, string>& local);
+	bool FindDirectTemplateMemberType(const TemplateDefinition& definition,
+		const vector<string>& arguments, const string& member, const string& context,
+		map<string, string>* local, string* result);
+	bool FindInheritedTemplateMemberType(const TemplateDefinition& definition,
+		const string& member, const string& context,
+		const map<string, string>& local, string* result);
 
 	void ReifyReferenceType(const CPPGMAstNodePtr& result) const
 	{
