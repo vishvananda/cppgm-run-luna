@@ -25,7 +25,7 @@
 	{
 		string qualifier = PrefixComponent(raw_callee);
 		if(!qualifier.empty()) return qualifier;
-		const string owner = definition.lexical_owner.empty() ? definition.owner : definition.lexical_owner;
+		const string owner = GeneratedOwner(definition);
 		bool visible = owner.empty() || context == owner ||
 			(context.size() > owner.size() && context.compare(0, owner.size(), owner) == 0 &&
 			 context[owner.size()] == ':');
@@ -140,6 +140,29 @@
 			map<string, TemplateDefinition>::const_iterator found = definitions_.find(by_name->second[0]);
 			if(found != definitions_.end()) return &found->second;
 		}
+		// An inline namespace contributes its declarations to the enclosing
+		// namespace for lookup.  Collection keeps the physical namespace in the
+		// typed definition key (`lib::abi::map`) so generated declarations remain
+		// deterministic; resolve a logical spelling such as `lib::map` against
+		// that physical key here instead of duplicating the entity.
+		const size_t raw_separator = TopLevelScopeSeparator(raw_name);
+		if(raw_separator != string::npos) {
+			const string logical_owner = raw_name.substr(0, raw_separator);
+			const string logical_name = raw_name.substr(raw_separator + 2);
+			const TemplateDefinition* logical_match = 0;
+			for(map<string, TemplateDefinition>::const_iterator it = definitions_.begin();
+				it != definitions_.end(); ++it) {
+				if(LastComponent(it->second.qualified_name) != logical_name) continue;
+				const string physical_owner = PrefixComponent(it->second.qualified_name);
+				map<string, string>::const_iterator logical =
+					lexical_namespace_logical_.find(physical_owner);
+				if(logical == lexical_namespace_logical_.end() ||
+					logical->second != logical_owner) continue;
+				if(logical_match) return 0;
+				logical_match = &it->second;
+			}
+			if(logical_match) return logical_match;
+		}
 		return 0;
 	}
 	const TemplateDefinition* FindExplicitFunctionSpecialization(
@@ -182,6 +205,31 @@
 			for(size_t i = 0; i < result.size(); ++i)
 				if(result[i] == &it->second) duplicate = true;
 			if(!duplicate) result.push_back(&it->second);
+		}
+		if(!result.empty()) return result;
+		// A generated body can retain the physical inline-namespace context even
+		// though the source declaration was collected under its logical owner.
+		// Re-run the owner filter through the namespace map before falling back to
+		// unrelated same-named overloads.
+		string logical_context = PrefixComponent(context);
+		map<string, string>::const_iterator context_logical =
+			lexical_namespace_logical_.find(logical_context);
+		if(context_logical != lexical_namespace_logical_.end())
+			logical_context = context_logical->second;
+		for(size_t indexed_definition = 0; indexed_definition < indexed->second.size();
+			++indexed_definition) {
+			map<string, TemplateDefinition>::const_iterator it = definitions_.find(
+				indexed->second[indexed_definition]);
+			if(it == definitions_.end() || it->second.class_template) continue;
+			string owner = PrefixComponent(it->second.qualified_name);
+			map<string, string>::const_iterator owner_logical =
+				lexical_namespace_logical_.find(owner);
+			if(owner_logical != lexical_namespace_logical_.end()) owner = owner_logical->second;
+			if(owner == logical_context ||
+				(logical_context.size() > owner.size() && logical_context.compare(0,
+					owner.size(), owner) == 0 && logical_context[owner.size()] == ':')) {
+				result.push_back(&it->second);
+			}
 		}
 		if(!result.empty()) return result;
 		for(size_t indexed_definition = 0; indexed_definition < indexed->second.size();

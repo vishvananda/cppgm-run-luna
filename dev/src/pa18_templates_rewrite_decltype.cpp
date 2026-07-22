@@ -421,9 +421,38 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 	if(!concrete_found) return false;
 	concrete_member = NormalizeTypeArgument(RewriteText(concrete_member, context,
 		concrete_substitutions, 0));
-	raw->replace(begin, concrete_member_end - begin, concrete_member);
+	// `TemplateBase` points at the nested component after a dependent
+	// qualifier, so `Ptr::template rebind<U>::other` would otherwise become
+	// `Ptr::template standard_allocator_double_`.  The materialized member
+	// type already contains the enclosing specialization's identity; consume
+	// the qualifier through `template` as part of this replacement.
+	size_t replacement_begin = begin;
+	size_t qualifier = begin;
+	while(qualifier > 0 && isspace(static_cast<unsigned char>((*raw)[qualifier - 1])))
+		--qualifier;
+	if(qualifier >= 8 && raw->compare(qualifier - 8, 8, "template") == 0) {
+		qualifier -= 8;
+		while(qualifier > 0 && isspace(static_cast<unsigned char>((*raw)[qualifier - 1])))
+			--qualifier;
+		if(qualifier >= 2 && raw->compare(qualifier - 2, 2, "::") == 0) {
+			qualifier -= 2;
+			while(qualifier > 0 && isspace(static_cast<unsigned char>((*raw)[qualifier - 1])))
+				--qualifier;
+			while(qualifier > 0) {
+				size_t component_end = qualifier;
+				while(qualifier > 0 && IsIdentifierCharacter((*raw)[qualifier - 1])) --qualifier;
+				if(component_end == qualifier || qualifier < 2 ||
+					raw->compare(qualifier - 2, 2, "::") != 0) break;
+				qualifier -= 2;
+				while(qualifier > 0 && isspace(static_cast<unsigned char>((*raw)[qualifier - 1])))
+					--qualifier;
+			}
+			replacement_begin = qualifier;
+		}
+	}
+	raw->replace(replacement_begin, concrete_member_end - replacement_begin, concrete_member);
 	if(template_replaced) *template_replaced = true;
-	if(search) *search = begin + concrete_member.size();
+	if(search) *search = replacement_begin + concrete_member.size();
 	return true;
 }
 

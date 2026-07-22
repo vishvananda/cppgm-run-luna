@@ -86,6 +86,19 @@ bool PA18TemplateExpander::SplitDirectFunctionType(const string& raw,
 	{
 		(void)context;
 		if(!lhs.partial_specialization || !rhs.partial_specialization) return false;
+		const auto repeated_pack_shape = [](const TemplateDefinition& definition) {
+			return definition.specialization_pattern.size() == 2 &&
+				definition.specialization_pattern[0].find("<") != string::npos &&
+				definition.specialization_pattern[0].find("...") != string::npos &&
+				CanonicalSpelling(definition.specialization_pattern[0]) ==
+				CanonicalSpelling(definition.specialization_pattern[1]);
+		};
+		const bool lhs_repeated_pack = repeated_pack_shape(lhs);
+		const bool rhs_repeated_pack = repeated_pack_shape(rhs);
+		if(lhs_repeated_pack != rhs_repeated_pack) return lhs_repeated_pack;
+		const bool lhs_const_pointer = !lhs.specialization_pattern.empty() && CanonicalSpelling(lhs.specialization_pattern[0]).find("const ") == 0;
+		const bool rhs_const_pointer = !rhs.specialization_pattern.empty() && CanonicalSpelling(rhs.specialization_pattern[0]).find("const ") == 0;
+		if(lhs_const_pointer != rhs_const_pointer) return lhs_const_pointer;
 		const auto template_head = [](const TemplateDefinition& definition) {
 			if(definition.specialization_pattern.empty()) return false;
 			const string pattern = CanonicalSpelling(definition.specialization_pattern[0]);
@@ -213,6 +226,21 @@ bool PA18TemplateExpander::IsTemplatePackName(const TemplateDefinition& definiti
 		if(definition.parameters[parameter].pack &&
 			definition.parameters[parameter].name == name) return true;
 	return template_pack_names_.find(name) != template_pack_names_.end();
+}
+
+bool PA18TemplateExpander::IsTopLevelPackPattern(const string& value) const
+{
+	if(value.size() <= 3 || value.compare(value.size() - 3, 3, "...") != 0) return false;
+	int angle = 0, paren = 0, bracket = 0;
+	for(size_t i = 0; i < value.size(); ++i) {
+		if(value[i] == '<' && IsTemplateAngleOpen(value, i)) ++angle;
+		else if(value[i] == '>' && angle > 0 && IsTemplateAngleClose(value, i)) --angle;
+		else if(value[i] == '(') ++paren;
+		else if(value[i] == ')' && paren > 0) --paren;
+		else if(value[i] == '[') ++bracket;
+		else if(value[i] == ']' && bracket > 0) --bracket;
+	}
+	return angle == 0 && paren == 0 && bracket == 0;
 }
 
 bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
@@ -431,7 +459,8 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 		pattern_object_cv;
 	const int actual_effective_cv = actual_has_pointer ? actual_trailing_cv :
 		actual_object_cv;
-	const bool direct_parameter = parameter_names.find(pattern) != parameter_names.end();
+	const bool direct_parameter = parameter_names.find(pattern) != parameter_names.end() &&
+		pattern.find('<') == string::npos;
 	const bool bare_reference_parameter = reference_pattern && pattern.size() > 1 &&
 		parameter_names.find(pattern.substr(0, pattern.size() - 1)) != parameter_names.end();
 	// A cv qualifier on a reference parameter is part of the binding rule, not
@@ -567,7 +596,8 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 					parameter_names, inferred, context, class_pattern)) return false;
 			return true;
 		}
-		if(parameter_names.find(pattern) != parameter_names.end()) {
+		if(parameter_names.find(pattern) != parameter_names.end() &&
+			pattern.find('<') == string::npos) {
 			map<string, string>::const_iterator prior = inferred->find(pattern);
 			if(prior != inferred->end() &&
 				CanonicalSpelling(ResolveAlias(prior->second, context)) !=
@@ -593,7 +623,26 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 					LastComponent(base->second) != pattern_base)) return false;
 				if(parameter_names.find(pattern_base) != parameter_names.end())
 					(*inferred)[pattern_base] = base->second;
-				if(pattern_parts.empty()) return true;
+				if(pattern_parts.empty()) {
+					if(specialization->second.empty()) return true;
+					const TemplateDefinition* actual_definition = FindDefinition(
+						base->second, context);
+					if(!actual_definition || actual_definition->parameters.size() !=
+						specialization->second.size()) return false;
+					map<string, string> default_bindings;
+					for(size_t parameter = 0; parameter < actual_definition->parameters.size(); ++parameter) {
+						const TemplateParameter& actual_parameter =
+							actual_definition->parameters[parameter];
+						if(actual_parameter.default_type.empty()) return false;
+						const string expected = NormalizeTypeArgument(ReplaceIdentifiers(
+							actual_parameter.default_type, default_bindings));
+						const string concrete = NormalizeTypeArgument(
+							specialization->second[parameter]);
+						if(expected != concrete) return false;
+						if(!actual_parameter.name.empty()) default_bindings[actual_parameter.name] = concrete;
+					}
+					return true;
+				}
 				actual_parts = specialization->second;
 			} else {
 				string actual_arguments;
@@ -637,36 +686,16 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 				}
 				actual_parts = SplitTemplateArguments(actual_arguments);
 			}
-			if(pattern_parts.size() == 1 && pattern_parts[0].size() > 3 &&
-				pattern_parts[0].compare(pattern_parts[0].size() - 3, 3, "...") == 0) {
-				const string pack_pattern = CanonicalSpelling(pattern_parts[0].substr(
-					0, pattern_parts[0].size() - 3));
-				if(parameter_names.find(pack_pattern) == parameter_names.end()) return false;
-				string combined;
-				for(size_t i = 0; i < actual_parts.size(); ++i) {
-					map<string, string> one;
-					if(!MatchTypePattern(pack_pattern, actual_parts[i], parameter_names,
-						&one, context, class_pattern)) return false;
-					map<string, string>::const_iterator value = one.find(pack_pattern);
-					if(value == one.end()) return false;
-					if(!combined.empty()) combined += ",";
-					combined += value->second;
-				}
-				if(inferred) {
-					map<string, string>::const_iterator prior = inferred->find(pack_pattern);
-					if(prior != inferred->end() && CanonicalSpelling(prior->second) !=
-						CanonicalSpelling(combined)) return false;
-					(*inferred)[pack_pattern] = combined;
-				}
-				return true;
-			}
 			if(!pattern_parts.empty() && pattern_parts.back().size() > 3 &&
 				pattern_parts.back().compare(pattern_parts.back().size() - 3, 3, "...") == 0) {
 				const string pack_pattern = CanonicalSpelling(pattern_parts.back().substr(
 					0, pattern_parts.back().size() - 3));
-				if(parameter_names.find(pack_pattern) != parameter_names.end())
-					return MatchTrailingTypePack(pattern_parts, actual_parts, parameter_names,
-						inferred, context, class_pattern);
+				if(parameter_names.find(pack_pattern) != parameter_names.end() ||
+					pack_pattern.find('<') != string::npos) {
+					const bool matched_pack = MatchTrailingTypePack(pattern_parts, actual_parts,
+						parameter_names, inferred, context, class_pattern);
+					return matched_pack;
+				}
 			}
 			if(pattern_parts.size() != actual_parts.size()) return false;
 			for(size_t i = 0; i < pattern_parts.size(); ++i)

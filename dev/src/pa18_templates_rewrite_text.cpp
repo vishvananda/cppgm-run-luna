@@ -25,9 +25,14 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			if(!expanded.empty()) expanded += ',';
 			expanded += active_pack->second[element];
 		}
-		for(size_t at = raw.find(token); at != string::npos;
-			at = raw.find(token, at + expanded.size()))
+		for(size_t at = raw.find(token); at != string::npos;) {
 			raw.replace(at, token.size(), expanded);
+			if(expanded.empty()) {
+				if(at < raw.size() && raw[at] == ',') raw.erase(at, 1);
+				else if(at > 0 && raw[at - 1] == ',') raw.erase(--at, 1);
+			}
+			at = raw.find(token, at + expanded.size());
+		}
 	}
 		if(raw.compare(0, 8, "operator") == 0) {
 			const string suffix = raw.substr(8);
@@ -38,6 +43,20 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			}
 		}
 	raw = RewriteDecltypeText(raw, context, substitutions, template_replaced);
+	// A qualified use may start from a non-template alias owner rather than a
+	// scalar substitution (`lib::ordered_json::object_t`).  Resolve that owner
+	// first, then let the ordinary template-id/member path materialize the
+	// concrete class and its member type.
+	if(resolve_member) {
+		const size_t owner_separator = TopLevelScopeSeparator(raw);
+		if(owner_separator != string::npos && owner_separator + 2 < raw.size()) {
+			const string owner = raw.substr(0, owner_separator);
+			const string member = raw.substr(owner_separator + 2);
+			const string resolved_owner = ResolveAlias(owner, context);
+			if(!resolved_owner.empty() && resolved_owner != owner)
+				raw = resolved_owner + "::" + member;
+		}
+	}
 	if(resolve_member) for(map<string, string>::const_iterator current = substitutions.begin();
 		current != substitutions.end(); ++current) {
 		if(current->first.empty() || current->second.empty() ||
@@ -132,8 +151,12 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				specialization_bases_.find(generated_name);
 			map<string, vector<string> >::const_iterator generated =
 				specialization_arguments_.find(generated_name);
+			const bool generated_context =
+				class_contexts_.find(generated_name) != class_contexts_.end() ||
+				(current_arguments.empty() &&
+				 class_contexts_.find(JoinPath(context, generated_name)) != class_contexts_.end());
 			if(generated_base == specialization_bases_.end() ||
-				class_contexts_.find(generated_name) == class_contexts_.end() ||
+				!generated_context ||
 				generated == specialization_arguments_.end() ||
 				generated->second.size() != current_arguments.size()) continue;
 			bool same_arguments = true;
@@ -249,9 +272,15 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			const TemplateDefinition* definition = FindDefinition(base, context);
 			string lookup_base = base;
 			map<string, string>::const_iterator qualified_alias = substitutions.find(base);
-			if(qualified_alias != substitutions.end() &&
-				qualified_alias->second.find("::") != string::npos)
-				lookup_base = qualified_alias->second;
+			if(qualified_alias != substitutions.end() && !qualified_alias->second.empty()) {
+				const TemplateDefinition* substituted_definition = FindDefinition(
+					qualified_alias->second, context);
+				if(qualified_alias->second.find("::") != string::npos ||
+					(substituted_definition && (substituted_definition->class_template ||
+						substituted_definition->alias_template ||
+						substituted_definition->variable_template)))
+					lookup_base = qualified_alias->second;
+			}
 			if(!definition) {
 				const size_t separator = base.find("::");
 				if(separator != string::npos) {
@@ -271,9 +300,9 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				// Remove that artifact at the point where the expansion is consumed;
 				// the general argument splitter must continue preserving source
 				// spellings for other parser paths.
-				while(!raw_template_args.empty() && raw_template_args.back().empty())
-					raw_template_args.pop_back();
-				vector<string> args;
+			while(!raw_template_args.empty() && raw_template_args.back().empty())
+				raw_template_args.pop_back();
+			vector<string> args;
 				bool deferred_pack_argument = false;
 			for(size_t raw_argument = 0; raw_argument < raw_template_args.size(); ++raw_argument) {
 				const string source_argument = CanonicalSpelling(raw_template_args[raw_argument]);
@@ -335,8 +364,8 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 						break;
 					}
 				}
-			args.push_back(source_argument);
-			}
+				args.push_back(source_argument);
+				}
 			if(deferred_pack_argument) {
 				search = close + 1;
 				continue;
@@ -503,19 +532,75 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				while(nested_begin < raw.size() && IsIdentifierCharacter(raw[nested_begin])) ++nested_begin;
 				const string nested = raw.substr(close + 3, nested_begin - (close + 3));
 				if(!nested.empty()) {
-					const string member_type = TemplateMemberType(*definition, args, nested, context);
-					if(!member_type.empty() && member_type.find('[') == string::npos) {
-						raw.replace(begin, nested_begin - begin, member_type);
+				const string member_type = TemplateMemberType(*definition, args, nested, context);
+				if(!member_type.empty() && member_type.find('[') == string::npos) {
+						// The template base can begin after a dependent
+						// `Owner::template` qualifier.  The resolved member type
+						// already names the materialized owner, so retain neither
+						// the dependent qualifier nor the `template` keyword.
+						size_t replacement_begin = begin;
+						size_t qualifier = begin;
+						while(qualifier > 0 && isspace(static_cast<unsigned char>(raw[qualifier - 1])))
+							--qualifier;
+						if(qualifier >= 8 && raw.compare(qualifier - 8, 8, "template") == 0) {
+							qualifier -= 8;
+							while(qualifier > 0 && isspace(static_cast<unsigned char>(raw[qualifier - 1])))
+								--qualifier;
+							if(qualifier >= 2 && raw.compare(qualifier - 2, 2, "::") == 0) {
+								qualifier -= 2;
+								while(qualifier > 0 && isspace(static_cast<unsigned char>(raw[qualifier - 1])))
+									--qualifier;
+								while(qualifier > 0) {
+									size_t component_end = qualifier;
+									while(qualifier > 0 && IsIdentifierCharacter(raw[qualifier - 1])) --qualifier;
+									if(component_end == qualifier || qualifier < 2 ||
+										raw.compare(qualifier - 2, 2, "::") != 0) break;
+									qualifier -= 2;
+									while(qualifier > 0 && isspace(static_cast<unsigned char>(raw[qualifier - 1])))
+										--qualifier;
+								}
+								replacement_begin = qualifier;
+							}
+						}
+						raw.replace(replacement_begin, nested_begin - replacement_begin, member_type);
 						if(template_replaced) *template_replaced = true;
-						search = begin + member_type.size();
+						search = replacement_begin + member_type.size();
 						continue;
 					}
 					requested_nested_classes_[definition->qualified_name].insert(nested);
 					requested_nested_classes_[LastComponent(definition->qualified_name)].insert(nested);
 				}
 			}
+			map<string, string> instantiation_substitutions = substitutions;
+			// When a member alias is reached through a generated enclosing class,
+			// the source member definition has only its own template parameters.
+			// Reconstruct the outer class's typed bindings from the generated owner
+			// before replaying the alias body; otherwise `Allocator` (and friends)
+			// remains unresolved and the generated alias is registered under the
+			// source owner instead of the concrete specialization.
+			const string concrete_owner = PrefixComponent(lookup_base);
+			map<string, string>::const_iterator concrete_base =
+				specialization_bases_.find(LastComponent(concrete_owner));
+			if(!concrete_owner.empty() && concrete_base != specialization_bases_.end() &&
+				LastComponent(concrete_base->second) == LastComponent(definition->owner)) {
+				map<string, vector<string> >::const_iterator concrete_arguments =
+					specialization_arguments_.find(LastComponent(concrete_owner));
+				const TemplateDefinition* owner_definition = FindDefinition(
+					concrete_base->second, context);
+				if(concrete_arguments != specialization_arguments_.end() && owner_definition) {
+					for(size_t parameter = 0; parameter < owner_definition->parameters.size() &&
+						parameter < concrete_arguments->second.size(); ++parameter)
+						if(!owner_definition->parameters[parameter].name.empty())
+							instantiation_substitutions[owner_definition->parameters[parameter].name] =
+								concrete_arguments->second[parameter];
+					// This typed marker is consumed only by alias registration below; it
+					// never appears in source text.
+					instantiation_substitutions["__PA18_CONCRETE_OWNER__"] =
+						concrete_owner + "::__PA18_OWNER";
+				}
+			}
 			const string local_name = Instantiate(*definition, args, context, false, 0,
-				&substitutions);
+				&instantiation_substitutions);
 			string replacement = local_name;
 			const string qualifier = PrefixComponent(lookup_base);
 			if(!qualifier.empty()) replacement = qualifier + "::" + local_name;

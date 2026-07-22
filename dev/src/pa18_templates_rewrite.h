@@ -3,19 +3,14 @@
 #include "pa18_templates_rewrite_decltype.h"
 #include "pa18_templates_rewrite_instantiate.h"
 bool MatchTypePattern(string pattern, string actual,
-		const set<string>& parameter_names, map<string, string>* inferred,
-		const string& context, bool class_pattern = false) const;
-	bool SplitDirectFunctionType(const string& raw, string* result,
-		vector<string>* parameters, string* qualifiers) const;
-	int MatchObjectCvPattern(const string& pattern, const string& actual,
-			const set<string>& parameter_names, map<string, string>* inferred,
-			const string& context) const;
-	bool MatchTrailingTypePack(const vector<string>& pattern_parts,
-		const vector<string>& actual_parts, const set<string>& parameter_names,
-		map<string, string>* inferred, const string& context, bool class_pattern) const;
+		const set<string>& parameter_names, map<string, string>* inferred, const string& context, bool class_pattern = false) const;
+	bool SplitDirectFunctionType(const string& raw, string* result, vector<string>* parameters, string* qualifiers) const;
+	int MatchObjectCvPattern(const string& pattern, const string& actual, const set<string>& parameter_names,
+			map<string, string>* inferred, const string& context) const;
+	bool MatchTrailingTypePack(const vector<string>& pattern_parts, const vector<string>& actual_parts,
+		const set<string>& parameter_names, map<string, string>* inferred, const string& context, bool class_pattern) const;
 	bool IsTemplatePackName(const TemplateDefinition& definition, const string& name) const;
-	bool MatchOrderingTypePattern(const string& raw_pattern, const string& raw_actual,
-			const set<string>& parameter_names, map<string, string>* inferred) const
+	bool MatchOrderingTypePattern(const string& raw_pattern, const string& raw_actual, const set<string>& parameter_names, map<string, string>* inferred) const
 	{
 		string pattern = CanonicalSpelling(raw_pattern);
 		string actual = CanonicalSpelling(raw_actual);
@@ -176,40 +171,41 @@ bool MatchTypePattern(string pattern, string actual,
 		for(; pattern_index < definition.specialization_pattern.size(); ++pattern_index) {
 			string pattern = CanonicalSpelling(
 				definition.specialization_pattern[pattern_index]);
-			const bool pack = pattern.size() > 3 &&
-				pattern.compare(pattern.size() - 3, 3, "...") == 0;
+			const bool pack = IsTopLevelPackPattern(pattern);
 			if(pack && pattern_index + 1 == definition.specialization_pattern.size()) {
 				const string pack_pattern = CanonicalSpelling(pattern.substr(0,
 					pattern.size() - 3));
-				if(parameter_names.find(pack_pattern) != parameter_names.end()) {
-					string combined;
+				if(!pack_pattern.empty()) {
 					while(argument_index < arguments.size()) {
-						if(!combined.empty()) combined += ",";
-						combined += CanonicalSpelling(arguments[argument_index++]);
+						const string actual = CanonicalSpelling(arguments[argument_index++]);
+						map<string, string> one;
+						if(!MatchTypePattern(pack_pattern, actual, parameter_names, &one, context, true)) return false;
+						for(map<string, string>::const_iterator binding = one.begin(); binding != one.end(); ++binding) {
+							const bool pack_binding = find(definition.specialization_pack_names.begin(),
+								definition.specialization_pack_names.end(), binding->first) !=
+								definition.specialization_pack_names.end();
+							map<string, string>::iterator prior = local.find(binding->first);
+							if(pack_binding) { if(prior != local.end() && !prior->second.empty()) prior->second += ","; local[binding->first] += binding->second; }
+							else { if(prior != local.end() && prior->second != binding->second) return false; local[binding->first] = binding->second; }
+						}
 					}
-					local[pack_pattern] = combined;
+					if(argument_index == arguments.size())
+						for(size_t pack_name = 0; pack_name < definition.specialization_pack_names.size(); ++pack_name)
+							if(local.find(definition.specialization_pack_names[pack_name]) == local.end()) local[definition.specialization_pack_names[pack_name]] = string();
 					break;
 				}
 			}
 			if(argument_index >= arguments.size()) return false;
 			string actual = CanonicalSpelling(arguments[argument_index++]);
-			// A template-template parameter is an entity, not a type alias.  In
-			// particular, a member alias such as `quote<T>::fn` must remain the
-			// qualified alias-template spelling while matching `P`; resolving it
-			// here would expose its still-dependent target (`defer<F,...>`) and
-			// lose the owner binding needed when the member is replayed.
+			if(pattern.find("::") != string::npos || pattern.find("typename") != string::npos) {
+				const string rewritten_pattern = NormalizeTypeArgument(const_cast<PA18TemplateExpander*>(this)->RewriteText(
+					ReplaceIdentifiersPreservingPackSizes(pattern, local), context, local, 0));
+				if(!rewritten_pattern.empty()) pattern = rewritten_pattern;
+			}
 			bool template_parameter = false;
 			for(size_t detail = 0; detail < definition.specialization_parameter_details.size(); ++detail)
 				if(definition.specialization_parameter_details[detail].name == pattern &&
-					definition.specialization_parameter_details[detail].template_template) {
-					template_parameter = true;
-					break;
-				}
-			// Selection can be reached from a dependent base lookup before the
-			// normal argument resolver has folded an arithmetic non-type spelling.
-			// Compare partial-specialization patterns against its typed value so
-			// `Index - 1` can select the `0` specialization instead of replaying
-			// the recursive branch and wrapping unsigned arithmetic.
+					definition.specialization_parameter_details[detail].template_template) { template_parameter = true; break; }
 			if(argument_index > 0 && argument_index - 1 < definition.parameters.size() &&
 				!definition.parameters[argument_index - 1].type) {
 				PA19ConstantExpressionParser parser(constant_values_, local,
@@ -231,14 +227,12 @@ bool MatchTypePattern(string pattern, string actual,
 				map<string, string>::const_iterator prior = local.find(pattern);
 				if(prior != local.end() && CanonicalSpelling(prior->second) != actual) return false;
 				local[pattern] = actual;
-			} else if(!MatchTypePattern(pattern, actual, parameter_names, &local, context, true)) return false;
+			} else {
+				const bool matched_pattern = pattern == actual ||
+					MatchTypePattern(pattern, actual, parameter_names, &local, context, true);
+				if(!matched_pattern) return false;
+			}
 		}
-		// A partial specialization may omit trailing primary parameters whose
-		// defaults are part of the concrete specialization-id.  For example,
-		// `same_v<T, T>` matches the primary `same_v<T, U = void>` after the
-		// caller has supplied the defaulted third argument.  Retain exact
-		// matching for non-defaulted extras, but validate defaulted ones against
-		// the primary parameter contract stored on the typed definition.
 		while(argument_index < arguments.size()) {
 			if(argument_index >= definition.parameters.size() ||
 				definition.parameters[argument_index].default_type.empty()) return false;
@@ -260,9 +254,20 @@ bool MatchTypePattern(string pattern, string actual,
 		map<string, vector<TemplateDefinition> >::const_iterator candidates =
 			class_specializations_.find(primary->qualified_name);
 		if(candidates == class_specializations_.end()) return primary;
+		vector<string> matching_arguments = arguments;
+		map<string, string> default_substitutions;
+		for(size_t parameter = 0; parameter < primary->parameters.size() && parameter < arguments.size(); ++parameter)
+			if(!primary->parameters[parameter].name.empty()) default_substitutions[primary->parameters[parameter].name] = arguments[parameter];
+		for(size_t parameter = arguments.size(); parameter < primary->parameters.size(); ++parameter) {
+			if(primary->parameters[parameter].default_type.empty()) break;
+			const string default_argument = NormalizeTypeArgument(ReplaceIdentifiers(primary->parameters[parameter].default_type, default_substitutions));
+			matching_arguments.push_back(default_argument);
+			if(!primary->parameters[parameter].name.empty()) default_substitutions[primary->parameters[parameter].name] = default_argument;
+		}
 		vector<const TemplateDefinition*> matched;
 		for(size_t i = 0; i < candidates->second.size(); ++i) {
-			const bool matches = MatchClassSpecializationPattern(candidates->second[i], arguments, 0, context);
+			const bool matches = MatchClassSpecializationPattern(candidates->second[i],
+				matching_arguments, 0, context);
 			if(matches)
 				matched.push_back(&candidates->second[i]);
 		}

@@ -1,5 +1,6 @@
 #pragma once
 
+
 	string NodeTypeSpelling(const CPPGMAstNodePtr& sequence) const
 	{
 		if(!sequence) return string();
@@ -412,8 +413,7 @@
 				}
 			}
 			substitutions[parent.name] = parent_local_name;
-			const string generated_context = JoinPath(
-				parent.lexical_owner.empty() ? parent.owner : parent.lexical_owner,
+			const string generated_context = JoinPath(GeneratedOwner(parent),
 				parent_local_name);
 			map<string, CPPGMAstNodePtr>::const_iterator concrete = class_declarations_.find(
 				JoinPath(parent.owner, parent_local_name));
@@ -463,8 +463,7 @@
 			}
 			MarkGeneratedNode(generated, parent.qualified_name, parent_args,
 				explicit_instantiation);
-			const string generated_owner = parent.lexical_owner.empty() ? parent.owner :
-				parent.lexical_owner;
+			const string generated_owner = GeneratedOwner(parent);
 			generated_by_owner_[generated_owner].push_back(generated);
 		}
 	}
@@ -491,8 +490,7 @@
 			InstantiateNestedClass(parent, parent_args, parent_local_name,
 				candidates[i]->name, context);
 		}
-		const string generated_context = JoinPath(
-			parent.lexical_owner.empty() ? parent.owner : parent.lexical_owner,
+		const string generated_context = JoinPath(GeneratedOwner(parent),
 			parent_local_name);
 		const map<string, vector<string> > previous_packs = active_pack_substitutions_;
 		map<string, vector<string> > parent_packs;
@@ -747,6 +745,7 @@
 	bool DeferIncompleteAliasClass(const TemplateDefinition& definition,
 		const vector<string>& arguments, const string& context) const
 	{
+		if(definition.partial_specialization) return false;
 		if(!definition.class_template || !definition.declaration ||
 			definition.declaration->kind != "class-specifier" ||
 			definition.declaration->children.size() <= 1) return false;
@@ -770,7 +769,16 @@
 		for(size_t argument = 0; argument < arguments.size(); ++argument) {
 			const string spelling = NormalizeTypeArgument(arguments[argument]);
 			const CPPGMAstNodePtr declaration = FindClassDeclaration(spelling, context);
-			if(declaration && declaration->kind == "class-forward-declaration") return true;
+			if(declaration && declaration->kind == "class-forward-declaration") {
+				map<string, string>::const_iterator generated = specialization_bases_.find(
+					LastComponent(spelling));
+				const TemplateDefinition* primary = generated == specialization_bases_.end() ?
+					0 : FindDefinition(generated->second, context);
+				const bool complete_primary = primary && primary->declaration &&
+					primary->declaration->kind == "class-specifier" &&
+					primary->declaration->children.size() > 1;
+				if(!complete_primary) return true;
+			}
 		}
 		return false;
 	}
@@ -1003,6 +1011,12 @@
 	{
 		string local_name = definition.name;
 		if(definition.class_template || definition.alias_template || definition.variable_template) {
+			// An empty argument list is a real specialization for a parameter-pack
+			// template.  Keep its generated entity distinct from the primary name;
+			// otherwise `list<>` is rewritten to `list`, and a later pass treats the
+			// primary template name as another template-id and recursively
+			// materializes the same empty specialization.
+			if(args.empty()) local_name += "_";
 			for(size_t i = 0; i < args.size(); ++i) {
 				local_name += i == 0 ? "_" : "__";
 				if(i < definition.parameters.size() && !definition.parameters[i].type) {
@@ -1038,6 +1052,23 @@
 			for(size_t i = 0; i < args.size(); ++i) {
 				local_name += i == 0 ? "__inst_" : "__";
 				local_name += TypeSuffix(args[i]);
+			}
+		}
+		// A member alias template is cached by its source definition and its
+		// own arguments, but its body can also depend on the concrete enclosing
+		// specialization.  Give those owner-bound aliases distinct entities so
+		// `allocator_traits<standard_allocator<void>>::rebind_traits<double>`
+		// cannot reuse the alias materialized for
+		// `allocator_traits<simple_allocator<int>>::rebind_traits<double>`.
+		if(definition.alias_template) {
+			map<string, string>::const_iterator owner = substitutions.find(
+				"__PA18_CONCRETE_OWNER__");
+			if(owner != substitutions.end()) {
+				const string marker = "::__PA18_OWNER";
+				const size_t end = owner->second.find(marker);
+				const string concrete = owner->second.substr(0,
+					end == string::npos ? string::npos : end);
+				if(!concrete.empty()) local_name += "__" + TypeSuffix(concrete);
 			}
 		}
 		return local_name;

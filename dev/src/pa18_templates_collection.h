@@ -502,6 +502,14 @@ private:
 	string DeclaratorTypeSpelling(const string& base,
 		const CPPGMAstNodePtr& declarator) const;
 	string TypeIdSpelling(const CPPGMAstNodePtr& type_id) const;
+	// Keep generated declaration ownership in one typed helper so forwards,
+	// class shells, and materialized definitions cannot diverge.
+	string GeneratedOwner(const TemplateDefinition& definition) const;
+	bool PreserveInlineGeneratedOrder(const vector<CPPGMAstNodePtr>& generated_classes,
+		const string& owner) const;
+	bool HasInlineTemplateCandidate(const vector<const TemplateDefinition*>& definitions,
+		const string& context) const;
+	bool IsTopLevelPackPattern(const string& value) const;
 	CPPGMAstNodePtr FunctionDeclarator(const CPPGMAstNodePtr& declaration) const;
 	bool IsBuiltinArithmeticType(string raw) const;
 	string CommonBuiltinArithmeticType(const string& left, const string& right) const;
@@ -1064,8 +1072,10 @@ private:
 			next_context = JoinPath(context, class_name);
 			class_declarations_[next_context] = node;
 			IndexConstantMembers(node, next_context);
-			if(LastComponent(context) == class_name) class_declarations_[context] = node;
-			if(LastComponent(context) == class_name) IndexConstantMembers(node, context);
+			if(LastComponent(context) == class_name) {
+				class_declarations_[context] = node;
+				IndexConstantMembers(node, context);
+			}
 			if(function_contexts_.find(context) != function_contexts_.end()) {
 				const map<string, string>::const_iterator owner = function_owners_.find(context);
 				const string function_owner = owner == function_owners_.end() ? PrefixComponent(context) : owner->second;

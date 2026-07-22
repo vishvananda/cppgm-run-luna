@@ -69,15 +69,55 @@ bool PA18TemplateExpander::MatchTrailingTypePack(const vector<string>& pattern_p
 	for(size_t part = 0; part < fixed_parts; ++part)
 		if(!MatchTypePattern(pattern_parts[part], actual_parts[part], parameter_names,
 			inferred, context, class_pattern)) return false;
-	string combined;
+	map<string, string> expansion_bindings;
 	for(size_t part = fixed_parts; part < actual_parts.size(); ++part) {
-		if(!combined.empty()) combined += ",";
-		combined += CanonicalSpelling(actual_parts[part]);
+		map<string, string> one;
+		if(!MatchTypePattern(pack_pattern, CanonicalSpelling(actual_parts[part]),
+			parameter_names, &one, context, class_pattern)) return false;
+		for(map<string, string>::const_iterator binding = one.begin();
+			binding != one.end(); ++binding) {
+			const bool pack_binding = binding->first == pack_pattern ||
+				template_pack_names_.find(binding->first) != template_pack_names_.end();
+			map<string, string>::iterator prior = expansion_bindings.find(binding->first);
+			if(pack_binding) {
+				if(prior != expansion_bindings.end() && !prior->second.empty())
+					prior->second += ",";
+				expansion_bindings[binding->first] += binding->second;
+			} else if(prior != expansion_bindings.end() &&
+				prior->second != binding->second) return false;
+			else expansion_bindings[binding->first] = binding->second;
+		}
 	}
-	map<string, string>::const_iterator prior = inferred->find(pack_pattern);
-	if(prior != inferred->end() && CanonicalSpelling(prior->second) !=
-		CanonicalSpelling(combined)) return false;
-	(*inferred)[pack_pattern] = combined;
+	for(map<string, string>::const_iterator binding = expansion_bindings.begin();
+		binding != expansion_bindings.end(); ++binding) {
+		map<string, string>::const_iterator prior = inferred->find(binding->first);
+		if(prior != inferred->end() && CanonicalSpelling(prior->second) !=
+			CanonicalSpelling(binding->second)) return false;
+		(*inferred)[binding->first] = binding->second;
+	}
+	if(actual_parts.size() == fixed_parts) {
+		const auto contains_identifier = [](const string& text, const string& name) {
+			for(size_t position = text.find(name); position != string::npos;
+				position = text.find(name, position + name.size())) {
+				if((position == 0 || !IsIdentifierCharacter(text[position - 1])) &&
+					(position + name.size() == text.size() ||
+						!IsIdentifierCharacter(text[position + name.size()]))) return true;
+			}
+			return false;
+		};
+		bool found_pack = false;
+		if(parameter_names.find(pack_pattern) != parameter_names.end()) {
+			(*inferred)[pack_pattern] = string();
+			found_pack = true;
+		}
+		for(set<string>::const_iterator pack = template_pack_names_.begin();
+			pack != template_pack_names_.end(); ++pack)
+			if(!pack->empty() && contains_identifier(pack_pattern, *pack)) {
+				(*inferred)[*pack] = string();
+				found_pack = true;
+			}
+		if(!found_pack && !pack_pattern.empty()) (*inferred)[pack_pattern] = string();
+	}
 	return true;
 }
 

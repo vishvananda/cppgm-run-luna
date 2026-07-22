@@ -5,6 +5,54 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
+string PA18TemplateExpander::GeneratedOwner(const TemplateDefinition& definition) const
+{
+	return definition.lexical_owner.empty() ? definition.owner : definition.lexical_owner;
+}
+
+bool PA18TemplateExpander::PreserveInlineGeneratedOrder(
+	const vector<CPPGMAstNodePtr>& generated_classes, const string& owner) const
+{
+	map<string, string>::const_iterator inline_owner = lexical_namespace_logical_.find(owner);
+	if(inline_owner != lexical_namespace_logical_.end() && inline_owner->second != owner)
+		return true;
+	if(generated_classes.empty()) return false;
+	for(size_t i = 0; i < generated_classes.size(); ++i) {
+		if(!generated_classes[i] || generated_classes[i]->kind != "class-specifier") return false;
+		map<string, string>::const_iterator base = specialization_bases_.find(
+			LastComponent(generated_classes[i]->value));
+		const TemplateDefinition* definition = base == specialization_bases_.end() ?
+			0 : FindDefinition(base->second, owner);
+		map<string, string>::const_iterator logical = definition ?
+			lexical_namespace_logical_.find(definition->lexical_owner) :
+			lexical_namespace_logical_.end();
+		if(!definition || definition->lexical_owner.empty() ||
+			definition->lexical_owner == definition->owner ||
+			logical == lexical_namespace_logical_.end() ||
+			logical->second != definition->owner) return false;
+	}
+	return true;
+}
+
+bool PA18TemplateExpander::HasInlineTemplateCandidate(
+	const vector<const TemplateDefinition*>& definitions, const string& context) const
+{
+	const string context_owner = PrefixComponent(context);
+	for(size_t candidate = 0; candidate < definitions.size(); ++candidate) {
+		const TemplateDefinition& definition = *definitions[candidate];
+		map<string, string>::const_iterator logical = lexical_namespace_logical_.find(
+			definition.lexical_owner);
+		if(logical != lexical_namespace_logical_.end() &&
+			logical->second == definition.owner &&
+			(definition.owner == context_owner ||
+				(context_owner.size() > definition.owner.size() &&
+				 context_owner.compare(0, definition.owner.size(), definition.owner) == 0 &&
+				 context_owner[definition.owner.size()] == ':')))
+			return true;
+	}
+	return false;
+}
+
 string NormalizeTypeArgument(string raw)
 {
 	raw = CanonicalSpelling(raw);
@@ -452,6 +500,32 @@ string PA18TemplateExpander::ResolveAlias(string spelling, const string& context
 			if(spelling.find("::") == string::npos &&
 				candidates != type_aliases_by_name_.end() && candidates->second.size() == 1)
 				direct = type_aliases_.find(candidates->second[0]);
+		}
+		if(direct == type_aliases_.end()) {
+			// Match a qualified alias through an inline namespace in the same
+			// logical namespace.  The alias remains stored under its physical
+			// owner, while source lookup is allowed to omit the inline component.
+			const size_t raw_separator = TopLevelScopeSeparator(spelling);
+			if(raw_separator != string::npos) {
+				const string logical_owner = spelling.substr(0, raw_separator);
+				const string logical_name = spelling.substr(raw_separator + 2);
+				map<string, string>::const_iterator logical_match = type_aliases_.end();
+				for(map<string, string>::const_iterator it = type_aliases_.begin();
+					it != type_aliases_.end(); ++it) {
+					if(LastComponent(it->first) != logical_name) continue;
+					const string physical_owner = PrefixComponent(it->first);
+					map<string, string>::const_iterator logical =
+						lexical_namespace_logical_.find(physical_owner);
+					if(logical == lexical_namespace_logical_.end() ||
+						logical->second != logical_owner) continue;
+					if(logical_match != type_aliases_.end()) {
+						logical_match = type_aliases_.end();
+						break;
+					}
+					logical_match = it;
+				}
+				if(logical_match != type_aliases_.end()) direct = logical_match;
+			}
 		}
 		if(direct != type_aliases_.end()) {
 			string target = direct->second;

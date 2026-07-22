@@ -1,7 +1,5 @@
 #include "pa18_templates_collection.h"
 #include "pa18_templates_rewrite.h"
-
-
 using namespace pa18_templates_internal;
 
 namespace {
@@ -912,8 +910,10 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 		const string callee_name = result_callee->value;
 		const vector<const TemplateDefinition*> definitions =
 			FindFunctionDefinitions(callee_name, context);
+		const bool inline_template_candidate = HasInlineTemplateCandidate(definitions, context);
 		if(!HasMaterializedMemberFunction(callee_name, context) &&
-			!HasExactOrdinaryMatch(result, callee_name, substitutions, context))
+			(!HasExactOrdinaryMatch(result, callee_name, substitutions, context) ||
+				inline_template_candidate))
 			for(size_t candidate = 0; candidate < definitions.size(); ++candidate) {
 				const TemplateDefinition* definition = definitions[candidate];
 				vector<string> inferred;
