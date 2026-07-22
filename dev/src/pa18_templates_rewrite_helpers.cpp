@@ -7,6 +7,10 @@ int PA18TemplateExpander::MatchObjectCvPattern(const string& pattern,
 	const string& actual, const set<string>& parameter_names,
 	map<string, string>* inferred, const string& context) const
 {
+	string function_result, function_qualifiers;
+	vector<string> function_parameters;
+	if(SplitDirectFunctionType(actual, &function_result, &function_parameters,
+		&function_qualifiers)) return -1;
 	auto object_cv_and_base = [](const string& spelling, int* mask, string* base) {
 		*mask = 0;
 		string remaining;

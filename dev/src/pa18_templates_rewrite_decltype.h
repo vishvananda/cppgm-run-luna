@@ -328,6 +328,33 @@
 			if(!result->empty()) return true;
 		}
 		if(!explicit_definition) {
+			// If no template overload is viable, an ellipsis declaration is the
+			// standard fallback for an overload probe.  The signature map's single
+			// entry is intentionally last-declaration-wins, so consult the complete
+			// overload set before using FindFunctionSignature.
+			for(map<string, vector<FunctionSignature> >::const_iterator overload =
+				function_overloads_.begin(); overload != function_overloads_.end(); ++overload) {
+				const string suffix = "::" + callee;
+				if(overload->first != callee &&
+					(overload->first.size() <= suffix.size() ||
+						overload->first.compare(overload->first.size() - suffix.size(),
+							suffix.size(), suffix) != 0)) continue;
+				for(size_t candidate = 0; candidate < overload->second.size(); ++candidate) {
+					const FunctionSignature& signature = overload->second[candidate];
+					const CPPGMAstNodePtr parameters = signature.parameters;
+					bool ellipsis = false;
+					if(parameters) for(size_t parameter = 0; parameter < parameters->children.size();
+						++parameter) {
+						const CPPGMAstNodePtr item = parameters->children[parameter];
+						if(item && item->kind == "ellipsis") {
+							ellipsis = true;
+							break;
+						}
+					}
+					if(ellipsis && signature.result_specifiers)
+						return (*result = NodeTypeSpelling(signature.result_specifiers), true);
+				}
+			}
 			const FunctionSignature* signature = FindFunctionSignature(callee, context);
 			if(signature && signature->result_specifiers) {
 				*result = NodeTypeSpelling(signature->result_specifiers);

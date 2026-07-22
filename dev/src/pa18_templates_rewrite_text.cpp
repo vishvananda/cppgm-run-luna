@@ -11,6 +11,23 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 {
 	if(template_replaced) *template_replaced = false;
 	raw = NormalizeElaboratedSpelling(raw, context);
+	// Expand a type pack embedded in a direct function type before parsing any
+	// nested template-id: `R(Args...)` becomes `R(A,B)`.  A standalone pack
+	// expansion stays on the existing path that emits separate outer arguments.
+	for(map<string, vector<string> >::const_iterator active_pack =
+		active_pack_substitutions_.begin(); active_pack != active_pack_substitutions_.end();
+		++active_pack) {
+		const string token = active_pack->first + "...";
+		if(raw == token) continue;
+		string expanded;
+		for(size_t element = 0; element < active_pack->second.size(); ++element) {
+			if(!expanded.empty()) expanded += ',';
+			expanded += active_pack->second[element];
+		}
+		for(size_t at = raw.find(token); at != string::npos;
+			at = raw.find(token, at + expanded.size()))
+			raw.replace(at, token.size(), expanded);
+	}
 		if(raw.compare(0, 8, "operator") == 0) {
 			const string suffix = raw.substr(8);
 			map<string, string>::const_iterator operator_substitution = substitutions.find(suffix);
@@ -161,6 +178,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			if(current_class && current_key != specialization_arguments_.end() &&
 				current_key->second.size() == current_arguments.size()) {
 				map<string, string> current_bindings = substitutions;
+				map<string, vector<string> > current_packs;
 				map<string, string>::const_iterator current_base =
 					specialization_bases_.find(LastComponent(current_name));
 				const TemplateDefinition* current_primary = current_base ==
@@ -177,17 +195,40 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 					if(partials != class_specializations_.end())
 						for(size_t partial = 0; partial < partials->second.size(); ++partial) {
 							map<string, string> partial_bindings;
-							if(MatchClassSpecializationPattern(partials->second[partial],
-								current_key->second, &partial_bindings, context))
+							const bool matched_partial = MatchClassSpecializationPattern(
+								partials->second[partial], current_key->second,
+								&partial_bindings, context);
+							if(matched_partial)
 								for(map<string, string>::const_iterator binding = partial_bindings.begin();
 									binding != partial_bindings.end(); ++binding)
 									current_bindings[binding->first] = binding->second;
+							if(matched_partial)
+									for(size_t pack = 0; pack < partials->second[partial].specialization_pack_names.size(); ++pack) {
+										const string& pack_name = partials->second[partial].specialization_pack_names[pack];
+										map<string, string>::const_iterator binding = partial_bindings.find(pack_name);
+										if(binding != partial_bindings.end() && !binding->second.empty())
+											current_packs[pack_name] = SplitTemplateArguments(binding->second);
+										else current_packs[pack_name] = vector<string>();
+									}
 						}
 				}
-			same_current_specialization = true;
+				 same_current_specialization = true;
 				for(size_t argument = 0; argument < current_arguments.size(); ++argument) {
+					string source_argument = CanonicalSpelling(current_arguments[argument]);
+					for(map<string, vector<string> >::const_iterator pack = current_packs.begin();
+						pack != current_packs.end(); ++pack) {
+						string expanded;
+						for(size_t value = 0; value < pack->second.size(); ++value) {
+							if(!expanded.empty()) expanded += ',';
+							expanded += pack->second[value];
+						}
+						const string token = pack->first + "...";
+						for(size_t at = source_argument.find(token); at != string::npos;
+							at = source_argument.find(token, at + expanded.size()))
+							source_argument.replace(at, token.size(), expanded);
+					}
 					const string actual = QualifyTypeArgument(NormalizeTypeArgument(
-						ReplaceIdentifiers(CanonicalSpelling(current_arguments[argument]),
+						ReplaceIdentifiers(source_argument,
 							current_bindings)), context);
 					const string expected = NormalizeTypeArgument(
 						CanonicalSpelling(current_key->second[argument]));
@@ -223,7 +264,14 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			}
 			if(lookup_base != base) definition = FindDefinition(lookup_base, context);
 			if(!definition) continue;
-				const vector<string> raw_template_args = SplitTemplateArguments(arguments_text);
+				vector<string> raw_template_args = SplitTemplateArguments(arguments_text);
+				// A pack expansion inside a template-id can leave a synthetic
+				// trailing empty component (`F<T, Pack...>` with an empty pack).
+				// Remove that artifact at the point where the expansion is consumed;
+				// the general argument splitter must continue preserving source
+				// spellings for other parser paths.
+				while(!raw_template_args.empty() && raw_template_args.back().empty())
+					raw_template_args.pop_back();
 				vector<string> args;
 				bool deferred_pack_argument = false;
 			for(size_t raw_argument = 0; raw_argument < raw_template_args.size(); ++raw_argument) {
@@ -286,7 +334,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 						break;
 					}
 				}
-				args.push_back(raw_template_args[raw_argument]);
+			args.push_back(source_argument);
 			}
 			if(deferred_pack_argument) {
 				search = close + 1;

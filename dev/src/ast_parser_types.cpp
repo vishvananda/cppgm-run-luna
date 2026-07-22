@@ -607,7 +607,16 @@ CPPGMAstNodePtr Parser::ParseAbstractDeclarator()
 		if (Is("(") )
 		{
 			CPPGMAstNodePtr parameters = ParseParameterClause();
-			if (parameters) { Add(result, parameters); any = true; continue; }
+			if (parameters)
+			{
+				Add(result, parameters);
+				any = true;
+				// Function type-ids use an abstract declarator, so their cv/ref
+				// qualifiers follow the parameter clause here rather than the
+				// named-declarator path handled by ParseDeclaratorCore.
+				ParseFunctionSuffixes(result);
+				continue;
+			}
 		}
 		Restore(suffix);
 		if (Take("["))

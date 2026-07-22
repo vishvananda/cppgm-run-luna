@@ -57,10 +57,12 @@ string NormalizeTypeArgument(string raw)
 		const size_t pointer = raw.rfind('*');
 		if(pointer != string::npos && raw.rfind("volatile") < pointer) raw += " volatile"; }
 	if(raw.size() > 5 && raw.compare(raw.size() - 5, 5, "const") == 0 &&
-		raw.find(' ') == string::npos && raw.find('_') == string::npos)
+		raw.find(' ') == string::npos && raw.find('_') == string::npos &&
+		raw.find('(') == string::npos)
 		raw = "const " + raw.substr(0, raw.size() - 5);
 	else if(raw.size() > 8 && raw.compare(raw.size() - 8, 8, "volatile") == 0 &&
-		raw.find(' ') == string::npos && raw.find('_') == string::npos)
+		raw.find(' ') == string::npos && raw.find('_') == string::npos &&
+		raw.find('(') == string::npos)
 		raw = "volatile " + raw.substr(0, raw.size() - 8);
 	return CanonicalSpelling(raw);
 }

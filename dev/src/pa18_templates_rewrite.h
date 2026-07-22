@@ -5,18 +5,34 @@
 bool MatchTypePattern(string pattern, string actual,
 		const set<string>& parameter_names, map<string, string>* inferred,
 		const string& context, bool class_pattern = false) const;
+	bool SplitDirectFunctionType(const string& raw, string* result,
+		vector<string>* parameters, string* qualifiers) const;
 	int MatchObjectCvPattern(const string& pattern, const string& actual,
-		const set<string>& parameter_names, map<string, string>* inferred,
-		const string& context) const;
+			const set<string>& parameter_names, map<string, string>* inferred,
+			const string& context) const;
 	bool MatchTrailingTypePack(const vector<string>& pattern_parts,
 		const vector<string>& actual_parts, const set<string>& parameter_names,
 		map<string, string>* inferred, const string& context, bool class_pattern) const;
 	bool IsTemplatePackName(const TemplateDefinition& definition, const string& name) const;
 	bool MatchOrderingTypePattern(const string& raw_pattern, const string& raw_actual,
-		const set<string>& parameter_names, map<string, string>* inferred) const
+			const set<string>& parameter_names, map<string, string>* inferred) const
 	{
 		string pattern = CanonicalSpelling(raw_pattern);
 		string actual = CanonicalSpelling(raw_actual);
+		string pattern_result, actual_result, pattern_qualifiers, actual_qualifiers;
+		vector<string> pattern_parameters, actual_parameters;
+		const bool pattern_function = SplitDirectFunctionType(pattern, &pattern_result,
+			&pattern_parameters, &pattern_qualifiers);
+		const bool actual_function = SplitDirectFunctionType(actual, &actual_result,
+			&actual_parameters, &actual_qualifiers);
+		if(pattern_function) {
+			if(!actual_function || pattern_qualifiers != actual_qualifiers ||
+				!MatchOrderingTypePattern(pattern_result, actual_result, parameter_names,
+					inferred)) return false;
+			return MatchOrderingPatternList(pattern_parameters, actual_parameters,
+				parameter_names, inferred);
+		}
+		if(actual_function && parameter_names.find(pattern) == parameter_names.end()) return false;
 		const size_t pattern_array = pattern.rfind('[');
 		const size_t actual_array = actual.rfind('[');
 		if(pattern_array != string::npos || actual_array != string::npos) {
@@ -158,7 +174,7 @@ bool MatchTypePattern(string pattern, string actual,
 		size_t pattern_index = 0;
 		size_t argument_index = 0;
 		for(; pattern_index < definition.specialization_pattern.size(); ++pattern_index) {
-			const string pattern = CanonicalSpelling(
+			string pattern = CanonicalSpelling(
 				definition.specialization_pattern[pattern_index]);
 			const bool pack = pattern.size() > 3 &&
 				pattern.compare(pattern.size() - 3, 3, "...") == 0;
@@ -196,9 +212,11 @@ bool MatchTypePattern(string pattern, string actual,
 			// the recursive branch and wrapping unsigned arithmetic.
 			if(argument_index > 0 && argument_index - 1 < definition.parameters.size() &&
 				!definition.parameters[argument_index - 1].type) {
-				PA19IntegralValue normalized_value;
-				PA19ConstantExpressionParser parser(constant_values_, map<string,string>(),
+				PA19ConstantExpressionParser parser(constant_values_, local,
 					constant_type_sizes_, constant_type_alignments_, type_aliases_);
+				PA19IntegralValue normalized_value;
+				if(parser.Evaluate(pattern, &normalized_value))
+					pattern = TemplateIntegralValueSpelling(normalized_value);
 				if(parser.Evaluate(actual, &normalized_value))
 					actual = TemplateIntegralValueSpelling(normalized_value);
 			}

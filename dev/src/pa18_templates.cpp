@@ -170,8 +170,12 @@ size_t PA18TemplateExpander::EstimateTypeSize(string raw, const string& context)
 		if(array_close != string::npos) {
 			const long count = strtol(raw.substr(array_open + 1,
 				array_close - array_open - 1).c_str(), 0, 10);
-			if(count >= 0) return EstimateTypeSize(raw.substr(0, array_open), context) *
-				static_cast<size_t>(count);
+			if(count >= 0) {
+				string element = CanonicalSpelling(raw.substr(0, array_open));
+				const size_t reference = element.rfind("(&");
+				if(reference != string::npos) element = CanonicalSpelling(element.substr(0, reference));
+				return EstimateTypeSize(element, context) * static_cast<size_t>(count);
+			}
 		}
 	}
 	if(!raw.empty() && (raw[raw.size() - 1] == '*' || raw[raw.size() - 1] == '&')) return 8;
@@ -331,8 +335,9 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 	map<string, string>::const_iterator local = local_class_names_.find(
 		JoinPath(context, spelling));
 	if(local != local_class_names_.end()) spelling = local->second;
+	const bool direct_function = SplitDirectFunctionType(spelling, 0, 0, 0);
 	if(spelling.size() > 5 && spelling.compare(spelling.size() - 5, 5, "const") == 0 &&
-		spelling.find("::") == string::npos) {
+		spelling.find("::") == string::npos && !direct_function) {
 	spelling = CanonicalSpelling(spelling.substr(0, spelling.size() - 5));
 	prefix = "const ";
 	}

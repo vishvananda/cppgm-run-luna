@@ -254,6 +254,22 @@ CPPGMAstNodePtr Parser::ParseCallSuffix(const CPPGMAstNodePtr& callee,
 	return result;
 }
 
+bool Parser::LooksLikeNamedCastType()
+{
+	if (Peek().kind != AST_IDENTIFIER || value_names_.find(Peek().text) != value_names_.end() ||
+		!IsNamedTypeStart()) return false;
+	if (LooksLikeTypeName(Peek())) return true;
+	Mark name_mark = Save();
+	string name;
+	bool result = false;
+	if (ParseName(&name, false))
+		result = name.find('<') != string::npos || types_.find(name) != types_.end() ||
+			templates_.find(name) != templates_.end() || Is("*") || Is("&") ||
+			Is("&&") || Is("[") || IsCv(Peek().text);
+	Restore(name_mark);
+	return result;
+}
+
 CPPGMAstNodePtr Parser::ParsePrimaryExpression()
 {
 	if (Peek().kind == AST_LITERAL)
@@ -334,10 +350,7 @@ CPPGMAstNodePtr Parser::ParsePrimaryExpression()
 		++ordinary_depth_;
 		const bool cast_type_start = IsFundamental(Peek().text) || IsCv(Peek().text) ||
 			Is("class") || Is("struct") || Is("union") || Is("enum") ||
-			Is("decltype") || Is("typename") ||
-			(Peek().kind == AST_IDENTIFIER &&
-			 value_names_.find(Peek().text) == value_names_.end() &&
-			 LooksLikeTypeName(Peek()));
+			Is("decltype") || Is("typename") || LooksLikeNamedCastType();
 		if (cast_type_start)
 		{
 			CPPGMAstNodePtr type = ParseTypeId();
@@ -396,8 +409,18 @@ CPPGMAstNodePtr Parser::ParseTypeTraitExpression()
 	else result = Node("type-trait-expression", TokenLabel(keyword) + ":" + keyword);
 	Mark type_mark = Save();
 	bool use_type = IsTypeStart();
-	if (use_type && Peek().kind == AST_IDENTIFIER && Peek(1).text == "(")
-		use_type = false;
+	if (use_type && Peek().kind == AST_IDENTIFIER)
+	{
+		// A qualified callable such as `detail::helper(...)` is lexically also
+		// a named type start.  Probe the complete name before deciding that the
+		// operand is a type; the immediate-token check misses the intervening
+		// scope separators and makes the enclosing template declaration fail to
+		// parse.
+		Mark call_mark = Save();
+		string candidate;
+		if (ParseName(&candidate, false) && Is("(")) use_type = false;
+		Restore(call_mark);
+	}
 	if (use_type)
 	{
 		CPPGMAstNodePtr type = ParseTypeId();
@@ -410,7 +433,9 @@ CPPGMAstNodePtr Parser::ParseTypeTraitExpression()
 	}
 	Restore(type_mark);
 	CPPGMAstNodePtr expression = ParseExpression();
-	if (!expression || !Take(")")) return CPPGMAstNodePtr();
+	if (!expression || !Take(")")) {
+		return CPPGMAstNodePtr();
+	}
 	--ordinary_depth_;
 	Add(result, expression);
 	return result;

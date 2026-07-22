@@ -624,6 +624,27 @@ bool PA18TemplateExpander::EvaluateIntegralText(string raw, const string& contex
 		if(rewritten != raw && EvaluateIntegralText(rewritten, context,
 			substitutions, result)) return true;
 	}
+	// `sizeof` may take an overloaded function call as its operand.  The
+	// ordinary constant-expression parser only has a type spelling at this
+	// point, so use the decltype call resolver to select the viable template
+	// overload and then measure its typed result.  This is particularly
+	// important for arity probes whose functions return a reference to an
+	// array (`char (&)[N]`).
+	if(raw.compare(0, 7, "sizeof(") == 0 && !raw.empty() && raw[raw.size() - 1] == ')') {
+		const string operand = raw.substr(7, raw.size() - 8);
+		string call_type;
+		if(FunctionCallResultType(operand, context, substitutions, &call_type)) {
+			string resolved = CanonicalSpelling(RemoveMarker(RewriteText(
+				call_type, context, substitutions, 0)));
+			resolved = ResolveAlias(resolved, context);
+			const size_t size = EstimateTypeSize(resolved, context);
+			if(size) {
+				*result = PA19IntegralValue::Unsigned(
+					static_cast<unsigned long long>(size), "unsigned long", 64);
+				return true;
+			}
+		}
+	}
 	if(EvaluateActivePackSize(raw, result)) return true;
 	const size_t subscript_open = raw.find('[');
 	if(subscript_open != string::npos && raw[raw.size() - 1] == ']' && subscript_open > 0) {
@@ -1256,6 +1277,17 @@ string PA18TemplateExpander::MaterializeInstantiation(const TemplateDefinition& 
 	RegisterGeneratedSpecialization(definition, metadata_args, local_name);
 	if(definition.class_template) substitutions[definition.name] = local_name;
 	specializations_[key] = local_name;
+	if(DeferIncompleteAliasClass(definition, args, context)) {
+		const string generated_owner = definition.lexical_owner.empty() ?
+			definition.owner : definition.lexical_owner;
+		const string generated_path = JoinPath(definition.owner, local_name);
+		const string lexical_path = JoinPath(generated_owner, local_name);
+		class_contexts_.insert(generated_path);
+		class_contexts_.insert(lexical_path);
+		class_declarations_[generated_path] = MakeForwardClass(local_name);
+		class_declarations_[lexical_path] = class_declarations_[generated_path];
+		return local_name;
+	}
 	if(!active_specializations_.insert(key).second) return local_name;
 	return EmitInstantiation(definition, args, metadata_args, substitutions,
 		integral_substitutions, pack_substitutions, context, explicit_instantiation,

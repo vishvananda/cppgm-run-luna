@@ -728,6 +728,36 @@
 			throw;
 		}
 	}
+	bool DeferIncompleteAliasClass(const TemplateDefinition& definition,
+		const vector<string>& arguments, const string& context) const
+	{
+		if(!definition.class_template || !definition.declaration ||
+			definition.declaration->kind != "class-specifier" ||
+			definition.declaration->children.size() <= 1) return false;
+		bool has_alias = false;
+		for(size_t child = 0; child < definition.declaration->children.size(); ++child) {
+			const CPPGMAstNodePtr member = definition.declaration->children[child];
+			if(!member || member->kind == "class-key" ||
+				member->kind == "access-specifier" || member->kind == "empty-declaration") continue;
+			if(member->kind == "alias-declaration") {
+				has_alias = true;
+				continue;
+			}
+			if(member->kind == "simple-declaration" && !member->children.empty() &&
+				SpellNode(member->children[0]).find("typedef") != string::npos) {
+				has_alias = true;
+				continue;
+			}
+			return false;
+		}
+		if(!has_alias) return false;
+		for(size_t argument = 0; argument < arguments.size(); ++argument) {
+			const string spelling = NormalizeTypeArgument(arguments[argument]);
+			const CPPGMAstNodePtr declaration = FindClassDeclaration(spelling, context);
+			if(declaration && declaration->kind == "class-forward-declaration") return true;
+		}
+		return false;
+	}
 	string NormalizeTemplateTemplateArgument(string raw, const string& context,
 		const map<string, string>& substitutions) const
 	{
@@ -946,7 +976,13 @@
 					!definition.parameters[i].type && IsKnownEnumType(
 						ResolveAlias(ReplaceIdentifiers(definition.parameters[i].non_type_type,
 							substitutions), context), context);
-				local_name += TypeSuffix(enum_argument ? metadata_args[i] : args[i]);
+					const string argument_spelling = enum_argument ? metadata_args[i] : args[i];
+					local_name += TypeSuffix(argument_spelling);
+					// Function types and object types can otherwise collapse to the
+					// same identifier suffix (`const int` vs `const int()`).
+					if(definition.class_template && definition.parameters[i].type &&
+						argument_spelling.find('(') != string::npos)
+						local_name += "_fn";
 				if(i + 1 == args.size()) {
 					const bool trailing_pack = !definition.parameters.empty() &&
 						definition.parameters.back().pack;

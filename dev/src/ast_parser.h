@@ -135,6 +135,7 @@ private:
 	void RegisterTemplate(const std::string& name);
 	bool IsTypeStart() const;
 	bool IsNamedTypeStart() const;
+	bool LooksLikeNamedCastType();
 	bool IsFundamental(const std::string& text) const;
 	bool IsStorageOrFunctionSpecifier(const std::string& text) const;
 	bool IsCv(const std::string& text) const;

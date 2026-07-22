@@ -3,6 +3,84 @@
 using namespace std;
 namespace pa18_templates_internal {
 
+bool PA18TemplateExpander::SplitDirectFunctionType(const string& raw,
+	string* result, vector<string>* parameters, string* qualifiers) const
+{
+	const string spelling = NormalizeTypeArgument(raw);
+	int angle_depth = 0;
+	int bracket_depth = 0;
+	for(size_t open = 0; open < spelling.size(); ++open) {
+		const char ch = spelling[open];
+		if(ch == '<' && IsTemplateAngleOpen(spelling, open)) {
+			++angle_depth;
+			continue;
+		}
+		if(ch == '>' && angle_depth > 0 && IsTemplateAngleClose(spelling, open)) {
+			--angle_depth;
+			continue;
+		}
+		if(ch == '[') {
+			++bracket_depth;
+			continue;
+		}
+		if(ch == ']' && bracket_depth > 0) {
+			--bracket_depth;
+			continue;
+		}
+		if(ch != '(' || angle_depth != 0 || bracket_depth != 0) continue;
+		const string prefix = CanonicalSpelling(spelling.substr(0, open));
+		if(prefix.empty()) return false;
+		// Expression wrappers such as `decltype(...)` use the same parenthesis
+		// shape as a direct function type, but they are not function types.  Do
+		// not route dependent placement-new/default-argument expressions through
+		// the function-type matcher.
+		if(prefix == "decltype" || prefix == "sizeof" || prefix == "alignof" ||
+			prefix == "new") return false;
+		int parentheses = 1;
+		size_t close = string::npos;
+		for(size_t position = open + 1; position < spelling.size(); ++position) {
+			if(spelling[position] == '(') ++parentheses;
+			else if(spelling[position] == ')' && --parentheses == 0) {
+				close = position;
+				break;
+			}
+		}
+		if(close == string::npos) return false;
+		// A function-pointer spelling has a second declarator parenthesis after
+		// the first pair (`R(*)(A)`).  It is handled by the existing pointer
+		// matcher, so only accept a direct function type here.
+		const string suffix = CanonicalSpelling(spelling.substr(close + 1));
+		bool valid_suffix = true;
+		for(size_t position = 0; position < suffix.size();) {
+			if(suffix[position] == '&') {
+				++position;
+				if(position < suffix.size() && suffix[position] == '&') ++position;
+				continue;
+			}
+			if(!IsIdentifierCharacter(suffix[position])) {
+				valid_suffix = false;
+				break;
+			}
+			size_t end = position + 1;
+			while(end < suffix.size() && IsIdentifierCharacter(suffix[end])) ++end;
+			const string word = suffix.substr(position, end - position);
+			if(word != "const" && word != "volatile" && word != "noexcept") {
+				valid_suffix = false;
+				break;
+			}
+			position = end;
+		}
+		if(!valid_suffix || suffix.find('(') != string::npos ||
+			prefix.find('(') != string::npos || prefix.find(')') != string::npos) return false;
+		if(result) *result = prefix;
+		if(parameters) *parameters = SplitTemplateArguments(spelling.substr(open + 1,
+			close - open - 1));
+		if(qualifiers) *qualifiers = suffix;
+		return true;
+	}
+	return false;
+}
+
 	bool PA18TemplateExpander::ClassPartialMoreSpecialized(const TemplateDefinition& lhs,
 		const TemplateDefinition& rhs, const string& context) const
 	{
@@ -23,6 +101,50 @@ namespace pa18_templates_internal {
 		const bool lhs_template_head = template_head(lhs);
 		const bool rhs_template_head = template_head(rhs);
 		if(lhs_template_head != rhs_template_head) return !lhs_template_head;
+		// When the outer specialization pattern is headed by a
+		// template-template parameter, the inner parameter list participates in
+		// partial ordering too.  A fixed arity head such as `Ptr<A>` is more
+		// specialized than the same head with a trailing `An...` pack.  The
+		// generic spelling matcher intentionally treats both as viable, so make
+		// this distinction before the identifier-renaming comparison below.
+		const auto template_head_arity = [&](const TemplateDefinition& definition,
+			size_t* fixed, bool* trailing_pack) {
+			for(size_t pattern_index = 0; pattern_index < definition.specialization_pattern.size();
+				++pattern_index) {
+				const string pattern = CanonicalSpelling(
+					definition.specialization_pattern[pattern_index]);
+				const size_t open = pattern.find('<');
+				if(open == string::npos) continue;
+				const string name = CanonicalSpelling(pattern.substr(0, open));
+				bool template_parameter = false;
+				for(size_t parameter = 0; parameter < definition.specialization_parameters.size() &&
+					parameter < definition.specialization_parameter_details.size(); ++parameter)
+					if(definition.specialization_parameters[parameter] == name &&
+						definition.specialization_parameter_details[parameter].template_template) {
+						template_parameter = true;
+						break;
+					}
+				if(!template_parameter) continue;
+				string arguments;
+				size_t close = string::npos;
+				if(!TemplateRange(pattern, open, &arguments, &close)) return false;
+				const vector<string> parts = SplitTemplateArguments(arguments);
+				*trailing_pack = !parts.empty() && parts.back().size() > 3 &&
+					parts.back().compare(parts.back().size() - 3, 3, "...") == 0;
+				*fixed = parts.size() - (*trailing_pack ? 1 : 0);
+				return true;
+			}
+			return false;
+		};
+		size_t lhs_fixed = 0, rhs_fixed = 0;
+		bool lhs_trailing_pack = false, rhs_trailing_pack = false;
+		if(template_head_arity(lhs, &lhs_fixed, &lhs_trailing_pack) &&
+			template_head_arity(rhs, &rhs_fixed, &rhs_trailing_pack)) {
+			if(lhs_trailing_pack != rhs_trailing_pack)
+				return !lhs_trailing_pack;
+			if(lhs_fixed != rhs_fixed)
+				return lhs_fixed > rhs_fixed;
+		}
 		// A fixed non-type pattern outranks a corresponding unconstrained
 		// parameter.  The ordering matcher below deliberately treats template
 		// parameters as metavariables, which otherwise makes `T<0, ...>` and
@@ -99,6 +221,38 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 {
 	pattern = NormalizeTypeArgument(pattern);
 	actual = NormalizeTypeArgument(ResolveAlias(actual, context));
+	// Peel matching pointer depth before the single-level pointer matcher below
+	// inspects a nested template-id.  Without this, `F<T>**` leaves one `*` on
+	// each spelling and the generated specialization identity cannot be
+	// recovered from `specialization_bases_`.
+	const auto pointer_depth = [](const string& spelling) {
+		size_t depth = 0;
+		int angle_depth = 0, parenthesis_depth = 0, bracket_depth = 0;
+		for(size_t position = 0; position < spelling.size(); ++position) {
+			const char ch = spelling[position];
+			if(ch == '<' && IsTemplateAngleOpen(spelling, position)) ++angle_depth;
+			else if(ch == '>' && angle_depth > 0 && IsTemplateAngleClose(spelling, position))
+				--angle_depth;
+			else if(ch == '(') ++parenthesis_depth;
+			else if(ch == ')' && parenthesis_depth > 0) --parenthesis_depth;
+			else if(ch == '[') ++bracket_depth;
+			else if(ch == ']' && bracket_depth > 0) --bracket_depth;
+			else if(ch == '*' && angle_depth == 0 && parenthesis_depth == 0 &&
+				bracket_depth == 0) ++depth;
+		}
+		return depth;
+	};
+	const size_t pattern_pointer_depth = pointer_depth(pattern);
+	const size_t actual_pointer_depth = pointer_depth(actual);
+	if(pattern_pointer_depth > 1 && actual_pointer_depth > 1) {
+		if(pattern_pointer_depth != actual_pointer_depth) return false;
+		pattern.erase(pattern.size() - pattern_pointer_depth);
+		actual.erase(actual.size() - actual_pointer_depth);
+		return MatchTypePattern(pattern, actual, parameter_names, inferred,
+			context, class_pattern);
+	}
+	if(class_pattern && actual_pointer_depth > 1 && pattern_pointer_depth == 1)
+		return false;
 	const auto separate_compact_cv = [](string spelling) {
 		static const char* const qualifiers[] = {"const", "volatile"};
 		for(size_t qualifier = 0; qualifier < 2; ++qualifier) {
@@ -159,6 +313,76 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 		return CanonicalSpelling(ReplaceIdentifiers(pattern_bound, *inferred)) ==
 			actual_bound;
 	}
+	// Direct function types have a different top-level grammar from function
+	// pointers.  Keep their parameter list and cv/ref qualifiers intact before
+	// the ordinary reference and object-cv normalization below, then bind a
+	// trailing type pack as one typed comma-separated substitution.
+	string pattern_result, actual_result, pattern_qualifiers, actual_qualifiers;
+	vector<string> pattern_parameters, actual_parameters;
+	const bool direct_pattern_function = SplitDirectFunctionType(pattern, &pattern_result,
+		&pattern_parameters, &pattern_qualifiers);
+	const bool direct_actual_function = SplitDirectFunctionType(actual, &actual_result,
+		&actual_parameters, &actual_qualifiers);
+	bool actual_function_converted = false;
+	if(direct_pattern_function) {
+		if(!direct_actual_function || pattern_qualifiers != actual_qualifiers ||
+			!MatchTypePattern(pattern_result, actual_result, parameter_names, inferred,
+				context, class_pattern)) return false;
+		if(!pattern_parameters.empty() && pattern_parameters.back().size() > 3 &&
+			pattern_parameters.back().compare(pattern_parameters.back().size() - 3, 3, "...") == 0) {
+			const size_t fixed = pattern_parameters.size() - 1;
+			if(actual_parameters.size() < fixed) return false;
+			for(size_t parameter = 0; parameter < fixed; ++parameter)
+				if(!MatchTypePattern(pattern_parameters[parameter], actual_parameters[parameter],
+					parameter_names, inferred, context, class_pattern)) return false;
+			const string pack_pattern = CanonicalSpelling(pattern_parameters.back().substr(
+				0, pattern_parameters.back().size() - 3));
+			if(parameter_names.find(pack_pattern) == parameter_names.end()) return false;
+			string combined;
+			for(size_t parameter = fixed; parameter < actual_parameters.size(); ++parameter) {
+				map<string, string> one;
+				if(!MatchTypePattern(pack_pattern, actual_parameters[parameter], parameter_names,
+					&one, context, class_pattern)) return false;
+				map<string, string>::const_iterator value = one.find(pack_pattern);
+				if(value == one.end()) return false;
+				if(!combined.empty()) combined += ",";
+				combined += CanonicalSpelling(value->second);
+			}
+			map<string, string>::const_iterator prior = inferred->find(pack_pattern);
+			if(prior != inferred->end() && CanonicalSpelling(prior->second) !=
+				CanonicalSpelling(combined)) return false;
+			(*inferred)[pack_pattern] = combined;
+			return true;
+		}
+		if(pattern_parameters.size() != actual_parameters.size()) return false;
+		for(size_t parameter = 0; parameter < pattern_parameters.size(); ++parameter)
+			if(!MatchTypePattern(pattern_parameters[parameter], actual_parameters[parameter],
+				parameter_names, inferred, context, class_pattern)) return false;
+		return true;
+	}
+	// A function type used as a nested type argument can be supplied to a
+	// pointer-shaped partial specialization after the language's function-to-
+	// pointer adjustment.  Preserve the typed result and parameter list while
+	// presenting the spelling expected by the existing pointer matcher.
+	if(direct_actual_function && !direct_pattern_function &&
+		pattern.find(")(") != string::npos && actual_qualifiers.empty()) {
+		string converted = actual_result + "(*)(";
+		for(size_t parameter = 0; parameter < actual_parameters.size(); ++parameter) {
+			if(parameter) converted += ',';
+			converted += actual_parameters[parameter];
+		}
+		converted += ')';
+		actual = CanonicalSpelling(converted);
+		actual_function_converted = true;
+	}
+	if(direct_actual_function && parameter_names.find(pattern) != parameter_names.end()) {
+		map<string, string>::const_iterator prior = inferred->find(pattern);
+		if(prior != inferred->end() && CanonicalSpelling(ResolveAlias(prior->second, context)) !=
+			CanonicalSpelling(ResolveAlias(actual, context))) return false;
+		(*inferred)[pattern] = actual;
+		return true;
+	}
+	if(direct_actual_function && !actual_function_converted) return false;
 	const auto trailing_cv_kind = [](const string& spelling) {
 		if(spelling.size() >= 9 && spelling.compare(spelling.size() - 8, 8,
 			"volatile") == 0 && spelling[spelling.size() - 9] == '*') return 2;
