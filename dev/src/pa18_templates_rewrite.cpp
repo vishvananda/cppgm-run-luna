@@ -877,8 +877,10 @@ bool PA18TemplateExpander::InferFunctionArguments(const TemplateDefinition& defi
 		vector<string> deferred_function_patterns;
 		vector<CPPGMAstNodePtr> deferred_function_arguments;
 		for(size_t i = 0; i < definition.parameters.size(); ++i) {
-			parameter_names.insert(definition.parameters[i].name);
-			if(explicit_prefix && i < explicit_prefix->size() && !definition.parameters[i].pack)
+			if(!definition.parameters[i].name.empty()) parameter_names.insert(
+				definition.parameters[i].name);
+			if(explicit_prefix && i < explicit_prefix->size() &&
+				!definition.parameters[i].pack && !definition.parameters[i].name.empty())
 				inferred[definition.parameters[i].name] = (*explicit_prefix)[i];
 		}
 		size_t argument_index = 0;

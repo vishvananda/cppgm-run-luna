@@ -17,6 +17,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 	for(map<string, vector<string> >::const_iterator active_pack =
 		active_pack_substitutions_.begin(); active_pack != active_pack_substitutions_.end();
 		++active_pack) {
+		if(active_pack->first.empty()) continue;
 		const string token = active_pack->first + "...";
 		if(raw == token) continue;
 		string expanded;
@@ -362,7 +363,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 							scope != substitutions.end() && !unresolved_scope; ++scope)
 							if(scope->second.find("decltype") != string::npos ||
 								scope->second.find("...") != string::npos ||
-								HasDependentVariableTemplateSpelling(scope->second))
+								HasDependentVariableTemplate(scope->second, context, substitutions))
 								unresolved_scope = true;
 						if(unresolved_scope &&
 							substitutions.find(CanonicalSpelling(args[i])) == substitutions.end()) {
@@ -383,7 +384,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 						const string& value = substituted_word->second;
 						resolved_identifier = value.find("decltype") == string::npos &&
 							value.find("...") == string::npos &&
-							!HasDependentVariableTemplateSpelling(value);
+							!HasDependentVariableTemplate(value, context, substitutions);
 					}
 					map<string, PA19IntegralValue>::const_iterator integral_word =
 						active_integral_substitutions_.find(word);
@@ -441,7 +442,8 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				if(args.size() < definition->parameters.size()) {
 				map<string, string> default_substitutions = substitutions;
 				for(size_t i = 0; i < args.size() && i < definition->parameters.size(); ++i)
-					default_substitutions[definition->parameters[i].name] = args[i];
+					if(!definition->parameters[i].name.empty())
+						default_substitutions[definition->parameters[i].name] = args[i];
 				for(size_t i = args.size(); i < definition->parameters.size(); ++i) {
 					string argument;
 					map<string, string>::const_iterator substituted = default_substitutions.find(
@@ -464,7 +466,8 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 					}
 					argument = QualifyTypeArgument(argument, context, definition->owner);
 					args.push_back(argument);
-					default_substitutions[definition->parameters[i].name] = argument;
+					if(!definition->parameters[i].name.empty())
+						default_substitutions[definition->parameters[i].name] = argument;
 				}
 			}
 			// Resolve non-type arguments in the surrounding substitution scope
@@ -483,7 +486,8 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 							" " + error.what());
 					}
 				}
-				argument_substitutions[definition->parameters[i].name] = args[i];
+				if(!definition->parameters[i].name.empty())
+					argument_substitutions[definition->parameters[i].name] = args[i];
 			}
 			definition = SelectClassTemplateDefinition(definition, args, context);
 			// Resolve a concrete nested owner before the generic member lookup so

@@ -6,12 +6,18 @@
 		const TemplateDefinition* direct = FindDefinition(raw_target, context);
 		if(direct && !direct->class_template) return true;
 		const string suffix = "::" + raw_target;
-		for(map<string, TemplateDefinition>::const_iterator it = definitions_.begin();
-			it != definitions_.end(); ++it)
-			if(!it->second.class_template && (it->second.qualified_name == raw_target ||
+		map<string, vector<string> >::const_iterator indexed =
+			definitions_by_name_.find(LastComponent(raw_target));
+		if(indexed == definitions_by_name_.end()) return false;
+		for(size_t i = 0; i < indexed->second.size(); ++i) {
+			map<string, TemplateDefinition>::const_iterator it =
+				definitions_.find(indexed->second[i]);
+			if(it == definitions_.end() || it->second.class_template) continue;
+			if(it->second.qualified_name == raw_target ||
 				(it->second.qualified_name.size() > suffix.size() &&
 				 it->second.qualified_name.compare(it->second.qualified_name.size() - suffix.size(),
-				 suffix.size(), suffix) == 0))) return true;
+				 suffix.size(), suffix) == 0)) return true;
+		}
 		return false;
 	}
 	string GeneratedFunctionQualifier(const TemplateDefinition& definition,
@@ -162,19 +168,28 @@
 			else current.erase(separator);
 		}
 		candidates.insert(raw_name);
-		for(map<string, TemplateDefinition>::const_iterator it = definitions_.begin();
-			it != definitions_.end(); ++it) {
-			if(it->second.class_template || candidates.find(it->second.qualified_name) == candidates.end()) continue;
+		const string short_name = LastComponent(raw_name);
+		map<string, vector<string> >::const_iterator indexed =
+			definitions_by_name_.find(short_name);
+		if(indexed == definitions_by_name_.end()) return result;
+		for(size_t indexed_definition = 0; indexed_definition < indexed->second.size();
+			++indexed_definition) {
+			map<string, TemplateDefinition>::const_iterator it = definitions_.find(
+				indexed->second[indexed_definition]);
+			if(it == definitions_.end() || it->second.class_template ||
+				candidates.find(it->second.qualified_name) == candidates.end()) continue;
 			bool duplicate = false;
 			for(size_t i = 0; i < result.size(); ++i)
 				if(result[i] == &it->second) duplicate = true;
 			if(!duplicate) result.push_back(&it->second);
 		}
 		if(!result.empty()) return result;
-		const string short_name = LastComponent(raw_name);
-		for(map<string, TemplateDefinition>::const_iterator it = definitions_.begin();
-			it != definitions_.end(); ++it)
-			if(!it->second.class_template && LastComponent(it->second.qualified_name) == short_name)
+		for(size_t indexed_definition = 0; indexed_definition < indexed->second.size();
+			++indexed_definition) {
+			map<string, TemplateDefinition>::const_iterator it = definitions_.find(
+				indexed->second[indexed_definition]);
+			if(it != definitions_.end() && !it->second.class_template)
 				result.push_back(&it->second);
+		}
 		return result;
 	}

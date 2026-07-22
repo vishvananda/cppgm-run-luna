@@ -370,7 +370,7 @@
 				map<string, string>::const_iterator owner_value = owner_substitutions.find(
 					member_parameter.name);
 				if(member_parameter.pack) {
-					vector<string>& values = pack_substitutions[member_parameter.name];
+					vector<string> values;
 					if(owner_value != owner_substitutions.end())
 						values = SplitTemplateArguments(owner_value->second);
 					else {
@@ -383,8 +383,11 @@
 						for(size_t value = 0; value < count; ++value)
 							values.push_back(parent_args[parent_argument++]);
 					}
-					if(!values.empty()) substitutions[member_parameter.name] = values[0];
-					else substitutions.erase(member_parameter.name);
+					if(!member_parameter.name.empty()) {
+						pack_substitutions[member_parameter.name] = values;
+						if(!values.empty()) substitutions[member_parameter.name] = values[0];
+						else substitutions.erase(member_parameter.name);
+					}
 					continue;
 				}
 				if(owner_value != owner_substitutions.end())
@@ -394,7 +397,8 @@
 						(value.compare(value.size() - 2, 2, "&&") == 0 ||
 						 value[value.size() - 1] == '&'))
 						value.erase(value.size() - (value.compare(value.size() - 2, 2, "&&") == 0 ? 2 : 1));
-					substitutions[member_parameter.name] = CanonicalSpelling(value);
+					if(!member_parameter.name.empty())
+						substitutions[member_parameter.name] = CanonicalSpelling(value);
 				}
 				else if(parent_argument < parent_args.size())
 				{
@@ -403,7 +407,8 @@
 						(value.compare(value.size() - 2, 2, "&&") == 0 ||
 						 value[value.size() - 1] == '&'))
 						value.erase(value.size() - (value.compare(value.size() - 2, 2, "&&") == 0 ? 2 : 1));
-					substitutions[member_parameter.name] = CanonicalSpelling(value);
+					if(!member_parameter.name.empty())
+						substitutions[member_parameter.name] = CanonicalSpelling(value);
 				}
 			}
 			substitutions[parent.name] = parent_local_name;
@@ -475,7 +480,8 @@
 		if(!materialized_nested_classes_.insert(key).second) return;
 		map<string, string> substitutions;
 		for(size_t i = 0; i < nested->parameters.size() && i < parent_args.size(); ++i)
-			if(nested->parameters[i].type || !nested->parameters[i].non_type_type.empty())
+			if(!nested->parameters[i].name.empty() &&
+				(nested->parameters[i].type || !nested->parameters[i].non_type_type.empty()))
 				substitutions[nested->parameters[i].name] = parent_args[i];
 		substitutions[parent.name] = parent_local_name;
 		const vector<const TemplateDefinition*> candidates = NestedDefinitions(parent);
@@ -499,25 +505,29 @@
 				for(size_t pack = 0; pack < parent.specialization_pack_names.size(); ++pack) {
 					const string& name = parent.specialization_pack_names[pack];
 					map<string, string>::const_iterator binding = specialized.find(name);
-					parent_packs[name] = binding == specialized.end() || binding->second.empty() ?
-						vector<string>() : SplitTemplateArguments(binding->second);
-					if(parent_packs[name].empty()) substitutions.erase(name);
-					else substitutions[name] = parent_packs[name][0];
+					if(!name.empty()) {
+						parent_packs[name] = binding == specialized.end() || binding->second.empty() ?
+							vector<string>() : SplitTemplateArguments(binding->second);
+						if(parent_packs[name].empty()) substitutions.erase(name);
+						else substitutions[name] = parent_packs[name][0];
+					}
 				}
 			}
 		} else {
 			size_t argument = 0;
 			for(size_t parameter = 0; parameter < parent.parameters.size(); ++parameter) {
 				if(parent.parameters[parameter].pack) {
-					vector<string>& values = parent_packs[parent.parameters[parameter].name];
-					while(argument < parent_args.size()) values.push_back(parent_args[argument++]);
+					if(!parent.parameters[parameter].name.empty()) {
+						vector<string>& values = parent_packs[parent.parameters[parameter].name];
+						while(argument < parent_args.size()) values.push_back(parent_args[argument++]);
+					} else while(argument < parent_args.size()) ++argument;
 				} else if(argument < parent_args.size()) ++argument;
 			}
 		}
 		active_pack_substitutions_ = previous_packs;
 		for(map<string, vector<string> >::const_iterator pack = parent_packs.begin();
 			pack != parent_packs.end(); ++pack)
-			active_pack_substitutions_[pack->first] = pack->second;
+			if(!pack->first.empty()) active_pack_substitutions_[pack->first] = pack->second;
 		CPPGMAstNodePtr generated;
 		try {
 			generated = TransformNode(nested->declaration, generated_context, substitutions);
@@ -702,16 +712,22 @@
 			active_pack_identifier_substitutions_;
 		active_integral_substitutions_ = integral_substitutions;
 		active_pack_substitutions_ = previous_packs;
+		// An unnamed parameter pack is only an arity constraint.  It has no
+		// source spelling that can be substituted, so an empty map key must never
+		// reach text replay (where it would make every `...` look expandable).
+		active_pack_substitutions_.erase("");
 		for(map<string, vector<string> >::const_iterator pack = pack_substitutions.begin();
 			pack != pack_substitutions.end(); ++pack)
-			active_pack_substitutions_[pack->first] = pack->second;
+			if(!pack->first.empty()) active_pack_substitutions_[pack->first] = pack->second;
 		for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter)
 			if(definition.parameters[parameter].pack &&
+				!definition.parameters[parameter].name.empty() &&
 				active_pack_substitutions_.find(definition.parameters[parameter].name) ==
 				active_pack_substitutions_.end())
 				active_pack_substitutions_[definition.parameters[parameter].name] = vector<string>();
 		for(size_t pack = 0; pack < definition.specialization_pack_names.size(); ++pack)
-			if(active_pack_substitutions_.find(definition.specialization_pack_names[pack]) ==
+			if(!definition.specialization_pack_names[pack].empty() &&
+				active_pack_substitutions_.find(definition.specialization_pack_names[pack]) ==
 				active_pack_substitutions_.end())
 				active_pack_substitutions_[definition.specialization_pack_names[pack]] = vector<string>();
 		active_pack_identifier_substitutions_.clear();
@@ -846,6 +862,23 @@
 		if(normalized) *normalized = argument;
 		return true;
 	}
+	bool HasDependentVariableTemplate(const string& raw, const string& context,
+		const map<string, string>& substitutions) const
+	{
+		const string resolved = CanonicalSpelling(
+			ReplaceIdentifiersPreservingPackSizes(raw, substitutions));
+		for(size_t search = 0; search < resolved.size(); ++search) {
+			if(resolved[search] != '<') continue;
+			size_t begin = 0, close = string::npos;
+			string base, arguments;
+			if(!TemplateBase(resolved, search, &begin, &base) ||
+				!TemplateRange(resolved, search, &arguments, &close)) continue;
+			const TemplateDefinition* definition = FindDefinition(base, context);
+			if(definition && definition->variable_template) return true;
+			search = close;
+		}
+		return false;
+	}
 	void ResolveTemplateArguments(const TemplateDefinition& definition,
 		const vector<string>& raw_args, const string& context,
 		vector<string>* args, vector<string>* metadata_args,
@@ -868,21 +901,21 @@
 				const size_t available = raw_args.size() > raw_index ?
 					raw_args.size() - raw_index : 0;
 				size_t count = available > trailing_fixed ? available - trailing_fixed : 0;
-				if(pack_hints) {
+				if(pack_hints && !parameter.name.empty()) {
 					map<string, vector<string> >::const_iterator hint =
 						pack_hints->find(parameter.name);
 					if(hint != pack_hints->end()) count = hint->second.size();
 				}
-					for(size_t element = 0; element < count; ++element) {
-						string argument = raw_args[raw_index++];
-						PA19IntegralValue integral_value;
-						if(parameter.template_template) {
-							string normalized;
-							if(!CompatibleTemplateTemplateArgument(parameter, argument, context,
-								*substitutions, &normalized))
-								throw logic_error("template-template argument does not match");
-							argument = normalized;
-						} else if(parameter.type) {
+				for(size_t element = 0; element < count; ++element) {
+					string argument = raw_args[raw_index++];
+					PA19IntegralValue integral_value;
+					if(parameter.template_template) {
+						string normalized;
+						if(!CompatibleTemplateTemplateArgument(parameter, argument, context,
+							*substitutions, &normalized))
+							throw logic_error("template-template argument does not match");
+						argument = normalized;
+					} else if(parameter.type) {
 						argument = RewriteText(argument, context, *substitutions, 0);
 						argument = NormalizeTypeArgument(argument);
 						argument = NormalizeTypeArgument(ReplaceIdentifiers(argument, *substitutions));
@@ -890,25 +923,28 @@
 						argument = RewriteText(argument, context, *substitutions, 0);
 						argument = NormalizeTypeArgument(argument);
 						argument = QualifyTypeArgument(argument, context, definition.owner);
-						} else {
-							try {
-								argument = ResolveIntegralArgument(parameter, argument, context,
-									*substitutions, &integral_value);
-							} catch(const logic_error& error) {
-								throw logic_error("definition=" + definition.qualified_name +
-									" " + error.what());
-							}
-						(*integral_substitutions)[parameter.name] = integral_value;
+					} else {
+						try {
+							argument = ResolveIntegralArgument(parameter, argument, context,
+								*substitutions, &integral_value);
+						} catch(const logic_error& error) {
+							throw logic_error("definition=" + definition.qualified_name +
+								" " + error.what());
+						}
+						if(!parameter.name.empty())
+							(*integral_substitutions)[parameter.name] = integral_value;
 					}
-				if(argument.empty()) throw logic_error("missing template argument");
-						values.push_back(argument);
-						args->push_back(argument);
-						metadata_args->push_back(TemplateArgumentMetadata(parameter, argument,
-							integral_value, context, *substitutions));
+					if(argument.empty()) throw logic_error("missing template argument");
+					values.push_back(argument);
+					args->push_back(argument);
+					metadata_args->push_back(TemplateArgumentMetadata(parameter, argument,
+						integral_value, context, *substitutions));
 				}
-				if(pack_substitutions) (*pack_substitutions)[parameter.name] = values;
-				if(!values.empty()) (*substitutions)[parameter.name] = values[0];
-				else substitutions->erase(parameter.name);
+				if(!parameter.name.empty()) {
+					if(pack_substitutions) (*pack_substitutions)[parameter.name] = values;
+					if(!values.empty()) (*substitutions)[parameter.name] = values[0];
+					else substitutions->erase(parameter.name);
+				}
 				continue;
 			}
 			string argument;
@@ -916,12 +952,14 @@
 			if(raw_index < raw_args.size() && !raw_args[raw_index].empty())
 				argument = raw_args[raw_index++];
 			else {
-				map<string, string>::const_iterator substituted = substitutions->find(parameter.name);
-				if(substituted != substitutions->end()) argument = substituted->second;
-				map<string, PA19IntegralValue>::const_iterator integral =
-					integral_substitutions->find(parameter.name);
-				if(argument.empty() && integral != integral_substitutions->end())
-					argument = TemplateIntegralValueSpelling(integral->second);
+				if(!parameter.name.empty()) {
+					map<string, string>::const_iterator substituted = substitutions->find(parameter.name);
+					if(substituted != substitutions->end()) argument = substituted->second;
+					map<string, PA19IntegralValue>::const_iterator integral =
+						integral_substitutions->find(parameter.name);
+					if(argument.empty() && integral != integral_substitutions->end())
+						argument = TemplateIntegralValueSpelling(integral->second);
+				}
 			}
 			if(argument.empty()) argument = parameter.default_type;
 			if(parameter.template_template) {
@@ -947,13 +985,14 @@
 					throw logic_error("definition=" + definition.qualified_name +
 						" " + error.what());
 				}
-				(*integral_substitutions)[parameter.name] = integral_value;
+				if(!parameter.name.empty())
+					(*integral_substitutions)[parameter.name] = integral_value;
 			}
 			if(argument.empty()) throw logic_error("missing template argument");
 			args->push_back(argument);
 			metadata_args->push_back(TemplateArgumentMetadata(parameter, argument,
 				integral_value, context, *substitutions));
-			(*substitutions)[parameter.name] = argument;
+			if(!parameter.name.empty()) (*substitutions)[parameter.name] = argument;
 		}
 		if(raw_index != raw_args.size())
 			throw logic_error("too many template arguments");
@@ -980,7 +1019,8 @@
 					local_name += TypeSuffix(argument_spelling);
 					// Function types and object types can otherwise collapse to the
 					// same identifier suffix (`const int` vs `const int()`).
-					if(definition.class_template && definition.parameters[i].type &&
+					if(definition.class_template && i < definition.parameters.size() &&
+						definition.parameters[i].type &&
 						argument_spelling.find('(') != string::npos)
 						local_name += "_fn";
 				if(i + 1 == args.size()) {

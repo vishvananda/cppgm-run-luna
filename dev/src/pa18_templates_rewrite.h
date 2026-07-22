@@ -423,10 +423,11 @@ bool MatchTypePattern(string pattern, string actual,
 						const vector<string> arguments = SplitTemplateArguments(argument_text);
 						for(size_t parameter = 0; parameter < base_definition->parameters.size() &&
 							parameter < arguments.size(); ++parameter)
-							base_substitutions[base_definition->parameters[parameter].name] =
-								QualifyTypeArgument(NormalizeElaboratedSpelling(
-									ReplaceIdentifiers(arguments[parameter], substitutions), declaration_context),
-									declaration_context, base_definition->owner);
+							if(!base_definition->parameters[parameter].name.empty())
+								base_substitutions[base_definition->parameters[parameter].name] =
+									QualifyTypeArgument(NormalizeElaboratedSpelling(
+										ReplaceIdentifiers(arguments[parameter], substitutions), declaration_context),
+										declaration_context, base_definition->owner);
 					}
 				}
 				if(base_definition) base_lookup = base_definition->qualified_name;
@@ -539,7 +540,8 @@ bool InferFunctionArguments(const TemplateDefinition& definition,
 		if(!parameter_clause || parameter_clause->children.size() != expected_parameters.size()) return false;
 		set<string> parameter_names;
 		for(size_t i = 0; i < definition.parameters.size(); ++i)
-			parameter_names.insert(definition.parameters[i].name);
+			if(!definition.parameters[i].name.empty()) parameter_names.insert(
+				definition.parameters[i].name);
 		map<string, string> inferred;
 		const string result_pattern = NodeTypeSpelling(definition.declaration->children[0]) +
 			DeclaratorSuffix(declarator);

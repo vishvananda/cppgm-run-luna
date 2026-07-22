@@ -93,7 +93,8 @@ void PA18TemplateExpander::PrepareTemplateMemberSubstitutions(
 {
 	if(!local) return;
 	for(size_t i = 0; i < definition.parameters.size() && i < arguments.size(); ++i)
-		(*local)[definition.parameters[i].name] = arguments[i];
+		if(!definition.parameters[i].name.empty())
+			(*local)[definition.parameters[i].name] = arguments[i];
 	// `arguments` is flattened, so a primary parameter pack cannot be
 	// represented by the scalar substitution above.  Template member lookup
 	// rewrites the base specialization before TransformInstantiatedNode has a
@@ -112,12 +113,14 @@ void PA18TemplateExpander::PrepareTemplateMemberSubstitutions(
 			vector<string> values;
 			for(size_t value = 0; value < count; ++value)
 				values.push_back(arguments[argument_index + value]);
-			active_pack_substitutions_[detail.name] = values;
-			if(values.empty()) local->erase(detail.name);
-			else (*local)[detail.name] = values[0];
+			if(!detail.name.empty()) {
+				active_pack_substitutions_[detail.name] = values;
+				if(values.empty()) local->erase(detail.name);
+				else (*local)[detail.name] = values[0];
+			}
 			argument_index += count;
 		} else {
-			if(argument_index < arguments.size())
+			if(argument_index < arguments.size() && !detail.name.empty())
 				(*local)[detail.name] = arguments[argument_index];
 			++argument_index;
 		}
@@ -133,9 +136,11 @@ void PA18TemplateExpander::PrepareTemplateMemberSubstitutions(
 				vector<string> values;
 				if(binding != specialized.end() && !binding->second.empty())
 					values = SplitTemplateArguments(binding->second);
-				active_pack_substitutions_[name] = values;
-				if(values.empty()) local->erase(name);
-				else (*local)[name] = values[0];
+				if(!name.empty()) {
+					active_pack_substitutions_[name] = values;
+					if(values.empty()) local->erase(name);
+					else (*local)[name] = values[0];
+				}
 			}
 		}
 	}
@@ -183,11 +188,13 @@ string PA18TemplateExpander::RewriteTemplateMemberSpelling(
 		const size_t count_value = available > trailing_fixed ? available - trailing_fixed : 0;
 		ostringstream count_stream;
 		count_stream << count_value;
-		pack_counts[definition.parameters[parameter].name] = count_stream.str();
+		if(!definition.parameters[parameter].name.empty())
+			pack_counts[definition.parameters[parameter].name] = count_stream.str();
 		argument_index += count_value;
 	}
 	for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter) {
 		if(!definition.parameters[parameter].pack) continue;
+		if(definition.parameters[parameter].name.empty()) continue;
 		const string token = "sizeof...(" + definition.parameters[parameter].name + ")";
 		const string count = pack_counts[definition.parameters[parameter].name];
 		for(size_t position = spelling.find(token); position != string::npos;

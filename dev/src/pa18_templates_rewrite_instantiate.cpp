@@ -475,7 +475,7 @@ bool PA18TemplateExpander::EvaluateUnqualifiedConstantMember(
 							++parameter) {
 							const TemplateParameter& item_parameter = owner_definition->parameters[parameter];
 							if(item_parameter.pack) {
-								vector<string>& values = owner_packs[item_parameter.name];
+								vector<string> values;
 								size_t trailing_fixed = 0;
 								for(size_t later = parameter + 1;
 									later < owner_definition->parameters.size(); ++later)
@@ -486,12 +486,18 @@ bool PA18TemplateExpander::EvaluateUnqualifiedConstantMember(
 									available - trailing_fixed : 0;
 								for(size_t value = 0; value < count; ++value)
 									values.push_back(arguments->second[argument++]);
-								if(!values.empty()) member_substitutions[item_parameter.name] = values[0];
-								else member_substitutions.erase(item_parameter.name);
+								if(!item_parameter.name.empty()) {
+									owner_packs[item_parameter.name] = values;
+									if(!values.empty()) member_substitutions[item_parameter.name] = values[0];
+									else member_substitutions.erase(item_parameter.name);
+								}
 								continue;
 							}
-							if(argument < arguments->second.size())
-								member_substitutions[item_parameter.name] = arguments->second[argument++];
+							if(argument < arguments->second.size()) {
+								if(!item_parameter.name.empty())
+									member_substitutions[item_parameter.name] = arguments->second[argument];
+								++argument;
+							}
 						}
 					}
 				}
@@ -499,7 +505,7 @@ bool PA18TemplateExpander::EvaluateUnqualifiedConstantMember(
 				const map<string, vector<string> > previous_packs = active_pack_substitutions_;
 				for(map<string, vector<string> >::const_iterator pack = owner_packs.begin();
 					pack != owner_packs.end(); ++pack)
-					active_pack_substitutions_[pack->first] = pack->second;
+					if(!pack->first.empty()) active_pack_substitutions_[pack->first] = pack->second;
 				const string expression = ConstantExpressionSpelling(initializer->children[0]);
 				bool evaluated = false;
 				if(expression != raw)
@@ -572,7 +578,7 @@ bool PA18TemplateExpander::EvaluateIntegralText(string raw, const string& contex
 			it != substitutions.end(); ++it)
 			if(it->second.find("decltype") != string::npos ||
 				it->second.find("...") != string::npos ||
-				HasDependentVariableTemplateSpelling(it->second)) {
+				HasDependentVariableTemplate(it->second, context, substitutions)) {
 				unresolved_scope = true;
 				break;
 			}
@@ -1342,9 +1348,11 @@ string PA18TemplateExpander::Instantiate(const TemplateDefinition& definition,
 			vector<string> values;
 			if(binding != specialized.end() && !binding->second.empty())
 				values = SplitTemplateArguments(binding->second);
-			pack_substitutions[pack_name] = values;
-			if(values.empty()) substitutions.erase(pack_name);
-			else substitutions[pack_name] = values[0];
+			if(!pack_name.empty()) {
+				pack_substitutions[pack_name] = values;
+				if(values.empty()) substitutions.erase(pack_name);
+				else substitutions[pack_name] = values[0];
+			}
 		}
 	}
 	ostringstream definition_key;

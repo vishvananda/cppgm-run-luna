@@ -757,7 +757,7 @@ bool PA18TemplateExpander::InferTemplateOperatorResult(const string& operation,
 		map<string, string> local = substitutions;
 		for(size_t parameter = 0; parameter < candidates[i]->parameters.size() &&
 			parameter < inferred.size(); ++parameter)
-			local[candidates[i]->parameters[parameter].name] = inferred[parameter];
+			if(!candidates[i]->parameters[parameter].name.empty()) local[candidates[i]->parameters[parameter].name] = inferred[parameter];
 		*result = NormalizeTypeArgument(ResolveAlias(ReplaceIdentifiers(type, local), context));
 		return !result->empty();
 	}

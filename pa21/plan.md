@@ -4,11 +4,13 @@
 
 The required current-PA report was refreshed serially after the
 template-template/alias replay increment: **96/215 tests pass**, leaving
-**119 failures**.  The complete current-PA failure set was inspected and
-grouped by shared compiler behavior.  The completed cases are concentrated in
-direct function-type matching, template-template arity/pack replay, typed
-dependent `sizeof` evaluation, generated pointer specialization matching,
-and safe incomplete alias-class deferral.
+**119 failures**: 104 exit-status mismatches, 14 relaxed LowIR mismatches, and
+one invalid LowIR result.  The complete current-PA failure set was inspected
+and grouped by shared compiler behavior; no timeout failure remains after the
+checkpoint audit.  The completed cases are concentrated in direct
+function-type matching, template-template arity/pack replay, typed dependent
+`sizeof` evaluation, generated pointer specialization matching, and safe
+incomplete alias-class deferral.
 
 ### Checkpoint Scope
 
@@ -30,14 +32,16 @@ pack expansion, direct function-type cv/ref/pack matching, and the dependent
 
 ### Checkpoint Result
 
-The completed increment raises PA21 to **96/215**, above the turn-start
-baseline of **82/215** (and the previous checkpoint's 91/215).  Earlier
-assignments remain green at **1635/1635**.  The parser/rewrite/evaluator work
-also covers active-pack `sizeof`, typed functional/braced casts, void-leading
-comma pack expressions, nested template delimiters, qualified alias owners,
-constant-array subscripts, generated specialization value lookup, constexpr
-source overload selection, direct function-type cv/ref/pack matching, and
-incomplete dependent alias-class lookup.
+The completed increment and audit report remain at **96/215**, preserving the
+audit-turn baseline of **96/215**.  Earlier assignments remain green at
+**1635/1635**.  The parser/rewrite/evaluator work also covers active-pack
+`sizeof`, typed functional/braced casts, void-leading comma pack expressions,
+nested template delimiters, qualified alias owners, constant-array
+subscripts, generated specialization value lookup, constexpr source overload
+selection, direct function-type cv/ref/pack matching, and incomplete
+dependent alias-class lookup.  The two former timeout fixtures now terminate
+quickly and remain ordinary semantic failures in the partial-specialization
+group.
 
 The large rewrite/evaluator implementation was split into focused translation
 units (pa18_templates_rewrite_text.cpp, pa18_templates_rewrite_eval.cpp, and
@@ -47,33 +51,34 @@ repository file-audit limits without changing behavior.
 
 ### Remaining Work Map
 
+The complete 119-failure set is covered by these four groups:
+
 - **Alias and template-template identity replay:** inline-namespace
   canonicalization, member-alias owner rebinding, nested cv-qualified
-  template arguments, empty template-id arguments, and remaining alias
-  non-type/value cases remain in the `general/400-*alias*`,
-  `general/400-inline-namespace-*`, and related `spec/100-*` paths.
+  arguments, empty template-ids, dependent pack/value expressions, and
+  remaining alias non-type cases in the general 400 alias/inline-namespace
+  paths plus related spec 100 cases.
 - **Class partial-specialization matching and ordering:** nested template-id
   packs, fixed/trailing/repeated/void-head packs, cv/ref patterns, concrete
-  namespace/member patterns, dependent value selection, and the remaining
-  incomplete/conditional-base cases remain in the `general/100-*`,
-  `general/200-*`, `general/400-*-partial-specialization-*`, and `spec/100-*`
-  paths.
+  namespace/member patterns, dependent value selection, and incomplete or
+  conditional bases in the general 100/200/400 and spec 100 paths. This
+  includes the two former timeout fixtures, now bounded semantic failures.
 - **Member/friend owner replay and lookup:** out-of-class definitions, nested
-  owners, using imports, inherited/hidden friends, ADL, and overload/member
-  selection account for most remaining `general/300-*` and `spec/300-*`
-  paths.
+  owners, using imports, inherited and hidden friends, ADL, and
+  overload/member selection in most general 300 and spec 300 paths.
 - **Explicit specialization/instantiation plus lowering/layout:** explicit
   specialization ordering, explicit instantiation materialization,
   extern-template suppression, constructor/operator collection, incomplete
-  bases, and relaxed/invalid LowIR cases remain.
+  bases, and the relaxed or invalid LowIR cases.
 
 ### Next Checkpoint Group
 
 Take the alias-identity cluster as the next checkpoint: preserve
 inline-namespace canonicalization and member-alias owner rebinding through
 dependent template-template replay, including empty template-ids and nested
-cv-qualified arguments.  Validate the remaining named alias fixtures plus a
-refreshed full PA21 report, then recheck through PA20 and the file audit.
+cv-qualified arguments and dependent non-type expressions. Validate the
+remaining named alias fixtures plus a refreshed full PA21 report, then
+recheck through PA20 and the file audit.
 
 
 ## Historical 62/215 failure map and prior checkpoint scope

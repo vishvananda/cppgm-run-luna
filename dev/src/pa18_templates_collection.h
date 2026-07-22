@@ -354,15 +354,6 @@ inline bool IsTemplateAngleClose(const string& raw, size_t position)
 	}
 	return true;
 }
-inline bool HasDependentVariableTemplateSpelling(const string& raw)
-{
-	for(size_t position = raw.find("_v"); position != string::npos;
-		position = raw.find("_v", position + 2)) {
-		const size_t after = position + 2;
-		if(after == raw.size() || !IsIdentifierCharacter(raw[after])) return true;
-	}
-	return false;
-}
 vector<string> SplitTemplateArguments(const string& raw);
 struct TemplateParameter
 {
@@ -890,7 +881,8 @@ private:
 						DescendantOfKind(specialized_declarator, "parameter-clause");
 					set<string> parameter_names;
 					for(size_t parameter = 0; parameter < primary->parameters.size(); ++parameter)
-						parameter_names.insert(primary->parameters[parameter].name);
+						if(!primary->parameters[parameter].name.empty()) parameter_names.insert(
+							primary->parameters[parameter].name);
 					map<string, string> inferred;
 					if(primary_parameters && specialized_parameters &&
 						primary_parameters->children.size() == specialized_parameters->children.size())

@@ -197,8 +197,10 @@
 		map<string, string> inferred;
 		set<string> parameter_names;
 		for(size_t i = 0; i < definition.parameters.size(); ++i) {
-			parameter_names.insert(definition.parameters[i].name);
-			if(explicit_prefix && i < explicit_prefix->size())
+			if(!definition.parameters[i].name.empty()) parameter_names.insert(
+				definition.parameters[i].name);
+			if(explicit_prefix && i < explicit_prefix->size() &&
+				!definition.parameters[i].name.empty())
 				inferred[definition.parameters[i].name] = (*explicit_prefix)[i];
 		}
 		size_t actual = 0;
@@ -253,7 +255,8 @@
 	{
 		if(!definition.declaration || definition.declaration->children.empty()) return string();
 			map<string, string> local; for(size_t i = 0; i < definition.parameters.size() && i < arguments.size(); ++i)
-			local[definition.parameters[i].name] = arguments[i];
+			if(!definition.parameters[i].name.empty())
+				local[definition.parameters[i].name] = arguments[i];
 		const CPPGMAstNodePtr declarator = FunctionDeclarator(definition.declaration);
 		string result = NodeTypeSpelling(definition.declaration->children[0]);
 		result += DeclaratorSuffix(declarator);
@@ -415,7 +418,8 @@
 		if(!clause) return string();
 		map<string, string> local = substitutions;
 		for(size_t i = 0; i < definition->parameters.size(); ++i)
-			local[definition->parameters[i].name] = arguments[i];
+			if(!definition->parameters[i].name.empty())
+				local[definition->parameters[i].name] = arguments[i];
 		string result = FunctionResultType(*definition, arguments, context) + "(*) (";
 		for(size_t i = 0; i < clause->children.size(); ++i) {
 			const CPPGMAstNodePtr parameter = clause->children[i];

@@ -136,7 +136,8 @@ namespace pa18_templates_internal {
 											for(size_t parameter = 0;
 												parameter < base_definition->parameters.size() &&
 												parameter < base_arguments.size(); ++parameter)
-												if(base_definition->parameters[parameter].type)
+												if(base_definition->parameters[parameter].type &&
+													!base_definition->parameters[parameter].name.empty())
 													expected_substitutions[base_definition->parameters[parameter].name] =
 														base_arguments[parameter];
 											string expected_type = ReplaceIdentifiers(
