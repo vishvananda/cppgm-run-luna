@@ -1,21 +1,22 @@
 #pragma once
 
-
 	string NodeTypeSpelling(const CPPGMAstNodePtr& sequence) const
 	{
 		if(!sequence) return string();
 		string result;
 		for(size_t i = 0; i < sequence->children.size(); ++i) {
-			const CPPGMAstNodePtr child = sequence->children[i];
-			if(!child || (child->kind == "decl-specifier" &&
-				(child->value == "KW_TYPEDEF:typedef" || child->value == "KW_STATIC:static" ||
-					 child->value == "KW_INLINE:inline" ||
-					 child->value == "KW_CONSTEXPR:constexpr"))) continue;
-			if(child->kind != "decl-specifier" && child->kind != "type-name" &&
-				child->kind != "type-specifier" && child->kind != "decltype-specifier" &&
-				child->kind != "cv-qualifier") continue;
-			const string spelling = RemoveMarker(child->value);
-			if(spelling.empty()) continue;
+		const CPPGMAstNodePtr child = sequence->children[i];
+		if(!child) continue;
+		const string spelling = RemoveMarker(child->value);
+		if(child->kind == "decl-specifier" &&
+			(spelling == "typedef" || spelling == "static" || spelling == "inline" ||
+			 spelling == "constexpr" || spelling == "extern" ||
+			 spelling == "thread_local" || spelling == "register" || spelling == "mutable"))
+			continue;
+		if(child->kind != "decl-specifier" && child->kind != "type-name" &&
+			child->kind != "type-specifier" && child->kind != "decltype-specifier" &&
+			child->kind != "cv-qualifier") continue;
+		if(spelling.empty()) continue;
 			if(!result.empty()) result += ' ';
 			result += spelling;
 		}
@@ -135,13 +136,15 @@
 	void RecordTemplateArrayValues(const TemplateDefinition& definition,
 		const vector<string>& arguments, const string& context,
 		const map<string, string>& substitutions);
-	void RecordConstantDeclaration(const CPPGMAstNodePtr& node, const string& context)
+	void RecordConstantDeclaration(const CPPGMAstNodePtr& node, const string& context,
+		const map<string, string>& substitutions = map<string, string>())
 	{
 		if(!node || node->kind != "simple-declaration" || node->children.empty()) return;
 		const string specifiers = SpellNode(node->children[0]);
 		if(specifiers.find("const") == string::npos && specifiers.find("constexpr") == string::npos) return;
 		const string base_type = NodeTypeSpelling(node->children[0]);
-		const string resolved_base_type = ResolveAlias(base_type, context);
+		const string resolved_base_type = ResolveAlias(
+			ReplaceIdentifiers(base_type, substitutions), context);
 		if(!PA19Type(resolved_base_type).integral) return;
 		const CPPGMAstNodePtr list = ChildOfKindLocal(node, "init-declarator-list");
 		if(!list) return;
@@ -153,9 +156,16 @@
 			if(name.empty() || !initializer || initializer->children.empty()) continue;
 			PA19IntegralValue value;
 			const string expression_text = ConstantExpressionSpelling(initializer->children[0]);
+			// A primary template's dependent static initializer is indexed before a
+			// concrete specialization has a substitution scope.  Leaving it
+			// deferred avoids treating the member itself as an unqualified constant
+			// operand (`value`) and recursively evaluating its own initializer.
+			if(substitutions.empty() && expression_text.find("decltype(") != string::npos)
+				continue;
 			if(!EvaluateIntegralText(expression_text, context,
-				map<string,string>(), &value)) continue;
-			const string qualified = JoinPath(context, name);
+				substitutions, &value)) continue;
+			const string qualified = JoinPath(
+				active_instantiation_name_.empty() ? context : active_instantiation_name_, name);
 			constant_values_[qualified] = value;
 			if(constant_values_.find(name) == constant_values_.end()) constant_values_[name] = value;
 			const PA19IntegralType type = PA19Type(resolved_base_type);
@@ -472,21 +482,38 @@
 		const string& nested_name, const string& context)
 	{
 		const TemplateDefinition* nested = FindNestedDefinition(parent, nested_name);
-		if(!nested) return;
+		CPPGMAstNodePtr nested_declaration = nested ? nested->declaration : CPPGMAstNodePtr();
+		vector<TemplateParameter> nested_parameters;
+		if(nested) nested_parameters = nested->parameters;
+		if(!nested) {
+			for(size_t child = 0; parent.declaration && child < parent.declaration->children.size(); ++child) {
+				const CPPGMAstNodePtr candidate = parent.declaration->children[child];
+				if(!candidate || (candidate->kind != "class-specifier" &&
+					candidate->kind != "class-forward-declaration") ||
+					LastComponent(candidate->value) != nested_name) continue;
+				nested_declaration = candidate;
+				break;
+			}
+		}
+		if(!nested_declaration) return;
 		class_contexts_.insert(parent_local_name);
 		class_contexts_.insert(parent_local_name + "::" + nested_name);
 		const string key = parent_local_name + "::" + nested_name;
 		if(!materialized_nested_classes_.insert(key).second) return;
 		map<string, string> substitutions;
-		for(size_t i = 0; i < nested->parameters.size() && i < parent_args.size(); ++i)
-			if(!nested->parameters[i].name.empty() &&
-				(nested->parameters[i].type || !nested->parameters[i].non_type_type.empty()))
-				substitutions[nested->parameters[i].name] = parent_args[i];
+		for(size_t i = 0; i < nested_parameters.size() && i < parent_args.size(); ++i)
+			if(!nested_parameters[i].name.empty() &&
+				(nested_parameters[i].type || !nested_parameters[i].non_type_type.empty()))
+				substitutions[nested_parameters[i].name] = parent_args[i];
+		if(!nested)
+			for(size_t i = 0; i < parent.parameters.size() && i < parent_args.size(); ++i)
+				if(!parent.parameters[i].name.empty())
+					substitutions[parent.parameters[i].name] = parent_args[i];
 		substitutions[parent.name] = parent_local_name;
 		const vector<const TemplateDefinition*> candidates = NestedDefinitions(parent);
 		for(size_t i = 0; i < candidates.size(); ++i) {
-			if(candidates[i]->name == nested_name ||
-				!MentionsGeneratedType(nested->declaration, candidates[i]->name)) continue;
+			if(candidates[i]->name == nested_name || !nested ||
+				!MentionsGeneratedType(nested_declaration, candidates[i]->name)) continue;
 			InstantiateNestedClass(parent, parent_args, parent_local_name,
 				candidates[i]->name, context);
 		}
@@ -528,7 +555,7 @@
 			if(!pack->first.empty()) active_pack_substitutions_[pack->first] = pack->second;
 		CPPGMAstNodePtr generated;
 		try {
-			generated = TransformNode(nested->declaration, generated_context, substitutions);
+			generated = TransformNode(nested_declaration, generated_context, substitutions);
 		} catch(...) {
 			active_pack_substitutions_ = previous_packs;
 			throw;
@@ -568,7 +595,25 @@
 		string expanded_pack;
 		if(ExpandIntegralPackExpression(source_raw, context, substitutions,
 			&expanded_pack)) raw = expanded_pack;
-		else raw = ReplaceIdentifiersPreservingPackSizes(raw, substitutions);
+		else {
+			map<string, string> expression_substitutions = substitutions;
+			// Preserve the base of a template-id until RewriteText can match or
+			// materialize the complete argument list.  Substituting a generated
+			// class name into the base alone creates `Generated_<Args>`.
+			for(map<string, string>::const_iterator substitution = substitutions.begin();
+				substitution != substitutions.end(); ++substitution)
+				for(size_t at = raw.find(substitution->first); at != string::npos;
+					at = raw.find(substitution->first, at + substitution->first.size())) {
+					if(at > 0 && IsIdentifierCharacter(raw[at - 1])) continue;
+					size_t after = at + substitution->first.size();
+					while(after < raw.size() && isspace(static_cast<unsigned char>(raw[after]))) ++after;
+					if(after < raw.size() && raw[after] == '<') {
+						expression_substitutions.erase(substitution->first);
+						break;
+					}
+				}
+			raw = ReplaceIdentifiersPreservingPackSizes(raw, expression_substitutions);
+		}
 		raw = RemoveMarker(RewriteText(raw, context, substitutions, 0));
 		raw = ReplaceIdentifiersPreservingPackSizes(raw, substitutions);
 		// When a non-type expression contains a nested template-id followed by
@@ -942,7 +987,7 @@
 						if(!parameter.name.empty())
 							(*integral_substitutions)[parameter.name] = integral_value;
 					}
-					if(argument.empty()) throw logic_error("missing template argument");
+				if(argument.empty()) throw logic_error("missing template argument");
 					values.push_back(argument);
 					args->push_back(argument);
 					metadata_args->push_back(TemplateArgumentMetadata(parameter, argument,
@@ -1089,6 +1134,8 @@
 		const map<string, vector<string> >& pack_substitutions);
 	void RegisterGeneratedSpecialization(const TemplateDefinition& definition,
 		const vector<string>& metadata_args, const string& local_name);
+	string FindConcreteInstantiationOwner(const TemplateDefinition& definition,
+		const map<string, string>& substitutions, const string& context) const;
 	string EmitInstantiation(const TemplateDefinition& definition,
 		const vector<string>& args, const vector<string>& metadata_args,
 		map<string, string> substitutions,

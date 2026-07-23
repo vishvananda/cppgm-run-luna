@@ -8,12 +8,13 @@ Type::Type(TypeKind type_kind, const string& type_name)
 	  parameters(), variadic(false), function_const(false), function_volatile(false),
 	  function_lvalue_ref_qualified(false), function_rvalue_ref_qualified(false),
 	  member_owner(), owned_scope(0),
-	  underlying(), class_members(), direct_base(), direct_base_offset(0), object_size(0), object_alignment(1),
+	  underlying(), class_members(), direct_base(), direct_bases(), direct_base_offset(0),
+	  direct_base_offsets(), object_size(0), object_alignment(1),
 	  explicit_alignment(0), layout_complete(false), layout_in_progress(false),
 	  is_union(false), enclosing_type(), dependent_base_lookup(false),
 	  friend_names(), virtual_methods(),
 	  polymorphic(false), has_vpointer(false), template_specialization(false),
-	  template_primary(), template_arguments() {}
+	  template_primary(), template_arguments(), materialize_sizeof_address(false) {}
 
 Binding::Binding(BindingKind binding_kind, const string& binding_name,
 	const TypePtr& binding_type)

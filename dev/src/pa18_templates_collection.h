@@ -463,6 +463,11 @@ private:
 	map<string, PA19IntegralValue> constant_values_;
 	map<string, vector<PA19IntegralValue> > constant_arrays_; map<string, size_t> constant_type_sizes_, constant_type_alignments_;
 	map<string, PA19IntegralValue> active_integral_substitutions_;
+	// During replay, the source class context remains dependent while its
+	// materialized class is being transformed.  Keep the concrete owner in
+	// typed state so an unqualified static member such as `_v` resolves to the
+	// current specialization rather than a previous specialization's fallback.
+	string active_instantiation_name_;
 	// A template parameter pack is a collection of typed substitutions.  Keep
 	// the collection separate from the scalar substitution map so an expanded
 	// declaration or call can consume every element without losing the first
@@ -803,6 +808,10 @@ private:
 	{
 		if(!node || node->kind != "template-declaration" || node->children.size() < 2) return;
 		const CPPGMAstNodePtr declaration = node->children[1];
+		if(declaration && declaration->kind == "template-declaration") {
+			RegisterTemplate(declaration, context);
+			return;
+		}
 		const string raw_declaration_name = DeclarationName(declaration);
 		string name = CanonicalSpelling(raw_declaration_name);
 		if(name.empty()) return;
@@ -1126,26 +1135,15 @@ private:
 			}
 		}
 		if(node->kind == "simple-declaration" && !node->children.empty()) {
-			string type;
 			const CPPGMAstNodePtr specs = node->children[0];
-			for(size_t i = 0; i < specs->children.size(); ++i) {
-				const CPPGMAstNodePtr child = specs->children[i];
-				if(!child) continue;
-				if(child->kind == "decl-specifier" || child->kind == "type-name" ||
-					child->kind == "type-specifier") {
-					if(!type.empty()) type += ' ';
-					type += RemoveMarker(child->value);
-				}
-			}
+			const string type = NodeTypeSpelling(specs);
 			const CPPGMAstNodePtr list = ChildOfKindLocal(node, "init-declarator-list");
 			if(list) for(size_t i = 0; i < list->children.size(); ++i) {
 				const CPPGMAstNodePtr item = list->children[i];
 				if(!item || item->children.empty()) continue;
 				const string name = FirstIdentifierLocal(item->children[0]);
 				if(!name.empty() && !type.empty())
-					variable_types_[name] = CanonicalSpelling(type +
-						DeclaratorSuffix(item->children[0]) +
-						DeclaratorArraySuffix(item->children[0]));
+					variable_types_[name] = DeclaratorTypeSpelling(type, item->children[0]);
 			}
 		}
 		for(size_t i = 0; i < node->children.size(); ++i) CollectVariables(node->children[i]);
@@ -1163,6 +1161,8 @@ private:
 	bool MentionsGeneratedType(const CPPGMAstNodePtr& node,
 		const string& type_name) const;
 	bool MentionsGeneratedClass(const CPPGMAstNodePtr& node,
+		const vector<CPPGMAstNodePtr>& generated) const;
+	bool MentionsGeneratedLayoutClass(const CPPGMAstNodePtr& node,
 		const vector<CPPGMAstNodePtr>& generated) const;
 	bool MentionsTemplateId(const CPPGMAstNodePtr& node) const;
 	vector<CPPGMAstNodePtr> OrderGeneratedClasses(

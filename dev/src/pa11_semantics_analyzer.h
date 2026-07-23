@@ -645,7 +645,7 @@ public:
 			return type->underlying ? TypeSize(type->underlying) : 4;
 		case TYPE_CLASS:
 			if (!type->complete || !type->layout_complete)
-				throw logic_error("sizeof incomplete class");
+			throw logic_error("sizeof incomplete class");
 			return type->object_size;
 		case TYPE_TEMPLATE_PARAMETER:
 		case TYPE_TEMPLATE_TEMPLATE_PARAMETER: return 0;
@@ -904,6 +904,9 @@ public:
 	void ComputeClassLayout(const CPPGMAstNodePtr& node, const TypePtr& type,
 		Scope* class_scope)
 	;
+	void ComputeClassMemberLayout(const TypePtr& type, size_t union_size,
+		size_t* offset, size_t* maximum_alignment)
+	;
 	void RecordClassMembers(const CPPGMAstNodePtr& node, const TypePtr& type,
 		Scope* scope, Scope* class_scope)
 	;
@@ -935,8 +938,6 @@ public:
 			const size_t separator = raw_name.rfind("::");
 			owner = ResolveNamespace(scope, raw_name.substr(0, separator));
 			if (!owner) {
-				// A qualified class member is a type owner rather than a
-				// namespace; walk the resolved type path for the prefix.
 				PathTarget prefix = ResolvePath(scope, raw_name.substr(0, separator));
 				owner = prefix.binding ? ScopeForType(prefix.binding->type) : 0;
 			}
@@ -1189,8 +1190,7 @@ public:
 		}
 		if (node->kind == "access-specifier" || node->kind == "empty-declaration" ||
 			node->kind == "base-clause") return;
-		// Statements other than declarations are semantically outside PA11;
-		// recurse only through nested compounds and declarations they contain.
+		// Statements other than declarations are semantically outside PA11; recurse only through nested compounds and declarations they contain.
 		for (size_t i = 0; i < node->children.size(); ++i)
 			if (node->children[i] && (node->children[i]->kind == "compound-statement" ||
 				node->children[i]->kind == "simple-declaration" ||

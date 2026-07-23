@@ -319,6 +319,7 @@ private:
 			{
 				if (source_value->kind == TYPE_FUNCTION && target_value->kind == TYPE_FUNCTION &&
 					PA12SameType(source_value, target_value, true)) return 1;
+				if (PA12IsArithmetic(source_value) && PA12IsArithmetic(target_value)) return 2;
 				return -1;
 			}
 			if (PA12SameType(source_value, target_value, true) &&
@@ -414,9 +415,9 @@ private:
 		(void)op;
 		return l;
 	}
-	PA12CallChoice ChooseCall(const string& raw_name, Scope* scope,
-		const vector<PA12ExprInfo>& arguments)
-	{
+		PA12CallChoice ChooseCall(const string& raw_name, Scope* scope,
+			const vector<PA12ExprInfo>& arguments)
+		{
 		PA12CallChoice best;
 		const vector<Binding*> candidates = Lookup(raw_name, scope);
 		bool found = false;

@@ -5,6 +5,7 @@
 #include <cerrno>
 #include <cstdlib>
 #include <iomanip>
+#include <functional>
 #include <limits>
 #include <map>
 #include <memory>
@@ -1333,14 +1334,27 @@ string PA14Lowerer::AdjustBaseAddress(const string& base, const TypePtr& raw_der
     if(!IsDerivedFrom(derived, wanted))
       throw logic_error("member owner is not a base class");
     size_t offset = 0;
-    TypePtr current = derived;
-    while(current && !PA12SameType(current, wanted, true)) {
-      if(!current->direct_base)
-        throw logic_error("member owner is not a base class");
-      offset += current->direct_base_offset;
-      current = type_value(current->direct_base);
-    }
-    if(!current) throw logic_error("member owner is not a base class");
+    bool found = false;
+    set<const Type*> visited;
+    function<bool(const TypePtr&, size_t)> find_base =
+      [&](const TypePtr& current, size_t accumulated) {
+        if(!current || !visited.insert(current.get()).second) return false;
+        if(PA12SameType(current, wanted, true)) {
+          offset = accumulated;
+          return true;
+        }
+        if(!current->direct_bases.empty()) {
+          for(size_t i = 0; i < current->direct_bases.size(); ++i) {
+            const size_t base_offset = i < current->direct_base_offsets.size() ?
+              current->direct_base_offsets[i] : (i == 0 ? current->direct_base_offset : 0);
+            if(find_base(type_value(current->direct_bases[i]), accumulated + base_offset)) return true;
+          }
+        } else if(current->direct_base && find_base(type_value(current->direct_base),
+            accumulated + current->direct_base_offset)) return true;
+        return false;
+      };
+    found = find_base(derived, 0);
+    if(!found) throw logic_error("member owner is not a base class");
     const string adjusted = new_temp();
     AddInstruction(adjusted + " = index i8 [projection=base_subobject] " + base + ", " +
       integer_text(static_cast<long long>(offset)));

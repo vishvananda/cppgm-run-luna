@@ -2,60 +2,74 @@
 
 ## Latest checkpoint and next scope
 
-### Turn-start audit for the current checkpoint
+### Turn-start audit
 
-The turn-start baseline supplied by the stage runner was **96/215 PA21
-tests**.  Before this checkpoint's final ordering fix, the complete current
-report was **107/215**; its failures were inspected and grouped by shared
-behavior: class partial-specialization matching and ordering; alias and
-template-template entity/value/pack replay; member/friend owner lookup and
-ADL; and explicit specialization/instantiation plus lowering/layout.
+The turn-start stage baseline was **96/215 PA21 tests**.  The complete
+current-PA failure set was inspected before implementation and grouped by
+shared behavior: dependent value/member replay, generated pack and base
+layout, alias/template-template entities, member/friend owner lookup and
+overload/ADL, explicit instantiation ownership, and ordinary lowering/layout.
 
 ### Checkpoint Scope
 
-This checkpoint completes the trailing/nested class-partial matching
-increment: match each element of a pack expansion against its nested pattern,
-merge typed bindings, materialize omitted primary defaults, and preserve
-fixed-prefix and partial-ordering rules for repeated packs and cv patterns.
-Validation covers the value-pattern, nested-template-id, fixed-tail,
-repeated-pack, trailing-pack, void-head, and cv-pointer specialization
-fixtures, the PA19 empty-template-id regression, the full PA21 report,
-through-PA20, and the file audit.
+This turn completes the dependent value and generated-layout increment:
+
+- preserve typed non-type values while recursively replaying variadic static
+  members and global typedefs;
+- retain reference/array declarator shells through alias and nested-member
+  lookup;
+- handle empty pack completion and concrete global template-member replay;
+- carry all direct template bases into semantic layout and lower base-owner
+  address adjustments; and
+- materialize local class addresses for deferred `sizeof` layout queries.
+
+Validation covered the recursive 64-element depth sum, nested outer-type pack,
+reference-array alias, template-template arity, deferred incomplete-layout,
+conditional/dependent owner, variadic-base, empty-pack, explicit-specialization
+and generated-base probes.  The complete report was rerun after cleanup.
 
 ### Checkpoint Result
 
-The checkpoint is complete.  The matcher now handles element-wise nested
-pack patterns, typed pack binding and empty-pack materialization, defaulted
-primary arguments, dependent pattern replay, repeated-pack ordering, and
-cv-qualified pointer partial ordering.  All seven PA21 specialization probes
-and the PA19 regression pass.  The required PA21 report reached **108/215**,
-up from the 96-test turn-start baseline; through-PA20 remains **1635/1635**.
-The remaining report failures are ordinary exit-status or LowIR mismatches;
-no timeout remains.
+The focused depth-sum fixture now passes with generated value **64**
+(previously **1**), and the empty-pack/generated-base and alias declarator
+probes remain passing.  The current PA report is **118/215**, an improvement
+of **22 tests** over the turn-start baseline and **2 tests** over the prior
+checkpoint.
+
+The two through-PA20 regressions found during validation were repaired as
+well: qualified generated-owner member replay now preserves the resolved
+member type, and dependent static initializers remain deferred until concrete
+	substitutions exist.  Focused PA18/PA19 validation passes, the full
+	through-PA20 gate is **1635/1635**, and the PA21 report is **118/215**.  The
+	required file audit now passes with only the repository's existing
+	non-fatal header-shape warnings.  The layout pass, template owner lookup,
+	specialization-ordering fragment, and template type helpers were split into
+	cohesive source units without changing the passing report.
 
 ### Remaining Work Map
 
-The current 107-failure set is covered by these four groups:
+The post-checkpoint report has **97** failures, grouped as follows:
 
-- **Class partial-specialization matching and ordering:** remaining
-  reference/function/cv/ref patterns, concrete qualified arguments, dependent
-  bases, and primary/default selection in general 100/400 and spec 100 paths.
-- **Alias and template-template entity replay:** dependent non-type
-  expressions, pointer/cv cache distinctions, alias partial-specialization
-  patterns, and remaining general 400/spec 100 cases.
-- **Member/friend owner replay and lookup:** out-of-class definitions, nested
-  owners, using imports, inherited and hidden friends, ADL, and overload
-  selection across general 100/200/300 and spec 300 paths.
-- **Explicit specialization/instantiation plus lowering/layout:** explicit
-  specialization ordering, materialization and extern-template ownership,
-  constructors/operators, incomplete bases, and relaxed or invalid LowIR.
+- **Member/friend owner replay and lookup (52):** out-of-class and nested
+  member-template definitions, using imports, hidden friends/ADL, inherited
+  members, explicit member calls, operators, and overload selection.
+- **Alias/template-template and dependent non-type replay (17):** alias
+  partials, template-template arity/entity binding, pointer/cv distinctions,
+  pack expressions, declaration-scope values, and inline-namespace aliases.
+- **Explicit specialization/instantiation ownership (18):** explicit and
+  extern instantiation materialization, specialization ordering, constructors,
+  static data/functions, and use-location replay.
+- **Partial-selection and ordinary lowering/layout (10):** remaining
+  reference/cv/pack selection, incomplete-class checks, anonymous storage,
+  static-constexpr array arguments, and LowIR/ABI presentation.
 
 ### Next Checkpoint Group
 
-Take the remaining class partial-specialization cluster next: function and
-reference patterns, top-level cv/ref distinctions, concrete qualified
-arguments, and dependent/conditional bases.  Validate those focused paths
-against the full PA21 report, then recheck through PA20 and the file audit.
+Take the member/friend owner replay group, starting with explicit and
+qualified member-template calls plus out-of-class owner reconstruction; then
+validate the related using/inherited/ADL fixtures together.  Keep the alias
+and explicit-instantiation groups separate unless a shared owner-state fix
+proves to cover them without changing the completed value/layout behavior.
 
 
 ## Historical 62/215 failure map and prior checkpoint scope

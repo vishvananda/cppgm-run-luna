@@ -1307,7 +1307,8 @@ PA14Lowerer::Value PA14Lowerer::EmitValue(const CPPGMAstNodePtr& node, Scope* sc
         VariablePlan* local = LocalForName(operand->value);
         if(local && type_value(local->type) &&
            type_value(local->type)->kind == TYPE_CLASS &&
-           !type_value(local->type)->template_specialization)
+           (!type_value(local->type)->template_specialization ||
+            type_value(local->type)->materialize_sizeof_address))
           (void)EmitAddress(operand, scope);
       } else if(node->kind == "sizeof-expression" && operand &&
          operand->kind == "member-expression" && !operand->children.empty()) {

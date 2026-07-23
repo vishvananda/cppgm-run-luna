@@ -13,9 +13,9 @@ int PA18TemplateExpander::MatchObjectCvPattern(const string& pattern,
 		&function_qualifiers)) return -1;
 	auto object_cv_and_base = [](const string& spelling, int* mask, string* base) {
 		*mask = 0;
-		string remaining;
+		size_t outer_pointer = string::npos;
 		int angle_depth = 0, parenthesis_depth = 0, bracket_depth = 0;
-		for(size_t position = 0; position < spelling.size();) {
+		for(size_t position = 0; position < spelling.size(); ++position) {
 			const char ch = spelling[position];
 			if(ch == '<' && IsTemplateAngleOpen(spelling, position)) ++angle_depth;
 			else if(ch == '>' && angle_depth > 0 && IsTemplateAngleClose(spelling, position)) --angle_depth;
@@ -23,7 +23,21 @@ int PA18TemplateExpander::MatchObjectCvPattern(const string& pattern,
 			else if(ch == ')' && parenthesis_depth > 0) --parenthesis_depth;
 			else if(ch == '[') ++bracket_depth;
 			else if(ch == ']' && bracket_depth > 0) --bracket_depth;
-			if(angle_depth == 0 && parenthesis_depth == 0 && bracket_depth == 0 &&
+			else if(ch == '*' && angle_depth == 0 && parenthesis_depth == 0 && bracket_depth == 0)
+				outer_pointer = position;
+		}
+		string remaining;
+		angle_depth = parenthesis_depth = bracket_depth = 0;
+		for(size_t position = 0; position < spelling.size();) {
+			const char ch = spelling[position];
+			const bool outer_cv = outer_pointer == string::npos || position > outer_pointer;
+			if(ch == '<' && IsTemplateAngleOpen(spelling, position)) ++angle_depth;
+			else if(ch == '>' && angle_depth > 0 && IsTemplateAngleClose(spelling, position)) --angle_depth;
+			else if(ch == '(') ++parenthesis_depth;
+			else if(ch == ')' && parenthesis_depth > 0) --parenthesis_depth;
+			else if(ch == '[') ++bracket_depth;
+			else if(ch == ']' && bracket_depth > 0) --bracket_depth;
+			if(outer_cv && angle_depth == 0 && parenthesis_depth == 0 && bracket_depth == 0 &&
 				(ch == '_' || isalpha(static_cast<unsigned char>(ch)))) {
 				size_t end = position + 1;
 				while(end < spelling.size() && IsIdentifierCharacter(spelling[end])) ++end;
@@ -43,6 +57,17 @@ int PA18TemplateExpander::MatchObjectCvPattern(const string& pattern,
 	string pattern_base, actual_base;
 	object_cv_and_base(pattern, &pattern_mask, &pattern_base);
 	object_cv_and_base(actual, &actual_mask, &actual_base);
+	const bool pattern_lvalue_reference = pattern_base.size() > 0 &&
+		pattern_base[pattern_base.size() - 1] == '&' &&
+		(pattern_base.size() < 2 || pattern_base[pattern_base.size() - 2] != '&');
+	const bool actual_lvalue_reference = actual_base.size() > 0 &&
+		actual_base[actual_base.size() - 1] == '&' &&
+		(actual_base.size() < 2 || actual_base[actual_base.size() - 2] != '&');
+	if(pattern_lvalue_reference || actual_lvalue_reference) {
+		if(!pattern_lvalue_reference || !actual_lvalue_reference) return -1;
+		pattern_base = CanonicalSpelling(pattern_base.substr(0, pattern_base.size() - 1));
+		actual_base = CanonicalSpelling(actual_base.substr(0, actual_base.size() - 1));
+	}
 	if(!pattern_mask || parameter_names.find(pattern_base) == parameter_names.end() ||
 		pattern_base.find('*') != string::npos || pattern_base.find('&') != string::npos) return -1;
 	if((pattern_mask & actual_mask) != pattern_mask) return 0;
@@ -119,6 +144,61 @@ bool PA18TemplateExpander::MatchTrailingTypePack(const vector<string>& pattern_p
 		if(!found_pack && !pack_pattern.empty()) (*inferred)[pack_pattern] = string();
 	}
 	return true;
+}
+
+int PA18TemplateExpander::MatchGeneratedBaseTypePattern(
+	const string& pattern, const string& actual, const string& pattern_base,
+	const set<string>& parameter_names, map<string, string>* inferred,
+	const string& context, bool class_pattern) const
+{
+	string actual_class = actual;
+	string pointer_suffix;
+	while(!actual_class.empty() && (actual_class[actual_class.size() - 1] == '*' ||
+		actual_class[actual_class.size() - 1] == '&')) {
+		pointer_suffix = actual_class[actual_class.size() - 1] + pointer_suffix;
+		actual_class.erase(actual_class.size() - 1);
+		actual_class = CanonicalSpelling(actual_class);
+	}
+	string cv_prefix;
+	for(;;) {
+		if(actual_class.compare(0, 6, "const ") == 0) {
+			cv_prefix += "const ";
+			actual_class = CanonicalSpelling(actual_class.substr(6));
+		} else if(actual_class.compare(0, 9, "volatile ") == 0) {
+			cv_prefix += "volatile ";
+			actual_class = CanonicalSpelling(actual_class.substr(9));
+		} else break;
+	}
+	map<string, vector<string> >::const_iterator specialization =
+		specialization_arguments_.find(LastComponent(actual_class));
+	map<string, string>::const_iterator base =
+		specialization_bases_.find(LastComponent(actual_class));
+	if(specialization == specialization_arguments_.end() || base == specialization_bases_.end())
+		return -1;
+	if(parameter_names.find(pattern_base) != parameter_names.end() ||
+		LastComponent(base->second) == pattern_base) return 0;
+	const TemplateDefinition* definition = FindDefinition(base->second, context);
+	if(!definition || !definition->class_template || !definition->declaration) return -1;
+	map<string, string> substitutions;
+	for(size_t parameter = 0; parameter < definition->parameters.size() &&
+		parameter < specialization->second.size(); ++parameter)
+		if(!definition->parameters[parameter].name.empty())
+			substitutions[definition->parameters[parameter].name] =
+				specialization->second[parameter];
+	for(size_t child = 0; child < definition->declaration->children.size(); ++child) {
+		const CPPGMAstNodePtr clause = definition->declaration->children[child];
+		if(!clause || clause->kind != "base-clause") continue;
+		for(size_t base_index = 0; base_index < clause->children.size(); ++base_index) {
+			const CPPGMAstNodePtr base_name = ChildOfKindLocal(
+				clause->children[base_index], "base-name");
+			if(!base_name) continue;
+			const string concrete_base = cv_prefix + CanonicalSpelling(
+				ReplaceIdentifiers(base_name->value, substitutions)) + pointer_suffix;
+			if(MatchTypePattern(pattern, concrete_base, parameter_names, inferred,
+				context, class_pattern)) return 1;
+		}
+	}
+	return -1;
 }
 
 } // namespace pa18_templates_internal

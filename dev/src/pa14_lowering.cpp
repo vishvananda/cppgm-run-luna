@@ -1120,10 +1120,24 @@ int PA14Lowerer::BaseDistance(const TypePtr& raw_derived, const TypePtr& raw_bas
     TypePtr base = type_value(raw_base);
     if(!derived || !base || derived->kind != TYPE_CLASS || base->kind != TYPE_CLASS)
       return -1;
-    int distance = 1;
-    for(TypePtr current = type_value(derived->direct_base); current;
-        current = type_value(current->direct_base), ++distance)
+    vector<pair<TypePtr, int> > pending;
+    set<const Type*> visited;
+    if(!derived->direct_bases.empty())
+      for(size_t i = 0; i < derived->direct_bases.size(); ++i)
+        pending.push_back(make_pair(type_value(derived->direct_bases[i]), 1));
+    else if(derived->direct_base)
+      pending.push_back(make_pair(type_value(derived->direct_base), 1));
+    for(size_t next = 0; next < pending.size(); ++next) {
+      TypePtr current = pending[next].first;
+      const int distance = pending[next].second;
+      if(!current || !visited.insert(current.get()).second) continue;
       if(PA12SameType(current, base, true)) return distance;
+      if(!current->direct_bases.empty())
+        for(size_t i = 0; i < current->direct_bases.size(); ++i)
+          pending.push_back(make_pair(type_value(current->direct_bases[i]), distance + 1));
+      else if(current->direct_base)
+        pending.push_back(make_pair(type_value(current->direct_base), distance + 1));
+    }
     return -1;
   }
 

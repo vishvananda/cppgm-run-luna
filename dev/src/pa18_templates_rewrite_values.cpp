@@ -70,10 +70,24 @@ namespace pa18_templates_internal {
 		// `A::value && B::value`.
 		string expanded = raw;
 		bool expanded_any = false;
-		for(size_t marker = expanded.find("::value"); marker != string::npos; ) {
-			size_t begin = marker;
-			while(begin > 0 && (IsIdentifierCharacter(expanded[begin - 1]) ||
-				expanded[begin - 1] == ':')) --begin;
+	for(size_t marker = expanded.find("::value"); marker != string::npos; ) {
+		size_t begin = marker;
+		if(begin > 0 && expanded[begin - 1] == '>') {
+			int angle_depth = 0;
+			while(begin > 0) {
+				const char character = expanded[begin - 1];
+				if(character == '>') ++angle_depth;
+				else if(character == '<' && angle_depth > 0) {
+					--angle_depth;
+					--begin;
+					if(angle_depth == 0) break;
+					continue;
+				}
+				--begin;
+			}
+		}
+		while(begin > 0 && (IsIdentifierCharacter(expanded[begin - 1]) ||
+			expanded[begin - 1] == ':')) --begin;
 			const size_t length = marker + 7 - begin;
 			const string operand = expanded.substr(begin, length);
 			PA19IntegralValue operand_value;
@@ -101,13 +115,29 @@ namespace pa18_templates_internal {
 						child_index < definition.declaration->children.size(); ++child_index) {
 						const CPPGMAstNodePtr clause = definition.declaration->children[child_index];
 						if(!clause || clause->kind != "base-clause") continue;
-						for(size_t base_index = 0; base_index < clause->children.size(); ++base_index) {
-							const CPPGMAstNodePtr base_name = ChildOfKindLocal(
-								clause->children[base_index], "base-name");
-							if(!base_name) continue;
-							string base_spelling = CanonicalSpelling(ReplaceIdentifiers(
-								base_name->value, member_substitutions));
-							base_spelling = ResolveAlias(base_spelling, context);
+		for(size_t base_index = 0; base_index < clause->children.size(); ++base_index) {
+			const CPPGMAstNodePtr base_name = ChildOfKindLocal(
+				clause->children[base_index], "base-name");
+			if(!base_name) continue;
+				map<string, string> base_substitutions = member_substitutions;
+			for(map<string, string>::const_iterator substitution = member_substitutions.begin();
+				substitution != member_substitutions.end(); ++substitution)
+				for(size_t at = base_name->value.find(substitution->first); at != string::npos;
+					at = base_name->value.find(substitution->first, at + substitution->first.size())) {
+					if(at > 0 && IsIdentifierCharacter(base_name->value[at - 1])) continue;
+					size_t after = at + substitution->first.size();
+					while(after < base_name->value.size() &&
+						isspace(static_cast<unsigned char>(base_name->value[after]))) ++after;
+					if(after < base_name->value.size() && base_name->value[after] == '<') {
+						base_substitutions.erase(substitution->first);
+						break;
+					}
+				}
+				string base_spelling = CanonicalSpelling(ReplaceIdentifiers(
+					base_name->value, base_substitutions));
+				base_spelling = CanonicalSpelling(RemoveMarker(RewriteText(
+					base_spelling, context, base_substitutions, 0)));
+				base_spelling = ResolveAlias(base_spelling, context);
 							string base_primary = base_spelling;
 							vector<string> base_arguments;
 							const size_t open = base_spelling.find('<');
@@ -155,7 +185,7 @@ namespace pa18_templates_internal {
 							}
 							const TemplateDefinition* base_definition = FindDefinition(
 								base_primary, context);
-							if(base_definition) base_primary = base_definition->qualified_name;
+			if(base_definition) base_primary = base_definition->qualified_name;
 							string materialized_base;
 							for(map<string, vector<string> >::const_iterator candidate =
 								specialization_arguments_.begin();
@@ -172,8 +202,8 @@ namespace pa18_templates_internal {
 										same = false;
 										break;
 									}
-								if(same) {
-									materialized_base = candidate->first;
+				if(same) {
+					materialized_base = candidate->first;
 									break;
 								}
 							}
@@ -196,10 +226,25 @@ namespace pa18_templates_internal {
 									}
 								}
 							}
-							if(materialized_base.empty() &&
-								class_contexts_.find(base_spelling) != class_contexts_.end())
-								materialized_base = base_spelling;
-							if(!materialized_base.empty()) {
+			if(materialized_base.empty() &&
+				class_contexts_.find(base_spelling) != class_contexts_.end())
+				materialized_base = base_spelling;
+			if(materialized_base.empty()) {
+				// Generated base spellings are often emitted without the lexical
+				// namespace (`integral_constant_bool__false_`) even though the
+				// typed class tables retain it (`std::integral_constant...`).
+				// Reconnect that spelling by its unique generated class component.
+				for(set<string>::const_iterator candidate = class_contexts_.begin();
+					candidate != class_contexts_.end(); ++candidate) {
+					if(LastComponent(*candidate) != LastComponent(base_spelling)) continue;
+					if(!materialized_base.empty()) {
+						materialized_base.clear();
+						break;
+					}
+					materialized_base = *candidate;
+				}
+			}
+				if(!materialized_base.empty()) {
 								const string member_key = materialized_base + "::value";
 								map<string,PA19IntegralValue>::const_iterator direct_value =
 									constant_values_.find(member_key);
@@ -249,6 +294,14 @@ namespace pa18_templates_internal {
 				if(!definition->parameters[parameter].name.empty())
 					member_substitutions[definition->parameters[parameter].name] =
 						member_arguments->second[parameter];
+			if(definition->partial_specialization) {
+				map<string,string> partial_bindings;
+				if(MatchClassSpecializationPattern(*definition, member_arguments->second,
+					&partial_bindings, context))
+					for(map<string,string>::const_iterator binding = partial_bindings.begin();
+						binding != partial_bindings.end(); ++binding)
+						member_substitutions[binding->first] = binding->second;
+			}
 		}
 		return EvaluateInheritedBaseValue(*definition, context,
 			member_substitutions, result);

@@ -267,8 +267,8 @@ bool PA18TemplateExpander::FindDirectTemplateMemberType(
 				LastComponent(FirstIdentifierLocal(item->children[0])).empty()) continue;
 			const string name = LastComponent(FirstIdentifierLocal(item->children[0]));
 			const string spelling = RewriteTemplateMemberSpelling(definition, arguments,
-				NodeTypeSpelling(child->children[0]) + DeclaratorSuffix(item->children[0]) +
-				DeclaratorArraySuffix(item->children[0]), context, *local);
+				DeclaratorTypeSpelling(NodeTypeSpelling(child->children[0]),
+					item->children[0]), context, *local);
 			(*local)[name] = spelling;
 			if(name == member) {
 				*result = spelling;
@@ -366,8 +366,9 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 	string* raw, size_t begin, size_t close, const string& base, const string& context,
 	const map<string, string>& substitutions, bool* template_replaced, size_t* search)
 {
-	if(!raw || close + 2 >= raw->size() || raw->compare(close + 1, 2, "::") != 0)
+	if(!raw || close + 2 >= raw->size() || raw->compare(close + 1, 2, "::") != 0) {
 		return false;
+	}
 	size_t concrete_member_end = close + 3;
 	while(concrete_member_end < raw->size() &&
 		IsIdentifierCharacter((*raw)[concrete_member_end])) ++concrete_member_end;
@@ -380,18 +381,34 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 		nested_name = base.substr(owner_separator + 2);
 		owner_spelling = ResolveAlias(base.substr(0, owner_separator), context);
 	}
+	// TemplateBase returns only the identifier before the current argument list.
+	// For `Owner<T>::template Nested<U>::member`, the current owner spelling is
+	// therefore reconstructed from the range being rewritten before looking up
+	// its nested definition.
+	if(owner_spelling.find('<') == string::npos && begin < raw->size() && close < raw->size())
+		owner_spelling = raw->substr(begin, close - begin + 1);
 	const size_t owner_open = owner_spelling.find('<');
 	string owner_arguments_text;
 	size_t owner_close = string::npos;
 	if(owner_open == string::npos || !TemplateRange(owner_spelling, owner_open,
-		&owner_arguments_text, &owner_close)) return false;
+		&owner_arguments_text, &owner_close)) {
+		return false;
+	}
 	const string owner_base = owner_spelling.substr(0, owner_open);
 	if(nested_name.empty() && owner_close + 2 < owner_spelling.size() &&
 		owner_spelling.compare(owner_close + 1, 2, "::") == 0)
 		nested_name = owner_spelling.substr(owner_close + 3);
+	size_t nested_qualifier_start = close + 3;
+	while(nested_qualifier_start < raw->size() && isspace(
+		static_cast<unsigned char>((*raw)[nested_qualifier_start]))) ++nested_qualifier_start;
+	const bool has_nested_template = raw->compare(nested_qualifier_start, 8,
+		"template") == 0 && (nested_qualifier_start + 8 == raw->size() ||
+		!IsIdentifierCharacter((*raw)[nested_qualifier_start + 8]));
+	if(nested_name.empty() && !has_nested_template)
+		nested_name = nested_member;
 	const TemplateDefinition* owner_definition = FindDefinition(owner_base, context);
-	if(!owner_definition || !owner_definition->class_template || nested_name.empty() ||
-		nested_member.empty()) return false;
+	if(!owner_definition || !owner_definition->class_template ||
+		(!has_nested_template && nested_name.empty()) || nested_member.empty()) return false;
 	vector<string> owner_arguments = SplitTemplateArguments(owner_arguments_text);
 	for(size_t owner_argument = 0; owner_argument < owner_arguments.size(); ++owner_argument) {
 		owner_arguments[owner_argument] = NormalizeTypeArgument(RewriteText(
@@ -403,7 +420,129 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 	const TemplateDefinition* selected_owner = SelectClassTemplateDefinition(
 		owner_definition, owner_arguments, context);
 	if(!selected_owner) return false;
-	const string owner_local_name = Instantiate(*selected_owner, owner_arguments, context);
+	string owner_local_name;
+	for(map<string, vector<string> >::const_iterator existing =
+		specialization_arguments_.begin(); existing != specialization_arguments_.end() &&
+		owner_local_name.empty(); ++existing) {
+		map<string, string>::const_iterator existing_base = specialization_bases_.find(
+			existing->first);
+		if(existing_base == specialization_bases_.end() ||
+			(existing_base->second != selected_owner->qualified_name &&
+			 LastComponent(existing_base->second) != LastComponent(selected_owner->qualified_name)) ||
+			existing->second.size() != owner_arguments.size()) continue;
+		bool same = true;
+		for(size_t argument = 0; argument < owner_arguments.size(); ++argument)
+			if(NormalizeTypeArgument(CanonicalSpelling(existing->second[argument])) !=
+				NormalizeTypeArgument(CanonicalSpelling(owner_arguments[argument]))) {
+				same = false;
+				break;
+			}
+		if(same) owner_local_name = existing->first;
+	}
+	if(owner_local_name.empty()) owner_local_name = Instantiate(*selected_owner,
+		owner_arguments, context);
+	// A dependent nested class template has one more level than the ordinary
+	// `Owner<T>::member` form handled below.  Materialize the nested
+	// specialization first so the enclosing member lookup sees the concrete
+	// inherited typedef.  This is the typed equivalent of resolving
+	// `Cases::template case_<Tag>::proto_grammar` before replaying the outer
+	// template-id that contains it.
+	size_t nested_qualifier = close + 1;
+	while(nested_qualifier < raw->size() && isspace(
+		static_cast<unsigned char>((*raw)[nested_qualifier]))) ++nested_qualifier;
+	if(has_nested_template && nested_qualifier + 1 < raw->size() &&
+		raw->compare(nested_qualifier, 2, "::") == 0) {
+		size_t nested_start = nested_qualifier + 2;
+		while(nested_start < raw->size() && isspace(
+			static_cast<unsigned char>((*raw)[nested_start]))) ++nested_start;
+		if(raw->compare(nested_start, 8, "template") == 0 &&
+			(nested_start + 8 == raw->size() ||
+			 !IsIdentifierCharacter((*raw)[nested_start + 8]))) {
+			nested_start += 8;
+			while(nested_start < raw->size() && isspace(
+				static_cast<unsigned char>((*raw)[nested_start]))) ++nested_start;
+		}
+		size_t nested_open = raw->find('<', nested_start);
+		size_t nested_begin = 0;
+		string nested_base;
+		string nested_arguments_text;
+		size_t nested_close = string::npos;
+		if(nested_open != string::npos &&
+			TemplateBase(*raw, nested_open, &nested_begin, &nested_base) &&
+			nested_begin == nested_start && TemplateRange(*raw, nested_open,
+			&nested_arguments_text, &nested_close)) {
+			size_t member_separator = nested_close + 1;
+			while(member_separator < raw->size() && isspace(
+				static_cast<unsigned char>((*raw)[member_separator]))) ++member_separator;
+			if(member_separator + 1 < raw->size() &&
+				raw->compare(member_separator, 2, "::") == 0) {
+				size_t member_begin = member_separator + 2;
+				while(member_begin < raw->size() && isspace(
+					static_cast<unsigned char>((*raw)[member_begin]))) ++member_begin;
+				size_t member_end = member_begin;
+				while(member_end < raw->size() && IsIdentifierCharacter((*raw)[member_end]))
+					++member_end;
+				const string nested_member = raw->substr(member_begin,
+					member_end - member_begin);
+					const TemplateDefinition* nested_definition = FindNestedDefinition(
+						*selected_owner, nested_base);
+					if(nested_definition && !nested_member.empty()) {
+					map<string, string> nested_substitutions = substitutions;
+					for(size_t parameter = 0; parameter < selected_owner->parameters.size() &&
+						parameter < owner_arguments.size(); ++parameter)
+						if(!selected_owner->parameters[parameter].name.empty())
+							nested_substitutions[selected_owner->parameters[parameter].name] =
+								owner_arguments[parameter];
+					map<string, string> owner_specialized;
+					if(selected_owner->partial_specialization &&
+						MatchClassSpecializationPattern(*selected_owner, owner_arguments,
+							&owner_specialized, context))
+						for(map<string, string>::const_iterator binding = owner_specialized.begin();
+							binding != owner_specialized.end(); ++binding)
+							nested_substitutions[binding->first] = binding->second;
+					nested_substitutions[selected_owner->name] = owner_local_name;
+					vector<string> nested_arguments = SplitTemplateArguments(
+						nested_arguments_text);
+					for(size_t argument = 0; argument < nested_arguments.size(); ++argument) {
+						nested_arguments[argument] = NormalizeTypeArgument(RewriteText(
+							nested_arguments[argument], context, nested_substitutions, 0,
+							false, false));
+						nested_arguments[argument] = NormalizeTypeArgument(ReplaceIdentifiers(
+							nested_arguments[argument], nested_substitutions));
+					}
+					const TemplateDefinition* selected_nested = SelectClassTemplateDefinition(
+						nested_definition, nested_arguments, context);
+					if(selected_nested) {
+						const string nested_local_name = Instantiate(*selected_nested,
+							nested_arguments, context, false, 0, &nested_substitutions);
+						const string concrete_nested = JoinPath(selected_nested->owner,
+							nested_local_name);
+						string concrete_member;
+						set<string> nested_active;
+						const bool concrete_found = FindClassMemberType(concrete_nested, nested_member,
+							nested_substitutions, context, &concrete_member, &nested_active,
+							true) && !concrete_member.empty();
+						if(concrete_found) {
+							concrete_member = NormalizeTypeArgument(RewriteText(
+								concrete_member, context, nested_substitutions, 0));
+							size_t replacement_begin = begin;
+							while(replacement_begin > 0 && isspace(static_cast<unsigned char>(
+								(*raw)[replacement_begin - 1]))) --replacement_begin;
+							if(replacement_begin >= 8 && raw->compare(replacement_begin - 8,
+								8, "typename") == 0 && (replacement_begin == 8 ||
+								!IsIdentifierCharacter((*raw)[replacement_begin - 9])))
+								replacement_begin -= 8;
+							raw->replace(replacement_begin, member_end - replacement_begin,
+								concrete_member);
+							if(template_replaced) *template_replaced = true;
+							if(search) *search = replacement_begin + concrete_member.size();
+							return true;
+						}
+					}
+				}
+			}
+		}
+	}
 	InstantiateNestedClass(*selected_owner, owner_arguments, owner_local_name, nested_name, context);
 	const string concrete_nested = JoinPath(owner_local_name, nested_name);
 	map<string, string> concrete_substitutions = substitutions;

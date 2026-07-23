@@ -104,11 +104,15 @@ struct Type
 	TypePtr underlying;
 	vector<ClassMemberInfo> class_members;
 	TypePtr direct_base;
+	// All direct base subobjects, retained alongside direct_base for the
+	// single-inheritance consumers from earlier assignments.
+	vector<TypePtr> direct_bases;
 	// Offset of the direct base subobject within the complete object.  The
 	// supported PA17 layout normally keeps a single-inheritance base at zero;
 	// a class that introduces its first vpointer reserves offset zero for that
 	// pointer and records the non-polymorphic base's adjusted address here.
 	size_t direct_base_offset;
+	vector<size_t> direct_base_offsets;
 	size_t object_size;
 	size_t object_alignment;
 	size_t explicit_alignment;
@@ -126,6 +130,10 @@ struct Type
 	bool template_specialization;
 	string template_primary;
 	vector<string> template_arguments;
+	// A materialized specialization whose object layout depends on a nested
+	// specialization of the current class needs its local object address
+	// visible when lowering an unevaluated sizeof query.
+	bool materialize_sizeof_address;
 
 	Type(TypeKind type_kind = TYPE_FUNDAMENTAL,
 		const string& type_name = string());

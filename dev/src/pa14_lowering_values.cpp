@@ -886,6 +886,8 @@ int PA14Lowerer::ConversionRank(const ExprInfo& source, const TypePtr& target) c
     TypePtr source_value = type_value(source.type);
     TypePtr target_value = type_value(target);
     if(!source_value || !target_value) return -1;
+    if(target->kind == TYPE_RVALUE_REFERENCE && source.category == "lvalue" &&
+       is_arithmetic_type(source_value) && is_arithmetic_type(target_value)) return 2;
     if(source_value->kind == TYPE_CLASS) {
       int conversion_rank = -1;
       if(FindConversionOperator(source_value, target, false, &conversion_rank))
@@ -947,6 +949,7 @@ int PA14Lowerer::ConversionRank(const ExprInfo& source, const TypePtr& target) c
         if(target_value->kind == TYPE_POINTER && source_value->kind == TYPE_ARRAY &&
            source_value->child && target_value->child &&
            PA12SameType(source_value->child, target_value->child, true)) return 1;
+        if(is_arithmetic_type(source_value) && is_arithmetic_type(target_value)) return 2;
         return -1;
       }
       if(PA12SameType(source_value, target_value, true)) return 0;

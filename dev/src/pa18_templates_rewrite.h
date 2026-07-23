@@ -2,248 +2,18 @@
 #include "pa18_templates_rewrite_lookup.h"
 #include "pa18_templates_rewrite_decltype.h"
 #include "pa18_templates_rewrite_instantiate.h"
+#include "pa18_templates_rewrite_specialization.inc"
 bool MatchTypePattern(string pattern, string actual,
 		const set<string>& parameter_names, map<string, string>* inferred, const string& context, bool class_pattern = false) const;
+	int MatchGeneratedBaseTypePattern(const string& pattern, const string& actual,
+		const string& pattern_base, const set<string>& parameter_names,
+		map<string, string>* inferred, const string& context, bool class_pattern) const;
 	bool SplitDirectFunctionType(const string& raw, string* result, vector<string>* parameters, string* qualifiers) const;
 	int MatchObjectCvPattern(const string& pattern, const string& actual, const set<string>& parameter_names,
 			map<string, string>* inferred, const string& context) const;
 	bool MatchTrailingTypePack(const vector<string>& pattern_parts, const vector<string>& actual_parts,
 		const set<string>& parameter_names, map<string, string>* inferred, const string& context, bool class_pattern) const;
 	bool IsTemplatePackName(const TemplateDefinition& definition, const string& name) const;
-	bool MatchOrderingTypePattern(const string& raw_pattern, const string& raw_actual, const set<string>& parameter_names, map<string, string>* inferred) const
-	{
-		string pattern = CanonicalSpelling(raw_pattern);
-		string actual = CanonicalSpelling(raw_actual);
-		string pattern_result, actual_result, pattern_qualifiers, actual_qualifiers;
-		vector<string> pattern_parameters, actual_parameters;
-		const bool pattern_function = SplitDirectFunctionType(pattern, &pattern_result,
-			&pattern_parameters, &pattern_qualifiers);
-		const bool actual_function = SplitDirectFunctionType(actual, &actual_result,
-			&actual_parameters, &actual_qualifiers);
-		if(pattern_function) {
-			if(!actual_function || pattern_qualifiers != actual_qualifiers ||
-				!MatchOrderingTypePattern(pattern_result, actual_result, parameter_names,
-					inferred)) return false;
-			return MatchOrderingPatternList(pattern_parameters, actual_parameters,
-				parameter_names, inferred);
-		}
-		if(actual_function && parameter_names.find(pattern) == parameter_names.end()) return false;
-		const size_t pattern_array = pattern.rfind('[');
-		const size_t actual_array = actual.rfind('[');
-		if(pattern_array != string::npos || actual_array != string::npos) {
-			if(pattern_array == string::npos || actual_array == string::npos ||
-				pattern.empty() || actual.empty() || pattern[pattern.size() - 1] != ']' ||
-				actual[actual.size() - 1] != ']') return false;
-			if(!MatchOrderingTypePattern(pattern.substr(0, pattern_array),
-				actual.substr(0, actual_array), parameter_names, inferred)) return false;
-			const string bound = CanonicalSpelling(pattern.substr(pattern_array + 1,
-				pattern.size() - pattern_array - 2));
-			const string actual_bound = CanonicalSpelling(actual.substr(actual_array + 1,
-				actual.size() - actual_array - 2));
-			if(bound.empty()) return actual_bound.empty();
-			if(parameter_names.find(bound) != parameter_names.end()) {
-				map<string, string>::const_iterator prior = inferred->find(bound);
-				if(prior != inferred->end() && prior->second != actual_bound) return false;
-				(*inferred)[bound] = actual_bound;
-				return true;
-			}
-			return ReplaceIdentifiers(bound, *inferred) == actual_bound;
-		}
-		const bool pattern_rvalue = pattern.size() > 1 &&
-			pattern.compare(pattern.size() - 2, 2, "&&") == 0;
-		const bool actual_rvalue = actual.size() > 1 &&
-			actual.compare(actual.size() - 2, 2, "&&") == 0;
-		const bool pattern_lvalue = !pattern.empty() && pattern[pattern.size() - 1] == '&' &&
-			!pattern_rvalue;
-		const bool actual_lvalue = !actual.empty() && actual[actual.size() - 1] == '&' &&
-			!actual_rvalue;
-		if(pattern_rvalue || actual_rvalue) {
-			if(!pattern_rvalue || !actual_rvalue) return false;
-			pattern.erase(pattern.size() - 2);
-			actual.erase(actual.size() - 2);
-		} else if(pattern_lvalue || actual_lvalue) {
-			if(!pattern_lvalue || !actual_lvalue) return false;
-			pattern.erase(pattern.size() - 1);
-			actual.erase(actual.size() - 1);
-		}
-		pattern = CanonicalSpelling(pattern);
-		actual = CanonicalSpelling(actual);
-		const bool pattern_const = pattern.compare(0, 6, "const ") == 0;
-		const bool actual_const = actual.compare(0, 6, "const ") == 0;
-		const bool pattern_volatile = pattern.compare(0, 9, "volatile ") == 0;
-		const bool actual_volatile = actual.compare(0, 9, "volatile ") == 0;
-		if(pattern_const != actual_const || pattern_volatile != actual_volatile) return false;
-		if(pattern_const) pattern = CanonicalSpelling(pattern.substr(6));
-		if(actual_const) actual = CanonicalSpelling(actual.substr(6));
-		if(pattern_volatile) pattern = CanonicalSpelling(pattern.substr(9));
-		if(actual_volatile) actual = CanonicalSpelling(actual.substr(9));
-		while(pattern.size() > 6 && pattern.compare(pattern.size() - 6, 6, " const") == 0) {
-			if(actual.size() <= 6 || actual.compare(actual.size() - 6, 6, " const") != 0) return false;
-			pattern = CanonicalSpelling(pattern.substr(0, pattern.size() - 6));
-			actual = CanonicalSpelling(actual.substr(0, actual.size() - 6));
-		}
-		while(pattern.size() > 9 && pattern.compare(pattern.size() - 9, 9, " volatile") == 0) {
-			if(actual.size() <= 9 || actual.compare(actual.size() - 9, 9, " volatile") != 0) return false;
-			pattern = CanonicalSpelling(pattern.substr(0, pattern.size() - 9));
-			actual = CanonicalSpelling(actual.substr(0, actual.size() - 9));
-		}
-		if(parameter_names.find(pattern) != parameter_names.end()) {
-			map<string, string>::const_iterator prior = inferred->find(pattern);
-			if(prior != inferred->end() && prior->second != actual) return false;
-			(*inferred)[pattern] = actual;
-			return true;
-		}
-		const size_t pattern_open = pattern.find('<');
-		if(pattern_open != string::npos) {
-			string pattern_arguments;
-			size_t pattern_close = string::npos;
-			if(!TemplateRange(pattern, pattern_open, &pattern_arguments, &pattern_close)) return false;
-			const size_t actual_open = actual.find('<');
-			if(actual_open == string::npos) return false;
-			string actual_arguments;
-			size_t actual_close = string::npos;
-			if(!TemplateRange(actual, actual_open, &actual_arguments, &actual_close) ||
-				pattern.substr(0, pattern_open) != actual.substr(0, actual_open)) return false;
-			return MatchOrderingPatternList(SplitTemplateArguments(pattern_arguments),
-				SplitTemplateArguments(actual_arguments), parameter_names, inferred);
-		}
-		for(set<string>::const_iterator parameter = parameter_names.begin();
-			parameter != parameter_names.end(); ++parameter) {
-			const size_t position = pattern.find(*parameter);
-			if(position == string::npos || (position > 0 &&
-				IsIdentifierCharacter(pattern[position - 1])) ||
-				(position + parameter->size() < pattern.size() &&
-				 IsIdentifierCharacter(pattern[position + parameter->size()]))) continue;
-			const string prefix = pattern.substr(0, position);
-			const string suffix = pattern.substr(position + parameter->size());
-			if(actual.size() < prefix.size() + suffix.size() ||
-				actual.compare(0, prefix.size(), prefix) != 0 ||
-				actual.compare(actual.size() - suffix.size(), suffix.size(), suffix) != 0) continue;
-			const string value = actual.substr(prefix.size(), actual.size() -
-				prefix.size() - suffix.size());
-			map<string, string>::const_iterator prior = inferred->find(*parameter);
-			if(prior != inferred->end() && prior->second != value) return false;
-			(*inferred)[*parameter] = value;
-			return true;
-		}
-		return pattern == actual;
-	}
-	bool MatchOrderingPatternList(const vector<string>& patterns,
-		const vector<string>& actual, const set<string>& parameter_names,
-		map<string, string>* inferred) const
-	{
-		size_t actual_index = 0;
-		for(size_t pattern_index = 0; pattern_index < patterns.size(); ++pattern_index) {
-			const string pattern = CanonicalSpelling(patterns[pattern_index]);
-			if(pattern.size() > 3 && pattern.compare(pattern.size() - 3, 3, "...") == 0 &&
-				pattern_index + 1 == patterns.size()) {
-				const string pack_name = CanonicalSpelling(pattern.substr(0, pattern.size() - 3));
-				if(parameter_names.find(pack_name) == parameter_names.end()) return false;
-				string combined;
-				while(actual_index < actual.size()) {
-					if(!combined.empty()) combined += ",";
-					combined += CanonicalSpelling(actual[actual_index++]);
-				}
-				map<string, string>::const_iterator prior = inferred->find(pack_name);
-				if(prior != inferred->end() && prior->second != combined) return false;
-				(*inferred)[pack_name] = combined;
-				return true;
-			}
-			if(actual_index >= actual.size() || !MatchOrderingTypePattern(pattern,
-				actual[actual_index++], parameter_names, inferred)) return false;
-		}
-		return actual_index == actual.size();
-	}
-	bool ClassPartialMoreSpecialized(const TemplateDefinition& lhs,
-		const TemplateDefinition& rhs, const string& context) const;
-	bool MatchClassSpecializationPattern(const TemplateDefinition& definition,
-		const vector<string>& arguments, map<string, string>* inferred,
-		const string& context) const
-	{
-		if(!definition.partial_specialization) return false;
-		set<string> parameter_names;
-		for(size_t i = 0; i < definition.specialization_parameters.size(); ++i)
-			if(!definition.specialization_parameters[i].empty())
-				parameter_names.insert(definition.specialization_parameters[i]);
-		map<string, string> local;
-		size_t pattern_index = 0;
-		size_t argument_index = 0;
-		for(; pattern_index < definition.specialization_pattern.size(); ++pattern_index) {
-			string pattern = CanonicalSpelling(
-				definition.specialization_pattern[pattern_index]);
-			const bool pack = IsTopLevelPackPattern(pattern);
-			if(pack && pattern_index + 1 == definition.specialization_pattern.size()) {
-				const string pack_pattern = CanonicalSpelling(pattern.substr(0,
-					pattern.size() - 3));
-				if(!pack_pattern.empty()) {
-					while(argument_index < arguments.size()) {
-						const string actual = CanonicalSpelling(arguments[argument_index++]);
-						map<string, string> one;
-						if(!MatchTypePattern(pack_pattern, actual, parameter_names, &one, context, true)) return false;
-						for(map<string, string>::const_iterator binding = one.begin(); binding != one.end(); ++binding) {
-							const bool pack_binding = find(definition.specialization_pack_names.begin(),
-								definition.specialization_pack_names.end(), binding->first) !=
-								definition.specialization_pack_names.end();
-							map<string, string>::iterator prior = local.find(binding->first);
-							if(pack_binding) { if(prior != local.end() && !prior->second.empty()) prior->second += ","; local[binding->first] += binding->second; }
-							else { if(prior != local.end() && prior->second != binding->second) return false; local[binding->first] = binding->second; }
-						}
-					}
-					if(argument_index == arguments.size())
-						for(size_t pack_name = 0; pack_name < definition.specialization_pack_names.size(); ++pack_name)
-							if(local.find(definition.specialization_pack_names[pack_name]) == local.end()) local[definition.specialization_pack_names[pack_name]] = string();
-					break;
-				}
-			}
-			if(argument_index >= arguments.size()) return false;
-			string actual = CanonicalSpelling(arguments[argument_index++]);
-			if(pattern.find("::") != string::npos || pattern.find("typename") != string::npos) {
-				const string rewritten_pattern = NormalizeTypeArgument(const_cast<PA18TemplateExpander*>(this)->RewriteText(
-					ReplaceIdentifiersPreservingPackSizes(pattern, local), context, local, 0));
-				if(!rewritten_pattern.empty()) pattern = rewritten_pattern;
-			}
-			bool template_parameter = false;
-			for(size_t detail = 0; detail < definition.specialization_parameter_details.size(); ++detail)
-				if(definition.specialization_parameter_details[detail].name == pattern &&
-					definition.specialization_parameter_details[detail].template_template) { template_parameter = true; break; }
-			if(argument_index > 0 && argument_index - 1 < definition.parameters.size() &&
-				!definition.parameters[argument_index - 1].type) {
-				PA19ConstantExpressionParser parser(constant_values_, local,
-					constant_type_sizes_, constant_type_alignments_, type_aliases_);
-				PA19IntegralValue normalized_value;
-				if(parser.Evaluate(pattern, &normalized_value))
-					pattern = TemplateIntegralValueSpelling(normalized_value);
-				if(parser.Evaluate(actual, &normalized_value))
-					actual = TemplateIntegralValueSpelling(normalized_value);
-			}
-			if(pattern.size() > 2 && pattern.compare(pattern.size() - 2, 2, "&&") == 0 &&
-				(actual.size() < 2 || actual.compare(actual.size() - 2, 2, "&&") != 0)) return false;
-			const bool lvalue_reference_pattern = pattern.size() > 0 &&
-				pattern[pattern.size() - 1] == '&' &&
-				!(pattern.size() > 1 && pattern[pattern.size() - 2] == '&');
-			if(lvalue_reference_pattern &&
-				(actual.empty() || actual[actual.size() - 1] != '&')) return false;
-			if(template_parameter) {
-				map<string, string>::const_iterator prior = local.find(pattern);
-				if(prior != local.end() && CanonicalSpelling(prior->second) != actual) return false;
-				local[pattern] = actual;
-			} else {
-				const bool matched_pattern = pattern == actual ||
-					MatchTypePattern(pattern, actual, parameter_names, &local, context, true);
-				if(!matched_pattern) return false;
-			}
-		}
-		while(argument_index < arguments.size()) {
-			if(argument_index >= definition.parameters.size() ||
-				definition.parameters[argument_index].default_type.empty()) return false;
-			const string expected = NormalizeTypeArgument(ReplaceIdentifiers(
-				definition.parameters[argument_index].default_type, local));
-			if(expected != NormalizeTypeArgument(arguments[argument_index])) return false;
-			++argument_index;
-		}
-		if(inferred) *inferred = local;
-		return true;
-	}
 		const TemplateDefinition* SelectClassTemplateDefinition(
 		const TemplateDefinition* primary, const vector<string>& arguments,
 		const string& context) const
@@ -251,9 +21,43 @@ bool MatchTypePattern(string pattern, string actual,
 		if(!primary) return primary;
 		if(!primary->class_template && !primary->alias_template &&
 			!primary->variable_template) return primary;
-		map<string, vector<TemplateDefinition> >::const_iterator candidates =
+		vector<const TemplateDefinition*> candidates;
+		map<string, vector<TemplateDefinition> >::const_iterator direct_candidates =
 			class_specializations_.find(primary->qualified_name);
-		if(candidates == class_specializations_.end()) return primary;
+		if(direct_candidates != class_specializations_.end())
+			for(size_t i = 0; i < direct_candidates->second.size(); ++i)
+				candidates.push_back(&direct_candidates->second[i]);
+		else {
+			const auto strip_template_arguments = [](const string& raw) {
+				string result;
+				int depth = 0;
+				for(size_t i = 0; i < raw.size(); ++i) {
+					if(raw[i] == '<') { ++depth; continue; }
+					if(raw[i] == '>') { if(depth > 0) --depth; continue; }
+					if(depth == 0) result += raw[i];
+				}
+				return result;
+			};
+			const auto collapse_repeated_owner = [](string raw) {
+				const size_t separator = raw.rfind("::");
+				if(separator != string::npos &&
+					LastComponent(raw.substr(0, separator)) == raw.substr(separator + 2))
+					raw.erase(separator);
+				return raw;
+			};
+			const string primary_owner = collapse_repeated_owner(
+				strip_template_arguments(primary->owner));
+			for(map<string, vector<TemplateDefinition> >::const_iterator group =
+				class_specializations_.begin(); group != class_specializations_.end(); ++group)
+				for(size_t i = 0; i < group->second.size(); ++i) {
+					const TemplateDefinition& candidate = group->second[i];
+					if(candidate.name != primary->name) continue;
+					const string candidate_owner = collapse_repeated_owner(
+						strip_template_arguments(candidate.owner));
+					if(candidate_owner == primary_owner) candidates.push_back(&candidate);
+				}
+		}
+		if(candidates.empty()) return primary;
 		vector<string> matching_arguments = arguments;
 		map<string, string> default_substitutions;
 		for(size_t parameter = 0; parameter < primary->parameters.size() && parameter < arguments.size(); ++parameter)
@@ -265,11 +69,11 @@ bool MatchTypePattern(string pattern, string actual,
 			if(!primary->parameters[parameter].name.empty()) default_substitutions[primary->parameters[parameter].name] = default_argument;
 		}
 		vector<const TemplateDefinition*> matched;
-		for(size_t i = 0; i < candidates->second.size(); ++i) {
-			const bool matches = MatchClassSpecializationPattern(candidates->second[i],
+		for(size_t i = 0; i < candidates.size(); ++i) {
+			const bool matches = MatchClassSpecializationPattern(*candidates[i],
 				matching_arguments, 0, context);
 			if(matches)
-				matched.push_back(&candidates->second[i]);
+				matched.push_back(candidates[i]);
 		}
 		if(matched.empty()) return primary;
 		for(size_t i = 0; i < matched.size(); ++i) {
@@ -348,10 +152,30 @@ bool MatchTypePattern(string pattern, string actual,
 		while(!class_key.empty() && (class_key[class_key.size() - 1] == '&' ||
 			class_key[class_key.size() - 1] == '*')) class_key.erase(class_key.size() - 1);
 		class_key = CanonicalSpelling(class_key);
-		if(class_declarations_.find(class_key) == class_declarations_.end()) {
-			map<string, string>::const_iterator specialization = specialization_bases_.find(
-				LastComponent(class_key));
-			if(specialization != specialization_bases_.end()) class_key = specialization->second;
+		map<string, string> class_substitutions = substitutions;
+		map<string, string>::const_iterator specialization = specialization_bases_.find(
+			LastComponent(class_key));
+		map<string, CPPGMAstNodePtr>::const_iterator concrete_declaration =
+			class_declarations_.find(class_key);
+		const bool incomplete_concrete = concrete_declaration == class_declarations_.end() ||
+			(concrete_declaration->second &&
+				(concrete_declaration->second->kind == "class-forward-declaration" ||
+				 concrete_declaration->second->children.size() <= 1));
+		if(specialization != specialization_bases_.end() && incomplete_concrete) {
+			const string generated_name = class_key;
+			class_key = specialization->second;
+			map<string, vector<string> >::const_iterator arguments =
+				specialization_arguments_.find(LastComponent(generated_name));
+			const TemplateDefinition* source_definition = FindDefinition(class_key, context);
+			if(source_definition && arguments != specialization_arguments_.end()) {
+				for(size_t parameter = 0; parameter < source_definition->parameters.size() &&
+					parameter < arguments->second.size(); ++parameter)
+					if(!source_definition->parameters[parameter].name.empty())
+						class_substitutions[source_definition->parameters[parameter].name] =
+							arguments->second[parameter];
+				if(!source_definition->name.empty())
+					class_substitutions[source_definition->name] = generated_name;
+			}
 		}
 		const string active_key = class_key + "|" + member;
 		if(!active->insert(active_key).second) return false;
@@ -377,7 +201,7 @@ bool MatchTypePattern(string pattern, string actual,
 						fallback_type = type;
 					continue;
 				}
-				*result = CanonicalSpelling(ReplaceIdentifiers(type, substitutions));
+					*result = CanonicalSpelling(ReplaceIdentifiers(type, class_substitutions));
 				active->erase(active_key);
 				return !result->empty();
 			}
@@ -393,14 +217,14 @@ bool MatchTypePattern(string pattern, string actual,
 				if(aliases_only && DescendantOfKind(init->children[0], "parameter-clause"))
 					continue;
 				if(LastComponent(FirstIdentifierLocal(init->children[0])) != member) continue;
-				*result = CanonicalSpelling(ReplaceIdentifiers(
-					base + DeclaratorSuffix(init->children[0]), substitutions));
+					*result = CanonicalSpelling(ReplaceIdentifiers(
+						DeclaratorTypeSpelling(base, init->children[0]), class_substitutions));
 				active->erase(active_key);
 				return !result->empty();
 			}
 		}
 		if(!fallback_type.empty()) {
-			*result = CanonicalSpelling(ReplaceIdentifiers(fallback_type, substitutions));
+			*result = CanonicalSpelling(ReplaceIdentifiers(fallback_type, class_substitutions));
 			active->erase(active_key);
 			return !result->empty();
 		}
@@ -412,7 +236,7 @@ bool MatchTypePattern(string pattern, string actual,
 				const CPPGMAstNodePtr base_name = ChildOfKindLocal(base_specifier, "base-name");
 				if(!base_name) continue;
 				string base_spelling = NormalizeElaboratedSpelling(
-					ReplaceIdentifiers(base_name->value, substitutions), declaration_context);
+					ReplaceIdentifiers(base_name->value, class_substitutions), declaration_context);
 				base_spelling = CanonicalSpelling(base_spelling);
 				const size_t open = base_spelling.find('<');
 				const TemplateDefinition* base_definition = 0;
@@ -431,7 +255,7 @@ bool MatchTypePattern(string pattern, string actual,
 							if(!base_definition->parameters[parameter].name.empty())
 								base_substitutions[base_definition->parameters[parameter].name] =
 									QualifyTypeArgument(NormalizeElaboratedSpelling(
-										ReplaceIdentifiers(arguments[parameter], substitutions), declaration_context),
+									ReplaceIdentifiers(arguments[parameter], class_substitutions), declaration_context),
 										declaration_context, base_definition->owner);
 					}
 				}
@@ -1050,9 +874,19 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 			const CPPGMAstNodePtr item = list->children[item_index];
 			if(!item || item->children.empty()) continue;
 			const string alias_name = FirstIdentifierLocal(item->children[0]);
-			if(!alias_name.empty()) (*local_substitutions)[alias_name] = RewriteText(
-				NodeTypeSpelling(original_child->children[0]) +
-				DeclaratorSuffix(item->children[0]), child_context, *local_substitutions, 0);
+			if(!alias_name.empty()) {
+				const string raw_type = DeclaratorTypeSpelling(
+					NodeTypeSpelling(original_child->children[0]), item->children[0]);
+				const string rewritten_type = RewriteText(
+					raw_type, child_context, *local_substitutions, 0);
+				if(raw_type.empty() || rewritten_type.empty()) continue;
+				(*local_substitutions)[alias_name] = rewritten_type;
+				const string qualified_alias = JoinPath(child_context, alias_name);
+				type_aliases_[qualified_alias] = (*local_substitutions)[alias_name];
+				vector<string>& aliases = type_aliases_by_name_[alias_name];
+				if(find(aliases.begin(), aliases.end(), qualified_alias) == aliases.end())
+					aliases.push_back(qualified_alias);
+			}
 		}
 	}
 	void RewriteTemplateInitializer(const CPPGMAstNodePtr& input,

@@ -1,4 +1,5 @@
 #include "pa11_semantics_analyzer.h"
+#include "pa11_semantics_layout.h"
 #include <cstdlib>
 
 namespace {
@@ -263,45 +264,6 @@ void Analyzer::ProcessNamespace(const CPPGMAstNodePtr& node, Scope* scope)
 
 namespace {
 
-bool SameLayoutType(const TypePtr& left, const TypePtr& right)
-{
-	if (left == right) return true;
-	if (!left || !right || left->kind != right->kind ||
-		left->is_const != right->is_const || left->is_volatile != right->is_volatile)
-		return false;
-	switch (left->kind)
-	{
-	case TYPE_FUNDAMENTAL:
-	case TYPE_TEMPLATE_PARAMETER:
-	case TYPE_TEMPLATE_TEMPLATE_PARAMETER:
-		return left->name == right->name;
-	case TYPE_CLASS:
-		return left->name == right->name && left->tag == right->tag;
-	case TYPE_ENUM:
-		return left->name == right->name && left->scoped_enum == right->scoped_enum;
-	case TYPE_POINTER:
-	case TYPE_LVALUE_REFERENCE:
-	case TYPE_RVALUE_REFERENCE:
-		return SameLayoutType(left->child, right->child);
-	case TYPE_ARRAY:
-		return left->bound == right->bound &&
-			SameLayoutType(left->child, right->child);
-	case TYPE_FUNCTION:
-		if (left->variadic != right->variadic ||
-			left->function_const != right->function_const ||
-			left->function_volatile != right->function_volatile ||
-			!SameLayoutType(left->child, right->child) ||
-			left->parameters.size() != right->parameters.size()) return false;
-		for (size_t i = 0; i < left->parameters.size(); ++i)
-			if (!SameLayoutType(left->parameters[i], right->parameters[i])) return false;
-		return true;
-	case TYPE_MEMBER_POINTER:
-		return SameLayoutType(left->member_owner, right->member_owner) &&
-			SameLayoutType(left->child, right->child);
-	}
-	return false;
-}
-
 string TrimConversionType(string text)
 {
 	while(!text.empty() && isspace(static_cast<unsigned char>(text[0]))) text.erase(0, 1);
@@ -419,16 +381,6 @@ bool EmptyBaseStorage(const TypePtr& raw_type)
 		if (!member.is_static && !member.name.empty()) return false;
 	}
 	return !raw_type->direct_base || EmptyBaseStorage(raw_type->direct_base);
-}
-
-bool IsBitFieldType(const TypePtr& type)
-{
-	if (!type) return false;
-	if (type->kind == TYPE_ENUM) return true;
-	if (type->kind != TYPE_FUNDAMENTAL) return false;
-	return type->name != "float" && type->name != "double" &&
-		type->name != "long double" && type->name != "void" &&
-		type->name != "nullptr_t";
 }
 
 bool IsValidAlignment(size_t alignment)
@@ -613,9 +565,10 @@ void Analyzer::ValidateNondependentTemplateNode(const CPPGMAstNodePtr& node,
 		const bool type_name = parent && (parent->kind == "type-id" ||
 			parent->kind == "type-specifier" || parent->kind == "base-name" ||
 			parent->kind == "mem-initializer-id");
-		if (!member_name && !type_name && !IsDependentTemplateName(current, node->value) &&
-			!ResolveBinding(current, node->value))
-			throw logic_error("unknown nondependent template name: " + node->value);
+			if (!member_name && !type_name && !IsDependentTemplateName(current, node->value) &&
+				!ResolveBinding(current, node->value)) {
+				throw logic_error("unknown nondependent template name: " + node->value);
+			}
 	}
 	for (size_t i = 0; i < node->children.size(); ++i)
 		ValidateNondependentTemplateNode(node->children[i], current, node, i);
@@ -936,6 +889,7 @@ void Analyzer::ComputeClassLayout(const CPPGMAstNodePtr& node, const TypePtr& ty
 	const bool empty_base = type->direct_base && EmptyBaseStorage(type->direct_base);
 	const bool owns_vpointer = type->has_vpointer;
 	type->direct_base_offset = 0;
+	type->direct_base_offsets.assign(type->direct_bases.size(), 0);
 	size_t offset = type->direct_base && !empty_base ? TypeSize(type->direct_base) : 0;
 	size_t maximum_alignment = type->direct_base && !empty_base ?
 		TypeAlignment(type->direct_base) : 1;
@@ -943,97 +897,41 @@ void Analyzer::ComputeClassLayout(const CPPGMAstNodePtr& node, const TypePtr& ty
 		type->direct_base && !empty_base ? TypeSize(type->direct_base) : 0,
 		type->direct_base && !empty_base ? TypeAlignment(type->direct_base) : 1,
 		&offset, &maximum_alignment);
+	if (!type->direct_base_offsets.empty())
+		type->direct_base_offsets[0] = type->direct_base_offset;
+	for (size_t base_index = 1; base_index < type->direct_bases.size(); ++base_index) {
+		const TypePtr base = type->direct_bases[base_index];
+		if (base && base->kind == TYPE_CLASS && !base->complete)
+			throw logic_error("incomplete direct base class");
+		if (!base || EmptyBaseStorage(base)) {
+			type->direct_base_offsets[base_index] = 0;
+			continue;
+		}
+		const size_t base_alignment = max<size_t>(1, TypeAlignment(base));
+		offset = AlignUp(offset, base_alignment);
+		type->direct_base_offsets[base_index] = offset;
+		maximum_alignment = max(maximum_alignment, base_alignment);
+		offset += TypeSize(base);
+	}
 	size_t union_size = offset;
 
-	size_t bit_unit_offset = 0;
-	size_t bit_unit_size = 0;
-	size_t bit_unit_alignment = 1;
-	long long bits_used = 0;
-	TypePtr bit_unit_type;
-	const bool union_type = type->is_union;
-	for (size_t i = 0; i < type->class_members.size(); ++i)
-	{
-		ClassMemberInfo& member = type->class_members[i];
-		if (member.is_static || !member.type) continue;
-		const size_t member_size = TypeSize(member.type);
-		const size_t member_alignment = max<size_t>(1, TypeAlignment(member.type));
-		maximum_alignment = max(maximum_alignment, member_alignment);
-		if (member.bit_field)
-		{
-			if (!IsBitFieldType(member.type))
-				throw logic_error("bit-field type is not integral or enum");
-			if (member_size > static_cast<size_t>(numeric_limits<long long>::max() / 8))
-				throw logic_error("bit-field storage unit is too large");
-			const long long capacity = static_cast<long long>(member_size * 8);
-			if (member.bit_width < 0 || member.bit_width > capacity)
-				throw logic_error("invalid bit-field width");
-			if (member.bit_width == 0 && !member.name.empty())
-				throw logic_error("named zero-width bit-field");
-		}
-		if (union_type)
-		{
-			member.offset = 0;
-			if (member.bit_field) member.bit_offset = 0;
-			union_size = max(union_size, member_size);
-			continue;
-		}
-		if (member.bit_field)
-		{
-			const long long width = member.bit_width;
-			const long long capacity = static_cast<long long>(member_size * 8);
-			if (width == 0)
-			{
-				if (bits_used != 0) offset = bit_unit_offset + bit_unit_size;
-				bits_used = 0;
-				bit_unit_size = 0;
-				bit_unit_type.reset();
-				offset = AlignUp(offset, member_alignment);
-				member.offset = static_cast<long long>(offset);
-				member.bit_offset = 0;
-				continue;
-			}
-			if (bits_used == 0 || bit_unit_size != member_size ||
-				bit_unit_alignment != member_alignment || !SameLayoutType(bit_unit_type, member.type) ||
-				bits_used + width > capacity)
-			{
-				if (bits_used != 0) offset = bit_unit_offset + bit_unit_size;
-				offset = AlignUp(offset, member_alignment);
-				bit_unit_offset = offset;
-				bit_unit_size = member_size;
-				bit_unit_alignment = member_alignment;
-				bit_unit_type = member.type;
-				bits_used = 0;
-			}
-			member.offset = static_cast<long long>(bit_unit_offset);
-			member.bit_offset = bits_used;
-			bits_used += width;
-			if (bits_used == capacity)
-			{
-				offset = bit_unit_offset + bit_unit_size;
-				bits_used = 0;
-				bit_unit_size = 0;
-				bit_unit_type.reset();
-			}
-			continue;
-		}
-		if (bits_used != 0)
-		{
-			offset = bit_unit_offset + bit_unit_size;
-			bits_used = 0;
-			bit_unit_size = 0;
-			bit_unit_type.reset();
-		}
-		offset = AlignUp(offset, member_alignment);
-		member.offset = static_cast<long long>(offset);
-		member.bit_offset = 0;
-		offset += member_size;
-	}
-	if (bits_used != 0) offset = bit_unit_offset + bit_unit_size;
-	if (union_type) offset = union_size;
+	ComputeClassMemberLayout(type, union_size, &offset, &maximum_alignment);
 	type->object_alignment = max(maximum_alignment, type->explicit_alignment);
 	if (type->object_alignment == 0) type->object_alignment = 1;
-	if (type->class_members.empty() && !type->direct_base && !owns_vpointer) offset = 1;
+	if (type->class_members.empty() && type->direct_bases.empty() && !owns_vpointer) offset = 1;
 	type->object_size = AlignUp(max<size_t>(1, offset), type->object_alignment);
+	type->materialize_sizeof_address = false;
+	if(type->template_specialization && !type->template_primary.empty())
+		for(size_t member = 0; member < type->class_members.size() &&
+			!type->materialize_sizeof_address; ++member) {
+			const TypePtr member_type = type->class_members[member].type;
+			if(!member_type || !member_type->template_specialization) continue;
+			for(size_t argument = 0; argument < member_type->template_arguments.size(); ++argument)
+				if(member_type->template_arguments[argument].find(type->template_primary) != string::npos) {
+					type->materialize_sizeof_address = true;
+					break;
+				}
+		}
 	type->layout_complete = true;
 	type->layout_in_progress = false;
 	(void)class_scope;
@@ -1399,6 +1297,8 @@ TypePtr Analyzer::ProcessClass(const CPPGMAstNodePtr& node, Scope* scope)
 	type->complete = true;
 	type->layout_complete = false;
 	type->direct_base.reset();
+	type->direct_bases.clear();
+	type->direct_base_offsets.clear();
 	type->virtual_methods.clear();
 	type->polymorphic = false;
 	type->has_vpointer = false;
@@ -1413,28 +1313,34 @@ TypePtr Analyzer::ProcessClass(const CPPGMAstNodePtr& node, Scope* scope)
 			if (!base) continue;
 			const CPPGMAstNodePtr base_name = ChildOfKind(base, "base-name");
 			if (!base_name) continue;
-			type->direct_base = ResolveType(owner, base_name->value);
-			break;
+			TypePtr resolved_base = ResolveType(owner, base_name->value);
+			if (!resolved_base) continue;
+			type->direct_bases.push_back(resolved_base);
+			if (!type->direct_base) type->direct_base = resolved_base;
 		}
 		break;
 	}
-	for (size_t i = 0; i < node->children.size(); ++i)
-		if (node->children[i]->kind != "class-key") Process(node->children[i], class_scope);
-	for (size_t i = 0; i < node->children.size(); ++i)
-	{
-		const CPPGMAstNodePtr child = node->children[i];
-		if (!child || child->kind != "base-clause") continue;
-		for (size_t j = 0; j < child->children.size(); ++j)
-		{
-			const CPPGMAstNodePtr base = child->children[j];
-			if (!base) continue;
-			const CPPGMAstNodePtr base_name = ChildOfKind(base, "base-name");
-			if (!base_name) continue;
-			type->direct_base = ResolveType(owner, base_name->value);
-			break;
-		}
-		break;
-	}
+	// Generated class specializations can contain a member function before the
+	// copied field declarations that function uses.  Populate those specialized
+	// scopes first; retain the established source-order processing for ordinary
+	// classes so declaration-order-sensitive diagnostics and ABI facts stay
+	// unchanged for earlier assignments.
+	if (node->template_instantiation)
+		for (unsigned int pass = 0; pass < 2; ++pass)
+			for (size_t i = 0; i < node->children.size(); ++i) {
+				const CPPGMAstNodePtr child = node->children[i];
+				if (!child || child->kind == "class-key") continue;
+				const bool function_definition = child->kind == "function-definition" ||
+					child->kind == "special-member-definition";
+				if ((pass == 0) == function_definition) continue;
+				Process(child, class_scope);
+			}
+	else
+		for (size_t i = 0; i < node->children.size(); ++i)
+			if (node->children[i] && node->children[i]->kind != "class-key")
+				Process(node->children[i], class_scope);
+	// direct_bases is the canonical base list; direct_base remains its first
+	// element for the single-inheritance consumers retained from earlier PAs.
 	type->class_members.clear();
 	RecordClassMembers(node, type, owner, class_scope);
 	ComputeClassLayout(node, type, class_scope);

@@ -144,13 +144,11 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
             callee_node->value.find("::") == string::npos && state_ &&
             state_->record && state_->record->member &&
             !state_->record->static_member;
-          if(!implicit_object && state_ && state_->record && state_->record->member_owner) {
-            TypePtr current = state_->record->member_owner;
-            while(current) {
-              if(current == binding->member_owner) { implicit_object = true; break; }
-              current = current->direct_base;
-            }
-          }
+			if(!implicit_object && state_ && state_->record && state_->record->member_owner) {
+				TypePtr current = state_->record->member_owner;
+				implicit_object = current == binding->member_owner ||
+					IsDerivedFrom(current, binding->member_owner);
+			}
           if(!implicit_object) continue;
         }
         if(arguments.size() > function->parameters.size() && !function->variadic) continue;

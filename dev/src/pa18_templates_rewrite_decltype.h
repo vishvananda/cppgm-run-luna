@@ -268,8 +268,7 @@
 	bool FunctionCallResultType(string expression, const string& context,
 		const map<string, string>& substitutions, string* result)
 	{
-		if(!result) return false;
-		string callee, argument_text;
+		if(!result) return false; string callee, argument_text;
 		if(!SplitTextCall(expression, &callee, &argument_text)) return false;
 		callee = StripTextParentheses(callee);
 		if(callee.empty()) return false;
@@ -326,7 +325,9 @@
 				explicit_arguments.size() == definition.parameters.size();
 			if(complete) arguments = explicit_arguments;
 			else if(!InferFunctionTypeArguments(definition, actual_types, &arguments,
-				substitutions, context, explicit_definition ? &explicit_arguments : 0)) continue;
+				substitutions, context, explicit_definition ? &explicit_arguments : 0)) {
+				continue;
+			}
 			*result = FunctionResultType(definition, arguments, context);
 			if(!result->empty()) return true;
 		}

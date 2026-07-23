@@ -2,7 +2,6 @@
 #include "pa18_templates_rewrite.h"
 
 #include <functional>
-
 using namespace std;
 
 namespace pa18_templates_internal {
@@ -559,6 +558,11 @@ bool PA18TemplateExpander::ExpandNamedIntegralOperands(
 bool PA18TemplateExpander::EvaluateIntegralText(string raw, const string& context,
 	const map<string, string>& substitutions, PA19IntegralValue* result)
 {
+	// A leading global-scope qualifier is semantically transparent once the
+	// expression has been detached from its source namespace.  Keep the typed
+	// constant tables canonical (they are indexed without that prefix) while
+	// still accepting source spellings such as `::meta::detail::Trait<...>::value`.
+	while(raw.compare(0, 2, "::") == 0) raw.erase(0, 2);
 	if(context.find('<') != string::npos) {
 		bool unresolved_scope = false;
 		if(substitutions.empty()) {
@@ -588,15 +592,36 @@ bool PA18TemplateExpander::EvaluateIntegralText(string raw, const string& contex
 			for(size_t marker = raw.find("::value"); marker != string::npos;
 				marker = raw.find("::value", marker + 7)) {
 				size_t begin = marker;
+				if(begin > 0 && raw[begin - 1] == '>') {
+					int angle_depth = 0;
+					while(begin > 0) {
+						const char character = raw[begin - 1];
+						if(character == '>') ++angle_depth;
+						else if(character == '<' && angle_depth > 0) {
+							--angle_depth;
+							--begin;
+							if(angle_depth == 0) break;
+							continue;
+						}
+						--begin;
+					}
+				}
 				while(begin > 0 && (IsIdentifierCharacter(raw[begin - 1]) ||
 					raw[begin - 1] == ':')) --begin;
 				const string operand = raw.substr(begin, marker + 7 - begin);
 				const string owner = operand.substr(0, operand.size() - 7);
 				found_value = true;
 				if(constant_values_.find(operand) != constant_values_.end()) continue;
-				if(owner.find('<') != string::npos ||
-					(class_declarations_.find(owner) == class_declarations_.end() &&
-					 specialization_bases_.find(LastComponent(owner)) == specialization_bases_.end())) {
+				if(owner.find('<') != string::npos) {
+					const string replayed_owner = CanonicalSpelling(RemoveMarker(
+						RewriteText(owner, context, substitutions, 0)));
+					if(replayed_owner != owner && replayed_owner.find('<') == string::npos)
+						continue;
+					concrete_values = false;
+					break;
+				}
+				if(class_declarations_.find(owner) == class_declarations_.end() &&
+					specialization_bases_.find(LastComponent(owner)) == specialization_bases_.end()) {
 					concrete_values = false;
 					break;
 				}
@@ -703,6 +728,14 @@ bool PA18TemplateExpander::EvaluateIntegralText(string raw, const string& contex
 	}
 	PA19ConstantExpressionParser parser(constant_values_, substitutions,
 		constant_type_sizes_, constant_type_alignments_, type_aliases_);
+	if(raw.find("::") == string::npos && !active_instantiation_name_.empty()) {
+		map<string, PA19IntegralValue>::const_iterator scoped = constant_values_.find(
+			JoinPath(active_instantiation_name_, raw));
+		if(scoped != constant_values_.end() && scoped->second.known) {
+			*result = scoped->second;
+			return true;
+		}
+	}
 	map<string, PA19IntegralValue>::const_iterator direct_value =
 		constant_values_.find(raw);
 	if(direct_value != constant_values_.end() && direct_value->second.known) {
@@ -1173,6 +1206,63 @@ void PA18TemplateExpander::RegisterGeneratedSpecialization(
 	forwards.push_back(MakeForwardClass(local_name));
 }
 
+string PA18TemplateExpander::FindConcreteInstantiationOwner(
+	const TemplateDefinition& definition, const map<string, string>& substitutions,
+	const string& context) const
+{
+	string concrete_owner;
+	const string source_owner_name = LastComponent(definition.owner);
+	for(map<string, string>::const_iterator substitution = substitutions.begin();
+		substitution != substitutions.end(); ++substitution)
+		if(substitution->first == source_owner_name &&
+			class_contexts_.find(substitution->second) != class_contexts_.end()) {
+			concrete_owner = substitution->second;
+			break;
+		}
+	if(!concrete_owner.empty()) return concrete_owner;
+	map<string, string>::const_iterator marker = substitutions.find(
+		"__PA18_CONCRETE_OWNER__");
+	if(marker != substitutions.end()) {
+		const string suffix = "::__PA18_OWNER";
+		const size_t end = marker->second.find(suffix);
+		const string candidate = marker->second.substr(0,
+			end == string::npos ? string::npos : end);
+		if(!candidate.empty() && class_contexts_.find(candidate) != class_contexts_.end())
+			return candidate;
+	}
+	const size_t owner_open = definition.owner.find('<');
+	string owner_arguments_text;
+	size_t owner_close = string::npos;
+	if(owner_open == string::npos || !TemplateRange(definition.owner, owner_open,
+		&owner_arguments_text, &owner_close)) return string();
+	const string owner_base = definition.owner.substr(0, owner_open);
+	const vector<string> owner_arguments = SplitTemplateArguments(owner_arguments_text);
+	map<string, vector<string> >::const_iterator names =
+		specialization_names_by_base_.find(LastComponent(owner_base));
+	if(names == specialization_names_by_base_.end()) return string();
+	for(size_t name = 0; name < names->second.size(); ++name) {
+		const string& candidate = names->second[name];
+		map<string, string>::const_iterator base = specialization_bases_.find(candidate);
+		map<string, vector<string> >::const_iterator arguments =
+			specialization_arguments_.find(candidate);
+		if(base == specialization_bases_.end() || arguments == specialization_arguments_.end() ||
+			LastComponent(base->second) != LastComponent(owner_base) ||
+			arguments->second.size() != owner_arguments.size() ||
+			class_contexts_.find(candidate) == class_contexts_.end()) continue;
+		bool same = true;
+		for(size_t argument = 0; argument < owner_arguments.size(); ++argument) {
+			const string expected = NormalizeTypeArgument(ResolveAlias(
+				ReplaceIdentifiers(owner_arguments[argument], substitutions), context));
+			if(NormalizeTypeArgument(arguments->second[argument]) != expected) {
+				same = false;
+				break;
+			}
+		}
+		if(same) return candidate;
+	}
+	return string();
+}
+
 string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definition,
 	const vector<string>& args, const vector<string>& metadata_args,
 	map<string, string> substitutions,
@@ -1182,12 +1272,23 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 {
 	const string generated_owner = definition.lexical_owner.empty() ?
 		definition.owner : definition.lexical_owner;
+	const string concrete_owner = definition.class_template ?
+		FindConcreteInstantiationOwner(definition, substitutions, context) : string();
 	if(definition.class_template) {
 		class_contexts_.insert(JoinPath(definition.owner, local_name));
 		class_contexts_.insert(JoinPath(generated_owner, local_name));
 	}
-	CPPGMAstNodePtr generated = TransformInstantiatedNode(definition, definition.owner,
-		substitutions, integral_substitutions, pack_substitutions);
+	const string previous_instantiation_name = active_instantiation_name_;
+	active_instantiation_name_ = definition.class_template ? local_name : string();
+	CPPGMAstNodePtr generated;
+	try {
+		generated = TransformInstantiatedNode(definition, definition.owner,
+			substitutions, integral_substitutions, pack_substitutions);
+	} catch(...) {
+		active_instantiation_name_ = previous_instantiation_name;
+		throw;
+	}
+	active_instantiation_name_ = previous_instantiation_name;
 	if(!generated) throw logic_error("unable to instantiate template");
 	MarkGeneratedNode(generated, definition.qualified_name, metadata_args, explicit_instantiation);
 	if(generated->kind == "simple-declaration") {
@@ -1228,6 +1329,12 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 		class_declarations_[lexical_path] = generated;
 		class_contexts_.insert(generated_path);
 		RegisterGeneratedConstants(generated, generated_path);
+		if(!concrete_owner.empty()) {
+			const string concrete_path = JoinPath(concrete_owner, local_name);
+			class_declarations_[concrete_path] = generated;
+			class_contexts_.insert(concrete_path);
+			RegisterGeneratedConstants(generated, concrete_path);
+		}
 		const map<string, vector<string> > previous_packs = active_pack_substitutions_;
 		active_pack_substitutions_ = pack_substitutions;
 		try {
@@ -1260,7 +1367,9 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 	else if(recursive_context_argument && definition.owner.empty() &&
 		!PrefixComponent(context).empty())
 		generated_before_class_[PrefixComponent(context)].push_back(generated);
-	else generated_by_owner_[generated_owner].push_back(generated);
+	else {
+		generated_by_owner_[concrete_owner.empty() ? generated_owner : concrete_owner].push_back(generated);
+	}
 	active_specializations_.erase(key);
 	return local_name;
 }

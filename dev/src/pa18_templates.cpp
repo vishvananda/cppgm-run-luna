@@ -36,6 +36,19 @@ bool MentionsQualifiedGeneratedType(const CPPGMAstNodePtr& node,
 	return false;
 }
 
+bool NamespacePathContains(const CPPGMAstNodePtr& node, const string& path)
+{
+	if(!node || node->kind != "namespace-definition" || path.empty()) return false;
+	const size_t separator = path.find("::");
+	const string head = path.substr(0, separator);
+	if(node->value != head) return false;
+	if(separator == string::npos) return true;
+	const string remainder = path.substr(separator + 2);
+	for(size_t i = 0; i < node->children.size(); ++i)
+		if(NamespacePathContains(node->children[i], remainder)) return true;
+	return false;
+}
+
 bool ContainsStaticAssert(const CPPGMAstNodePtr& node)
 {
 	if(!node) return false;
@@ -131,9 +144,29 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformTranslationUnit(
 	CountNamespaceOccurrences(input, string());
 	CollectVariables(input);
 	CPPGMAstNodePtr result(new CPPGMAstNode("translation-unit"));
+	map<string, string> top_level_substitutions;
 	for(size_t i = 0; i < input->children.size(); ++i) {
-		CPPGMAstNodePtr child = TransformNode(input->children[i], string(), map<string, string>());
+		CPPGMAstNodePtr child = TransformNode(input->children[i], string(),
+			top_level_substitutions);
 		if(child) result->children.push_back(child);
+		const CPPGMAstNodePtr original = input->children[i];
+		if(original && original->kind == "simple-declaration" &&
+			!original->children.empty() &&
+			SpellNode(original->children[0]).find("typedef") != string::npos)
+			RecordTypedefSubstitutions(original, string(), &top_level_substitutions);
+		if(original && original->kind == "alias-declaration" &&
+			!original->value.empty() && !original->children.empty()) {
+			const string alias = original->value;
+			const string value = RewriteText(TypeIdSpelling(original->children[0]),
+				string(), top_level_substitutions, 0);
+			if(!value.empty()) {
+				top_level_substitutions[alias] = value;
+				type_aliases_[alias] = value;
+				vector<string>& aliases = type_aliases_by_name_[alias];
+				if(find(aliases.begin(), aliases.end(), alias) == aliases.end())
+					aliases.push_back(alias);
+			}
+		}
 	}
 	InjectGenerated(result, string(), string());
 	vector<CPPGMAstNodePtr> generated_forwards;
@@ -218,8 +251,7 @@ void PA18TemplateExpander::RecordClassTypeSize(const CPPGMAstNodePtr& node,
 			if(!item || item->children.empty()) continue;
 			const CPPGMAstNodePtr declarator = item->children[0];
 			if(DescendantOfKind(declarator, "parameter-clause")) continue;
-			const string spelling = base + DeclaratorSuffix(declarator) +
-				DeclaratorArraySuffix(declarator);
+			const string spelling = DeclaratorTypeSpelling(base, declarator);
 			const size_t size = EstimateTypeSize(spelling, class_path);
 			if(!size) continue;
 			const size_t member_alignment = size > 8 ? 8 : size;
@@ -464,122 +496,6 @@ string PA18TemplateExpander::DeclaratorArraySuffix(const CPPGMAstNodePtr& declar
 		result += ']';
 	}
 	return result;
-}
-string PA18TemplateExpander::MemberAliasType(const string& class_key, const string& member) const
-{
-	const string owner_key = CanonicalSpelling(RemoveMarker(class_key));
-	const string member_name = CanonicalSpelling(RemoveMarker(member));
-	if(owner_key.empty() || member_name.empty()) return string();
-	for(size_t i = 0; i < member_name.size(); ++i)
-		if(!IsIdentifierCharacter(member_name[i])) return string();
-	map<string, CPPGMAstNodePtr>::const_iterator declaration_it =
-		class_declarations_.find(owner_key);
-	if(declaration_it == class_declarations_.end() || !declaration_it->second)
-		return string();
-	const CPPGMAstNodePtr& declaration = declaration_it->second;
-	if(declaration) {
-		for(size_t i = 0; i < declaration->children.size(); ++i) {
-			const CPPGMAstNodePtr child = declaration->children[i];
-			if(!child) continue;
-			if(child->kind == "alias-declaration" &&
-				LastComponent(RemoveMarker(child->value)) == member_name &&
-				!child->children.empty())
-				return QualifyNestedMembers(TypeIdSpelling(child->children[0]),
-					owner_key, declaration);
-			if(child->kind != "simple-declaration" || child->children.empty() ||
-				SpellNode(child->children[0]).find("typedef") == string::npos) continue;
-			const CPPGMAstNodePtr list = ChildOfKindLocal(child, "init-declarator-list");
-			if(!list) continue;
-			for(size_t j = 0; j < list->children.size(); ++j) {
-				const CPPGMAstNodePtr item = list->children[j];
-				if(!item || item->children.empty() ||
-					LastComponent(RemoveMarker(FirstIdentifierLocal(item->children[0]))) != member_name)
-					continue;
-				if(!DeclaratorArraySuffix(item->children[0]).empty()) return string();
-				return QualifyNestedMembers(NodeTypeSpelling(child->children[0]) +
-					DeclaratorSuffix(item->children[0]) +
-					DeclaratorArraySuffix(item->children[0]), owner_key, declaration);
-			}
-		}
-	}
-	map<string, string> substitutions;
-	set<string> active;
-	string inherited;
-	if(FindClassMemberType(owner_key, member_name, substitutions, PrefixComponent(owner_key),
-		&inherited, &active, true))
-		return QualifyNestedMembers(inherited, owner_key, declaration);
-	return string();
-}
-string PA18TemplateExpander::QualifyNestedMembers(string spelling, const string& class_key,
-	const CPPGMAstNodePtr& declaration) const
-{
-	if(!declaration || class_key.empty()) return spelling;
-	for(size_t i = 0; i < declaration->children.size(); ++i) {
-		const CPPGMAstNodePtr child = declaration->children[i];
-		if(!child || (child->kind != "class-specifier" &&
-			child->kind != "class-forward-declaration")) continue;
-		const string name = LastComponent(child->value);
-		for(size_t at = spelling.find(name); at != string::npos;
-			at = spelling.find(name, at + name.size())) {
-			const bool left = at == 0 || !IsIdentifierCharacter(spelling[at - 1]);
-			const size_t end = at + name.size();
-			const bool right = end == spelling.size() || !IsIdentifierCharacter(spelling[end]);
-			const bool qualified = at >= 2 && spelling.compare(at - 2, 2, "::") == 0;
-			if(left && right && !qualified) {
-				spelling.replace(at, name.size(), class_key + "::" + name);
-				at += class_key.size() + 2;
-			}
-		}
-	}
-	return spelling;
-}
-string PA18TemplateExpander::ParameterTypeSpelling(const CPPGMAstNodePtr& parameter) const
-{
-	if(!parameter || parameter->children.empty()) return string();
-	string result = NodeTypeSpelling(parameter->children[0]);
-	if(parameter->children.size() > 1) result += DeclaratorSuffix(parameter->children[1]);
-	return CanonicalSpelling(result);
-}
-string PA18TemplateExpander::FunctionTypeSpelling(const CPPGMAstNodePtr& parameter) const
-{
-	if(!parameter || parameter->children.size() < 2 || !parameter->children[1])
-		return ParameterTypeSpelling(parameter);
-	const CPPGMAstNodePtr declarator = parameter->children[1];
-	const string base = NodeTypeSpelling(parameter->children[0]);
-	const CPPGMAstNodePtr nested = ChildOfKindLocal(declarator, "nested-declarator");
-	const CPPGMAstNodePtr clause = ChildOfKindLocal(declarator, "parameter-clause");
-	if(!nested || !clause) return ParameterTypeSpelling(parameter);
-	const CPPGMAstNodePtr inner = nested->children.empty() ? CPPGMAstNodePtr() : nested->children[0];
-	string result = base + DeclaratorSuffix(declarator);
-	result += inner && DeclaratorSuffix(inner).find('&') != string::npos ? "(&)(" : "(*)(";
-	for(size_t i = 0; i < clause->children.size(); ++i) {
-		const CPPGMAstNodePtr item = clause->children[i];
-		if(!item || item->kind != "parameter-declaration") continue;
-		if(result[result.size() - 1] != '(') result += ',';
-		result += ParameterTypeSpelling(item);
-	}
-	result += ')';
-	return CanonicalSpelling(result);
-}
-string PA18TemplateExpander::DeclaratorTypeSpelling(const string& base,
-	const CPPGMAstNodePtr& declarator) const
-{
-	if(!declarator) return base;
-	const CPPGMAstNodePtr nested = ChildOfKindLocal(declarator, "nested-declarator");
-	const CPPGMAstNodePtr clause = ChildOfKindLocal(declarator, "parameter-clause");
-	if(!nested || !clause) return CanonicalSpelling(base + DeclaratorSuffix(declarator) +
-		DeclaratorArraySuffix(declarator));
-	const CPPGMAstNodePtr inner = nested->children.empty() ? CPPGMAstNodePtr() : nested->children[0];
-	string result = base + DeclaratorSuffix(declarator);
-	result += inner && DeclaratorSuffix(inner).find('&') != string::npos ? "(&)(" : "(*)(";
-	for(size_t i = 0; i < clause->children.size(); ++i) {
-		const CPPGMAstNodePtr item = clause->children[i];
-		if(!item || item->kind != "parameter-declaration") continue;
-		if(result[result.size() - 1] != '(') result += ',';
-		result += ParameterTypeSpelling(item);
-	}
-	result += ')';
-	return CanonicalSpelling(result);
 }
 string PA18TemplateExpander::TypeIdSpelling(const CPPGMAstNodePtr& type_id) const
 {
@@ -828,6 +744,22 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 				TemplateRange(lookup_callee, open, &argument_text, &close))
 				explicit_definition = FindDefinition(base, context);
 			if(explicit_definition && !explicit_definition->class_template) {
+				const vector<const TemplateDefinition*> overloads = FindFunctionDefinitions(base, context);
+				if(overloads.size() > 1) {
+					const vector<string> raw_explicit_args = SplitTemplateArguments(argument_text);
+					for(size_t overload = 0; overload < overloads.size(); ++overload) {
+						vector<string> trial_arguments;
+						try {
+							if(InferFunctionArguments(*overloads[overload], input, &trial_arguments,
+								substitutions, context, &raw_explicit_args)) {
+								explicit_definition = overloads[overload];
+								break;
+							}
+						} catch(const logic_error&) {}
+					}
+				}
+			}
+			if(explicit_definition && !explicit_definition->class_template) {
 				vector<string> explicit_args = SplitTemplateArguments(argument_text);
 				map<string, string> explicit_substitutions = substitutions;
 				for(map<string, PA19IntegralValue>::const_iterator integral =
@@ -867,9 +799,9 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 				bool complete = explicit_pack_elements ||
 					(!has_parameter_pack && explicit_args.size() == explicit_definition->parameters.size());
 				if(complete) complete_args = explicit_args;
-				else if(explicit_args.size() < explicit_definition->parameters.size())
-					complete = InferFunctionArguments(*explicit_definition, input,
-						&complete_args, substitutions, context, &explicit_args);
+					else if(explicit_args.size() < explicit_definition->parameters.size())
+						complete = InferFunctionArguments(*explicit_definition, input,
+							&complete_args, substitutions, context, &explicit_args);
 				if(complete) {
 					const string local_name = Instantiate(*explicit_definition, complete_args, context);
 					result->template_primary = explicit_definition->qualified_name;
@@ -1048,6 +980,27 @@ bool PA18TemplateExpander::MentionsGeneratedClass(const CPPGMAstNodePtr& node,
 	return false;
 }
 
+bool PA18TemplateExpander::MentionsGeneratedLayoutClass(
+	const CPPGMAstNodePtr& node, const vector<CPPGMAstNodePtr>& generated) const
+{
+	if(!node) return false;
+	if(node->kind == "base-clause")
+		return MentionsGeneratedClass(node, generated);
+	if(node->kind == "simple-declaration") {
+		if(node->children.empty()) return false;
+		const string specifiers = SpellNode(node->children[0]);
+		if(specifiers.find("typedef") != string::npos ||
+			specifiers.find("static") != string::npos ||
+			DescendantOfKind(node, "parameter-clause")) return false;
+		return MentionsGeneratedClass(node->children[0], generated);
+	}
+	if(node->kind == "class-specifier" || node->kind == "class-forward-declaration") {
+		for(size_t i = 0; i < node->children.size(); ++i)
+			if(MentionsGeneratedLayoutClass(node->children[i], generated)) return true;
+	}
+	return false;
+}
+
 bool PA18TemplateExpander::MentionsTemplateId(const CPPGMAstNodePtr& node) const
 {
 	if(!node) return false;
@@ -1074,7 +1027,7 @@ vector<CPPGMAstNodePtr> PA18TemplateExpander::OrderGeneratedClasses(
 				if(i == j || placed[j] || !input[j]) continue;
 				if(LastComponent(input[i]->value) == LastComponent(input[j]->value)) continue;
 				vector<CPPGMAstNodePtr> dependency(1, input[j]);
-				if(MentionsGeneratedClass(input[i], dependency)) {
+				if(MentionsGeneratedLayoutClass(input[i], dependency)) {
 					ready = false;
 					break;
 				}
@@ -1244,23 +1197,26 @@ void PA18TemplateExpander::InsertGenerated(vector<CPPGMAstNodePtr>* children,
 				positions[i] = min(positions[i], child);
 		}
 	}
-	if(owner.empty()) {
-		for(size_t i = 0; i < generated_classes.size(); ++i) {
-			for(map<string, vector<CPPGMAstNodePtr> >::const_iterator other =
-				generated_by_owner_.begin(); other != generated_by_owner_.end(); ++other) {
-				if(other->first.empty()) continue;
-				for(size_t dependency = 0; dependency < other->second.size(); ++dependency) {
+	for(size_t i = 0; i < generated_classes.size(); ++i) {
+		for(map<string, vector<CPPGMAstNodePtr> >::const_iterator other =
+			generated_by_owner_.begin(); other != generated_by_owner_.end(); ++other) {
+				if(other->first.empty() || other->first == owner) continue;
+				string relative_owner = other->first;
+				if(!owner.empty() && (other->first == owner ||
+					(other->first.size() > owner.size() &&
+					 other->first.compare(0, owner.size(), owner) == 0 &&
+					 other->first[owner.size()] == ':')))
+					relative_owner = other->first.substr(owner.size() + 2);
+			for(size_t dependency = 0; dependency < other->second.size(); ++dependency) {
 					if(!other->second[dependency]) continue;
 					vector<CPPGMAstNodePtr> dependency_node(1, other->second[dependency]);
 					if(!MentionsGeneratedClass(generated_classes[i], dependency_node)) continue;
 					for(size_t child = 0; child < children->size(); ++child)
-						if((*children)[child] && (*children)[child]->kind == "namespace-definition" &&
-							(*children)[child]->value == other->first)
+						if(NamespacePathContains((*children)[child], relative_owner))
 							positions[i] = max(positions[i], child + 1);
-				}
+			}
 			}
 		}
-	}
 	// Keep generated dependencies in the same source slot when their source
 	// dependencies would otherwise place the dependent before its materialized
 	// prerequisite.  OrderGeneratedClasses already makes the vector topological.
@@ -1423,7 +1379,7 @@ void PA18TemplateExpander::InjectGenerated(const CPPGMAstNodePtr& node,
 		const string class_context = JoinPath(context, LastComponent(node->value));
 		map<string, vector<CPPGMAstNodePtr> >::iterator found =
 			generated_by_owner_.find(class_context);
-		if(node->kind == "class-specifier" && node->children.size() > 1 &&
+		if(node->kind == "class-specifier" &&
 			found != generated_by_owner_.end() && !found->second.empty()) {
 			vector<CPPGMAstNodePtr> generated_classes;
 			vector<CPPGMAstNodePtr> generated_functions;
