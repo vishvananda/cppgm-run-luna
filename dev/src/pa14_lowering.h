@@ -313,6 +313,8 @@ class PA14Lowerer
 	set<const Type*> emitted_rtti_;
 	FunctionState* state_;
 	  map<const CPPGMAstNode*, InferCacheEntry> infer_cache_;
+	map<const Type*, vector<TypePtr> > friend_owner_index_;
+	void IndexFriendOwners();
 
 public:
 explicit PA14Lowerer(const vector<CPPGMAstNodePtr>& trees)

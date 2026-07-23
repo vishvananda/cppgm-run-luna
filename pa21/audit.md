@@ -5,89 +5,83 @@
 Reviewed the latest Checkpoint Scope and complete failure map in
 `pa21/plan.md`, the PA21 contract in `pa21/README.md`,
 `TESTING_AND_REFERENCES.md`, the changed source files and source-set entries,
-recent commits `297acef`, `a74b4e5`, `a916cd1`, `64aa678`, `6b2c6fc`, and
-`ff9d4f3`, and the supplied full primary log at
+recent commits `92c2a21`, `d1c2508`, `297acef`, `a74b4e5`, `a916cd1`,
+`64aa678`, `6b2c6fc`, and `ff9d4f3`, and the full primary log at
 `/home/vishvananda/work/.ralph/luna-gpt-5.6-luna-ultra/last-test.log`.
 
-The landed checkpoint is the hidden-friend namespace/ADL increment: replayed
-friend function templates retain an unqualified generated declarator so PA14
-can assign the surrounding namespace symbol, and normalized `friend`
-specifiers remain semantic facts rather than becoming types.  The audit also
-covers the supporting PA18 replay changes required by that checkpoint:
-structured function-signature propagation, typed lookup indexes, bounded
-dependent replay, integral-evaluation phase separation, and using-imported
-member-template declarations.
+The checkpoint scope is the typed friend-owner/access slice: ordinary and
+qualified friend function templates, nested friend replay, existing-template
+friends, friend class templates, private/protected access, dependent
+`typename` construction, and generated friend-class inheritance ordering.  The
+focused set is the nine tests listed in the current Checkpoint Scope.  The
+review also covered the PA11 semantic model, PA14 access and lowering paths,
+PA18 collection/replay, and the complete current-PA failure map.
 
 ## Findings
 
-- The full compiler pipeline remains active: preprocessing, tokenization,
-  parsing, PA11 semantic analysis, PA14 lowering, PA18 replay, and ordinary
-  LowIR emission all run.  There is no skipped phase, dummy or embedded
-  output, reference/host compiler invocation, interpreter/VM/trampoline
-  substitute, source/test-specific acceptance gate, timeout workaround, or
-  fallback success path.
+- The landed replay used a synthetic `friend_owner_only` declaration with an
+  empty parameter clause.  PA11 and PA14 explicitly skipped that node, then
+  recovered access from an untyped name and stripped generated-name markers.
+  That was a real phase bypass, signature loss, and stringly access shortcut;
+  it was a checkpoint-level blocker and is removed.
 
-- The source prototype retained for a using-imported member template is a
-  real dependent declaration: it preserves the collected result specifier,
-  declarator, template parameters, and semantic identity, while omitting only
-  the source body at the declaration boundary.  PA11 processes that
-  declaration, PA14 processes the resulting declaration node, and PA18
-  materializes the concrete definition through `Instantiate`; it is not dummy
-  output or a skipped semantic/lowering path.
+- Friend declarations now retain their complete transformed declarator and go
+  through normal template-parameter processing and PA11 analysis.  Friend
+  edges carry entity kind and a `TypePtr` target in `FriendAccess`; PA14 checks
+  the selected function/class type and canonical function identity.  No
+  emitted LowIR or generated source text is reparsed to recover these facts.
 
-- Function types are carried as `FunctionSignature` values through deduction,
-  instantiation, and parameter replay.  The former reserved string markers and
-  fake function payloads are gone.  Call, cast, binary, and `decltype`
-  fallbacks now accept only known typed spellings, so arbitrary source text
-  cannot manufacture a successful semantic result.
+- Flattened `SpellNode(...).find("friend")` gates were removed.  Friend status
+  is recognized from structured declaration nodes and cached as
+  `TemplateDefinition::friend_declaration`.  Generated layout ordering is
+  restricted to an actual structured friend declaration and typed layout
+  dependencies; this is an ordering applicability check, not a source- or
+  test-specific success gate.
 
-- Dependent replay defers only identifiers registered as template parameters;
-  concrete local classes and known aliases materialize normally.  Lookup facts
-  are retained in `definitions_by_name_`, namespace-export indexes, and
-  a class-scoped collection-time using-member index.  Function-local and
-  namespace-level using declarations do not retain unrelated source template
-  bodies.  Member-template lookup no longer performs registry-wide scans on
-  its normal indexed paths, and no emitted LowIR or generated text is reparsed
-  to recover semantic facts.
+- The friend-class access path had an avoidable full walk of the analyzer's
+  class-type map for every private/protected access.  A typed reverse index is
+  built once after PA11 analysis, so hot-path access checks visit only friend
+  owners associated with the member's owner class.
 
-- Function-argument inference and integral evaluation are split into focused
-  preparation, matching, completion, normalization, special-form, known-value,
-  and fallback phases.  This removes the oversized hot routines while keeping
-  pack arity, defaults, reference adjustment, overload deferral, and typed
-  constant values explicit.
+- The reviewed pipeline still executes preprocessing, tokenization, parsing,
+  PA11 semantics, PA14 lowering, PA18 replay, and ordinary LowIR emission.  No
+  dummy or embedded output, interpreter/VM/trampoline substitute, reference or
+  host-compiler invocation, timeout workaround, fallback-success path, or
+  weakened test acceptance gate remains in the checkpoint paths.
 
-- No file-audit bypass, hidden implementation fragment, weakened check, or
-  code moved to an unchecked path remains.  The specialization matcher is an
-  audited `.cpp` translation unit listed in `dev/frontend_source_sets.mk`.
-  Earlier assignments remain clean, and the current PA remains at the landed
-  checkpoint baseline.
+- The file audit initially exposed two size regressions caused by the new
+  implementation.  Dependent type resolution and structured friend-specifier
+  traversal were moved to their owning `.cpp` files.  The final audit has no
+  fatal size, source-set, hidden-fragment, or unchecked-path finding; its ten
+  existing division/complexity results are warnings only.
 
 ## Changes Made
 
-- Removed fake function markers and the temporary template-entity-only path;
-  propagated typed function signatures through concrete replay.
-- Added strict known-type checks to semantic fallbacks and corrected dependent
-  replay to distinguish unresolved template parameters from concrete classes.
-- Replaced normal full-registry member/template lookup walks with collection-
-  time indexes, scoped the using-member index to class contexts, and retained
-  a real dependent prototype for using-imported member templates.
-- Split function inference and integral evaluation into auditable helpers,
-  kept the specialization implementation in the checked source set, and
-  refreshed the current failure map and next substantial checkpoint in
-  `pa21/plan.md`.
+- Removed `friend_owner_only`, its synthetic declaration builder, PA11/PA14
+  skip paths, and untyped `friend_names`/generated-symbol matching.
+- Added typed `FriendAccess` relations, dependent template-id type
+  construction, complete friend-template replay, structured friend metadata,
+  and typed function/class access matching.
+- Added the one-time derived friend-owner index to eliminate the class-registry
+  scan from the access hot path.
+- Moved the new dependent type-resolution and friend-specifier implementations
+  out of oversized headers so file-audit limits remain healthy.
+- Refreshed `pa21/plan.md` with the complete 62-test failure map and the next
+  inherited/using member-template owner-replay checkpoint.
 
 ## Validation
 
-- `make -j2`: passed.
-- Required prior-through check (`make test-report-through-pa20`):
-  **1635/1635 passed**.
-- `perl scripts/cppgm_file_audit.pl --stage pa21 --paths dev/src`: passed with
-  warning-only findings and no fatal file, size, or source-set finding.
-- `make test-report ACTIVE_TEST_REPORT_PAS='pa21'`: **146/215 passed** with
-  **69 failures**, matching the complete map in `pa21/plan.md`.  This equals
-  the checkpoint baseline and remains above the turn-start 119/215 baseline;
-  earlier PAs still pass.
-- Focused hidden-friend ADL/operator, using-imported member-template, and PA18
-  inference regressions passed.
-- `git diff --check`: passed.  The implementation is ready for the next
-  member/friend owner-replay checkpoint group.
+- The nine-test focused run: **7/9** relaxed reference comparisons passed; all
+  nine compile/status checks passed.  The two non-passing comparisons are the
+  known presentation-only LowIR differences for existing-template friend
+  operator and qualified friend member cases.
+- Required current-PA report, `make test-report ACTIVE_TEST_REPORT_PAS='pa21'`:
+  **153/215 passed**, **62 failures**, exactly matching the refreshed map and
+  preserving the checkpoint baseline of 153/215 (above the prior 146/215
+  turn-start baseline).
+- Required prior-through command for `n=21`:
+  `make test-report-through-pa20` — **1635/1635 passed**.
+- Required file audit, `perl scripts/cppgm_file_audit.pl --stage pa21 --paths
+  dev/src` — passed with ten warnings and no fatal finding.
+- `make -C dev cppgm++` and `git diff --check` passed.  The cohesive audit
+  changes were committed, and the final `git status --short` is empty.

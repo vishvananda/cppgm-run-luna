@@ -28,10 +28,6 @@ struct CPPGMAstNode
 	bool template_instantiation;
 	bool explicit_instantiation;
 	bool extern_instantiation;
-	// A generated friend declaration used only to preserve the declaring
-	// class's typed friend edge.  PA11 records its name without creating an
-	// ordinary function binding or LowIR declaration.
-	bool friend_owner_only;
 	// PA18 preserves this source-level lookup fact on a materialized class
 	// specialization so PA14 can distinguish a dependent base from an
 	// ordinary concrete base during unqualified lookup.

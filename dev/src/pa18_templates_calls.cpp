@@ -552,8 +552,7 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 				const TemplateDefinition& other = *candidates[other_index];
 				if(other.declaration->kind == "function-definition" &&
 					( MemberSignatureKey(other) == MemberSignatureKey(definition) ||
-						(SpellNode(definition.declaration->children.empty() ?
-							CPPGMAstNodePtr() : definition.declaration->children[0]).find("friend") != string::npos &&
+						(definition.friend_declaration &&
 							LastComponent(other.name) == LastComponent(definition.name)))) {
 					has_definition = true;
 					break;

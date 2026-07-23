@@ -133,6 +133,7 @@ inline CPPGMAstNodePtr DescendantOfKind(const CPPGMAstNodePtr& node, const strin
 	}
 	return CPPGMAstNodePtr();
 }
+bool HasFriendSpecifier(const CPPGMAstNodePtr& node);
 inline CPPGMAstNodePtr CloneNode(const CPPGMAstNodePtr& node)
 {
 	if(!node) return CPPGMAstNodePtr();
@@ -141,7 +142,6 @@ inline CPPGMAstNodePtr CloneNode(const CPPGMAstNodePtr& node)
 	result->template_instantiation = node->template_instantiation;
 	result->explicit_instantiation = node->explicit_instantiation;
 	result->extern_instantiation = node->extern_instantiation;
-	result->friend_owner_only = node->friend_owner_only;
 	result->dependent_base_lookup = node->dependent_base_lookup;
 	result->materialize_object_address = node->materialize_object_address;
 	result->materialize_object_name = node->materialize_object_name;
@@ -387,10 +387,8 @@ struct TemplateDefinition
 	bool alias_template;
 	bool variable_template;
 	bool member_template;
-	TemplateDefinition() : qualified_name(), name(), owner(), lexical_owner(), declaration(), parameters(),
-		partial_specialization(false), specialization_parameters(), specialization_parameter_details(),
-		specialization_pack_names(), specialization_pattern(),
-		class_template(false), alias_template(false), variable_template(false), member_template(false) {}
+	bool friend_declaration;
+	TemplateDefinition() : qualified_name(), name(), owner(), lexical_owner(), declaration(), parameters(), partial_specialization(false), specialization_parameters(), specialization_parameter_details(), specialization_pack_names(), specialization_pattern(), class_template(false), alias_template(false), variable_template(false), member_template(false), friend_declaration(false) {}
 };
 struct FunctionSignature
 {
@@ -884,6 +882,7 @@ private:
 		JoinPath(lexical->second, normalized_prefix);
 	item.qualified_name = JoinPath(item.owner, name);
 	item.declaration = declaration;
+	item.friend_declaration = declaration && !declaration->children.empty() && HasFriendSpecifier(declaration->children[0]);
 		item.parameters = Parameters(node->children[0]);
 		for(size_t parameter = 0; parameter < item.parameters.size(); ++parameter)
 			if(!item.parameters[parameter].name.empty()) {

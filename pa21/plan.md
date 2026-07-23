@@ -113,12 +113,15 @@ nine tests, not test-specific acceptance.  Earlier assignments must remain at
 
 Implemented the typed friend-owner/access slice across PA18 replay, PA11
 friend metadata, PA14 access checks, dependent `typename` construction, and
-generated friend-class inheritance ordering.  The nine-test focused run had
-**7/9** reference-comparison passes: all nine compile/status checks pass, with
-two remaining relaxed-LowIR presentation mismatches in the existing-template
-friend operator and qualified friend member cases.  The full report is
-**153/215**, the through-PA20 report is **1635/1635**, and file audit passes
-with warnings only.
+generated friend-class inheritance ordering.  The audit removed the synthetic
+empty friend declaration and its PA11/PA14 bypass, replaced untyped friend-name
+recovery with typed access edges, narrowed layout reordering to structured
+friend declarations, and indexed derived friend owners for access checks.  The
+nine-test focused run had **7/9** reference-comparison passes: all nine
+compile/status checks pass, with two relaxed-LowIR presentation mismatches in
+the existing-template friend operator and qualified friend member cases.  The
+full report remains **153/215** (the checkpoint baseline), the through-PA20
+report is **1635/1635**, and file audit passes with warnings only.
 
 The next checkpoint group is inherited/using member-template owner replay:
 preserve the active declaring class through using-imported and dependent-base

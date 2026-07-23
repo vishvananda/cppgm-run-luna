@@ -226,40 +226,7 @@ public:
 			}
 		return false;
 	}
-	TypePtr ResolveType(Scope* from, const string& raw) const
-	{
-		const string name = StripTypeMarker(raw);
-		if (name.find("::") == string::npos)
-		{
-			for (Scope* current = from; current; current = current->parent)
-				for (size_t i = current->bindings.size(); i > 0; --i)
-				{
-					const Binding& candidate = current->bindings[i - 1];
-						if (candidate.name == name && (candidate.kind == BIND_TYPE ||
-							candidate.kind == BIND_TYPE_ALIAS) && AccessibleType(candidate, from)) return candidate.type;
-				}
-			for (Scope* current = from; current; current = current->parent)
-				if (current->kind == SCOPE_CLASS && current->owner_type)
-					for (TypePtr base = current->owner_type->direct_base; base;
-						base = base->direct_base)
-					{
-						if (LastComponent(base->name) == name) return base;
-						if (!base->owned_scope) continue;
-						for (size_t i = base->owned_scope->bindings.size(); i > 0; --i)
-						{
-							const Binding& candidate = base->owned_scope->bindings[i - 1];
-							if (candidate.name == name && (candidate.kind == BIND_TYPE ||
-								candidate.kind == BIND_TYPE_ALIAS) && AccessibleType(candidate, from)) return candidate.type;
-						}
-					}
-		}
-		Binding* binding = ResolveBinding(from, name);
-	if (!binding || (binding->kind != BIND_TYPE &&
-		binding->kind != BIND_TYPE_ALIAS) || !AccessibleType(*binding, from)) {
-			throw logic_error("unknown type: " + raw);
-		}
-		return binding->type;
-	}
+	TypePtr ResolveType(Scope* from, const string& raw) const;
 	static bool IsFundamentalWord(const string& word)
 	{
 		return word == "bool" || word == "char" || word == "char16_t" ||
@@ -1136,6 +1103,35 @@ public:
 			}
 		}
 		Process(node->children[1], parameters);
+		// A friend function template declared inside a class template is a
+		// namespace-level entity whose declaration is nevertheless needed by
+		// the owning class for access checks.  Keep the real transformed
+		// declaration in the AST and record its semantic name after normal
+		// template-parameter processing; PA14 will collect only an actual
+		// definition, never this declaration as a member.
+		if (scope && scope->kind == SCOPE_CLASS && scope->owner_type &&
+			node->children[1] && node->children[1]->kind == "simple-declaration" &&
+			!node->children[1]->children.empty()) {
+			SpecFacts facts;
+			TypePtr friend_type = TypeFromSpecSeq(node->children[1]->children[0],
+				parameters, &facts);
+			const CPPGMAstNodePtr friend_list = ChildOfKind(node->children[1],
+				"init-declarator-list");
+			const CPPGMAstNodePtr friend_item = friend_list &&
+				!friend_list->children.empty() ? friend_list->children[0] :
+				CPPGMAstNodePtr();
+			const CPPGMAstNodePtr friend_declarator = friend_item &&
+				!friend_item->children.empty() ? friend_item->children[0] :
+				CPPGMAstNodePtr();
+			TypePtr friend_function = friend_declarator ? BuildDeclarator(
+				friend_declarator, friend_type, parameters) : TypePtr();
+			if (facts.is_friend && friend_function &&
+				friend_function->kind == TYPE_FUNCTION) {
+				const string friend_name = FirstIdentifier(node->children[1]);
+				if (!friend_name.empty()) scope->owner_type->friend_access.push_back(
+					FriendAccess(FriendAccess::FRIEND_FUNCTION, friend_name, friend_function));
+			}
+		}
 		if (node->children[1] && node->children[1]->kind == "function-definition" &&
 			node->children[1]->children.size() > 1)
 		{
@@ -1172,7 +1168,7 @@ public:
 		if (node->kind == "class-forward-declaration") { ProcessForwardClass(node, scope); return; }
 		if (node->kind == "class-specifier") { ProcessClass(node, scope); return; }
 		if (node->kind == "enum-specifier") { ProcessEnum(node, scope); return; }
-		if ((node->kind == "simple-declaration" && !node->friend_owner_only) || node->kind == "bit-field-declaration")
+		if (node->kind == "simple-declaration" || node->kind == "bit-field-declaration")
 			return ProcessSimpleDeclaration(node, scope);
 		if (node->kind == "function-definition") return ProcessFunctionDefinition(node, scope);
 		if (node->kind == "static-assert-declaration") return ProcessStaticAssert(node, scope);

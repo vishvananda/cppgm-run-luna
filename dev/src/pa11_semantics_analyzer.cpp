@@ -51,19 +51,90 @@ CPPGMAstNodePtr FindReturnStatement(const CPPGMAstNodePtr& node)
 	return CPPGMAstNodePtr();
 }
 
-bool RecordFriendOwnerOnly(const CPPGMAstNodePtr& node, const TypePtr& type)
-{
-	if(!node || !node->friend_owner_only || !type) return false;
-	const string name = FirstIdentifier(node);
-	if(!name.empty()) type->friend_names.push_back(name);
-	return true;
-}
-
 }
 
 Analyzer::Analyzer()
 	: global_(new Scope(SCOPE_NAMESPACE, "<global>", 0)), anonymous_type_count_(0)
 {
+}
+
+TypePtr Analyzer::ResolveType(Scope* from, const string& raw) const
+{
+	const string name = StripTypeMarker(raw);
+	// Friend-template parameter types can be dependent template-ids such as
+	// Box<U>; preserve that identity as a typed class specialization.
+	const size_t template_open = name.find('<');
+	if (template_open != string::npos && name.size() > template_open + 1 &&
+		name[name.size() - 1] == '>')
+	{
+		const string primary_name = name.substr(0, template_open);
+		TypePtr primary = ResolveType(from, primary_name);
+		if (primary && (primary->kind == TYPE_CLASS ||
+			primary->kind == TYPE_TEMPLATE_PARAMETER))
+		{
+			vector<string> arguments;
+			string current;
+			int depth = 0;
+			for (size_t i = template_open + 1; i + 1 < name.size(); ++i)
+			{
+				const char ch = name[i];
+				if (ch == '<') ++depth;
+				else if (ch == '>' && depth > 0) --depth;
+				if (ch == ',' && depth == 0)
+				{
+					while (!current.empty() && isspace(static_cast<unsigned char>(current[0])))
+						current.erase(0, 1);
+					while (!current.empty() && isspace(static_cast<unsigned char>(current[current.size() - 1])))
+						current.erase(current.size() - 1);
+					arguments.push_back(current);
+					current.clear();
+				}
+				else current += ch;
+			}
+			while (!current.empty() && isspace(static_cast<unsigned char>(current[0])))
+				current.erase(0, 1);
+			while (!current.empty() && isspace(static_cast<unsigned char>(current[current.size() - 1])))
+				current.erase(current.size() - 1);
+			if (!current.empty()) arguments.push_back(current);
+			TypePtr specialization(new Type(*primary));
+			specialization->name = name;
+			specialization->template_specialization = true;
+			specialization->template_primary = primary->name;
+			specialization->template_arguments = arguments;
+			return specialization;
+		}
+	}
+	if (name.find("::") == string::npos)
+	{
+		for (Scope* current = from; current; current = current->parent)
+			for (size_t i = current->bindings.size(); i > 0; --i)
+			{
+				const Binding& candidate = current->bindings[i - 1];
+				if (candidate.name == name && (candidate.kind == BIND_TYPE ||
+					candidate.kind == BIND_TYPE_ALIAS) && AccessibleType(candidate, from))
+					return candidate.type;
+			}
+		for (Scope* current = from; current; current = current->parent)
+			if (current->kind == SCOPE_CLASS && current->owner_type)
+				for (TypePtr base = current->owner_type->direct_base; base;
+					base = base->direct_base)
+				{
+					if (LastComponent(base->name) == name) return base;
+					if (!base->owned_scope) continue;
+					for (size_t i = base->owned_scope->bindings.size(); i > 0; --i)
+					{
+						const Binding& candidate = base->owned_scope->bindings[i - 1];
+						if (candidate.name == name && (candidate.kind == BIND_TYPE ||
+							candidate.kind == BIND_TYPE_ALIAS) && AccessibleType(candidate, from))
+							return candidate.type;
+					}
+				}
+	}
+	Binding* binding = ResolveBinding(from, name);
+	if (!binding || (binding->kind != BIND_TYPE &&
+		binding->kind != BIND_TYPE_ALIAS) || !AccessibleType(*binding, from))
+		throw logic_error("unknown type: " + raw);
+	return binding->type;
 }
 
 void Analyzer::Analyze(const CPPGMAstNodePtr& tree)
@@ -1085,7 +1156,8 @@ void Analyzer::RecordClassDeclaration(const CPPGMAstNodePtr& child, const TypePt
 		TypePtr field_type = BuildDeclarator(declarator, base, class_scope);
 		if (facts.is_friend)
 		{
-			if (!name.empty()) type->friend_names.push_back(name);
+			if (!name.empty()) type->friend_access.push_back(FriendAccess(
+				FriendAccess::FRIEND_FUNCTION, name, field_type));
 			for (size_t k = 0; k < class_scope->bindings.size(); ++k)
 			{
 				Binding& binding = class_scope->bindings[k];
@@ -1188,7 +1260,6 @@ void Analyzer::RecordClassMembers(const CPPGMAstNodePtr& node, const TypePtr& ty
 			}
 			continue;
 		}
-		if (RecordFriendOwnerOnly(child, type)) continue;
 		if (child->kind == "simple-declaration" && !child->children.empty())
 		{
 			SpecFacts friend_facts;
@@ -1198,7 +1269,8 @@ void Analyzer::RecordClassMembers(const CPPGMAstNodePtr& node, const TypePtr& ty
 				friend_type->kind == TYPE_CLASS)
 			{
 				const string friend_name = LastComponent(friend_type->name);
-				if (!friend_name.empty()) type->friend_names.push_back(friend_name);
+				if (!friend_name.empty()) type->friend_access.push_back(FriendAccess(
+					FriendAccess::FRIEND_CLASS, friend_name, friend_type));
 				continue;
 			}
 		}

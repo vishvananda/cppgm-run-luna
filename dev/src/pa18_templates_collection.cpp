@@ -7,6 +7,16 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
+bool HasFriendSpecifier(const CPPGMAstNodePtr& node)
+{
+	if(!node) return false;
+	if((node->kind == "decl-specifier" || node->kind == "decl-specifier-seq") &&
+		(node->value == "KW_FRIEND:friend" || node->value == "friend")) return true;
+	for(size_t i = 0; i < node->children.size(); ++i)
+		if(HasFriendSpecifier(node->children[i])) return true;
+	return false;
+}
+
 void PA18TemplateExpander::IndexUsingDirectiveDefinition(
 	const TemplateDefinition& definition, const string& key)
 {

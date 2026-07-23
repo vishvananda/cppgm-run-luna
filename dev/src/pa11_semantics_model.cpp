@@ -12,7 +12,7 @@ Type::Type(TypeKind type_kind, const string& type_name)
 	  direct_base_offsets(), object_size(0), object_alignment(1),
 	  explicit_alignment(0), layout_complete(false), layout_in_progress(false),
 	  is_union(false), enclosing_type(), dependent_base_lookup(false),
-	  friend_names(), virtual_methods(),
+	  friend_access(), virtual_methods(),
 	  polymorphic(false), has_vpointer(false), template_specialization(false),
 	  template_primary(), template_arguments(), materialize_sizeof_address(false) {}
 

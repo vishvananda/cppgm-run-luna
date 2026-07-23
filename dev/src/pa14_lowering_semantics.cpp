@@ -19,20 +19,55 @@ string TypeNameValue(const CPPGMAstNodePtr& node)
     return string();
   }
 
-string FriendFunctionComponent(const string& name)
+bool FriendTypeMatches(const TypePtr& pattern, const TypePtr& actual)
 {
-    string component = last_component(name);
-    const size_t generated = component.find("__inst_");
-    if(generated != string::npos) component.erase(generated);
-    return component;
+    TypePtr left = type_value(pattern);
+    TypePtr right = type_value(actual);
+    if(!left || !right) return true;
+    if(left->kind == TYPE_TEMPLATE_PARAMETER ||
+       left->kind == TYPE_TEMPLATE_TEMPLATE_PARAMETER) return true;
+    if(left->kind != right->kind) return false;
+    if(left->kind == TYPE_FUNDAMENTAL) return left->name == right->name;
+    if(left->kind == TYPE_CLASS) {
+      if(left->template_specialization) {
+        if(!right->template_specialization) return false;
+        return last_component(left->template_primary) ==
+            last_component(right->template_primary);
+      }
+      if(right->template_specialization)
+        return last_component(left->name) ==
+            last_component(right->template_primary);
+      return last_component(left->name) == last_component(right->name);
+    }
+    if(left->kind == TYPE_FUNCTION) {
+      if(left->parameters.size() != right->parameters.size() ||
+         left->variadic != right->variadic ||
+         left->function_const != right->function_const ||
+         left->function_volatile != right->function_volatile ||
+         left->function_lvalue_ref_qualified != right->function_lvalue_ref_qualified ||
+         left->function_rvalue_ref_qualified != right->function_rvalue_ref_qualified)
+        return false;
+      if(!FriendTypeMatches(left->child, right->child)) return false;
+      for(size_t i = 0; i < left->parameters.size(); ++i)
+        if(!FriendTypeMatches(left->parameters[i], right->parameters[i])) return false;
+      return true;
+    }
+    if(left->kind == TYPE_POINTER || left->kind == TYPE_LVALUE_REFERENCE ||
+       left->kind == TYPE_RVALUE_REFERENCE || left->kind == TYPE_MEMBER_POINTER ||
+       left->kind == TYPE_ARRAY)
+      return FriendTypeMatches(left->child, right->child);
+    return true;
   }
 
-bool FriendFunctionMatches(const string& friend_name, const string& function_name)
+bool FriendFunctionMatches(const FriendAccess& access, const string& identity,
+    const TypePtr& function_type)
 {
-    if(friend_name.empty() || function_name.empty()) return false;
-    if(friend_name == function_name ||
-       last_component(friend_name) == last_component(function_name)) return true;
-    return FriendFunctionComponent(friend_name) == FriendFunctionComponent(function_name);
+    if(access.kind != FriendAccess::FRIEND_FUNCTION || identity.empty() ||
+       access.name.empty()) return false;
+    if(access.name != identity && last_component(access.name) != last_component(identity))
+      return false;
+    return access.target && function_type &&
+      FriendTypeMatches(access.target, function_type);
   }
 
 } // namespace
@@ -265,11 +300,15 @@ bool PA14Lowerer::IsAccessible(Binding* binding, Scope* scope) const
        binding->access == "public") return true;
     TypePtr owner = type_value(binding->member_owner);
     if(!owner) return false;
-    const string function_name = state_ && state_->record ?
-      state_->record->qualified_name : string();
-    for(size_t i = 0; i < owner->friend_names.size(); ++i) {
-      const string& friend_name = owner->friend_names[i];
-      if(FriendFunctionMatches(friend_name, function_name))
+    const FunctionRecord* function_record = state_ && state_->record ?
+      state_->record : 0;
+    const string function_identity = function_record &&
+      !function_record->template_primary.empty() ? function_record->template_primary :
+      function_record ? function_record->qualified_name : string();
+    const TypePtr function_type = function_record ? function_record->source_type : TypePtr();
+    for(size_t i = 0; i < owner->friend_access.size(); ++i) {
+      const FriendAccess& access = owner->friend_access[i];
+      if(FriendFunctionMatches(access, function_identity, function_type))
         return true;
     }
     TypePtr context;
@@ -281,17 +320,18 @@ bool PA14Lowerer::IsAccessible(Binding* binding, Scope* scope) const
         break;
       }
     if(!context) return false;
-    const string context_name = context->name;
-    for(map<const CPPGMAstNode*, TypePtr>::const_iterator it = analyzer_.class_types_.begin();
-        it != analyzer_.class_types_.end(); ++it) {
-      TypePtr friend_owner = type_value(it->second);
-      if(!friend_owner || friend_owner->kind != TYPE_CLASS) continue;
+    map<const Type*, vector<TypePtr> >::const_iterator indexed_friends =
+      friend_owner_index_.find(owner.get());
+    if(indexed_friends != friend_owner_index_.end()) for(size_t owner_index = 0;
+        owner_index < indexed_friends->second.size(); ++owner_index) {
+      const TypePtr& friend_owner = indexed_friends->second[owner_index];
       bool friend_match = false;
-      for(size_t i = 0; i < friend_owner->friend_names.size(); ++i) {
-        const string& friend_name = friend_owner->friend_names[i];
-        if(friend_name == context_name ||
-           (!friend_name.empty() && last_component(friend_name) == last_component(context_name)) ||
-           FriendFunctionMatches(friend_name, function_name)) {
+      for(size_t i = 0; i < friend_owner->friend_access.size(); ++i) {
+        const FriendAccess& access = friend_owner->friend_access[i];
+        const TypePtr friend_type = type_value(access.target);
+        const bool friend_class = access.kind == FriendAccess::FRIEND_CLASS &&
+          friend_type && FriendTypeMatches(friend_type, context);
+        if(friend_class || FriendFunctionMatches(access, function_identity, function_type)) {
           friend_match = true;
           break;
         }

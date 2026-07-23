@@ -1055,7 +1055,6 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 	}
 	CPPGMAstNodePtr TransformRegularNode(const CPPGMAstNodePtr& input,
 		const string& context, const map<string, string>& substitutions);
-	CPPGMAstNodePtr MakeFriendOwnerDeclaration(const CPPGMAstNodePtr& input) const;
 	CPPGMAstNodePtr RewriteRegularNodeValue(const CPPGMAstNodePtr& input,
 		const string& context, const map<string, string>& substitutions,
 		const CPPGMAstNodePtr& result, string* promoted_name);
@@ -1118,36 +1117,44 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 					}
 				}
 			}
-			CPPGMAstNodePtr friend_owner = MakeFriendOwnerDeclaration(input);
-			if(friend_owner) return friend_owner;
-				if(input->children.size() > 1 && input->children[1] &&
-					(input->children[1]->kind == "class-specifier" ||
-					 input->children[1]->kind == "class-forward-declaration"))
-					return PrefixComponent(input->children[1]->value).find('<') == string::npos ?
-						MakeClassShell(LastComponent(input->children[1]->value).substr(0,
-							LastComponent(input->children[1]->value).find('<'))) :
-						CPPGMAstNodePtr();
-				if(input->children.size() > 1 && input->children[1] &&
-					input->children[1]->kind == "function-definition" && !context.empty()) {
-					const string member = LastComponent(DeclarationName(input->children[1]));
-					if(using_member_template_names_.find(member) != using_member_template_names_.end()) {
-						// PA11 needs the template entity for using-declaration lookup. Keep the real dependent signature, but expose it as a declaration so
-						// PA14 never lowers the source body; concrete calls use Instantiate().
-						CPPGMAstNodePtr declaration = CloneNode(input);
-						CPPGMAstNodePtr function = declaration->children[1];
-						if(function->children.size() > 1) {
-							CPPGMAstNodePtr simple(new CPPGMAstNode("simple-declaration"));
-							simple->children.push_back(CloneNode(function->children[0]));
-							CPPGMAstNodePtr list(new CPPGMAstNode("init-declarator-list"));
-							CPPGMAstNodePtr item(new CPPGMAstNode("init-declarator"));
-							item->children.push_back(CloneNode(function->children[1]));
-							list->children.push_back(item);
-							simple->children.push_back(list);
-							declaration->children[1] = simple;
-						}
-						return declaration;
+			// Preserve a friend template declaration with its complete typed
+			// declarator.  The semantic pass records the friend edge from the
+			// normal template-parameter scope; no synthetic empty signature is
+			// needed and PA14 naturally ignores declarations without bodies.
+			if(input->children.size() > 1 && input->children[1] &&
+				input->children[1]->kind == "simple-declaration" &&
+				!input->children[1]->children.empty() &&
+				HasFriendSpecifier(input->children[1]->children[0]) &&
+				DescendantOfKind(input->children[1], "parameter-clause"))
+				return TransformRegularNode(input, context, substitutions);
+			if(input->children.size() > 1 && input->children[1] &&
+				(input->children[1]->kind == "class-specifier" ||
+				 input->children[1]->kind == "class-forward-declaration"))
+				return PrefixComponent(input->children[1]->value).find('<') == string::npos ?
+					MakeClassShell(LastComponent(input->children[1]->value).substr(0,
+						LastComponent(input->children[1]->value).find('<'))) :
+					CPPGMAstNodePtr();
+			if(input->children.size() > 1 && input->children[1] &&
+				input->children[1]->kind == "function-definition" && !context.empty()) {
+				const string member = LastComponent(DeclarationName(input->children[1]));
+				if(using_member_template_names_.find(member) != using_member_template_names_.end()) {
+					// PA11 needs the template entity for using-declaration lookup. Keep the real dependent signature, but expose it as a declaration so
+					// PA14 never lowers the source body; concrete calls use Instantiate().
+					CPPGMAstNodePtr declaration = CloneNode(input);
+					CPPGMAstNodePtr function = declaration->children[1];
+					if(function->children.size() > 1) {
+						CPPGMAstNodePtr simple(new CPPGMAstNode("simple-declaration"));
+						simple->children.push_back(CloneNode(function->children[0]));
+						CPPGMAstNodePtr list(new CPPGMAstNode("init-declarator-list"));
+						CPPGMAstNodePtr item(new CPPGMAstNode("init-declarator"));
+						item->children.push_back(CloneNode(function->children[1]));
+						list->children.push_back(item);
+						simple->children.push_back(list);
+						declaration->children[1] = simple;
 					}
+					return declaration;
 				}
+			}
 			return CPPGMAstNodePtr();
 		}
 		if(input->kind == "using-declaration") {

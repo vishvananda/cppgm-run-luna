@@ -362,7 +362,7 @@ PA14Lowerer::PA14Lowerer(const vector<CPPGMAstNodePtr>& trees)
       string_data_(), string_symbols_(), string_order_(), deferred_static_members_(),
       needs_init_helper_(false),
       needs_fini_helper_(false), emitted_vtables_(), external_vtables_(),
-      emitted_rtti_(), state_(), infer_cache_()
+      emitted_rtti_(), state_(), infer_cache_(), friend_owner_index_()
 {}
 
 string PA14Lowerer::function_key(const string& name, const TypePtr& type)
@@ -718,7 +718,7 @@ void PA14Lowerer::CollectClassMembers(const CPPGMAstNodePtr& node, Scope* scope)
           has_inheriting_constructor_using = true;
         continue;
       }
-		if(child->kind != "simple-declaration" || child->friend_owner_only) continue;
+		if(child->kind != "simple-declaration") continue;
       if(child->children.empty()) continue;
       Analyzer::SpecFacts facts;
       TypePtr base = analyzer_.TypeFromSpecSeq(child->children[0], class_scope, &facts);

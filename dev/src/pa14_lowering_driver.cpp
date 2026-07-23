@@ -9,6 +9,22 @@ using namespace std;
 
 namespace cppgm_pa14_lowering {
 
+void PA14Lowerer::IndexFriendOwners()
+{
+  friend_owner_index_.clear();
+  for(map<const CPPGMAstNode*, TypePtr>::const_iterator it = analyzer_.class_types_.begin();
+      it != analyzer_.class_types_.end(); ++it) {
+    const TypePtr friend_owner = type_value(it->second);
+    if(!friend_owner || friend_owner->kind != TYPE_CLASS ||
+       friend_owner->friend_access.empty()) continue;
+    for(TypePtr owner = friend_owner; owner; owner = type_value(owner->direct_base)) {
+      vector<TypePtr>& entries = friend_owner_index_[owner.get()];
+      if(find(entries.begin(), entries.end(), friend_owner) == entries.end())
+        entries.push_back(friend_owner);
+    }
+  }
+}
+
 void PA14Lowerer::Lower(ostream& out)
 {
     for(size_t i = 0; i < trees_.size(); ++i) {
@@ -18,6 +34,7 @@ void PA14Lowerer::Lower(ostream& out)
         program_->children.push_back(trees_[i]->children[j]);
     }
     analyzer_.Analyze(program_);
+    IndexFriendOwners();
     InstallBuiltins();
     CollectTopLevel(program_, analyzer_.global_.get());
     PreparePolymorphicModel();

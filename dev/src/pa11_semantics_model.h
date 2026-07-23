@@ -26,6 +26,21 @@ struct ConstantObject;
 struct ConstantPointer;
 typedef shared_ptr<Type> TypePtr;
 
+// A friend edge is a semantic relationship, not a source spelling. Keep the
+// entity kind and typed target alongside the lookup identity so access checks
+// can validate the selected class/function entity.
+struct FriendAccess
+{
+	enum Kind { FRIEND_FUNCTION, FRIEND_CLASS };
+	Kind kind;
+	string name;
+	TypePtr target;
+
+	FriendAccess(Kind access_kind = FRIEND_FUNCTION,
+		const string& access_name = string(), const TypePtr& access_target = TypePtr())
+		: kind(access_kind), name(access_name), target(access_target) {}
+};
+
 // The PA15 object model keeps layout facts in the semantic type rather than
 // rediscovering them from LowIR spelling.  This is deliberately small at the
 // PA11/PA14 handoff; later stages can extend the member record with access and
@@ -123,7 +138,7 @@ struct Type
 	// True when this materialized class was defined with a dependent base.
 	// Unqualified lookup in its template body must not inspect that base.
 	bool dependent_base_lookup;
-	vector<string> friend_names;
+	vector<FriendAccess> friend_access;
 	vector<VirtualMethodInfo> virtual_methods;
 	bool polymorphic;
 	bool has_vpointer;

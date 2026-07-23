@@ -62,8 +62,7 @@
 		// private state; its call spelling must nevertheless remain unqualified
 		// here, allowing PA14's friend-aware collection to assign the namespace
 		// qualified symbol.
-		if(definition.declaration && !definition.declaration->children.empty() &&
-			SpellNode(definition.declaration->children[0]).find("friend") != string::npos)
+		if(definition.friend_declaration)
 			return string();
 		const string owner = GeneratedOwner(definition);
 		bool visible = owner.empty() || context == owner ||

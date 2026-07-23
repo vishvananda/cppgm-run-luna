@@ -184,10 +184,13 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformTranslationUnit(
 		generated_forwards.insert(generated_forwards.end(), other_children.begin(), other_children.end());
 		result->children.swap(generated_forwards);
 	}
-	// If a materialized class derives from another materialized specialization,
-	// the late replay path can leave their complete definitions in source-use
-	// order rather than base order.  Repair only that generated inheritance
-	// chain; unrelated forwards retain the established PA18 placement rules.
+	// If a materialized friend class derives from another materialized
+	// specialization, the late replay path can leave their complete
+	// definitions in source-use order rather than base order.  Repair that
+	// generated inheritance chain from its layout dependencies.  The friend
+	// predicate is a structured declaration fact, not a flattened source-text
+	// acceptance gate; unrelated generated classes retain the established PA18
+	// placement rules.
 	vector<CPPGMAstNodePtr> complete_generated;
 	for(size_t child = 0; child < result->children.size(); ++child) {
 		const CPPGMAstNodePtr& item = result->children[child];
@@ -207,7 +210,7 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformTranslationUnit(
 	bool friend_inheritance_chain = false;
 	for(size_t generated = 0; generated < complete_generated.size(); ++generated)
 		if(inheritance_chain_names.find(LastComponent(complete_generated[generated]->value)) !=
-			inheritance_chain_names.end() && SpellNode(complete_generated[generated]).find("friend") != string::npos) {
+			inheritance_chain_names.end() && HasFriendSpecifier(complete_generated[generated])) {
 			friend_inheritance_chain = true;
 			break;
 		}

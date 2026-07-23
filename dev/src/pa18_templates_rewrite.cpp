@@ -1210,40 +1210,6 @@ CPPGMAstNodePtr PA18TemplateExpander::FinishRegularNode(
 	return result;
 }
 
-CPPGMAstNodePtr PA18TemplateExpander::MakeFriendOwnerDeclaration(
-	const CPPGMAstNodePtr& input) const
-{
-	if(!input || input->kind != "template-declaration" || input->children.size() < 2)
-		return CPPGMAstNodePtr();
-	const CPPGMAstNodePtr source = input->children[1];
-	if(!source || source->kind != "simple-declaration" || source->children.empty() ||
-		!source->children[0] || SpellNode(source->children[0]).find("friend") == string::npos ||
-		!DescendantOfKind(source, "parameter-clause")) return CPPGMAstNodePtr();
-	const CPPGMAstNodePtr list = ChildOfKindLocal(source, "init-declarator-list");
-	if(!list || list->children.empty() || !list->children[0] ||
-		list->children[0]->children.empty()) return CPPGMAstNodePtr();
-	const CPPGMAstNodePtr source_declarator = list->children[0]->children[0];
-	const string friend_name = FirstIdentifierLocal(source_declarator);
-	if(friend_name.empty()) return CPPGMAstNodePtr();
-	CPPGMAstNodePtr declaration(new CPPGMAstNode("simple-declaration"));
-	declaration->friend_owner_only = true;
-	declaration->children.push_back(CloneNode(source->children[0]));
-	CPPGMAstNodePtr result_list(new CPPGMAstNode("init-declarator-list"));
-	CPPGMAstNodePtr item(new CPPGMAstNode("init-declarator"));
-	CPPGMAstNodePtr declarator(new CPPGMAstNode("declarator"));
-	declarator->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
-		"identifier", friend_name)));
-	declarator->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
-		"parameter-clause")));
-	const CPPGMAstNodePtr cv_qualifier = ChildOfKindLocal(source_declarator,
-		"cv-qualifier");
-	if(cv_qualifier) declarator->children.push_back(CloneNode(cv_qualifier));
-	item->children.push_back(declarator);
-	result_list->children.push_back(item);
-	declaration->children.push_back(result_list);
-	return declaration;
-}
-
 CPPGMAstNodePtr PA18TemplateExpander::TransformRegularNode(
 	const CPPGMAstNodePtr& input, const string& context,
 	const map<string, string>& substitutions)
@@ -1276,7 +1242,6 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformRegularNode(
 		result->template_instantiation = input->template_instantiation;
 		result->explicit_instantiation = input->explicit_instantiation;
 		result->extern_instantiation = input->extern_instantiation;
-		result->friend_owner_only = input->friend_owner_only;
 		result->dependent_base_lookup = input->dependent_base_lookup;
 		result->materialize_object_address = input->materialize_object_address;
 		result->source_token_begin = input->source_token_begin;
