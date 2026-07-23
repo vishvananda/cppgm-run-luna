@@ -171,11 +171,29 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 		((member_owner_definition && member_owner_definition->class_template) ||
 		 class_contexts_.find(member_owner_name) != class_contexts_.end() ||
 		 FindClassDeclaration(member_owner_name, context));
-	const string concrete_owner = definition.class_template ?
+	string concrete_owner = definition.class_template ?
 		FindConcreteInstantiationOwner(definition, substitutions, context, requested_owner) :
 		((member_definition && ConcreteOwnerMatches(definition, requested_owner)) ||
 		 (definition.alias_template && ConcreteOwnerMatches(definition, requested_owner)) ?
-			requested_owner : string());
+		 requested_owner : string());
+	// A generated class can be reached through the lexical function path used
+	// while replaying a functional cast (for example
+	// `make_pair_int::pair_int_`), while PA14 indexes its declarations by the
+	// materialized class identity (`pair_int_`).  Keep the typed specialization
+	// owner canonical before registering generated member declarations.
+	if(!concrete_owner.empty() && specialization_bases_.find(
+		LastComponent(concrete_owner)) != specialization_bases_.end() &&
+		class_contexts_.find(LastComponent(concrete_owner)) != class_contexts_.end())
+		concrete_owner = LastComponent(concrete_owner);
+	else if(!concrete_owner.empty() && specialization_bases_.find(
+		LastComponent(concrete_owner)) != specialization_bases_.end()) {
+		for(set<string>::const_iterator candidate = class_contexts_.begin();
+			candidate != class_contexts_.end(); ++candidate)
+			if(LastComponent(*candidate) == LastComponent(concrete_owner)) {
+				concrete_owner = LastComponent(concrete_owner);
+				break;
+			}
+	}
 	if(definition.class_template) {
 		class_contexts_.insert(JoinPath(definition.owner, local_name));
 		class_contexts_.insert(JoinPath(generated_owner, local_name));
@@ -226,10 +244,13 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 	if(member_definition && !concrete_owner.empty()) {
 		const bool special_member = generated->kind == "special-member-definition" ||
 			generated->kind == "special-member-declaration";
+		const bool operator_member = LastComponent(definition.name).compare(0, 8,
+			"operator") == 0;
 		if(special_member)
 			generated->value = concrete_owner + "::" + LastComponent(concrete_owner);
 		RenameGeneratedFunction(generated, special_member ?
-			LastComponent(concrete_owner) : LastComponent(definition.name));
+			LastComponent(concrete_owner) : operator_member ? local_name :
+			LastComponent(definition.name));
 	}
 	for(size_t i = 0; i < args.size(); ++i)
 		EnsureForwardClass(args[i], context, generated_owner);
@@ -254,7 +275,9 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 		generated_before_class_[PrefixComponent(context)].push_back(generated);
 	else {
 	string generated_function_owner = concrete_owner.empty() ? generated_owner : concrete_owner;
-	if(!concrete_owner.empty() && generated_function_owner.find("::") == string::npos) {
+	if(!concrete_owner.empty() && generated_function_owner.find("::") == string::npos &&
+		specialization_bases_.find(LastComponent(concrete_owner)) ==
+			specialization_bases_.end()) {
 		string lexical_prefix = PrefixComponent(definition.owner);
 		if(!lexical_prefix.empty() && LastComponent(lexical_prefix) ==
 			LastComponent(definition.owner))

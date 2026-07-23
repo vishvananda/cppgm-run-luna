@@ -465,7 +465,9 @@ CPPGMAstNodePtr Parser::ParseSpecialMember(bool definition, bool member_context)
 		return result;
 	}
 	CPPGMAstNodePtr ctor = ParseCtorInitializer();
+	++function_body_depth_;
 	CPPGMAstNodePtr body = ParseCompoundStatement();
+	--function_body_depth_;
 	if (!body)
 	{
 		value_names_ = saved_value_names;

@@ -144,7 +144,7 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformTranslationUnit(
 	if(!input || input->kind != "translation-unit") return CPPGMAstNodePtr();
 	namespace_occurrences_.clear();
 	CountNamespaceOccurrences(input, string());
-	CollectVariables(input);
+	CollectVariables(input, string());
 	CPPGMAstNodePtr result(new CPPGMAstNode("translation-unit"));
 	map<string, string> top_level_substitutions;
 	for(size_t i = 0; i < input->children.size(); ++i) {
@@ -1285,6 +1285,80 @@ void PA18TemplateExpander::InjectGenerated(const CPPGMAstNodePtr& node,
 	}
 	for(size_t i = 0; i < node->children.size(); ++i)
 		InjectGenerated(node->children[i], context, lexical_context);
+}
+
+void PA18TemplateExpander::CollectVariables(const CPPGMAstNodePtr& node,
+	const string& context)
+{
+	if(!node) return;
+	string function_context = context;
+	if(node->kind == "function-definition") {
+		const string function_name = DeclarationName(node);
+		function_context = JoinPath(context, function_name);
+		if(!function_name.empty() && LastComponent(context) == function_name)
+			function_context = context;
+	} else if(node->kind == "special-member-definition" ||
+		node->kind == "special-member-declaration") {
+		const string function_name = DeclarationName(node);
+		if(!function_name.empty()) function_context = JoinPath(context, function_name);
+	}
+	if((node->kind == "function-definition" ||
+		node->kind == "special-member-definition") && node->children.size() > 1) {
+		const CPPGMAstNodePtr declarator = node->kind == "function-definition" ?
+			node->children[1] : ChildOfKindLocal(node, "declarator");
+		const CPPGMAstNodePtr parameters = DescendantOfKind(declarator,
+			"parameter-clause");
+		if(parameters) for(size_t i = 0; i < parameters->children.size(); ++i) {
+			const CPPGMAstNodePtr parameter = parameters->children[i];
+			if(!parameter || parameter->kind != "parameter-declaration" ||
+				parameter->children.size() < 2) continue;
+			const string name = FirstIdentifierLocal(parameter->children[1]);
+			if(!name.empty()) {
+				const string type = ParameterTypeSpelling(parameter);
+				variable_types_[name] = type;
+				function_parameter_types_[function_context][name] = type;
+			}
+		}
+	}
+	if(node->kind == "simple-declaration") {
+		const CPPGMAstNodePtr list = ChildOfKindLocal(node, "init-declarator-list");
+		if(list) for(size_t i = 0; i < list->children.size(); ++i) {
+			const CPPGMAstNodePtr item = list->children[i];
+			if(!item || item->children.empty()) continue;
+			const CPPGMAstNodePtr clause = DescendantOfKind(item->children[0],
+				"parameter-clause");
+			if(!clause) continue;
+			for(size_t j = 0; j < clause->children.size(); ++j) {
+				const CPPGMAstNodePtr parameter = clause->children[j];
+				if(!parameter || parameter->kind != "parameter-declaration" ||
+					parameter->children.size() < 2) continue;
+				const string name = FirstIdentifierLocal(parameter->children[1]);
+				if(!name.empty()) {
+					const string type = ParameterTypeSpelling(parameter);
+					variable_types_[name] = type;
+					function_parameter_types_[JoinPath(context, DeclarationName(node))][name] = type;
+				}
+			}
+		}
+	}
+	if(node->kind == "simple-declaration" && !node->children.empty()) {
+		const CPPGMAstNodePtr specs = node->children[0];
+		const string type = NodeTypeSpelling(specs);
+		const CPPGMAstNodePtr list = ChildOfKindLocal(node, "init-declarator-list");
+		if(list) for(size_t i = 0; i < list->children.size(); ++i) {
+			const CPPGMAstNodePtr item = list->children[i];
+			if(!item || item->children.empty()) continue;
+			const string name = FirstIdentifierLocal(item->children[0]);
+			if(!name.empty() && !type.empty())
+				variable_types_[name] = DeclaratorTypeSpelling(type, item->children[0]);
+		}
+	}
+	for(size_t i = 0; i < node->children.size(); ++i) {
+		const string child_context = node->kind == "function-definition" &&
+			node->children[i] && node->children[i]->kind == "compound-statement" ?
+			function_context : context;
+		CollectVariables(node->children[i], child_context);
+	}
 }
 
 } // namespace pa18_templates_internal

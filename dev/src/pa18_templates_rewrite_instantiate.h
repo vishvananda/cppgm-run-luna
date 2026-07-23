@@ -1105,8 +1105,12 @@
 						(i == 0 && nested_specialization ? "__" : "_");
 				}
 			}
-		} else if(definition.name.compare(0, 8, "operator") != 0) {
+		} else if(definition.name.compare(0, 8, "operator") != 0 ||
+			definition.member_template) {
 			// Keep each concrete function specialization distinct in its generated AST.
+			// Member operator templates need the suffix to avoid colliding with an
+			// implicit copy/move special member; free operators retain their source
+			// spelling so ADL/operator lookup can find them.
 			for(size_t i = 0; i < args.size(); ++i) {
 				local_name += i == 0 ? "__inst_" : "__";
 				local_name += TypeSuffix(args[i]);

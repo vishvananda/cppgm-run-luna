@@ -1073,3 +1073,124 @@ resolve the remaining special-member-vs-member-template distinction, then
 carry the concrete owner through explicit member-template IDs, qualified
 friend/member definitions, and nested/out-of-class definitions.  Keep the
 existing five-test owner slice and the through-PA20 report as regression gates.
+
+## Continuation turn checkpoint scope (before implementation, 2026-07-23)
+
+The current required report is **156/215** with the complete **59-path**
+failure set recorded immediately above.  This checkpoint selects the shared
+generated-member materialization slice of Group C:
+
+`general/300-member-template-assignment-not-special-member`,
+`general/300-member-template-assignment-operator-value`,
+`general/300-templated-constructor-special-member-collection`,
+`general/300-basic-template-operator-overloads`,
+`general/300-unary-member-operator-template-default`, and
+`general/300-dependent-base-qualified-rvalue-assignment`.
+
+The scope is typed replay of member-template operators and constructors:
+deduce operator template arguments without colliding with implicit special
+members, materialize a templated constructor as a class-value producer,
+retain overloaded unary result types, and carry dependent-base ownership
+through qualified rvalue assignment.  It covers the PA18 owner/call graph and
+the PA14 assignment, dereference, return-transfer, and LowIR consumers through
+their ordinary semantic paths.  Success requires the six focused tests to
+pass, the full PA21 count to exceed 156/215, through-PA20 to remain 1635/1635,
+and the file audit to pass.
+
+## Continuation checkpoint result (2026-07-23)
+
+The selected generated-member slice is implemented.  Function-local value-name
+tracking is now explicitly scoped to function bodies and excludes typedef and
+anonymous-aggregate declarations, while namespace aliases remain usable in
+qualified type names.  Template argument defaults are replayed into typed
+parameter bindings; variable-type lookup is context-aware; reference-pattern
+matching accepts generated rvalue-reference spellings; and generated member
+operators, templated constructors, and dependent-base calls retain their
+concrete declaring owner.  The variable collection body was moved out of the
+large collection header so the stage file audit remains within its size rule.
+
+All six focused tests pass their compiler/run checks.  The required full report
+is **158/215** (up from the task-state baseline of **153/215**), with 57
+remaining failures: 44 semantic/parse/lookup exit-status mismatches and 13
+relaxed LowIR owner/body/emission mismatches.  The selected assignment
+member-template case is in the latter set: it executes successfully but its
+generated LowIR still differs from the checked reference.  The through-PA20
+report is green at **1635/1635**, and the PA21 file audit passes with ten
+pre-existing warnings.
+
+### Remaining Work Map
+
+The complete final report failure set is grouped by the shared observed
+behavior below.  The first group still needs semantic/parser/template-state
+work across partial specialization, aliases, member/friend lookup, explicit
+ownership, and dependent lowering:
+
+`general/100-reference-shell-out-of-class-current-specialization-iterator`,
+`general/100-rvalue-reference-binds-converted-temporary`,
+`general/200-reference-alias-top-cv-return-binding`,
+`general/300-anonymous-union-storage-constructor-noop`,
+`general/300-array-functional-cast-pack-call`,
+`general/300-constexpr-static-fn-template-address-pack`,
+`general/300-crtp-static-cast-reference-before-constructor-template`,
+`general/300-extern-template-builtin-operator-function-declaration-bad`,
+`general/300-function-pack-template-id-deduction-decltype`,
+`general/300-function-signature-partial-specialization-functor-assignment`,
+`general/300-local-qualified-argument-replay`,
+`general/300-member-class-explicit-specialization-owner-lookup`,
+`general/300-nested-class-template-current-owner-lookup`,
+`general/300-nested-class-template-reference-reset`,
+`general/300-nested-member-partial-specialization-apply-scope`,
+`general/300-out-of-class-ctor-using-imported-member-template`,
+`general/300-out-of-class-member-template-namespace-typedef`,
+`general/300-parenthesized-qualified-template-functional-call`,
+`general/300-single-pack-cast-target`,
+`general/300-static-constexpr-function-template-pointer-array`,
+`general/300-template-instantiation-use-location-explicit-specialization`,
+`general/400-alias-nontype-expression-declaration-scope`,
+`general/400-alias-nontype-pack-partial-specialization-pattern`,
+`general/400-alias-rebind-partial-specialization-shadow`,
+`general/400-alias-template-nontype-shadowed-by-inner-value`,
+`general/400-alias-template-pointer-cv-cache-distinction`,
+`general/400-dependent-pack-typename-nontype-expression`,
+`general/400-forward-primary-partial-switch-value`,
+`general/400-function-parameter-pack-alias-expansion`,
+`general/400-inline-namespace-template-template-argument`,
+`general/400-member-alias-template-template-dependent-replay`,
+`general/400-member-template-nontype-shadowed-global-replay`,
+`general/400-partial-specialization-conversion-operator-pointer-binding`,
+`general/400-partial-specialization-redecl-member-template-empty-pack`,
+`general/400-reference-member-lookup-in-progress-base-typedef`,
+`spec/100-inline-namespace-qualified-template-id-pack-expansion`,
+`spec/300-defaulted-type-arg-specialization-nontype-value`,
+`spec/300-explicit-specialization-after-instantiation`,
+`spec/300-explicit-specialization-refreshes-stale-primary-instantiation`,
+`spec/300-explicit-specialized-ctor-template-header-bad`,
+`spec/300-hidden-friend-template-operator-adl`,
+`spec/300-member-class-template-out-of-class`,
+`spec/300-member-operator-template-active-owner`, and
+`spec/300-member-operator-template-in-class-template`.
+
+The remaining emission/owner-body comparison group is:
+
+`general/300-dependent-hidden-friend-static-member-definition`,
+`general/300-explicit-member-template-id-shares-ordinary-overload`,
+`general/300-explicit-type-arg-decltype-member-access`,
+`general/300-friend-existing-template-private-ctor-access`,
+`general/300-function-template-local-static-per-specialization`,
+`general/300-member-template-assignment-not-special-member`,
+`general/300-namespace-function-template-hides-outer-callable-object`,
+`general/300-qualified-friend-member-template-access`,
+`general/400-alias-pack-nontype-expression-fast-path`,
+`general/400-reference-member-depth-pack-sum`,
+`spec/300-explicit-instantiation-static-member-function`,
+`spec/300-explicit-specialization-static-data-member`, and
+`spec/300-rooted-qualified-static-data-member-template-definition`.
+
+## Next Checkpoint Group
+
+Continue with the ten remaining alias/non-type replay paths as one coherent
+Group B checkpoint: declaration-scope and shadowed-value handling,
+alias-template rebinding, pointer/cv cache identity, dependent pack
+expressions, member-alias template replay, and the nontype expression fast
+path.  Keep the six generated-member run probes, the through-PA20 report, and
+the file audit as regression gates.

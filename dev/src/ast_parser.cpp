@@ -24,7 +24,7 @@ namespace cppgm_pa10 {
 Parser::Parser(const vector<Token>& tokens)
 	: tokens_(tokens), position_(0), angle_depth_(0), ordinary_depth_(0),
 	  angle_floors_(), types_(), templates_(), namespaces_(), value_names_(),
-	  in_template_declaration_(false)
+	  in_template_declaration_(false), function_body_depth_(0)
 {
 	const char* const fundamentals[] = {
 		"bool", "char", "char16_t", "char32_t", "double", "float", "int",
@@ -229,7 +229,9 @@ bool Parser::LooksLikeTypeName(const Token& token) const
 bool Parser::IsNamedTypeStart() const
 {
 	if (Peek().kind != AST_IDENTIFIER) return false;
-	if (value_names_.find(Peek().text) != value_names_.end()) return false;
+	if (value_names_.find(Peek().text) != value_names_.end() &&
+		!(Peek(1).text == "::" &&
+			namespaces_.find(Peek().text) != namespaces_.end())) return false;
 	if (LooksLikeTypeName(Peek())) return true;
 	return Peek(1).text == "::" || Peek(1).text == "<";
 }

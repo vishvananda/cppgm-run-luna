@@ -79,7 +79,9 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformAssignmentExpression(
 	CPPGMAstNodePtr arguments(new CPPGMAstNode("argument-list"));
 	arguments->children.push_back(right);
 	call->children.push_back(arguments);
-	if(!InstantiateMemberCall(call, member, "operator=", context, substitutions))
+	const bool instantiated = InstantiateMemberCall(call, member, "operator=", context,
+		substitutions);
+	if(!instantiated)
 		return CPPGMAstNodePtr();
 	return call;
 }
@@ -100,10 +102,9 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformUnaryExpression(
 	CPPGMAstNodePtr call(new CPPGMAstNode("call-expression"));
 	call->children.push_back(member);
 	call->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("argument-list")));
-	if(!InstantiateMemberCall(call, member, "operator" + operation,
-		context, substitutions)) {
-		return CPPGMAstNodePtr();
-	}
+	const bool instantiated = InstantiateMemberCall(call, member, "operator" + operation,
+		context, substitutions);
+	if(!instantiated) return CPPGMAstNodePtr();
 	return call;
 }
 
@@ -774,10 +775,14 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 				return true;
 			}
 		}
-		if(!pattern.empty() && pattern[pattern.size() - 1] == '&') {
+		// Normalize both lvalue and rvalue references before looking up a
+		// generated specialization.  Removing only one character from `T&&`
+		// leaves a trailing `&`, so `Box__inst_int&` misses the typed
+		// specialization table and cannot match `Box<U>&&`.
+		while(!pattern.empty() && pattern[pattern.size() - 1] == '&')
 			pattern.erase(pattern.size() - 1);
-			if(!actual.empty() && actual[actual.size() - 1] == '&') actual.erase(actual.size() - 1);
-		}
+		while(!actual.empty() && actual[actual.size() - 1] == '&')
+			actual.erase(actual.size() - 1);
 		if(!pattern.empty() && pattern[pattern.size() - 1] == '*') {
 			if(actual.empty() || actual[actual.size() - 1] != '*') return false;
 			pattern.erase(pattern.size() - 1);

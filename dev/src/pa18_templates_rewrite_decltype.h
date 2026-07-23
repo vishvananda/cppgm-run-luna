@@ -366,11 +366,10 @@
 			// materialized class's operator(), not from free-function lookup.
 			// This is needed for decltype(factory()) inside an instantiated
 			// function body.
-			map<string, string>::const_iterator variable = variable_types_.find(
-				LastComponent(callee));
-			if(variable != variable_types_.end()) {
+			string variable_type;
+			if(LookupVariableType(callee, context, &variable_type)) {
 				const string object_type = NormalizeTypeArgument(ResolveAlias(
-					ReplaceIdentifiers(variable->second, substitutions), context));
+					ReplaceIdentifiers(variable_type, substitutions), context));
 				const CPPGMAstNodePtr declaration = FindClassDeclaration(object_type, context);
 				if(declaration) for(size_t member = 0; member < declaration->children.size(); ++member) {
 					const CPPGMAstNodePtr candidate = declaration->children[member];
@@ -582,9 +581,9 @@
 		}
 		map<string, string>::const_iterator substituted = substitutions.find(expression);
 		if(substituted != substitutions.end()) return substituted->second;
-		map<string, string>::const_iterator variable = variable_types_.find(LastComponent(expression));
-		if(variable != variable_types_.end())
-			return ReplaceIdentifiers(ResolveAlias(variable->second, context), substitutions);
+		string variable_type;
+		if(LookupVariableType(expression, context, &variable_type))
+			return ReplaceIdentifiers(ResolveAlias(variable_type, context), substitutions);
 		if(expression == "true" || expression == "false") return "bool";
 		if(!expression.empty() && (isdigit(static_cast<unsigned char>(expression[0])) ||
 			expression[0] == '\'' || expression[0] == '"'))

@@ -543,6 +543,8 @@ private:
 	CPPGMAstNodePtr TransformCallExpression(const CPPGMAstNodePtr& input,
 		const string& context, const map<string, string>& substitutions);
 	string ResolveAlias(string spelling, const string& context) const;
+	bool LookupVariableType(const string& name, const string& context,
+		string* result) const;
 	bool ContainsName(const CPPGMAstNodePtr& node, const string& name) const;
 	string DeclarationName(const CPPGMAstNodePtr& declaration) const
 	{
@@ -1132,54 +1134,7 @@ private:
 		if(node->kind == "class-specifier" || node->kind == "class-forward-declaration")
 			RecordClassTypeSize(node, context, JoinPath(context, LastComponent(node->value)));
 	}
-	void CollectVariables(const CPPGMAstNodePtr& node)
-	{
-		if(!node) return;
-		if((node->kind == "function-definition" ||
-			node->kind == "special-member-definition") && node->children.size() > 1) {
-			const CPPGMAstNodePtr declarator = node->kind == "function-definition" ?
-				node->children[1] : ChildOfKindLocal(node, "declarator");
-			const CPPGMAstNodePtr parameters = DescendantOfKind(declarator,
-				"parameter-clause");
-			if(parameters) for(size_t i = 0; i < parameters->children.size(); ++i) {
-				const CPPGMAstNodePtr parameter = parameters->children[i];
-				if(!parameter || parameter->kind != "parameter-declaration" || parameter->children.size() < 2)
-					continue;
-				const string name = FirstIdentifierLocal(parameter->children[1]);
-				if(!name.empty()) variable_types_[name] = ParameterTypeSpelling(parameter);
-			}
-		}
-		if(node->kind == "simple-declaration") {
-			const CPPGMAstNodePtr list = ChildOfKindLocal(node, "init-declarator-list");
-			if(list) for(size_t i = 0; i < list->children.size(); ++i) {
-				const CPPGMAstNodePtr item = list->children[i];
-				if(!item || item->children.empty()) continue;
-				const CPPGMAstNodePtr clause = DescendantOfKind(item->children[0],
-					"parameter-clause");
-				if(!clause) continue;
-				for(size_t j = 0; j < clause->children.size(); ++j) {
-					const CPPGMAstNodePtr parameter = clause->children[j];
-					if(!parameter || parameter->kind != "parameter-declaration" ||
-						parameter->children.size() < 2) continue;
-					const string name = FirstIdentifierLocal(parameter->children[1]);
-					if(!name.empty()) variable_types_[name] = ParameterTypeSpelling(parameter);
-				}
-			}
-		}
-		if(node->kind == "simple-declaration" && !node->children.empty()) {
-			const CPPGMAstNodePtr specs = node->children[0];
-			const string type = NodeTypeSpelling(specs);
-			const CPPGMAstNodePtr list = ChildOfKindLocal(node, "init-declarator-list");
-			if(list) for(size_t i = 0; i < list->children.size(); ++i) {
-				const CPPGMAstNodePtr item = list->children[i];
-				if(!item || item->children.empty()) continue;
-				const string name = FirstIdentifierLocal(item->children[0]);
-				if(!name.empty() && !type.empty())
-					variable_types_[name] = DeclaratorTypeSpelling(type, item->children[0]);
-			}
-		}
-		for(size_t i = 0; i < node->children.size(); ++i) CollectVariables(node->children[i]);
-	}
+	void CollectVariables(const CPPGMAstNodePtr& node, const string& context);
 	void CountNamespaceOccurrences(const CPPGMAstNodePtr& node, const string& context);
 	CPPGMAstNodePtr TransformTranslationUnit(const CPPGMAstNodePtr& input);
 	bool TypeOnlyNode(const CPPGMAstNodePtr& node) const;

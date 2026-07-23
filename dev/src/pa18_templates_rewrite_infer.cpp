@@ -71,6 +71,33 @@ bool PA18TemplateExpander::HasUnresolvedTemplateParameter(string raw,
 	return false;
 }
 
+bool PA18TemplateExpander::LookupVariableType(const string& name,
+	const string& context, string* result) const
+{
+	if(!result) return false;
+	const string key = LastComponent(RemoveMarker(name));
+	if(key.empty()) return false;
+	for(string current = context; ; ) {
+		map<string, map<string, string> >::const_iterator scope =
+			function_parameter_types_.find(current);
+		if(scope != function_parameter_types_.end()) {
+			map<string, string>::const_iterator found = scope->second.find(key);
+			if(found != scope->second.end()) {
+				*result = found->second;
+				return true;
+			}
+		}
+		if(current.empty()) break;
+		const size_t separator = current.rfind("::");
+		if(separator == string::npos) current.clear();
+		else current.erase(separator);
+	}
+	map<string, string>::const_iterator found = variable_types_.find(key);
+	if(found == variable_types_.end()) return false;
+	*result = found->second;
+	return true;
+}
+
 bool PA18TemplateExpander::InferArgument(const CPPGMAstNodePtr& expression,
 	string* result, const map<string, string>& substitutions,
 	const string& context, FunctionSignature* function_signature) const
@@ -191,14 +218,14 @@ bool PA18TemplateExpander::InferArgument(const CPPGMAstNodePtr& expression,
 				pack != active_pack_identifier_substitutions_.end(); ++pack) {
 				if(find(pack->second.begin(), pack->second.end(), expression->value) ==
 					pack->second.end()) continue;
-				map<string, string>::const_iterator source = variable_types_.find(pack->first);
-				if(source == variable_types_.end()) continue;
-				*result = ReplaceIdentifiers(ResolveAlias(source->second, context), substitutions);
+				string source;
+				if(!LookupVariableType(pack->first, context, &source)) continue;
+				*result = ReplaceIdentifiers(ResolveAlias(source, context), substitutions);
 				if(!result->empty()) return true;
 			}
-			map<string, string>::const_iterator found = variable_types_.find(LastComponent(expression->value));
-		if(found != variable_types_.end()) {
-			*result = ReplaceIdentifiers(ResolveAlias(found->second, context), substitutions);
+			string variable_type;
+			if(LookupVariableType(expression->value, context, &variable_type)) {
+				*result = ReplaceIdentifiers(ResolveAlias(variable_type, context), substitutions);
 				return true;
 			}
 			const FunctionSignature* signature = FindFunctionSignature(
@@ -508,8 +535,16 @@ bool PA18TemplateExpander::CompleteFunctionArguments(
 		}
 		map<string, string>::const_iterator found = inferred->find(parameter.name);
 		if(found != inferred->end()) result->push_back(found->second);
-		else if(!parameter.default_type.empty()) result->push_back(
-			ReplaceIdentifiers(parameter.default_type, *inferred));
+		else if(!parameter.default_type.empty()) {
+			// Defaults are ordered: a later default may depend on a parameter
+			// supplied by an earlier default (`Result = Ref`).  Keep each
+			// completed default in the typed deduction map so both the result
+			// vector and subsequent defaults see the same concrete argument.
+			const string value = NormalizeTypeArgument(ReplaceIdentifiers(
+				parameter.default_type, *inferred));
+			(*inferred)[parameter.name] = value;
+			result->push_back(value);
+		}
 		else return false;
 	}
 	return true;

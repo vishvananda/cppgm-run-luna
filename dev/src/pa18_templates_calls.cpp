@@ -342,7 +342,17 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 	// not as a template-id delimiter.  Let ordinary member lookup see those
 	// names; explicit operator template-ids are handled by the parsed member
 	// spelling when a real range is present.
-	if(member_open != string::npos && member_spelling.compare(0, 8, "operator") != 0) {
+	const size_t qualified_template_separator = member_open == string::npos ?
+		string::npos : member_spelling.find("::", member_open);
+	if(member_open != string::npos && qualified_template_separator != string::npos &&
+		member_spelling.compare(0, 8, "operator") != 0) {
+		// `base<T>::operator=` is a qualified member name, not a member
+		// template-id named `base`.  Keep the dependent owner separate so the
+		// inherited-member replay can materialize the operator on that base.
+		member_qualifier = member_spelling.substr(0, qualified_template_separator);
+		member_name = LastComponent(member_spelling.substr(
+			qualified_template_separator + 2));
+	} else if(member_open != string::npos && member_spelling.compare(0, 8, "operator") != 0) {
 		string member_base;
 		string member_argument_text;
 		size_t member_begin = 0;
@@ -706,11 +716,21 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 		}
 		const bool static_member = definition.declaration && !definition.declaration->children.empty() &&
 			SpellNode(definition.declaration->children[0]).find("static") != string::npos;
+		const bool generated_operator = member_name.compare(0, 8, "operator") == 0;
 		if(static_member && !member_qualifier.empty()) {
 			const string owner = PrefixComponent(definition.qualified_name);
 			call->children[0] = CPPGMAstNodePtr(new CPPGMAstNode("id-expression",
 				owner.empty() ? generated_name : owner + "::" + generated_name));
-		} else callee->children[1]->value = concrete_owner ? member_name : generated_name;
+		} else callee->children[1]->value = concrete_owner && !generated_operator ?
+			member_name : generated_name;
+		if(!member_qualifier.empty() && concrete_owner && !static_member) {
+			// Preserve a dependent qualified-base call as a qualified generated
+			// function.  Leaving it as `this->operator=...` redispatches through
+			// the derived class during PA14 lookup and loses the selected base
+			// specialization.
+			call->children[0] = CPPGMAstNodePtr(new CPPGMAstNode("id-expression",
+				requested_owner + "::" + generated_name));
+		}
 		return true;
 	}
 	return false;

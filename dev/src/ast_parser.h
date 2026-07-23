@@ -117,6 +117,7 @@ private:
 	std::set<std::string> value_names_;
 	std::string current_class_;
 	bool in_template_declaration_;
+	int function_body_depth_;
 
 	Mark Save() const;
 	void Restore(const Mark& mark);

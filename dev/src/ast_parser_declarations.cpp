@@ -458,7 +458,9 @@ CPPGMAstNodePtr Parser::ParseSimpleOrFunctionDeclaration(bool member_context)
 		result = Node("function-definition");
 		Add(result, specifiers);
 		Add(result, first_declarator);
+		++function_body_depth_;
 		CPPGMAstNodePtr body = ParseCompoundStatement();
+		--function_body_depth_;
 		if (!body)
 		{
 			value_names_ = saved_value_names;
@@ -501,7 +503,30 @@ CPPGMAstNodePtr Parser::ParseSimpleOrFunctionDeclaration(bool member_context)
 		for (size_t i = 0; i < declarators.size(); ++i)
 			RegisterType(FirstIdentifier(declarators[i]));
 	}
-	value_names_ = saved_value_names;
+	bool typedef_declaration = false;
+	for (size_t i = 0; i < specifiers->children.size(); ++i)
+	{
+		const CPPGMAstNodePtr& specifier = specifiers->children[i];
+		if (!specifier) continue;
+		if (specifier->kind == "decl-specifier" &&
+			specifier->value == "KW_TYPEDEF:typedef") typedef_declaration = true;
+	}
+	bool anonymous_aggregate = false;
+	for (size_t i = 0; i < specifiers->children.size(); ++i)
+	{
+		const CPPGMAstNodePtr& specifier = specifiers->children[i];
+		if (specifier && specifier->kind == "class-specifier" &&
+			specifier->value.empty()) anonymous_aggregate = true;
+	}
+	if (function_body_depth_ != 0 && !typedef_declaration && !anonymous_aggregate)
+		for (size_t i = 0; i < declarators.size(); ++i)
+			value_names_.insert(FirstIdentifier(declarators[i]));
+	// Local declarations remain visible for expression/template-id
+	// disambiguation throughout a function body.  Without this, `b < a` is
+	// speculatively parsed as the template-id `b<a>`, leaving `>` as an
+	// unmatched angle close in an otherwise ordinary comparison chain.
+	if (function_body_depth_ == 0)
+		value_names_ = saved_value_names;
 	(void)member_context;
 	return result;
 }
