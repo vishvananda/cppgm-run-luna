@@ -51,6 +51,14 @@ CPPGMAstNodePtr FindReturnStatement(const CPPGMAstNodePtr& node)
 	return CPPGMAstNodePtr();
 }
 
+bool RecordFriendOwnerOnly(const CPPGMAstNodePtr& node, const TypePtr& type)
+{
+	if(!node || !node->friend_owner_only || !type) return false;
+	const string name = FirstIdentifier(node);
+	if(!name.empty()) type->friend_names.push_back(name);
+	return true;
+}
+
 }
 
 Analyzer::Analyzer()
@@ -1180,6 +1188,7 @@ void Analyzer::RecordClassMembers(const CPPGMAstNodePtr& node, const TypePtr& ty
 			}
 			continue;
 		}
+		if (RecordFriendOwnerOnly(child, type)) continue;
 		if (child->kind == "simple-declaration" && !child->children.empty())
 		{
 			SpecFacts friend_facts;

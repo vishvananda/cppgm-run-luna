@@ -141,6 +141,7 @@ inline CPPGMAstNodePtr CloneNode(const CPPGMAstNodePtr& node)
 	result->template_instantiation = node->template_instantiation;
 	result->explicit_instantiation = node->explicit_instantiation;
 	result->extern_instantiation = node->extern_instantiation;
+	result->friend_owner_only = node->friend_owner_only;
 	result->dependent_base_lookup = node->dependent_base_lookup;
 	result->materialize_object_address = node->materialize_object_address;
 	result->materialize_object_name = node->materialize_object_name;

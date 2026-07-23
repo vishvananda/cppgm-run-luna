@@ -19,6 +19,22 @@ string TypeNameValue(const CPPGMAstNodePtr& node)
     return string();
   }
 
+string FriendFunctionComponent(const string& name)
+{
+    string component = last_component(name);
+    const size_t generated = component.find("__inst_");
+    if(generated != string::npos) component.erase(generated);
+    return component;
+  }
+
+bool FriendFunctionMatches(const string& friend_name, const string& function_name)
+{
+    if(friend_name.empty() || function_name.empty()) return false;
+    if(friend_name == function_name ||
+       last_component(friend_name) == last_component(function_name)) return true;
+    return FriendFunctionComponent(friend_name) == FriendFunctionComponent(function_name);
+  }
+
 } // namespace
 
 CPPGMAstNodePtr PA14Lowerer::MakeMemberCall(const CPPGMAstNodePtr& object,
@@ -253,8 +269,7 @@ bool PA14Lowerer::IsAccessible(Binding* binding, Scope* scope) const
       state_->record->qualified_name : string();
     for(size_t i = 0; i < owner->friend_names.size(); ++i) {
       const string& friend_name = owner->friend_names[i];
-      if(friend_name == function_name ||
-         (!friend_name.empty() && last_component(friend_name) == last_component(function_name)))
+      if(FriendFunctionMatches(friend_name, function_name))
         return true;
     }
     TypePtr context;
@@ -276,8 +291,7 @@ bool PA14Lowerer::IsAccessible(Binding* binding, Scope* scope) const
         const string& friend_name = friend_owner->friend_names[i];
         if(friend_name == context_name ||
            (!friend_name.empty() && last_component(friend_name) == last_component(context_name)) ||
-           friend_name == function_name ||
-           (!friend_name.empty() && last_component(friend_name) == last_component(function_name))) {
+           FriendFunctionMatches(friend_name, function_name)) {
           friend_match = true;
           break;
         }

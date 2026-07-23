@@ -1,49 +1,42 @@
 # PA21 checkpoint plan
 
-## Checkpoint audit result: 146/215 (2026-07-23)
+## Checkpoint result: 153/215 (2026-07-23)
 
 The required report, `make test-report ACTIVE_TEST_REPORT_PAS='pa21'`, is
-**146/215 passing** with **69 failures** after the checkpoint audit.  This is
-**+27** over the 119/215 turn-start baseline and preserves the checkpoint
-baseline.  The required through report remains **1635/1635 through PA20**.
-The map below is refreshed from the complete current-PA report; every failure
-appears exactly once and is grouped by shared compiler behavior.
+**153/215 passing** with **62 failures**, improving the turn-start baseline
+of **146/215** by seven tests.  The required through report remains
+**1635/1635 through PA20**.  The map below is refreshed from the complete
+post-checkpoint report; every failure appears exactly once and is grouped by
+shared compiler behavior.
 
 ### Remaining Work Map
 
-- **Member/friend owner replay, lookup, ADL, and generated members (32):**
-  `general/300-basic-template-operator-overloads`,
-  `general/300-crtp-static-cast-reference-before-constructor-template`,
-  `general/300-dependent-base-qualified-rvalue-assignment`,
-  `general/300-dependent-hidden-friend-static-member-definition`,
-  `general/300-explicit-member-template-id-shares-ordinary-overload`,
-  `general/300-explicit-type-arg-decltype-member-access`,
-  `general/300-friend-existing-template-private-ctor-access`,
-  `general/300-friend-function-template-access`,
-  `general/300-function-pack-template-id-deduction-decltype`,
-  `general/300-inherited-member-template-subscript-action`,
-  `general/300-local-qualified-argument-replay`,
-  `general/300-member-template-assignment-operator-value`,
-  `general/300-member-template-local-using-does-not-suppress-adl`,
-  `general/300-nested-class-friend-template-namespace-scope`,
-  `general/300-nested-class-template-current-owner-lookup`,
-  `general/300-nested-class-template-reference-reset`,
-  `general/300-out-of-class-ctor-using-imported-member-template`,
-  `general/300-parenthesized-qualified-template-functional-call`,
-  `general/300-qualified-friend-member-template-access`,
-  `general/300-template-friend-class-constructor-access`,
-  `general/300-unary-member-operator-template-default`,
-  `spec/300-friend-class-template-nested-private-typedef-access`,
-  `spec/300-friend-class-template-protected-base-access`,
-  `spec/300-member-call-template-hides-inherited-instantiation`,
-  `spec/300-member-class-template-out-of-class`,
-  `spec/300-member-operator-template-active-owner`,
-  `spec/300-member-operator-template-in-class-template`,
-  `spec/300-qualified-friend-function-template-member-access`,
-  `spec/300-rooted-qualified-static-data-member-template-definition`,
-  `spec/300-template-friend-inside-class-template`,
-  `spec/300-using-imported-member-template-active-owner`, and
-  `spec/300-using-inherited-alias-operator-template`.
+- **Member/friend owner replay, lookup, ADL, and generated members (25):**
+	`general/300-basic-template-operator-overloads`,
+	`general/300-crtp-static-cast-reference-before-constructor-template`,
+	`general/300-dependent-base-qualified-rvalue-assignment`,
+	`general/300-dependent-hidden-friend-static-member-definition`,
+	`general/300-explicit-member-template-id-shares-ordinary-overload`,
+	`general/300-explicit-type-arg-decltype-member-access`,
+	`general/300-friend-existing-template-private-ctor-access`,
+	`general/300-function-pack-template-id-deduction-decltype`,
+	`general/300-inherited-member-template-subscript-action`,
+	`general/300-local-qualified-argument-replay`,
+	`general/300-member-template-assignment-operator-value`,
+	`general/300-member-template-local-using-does-not-suppress-adl`,
+	`general/300-nested-class-template-current-owner-lookup`,
+	`general/300-nested-class-template-reference-reset`,
+	`general/300-out-of-class-ctor-using-imported-member-template`,
+	`general/300-parenthesized-qualified-template-functional-call`,
+	`general/300-qualified-friend-member-template-access`,
+	`general/300-unary-member-operator-template-default`,
+	`spec/300-member-call-template-hides-inherited-instantiation`,
+	`spec/300-member-class-template-out-of-class`,
+	`spec/300-member-operator-template-active-owner`,
+	`spec/300-member-operator-template-in-class-template`,
+	`spec/300-rooted-qualified-static-data-member-template-definition`,
+	`spec/300-using-imported-member-template-active-owner`, and
+	`spec/300-using-inherited-alias-operator-template`.
 
 - **Alias, template-template, and dependent non-type/type replay (14):**
   `general/200-reference-alias-top-cv-return-binding`,
@@ -92,35 +85,50 @@ appears exactly once and is grouped by shared compiler behavior.
 
 ### Checkpoint Scope
 
-This checkpoint completes the hidden-friend namespace/ADL increment.  A
-friend function template replayed from a class now keeps an unqualified
-generated declarator so PA14's typed friend collection assigns its
-surrounding namespace symbol; normalized replayed `friend` specifiers remain
-semantic facts rather than being parsed as a type.  This covers hidden friend
-ordinary calls and ADL, including the hidden friend operator form.
+This checkpoint completes the typed friend-owner/access slice of the current
+member/friend group.  Replayed friend function and friend class declarations
+must retain the declaring class specialization, namespace-level function or
+class identity, and the access relationship used while lowering the generated
+body.  It covers ordinary and qualified friend function templates, nested
+class friend replay, existing-template friend definitions, template friend
+class access, and private/protected members reached through a friend class.
 
-Validation for the scope is the three hidden-friend fixtures
-`general/300-hidden-friend-template-call-adl`,
-`spec/300-hidden-friend-template-call-adl`, and
-`spec/300-hidden-friend-template-operator-adl`, all passing in focused checks
-and absent from the required 146/215 failure set.  Earlier assignments remain
-clean at 1635/1635.
+The focused validation set is:
+
+`general/300-friend-function-template-access`,
+`general/300-friend-existing-template-private-ctor-access`,
+`general/300-nested-class-friend-template-namespace-scope`,
+`general/300-qualified-friend-member-template-access`,
+`general/300-template-friend-class-constructor-access`,
+`spec/300-friend-class-template-nested-private-typedef-access`,
+`spec/300-friend-class-template-protected-base-access`,
+`spec/300-qualified-friend-function-template-member-access`, and
+`spec/300-template-friend-inside-class-template`.
+
+The selected scope is the shared typed ownership/access behavior across these
+nine tests, not test-specific acceptance.  Earlier assignments must remain at
+1635/1635, and the full PA21 report must improve beyond the 146/215 baseline.
 
 ### Checkpoint Result and Next Scope
 
-The checkpoint improves PA21 by 27 tests over the turn-start baseline.  The
-implementation compiles with the added PA18 translation units, and
-`cppgm_file_audit.pl --stage pa21 --paths dev/src` passes with warnings only.
-The audit removes string-encoded function facts, unrestricted fallback type
-acceptance, broad dependent replay deferral, and registry-wide hot-path scans;
-it also keeps class-scoped using-imported member templates as real dependent
-declarations until PA18 materializes their concrete definitions.  The current
-report stays at the 146/215 checkpoint baseline with no earlier-PA regression.
-The next group is the remaining friend/access and member-owner subset of the
-member/friend map: propagate friend ownership through wrapped template
-declarations and concrete class replay, then validate private/protected type
-access, inherited member-template selection, and qualified member definitions
-before rerunning the full report.
+Implemented the typed friend-owner/access slice across PA18 replay, PA11
+friend metadata, PA14 access checks, dependent `typename` construction, and
+generated friend-class inheritance ordering.  The nine-test focused run had
+**7/9** reference-comparison passes: all nine compile/status checks pass, with
+two remaining relaxed-LowIR presentation mismatches in the existing-template
+friend operator and qualified friend member cases.  The full report is
+**153/215**, the through-PA20 report is **1635/1635**, and file audit passes
+with warnings only.
+
+The next checkpoint group is inherited/using member-template owner replay:
+preserve the active declaring class through using-imported and dependent-base
+lookup, then validate operator/member-call selection and qualified member
+definitions.  Focus next on
+`general/300-inherited-member-template-subscript-action`,
+`general/300-member-template-local-using-does-not-suppress-adl`,
+`spec/300-member-call-template-hides-inherited-instantiation`,
+`spec/300-using-imported-member-template-active-owner`, and
+`spec/300-using-inherited-alias-operator-template`.
 
 ## Archived 151/215 checkpoint
 

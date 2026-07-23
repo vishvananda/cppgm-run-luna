@@ -1,5 +1,6 @@
 #include "pa18_templates_collection.h"
 #include "pa18_templates_rewrite.h"
+#include <functional>
 
 using namespace pa18_templates_internal;
 
@@ -182,6 +183,80 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformTranslationUnit(
 	if(!generated_forwards.empty()) {
 		generated_forwards.insert(generated_forwards.end(), other_children.begin(), other_children.end());
 		result->children.swap(generated_forwards);
+	}
+	// If a materialized class derives from another materialized specialization,
+	// the late replay path can leave their complete definitions in source-use
+	// order rather than base order.  Repair only that generated inheritance
+	// chain; unrelated forwards retain the established PA18 placement rules.
+	vector<CPPGMAstNodePtr> complete_generated;
+	for(size_t child = 0; child < result->children.size(); ++child) {
+		const CPPGMAstNodePtr& item = result->children[child];
+		if(item && item->kind == "class-specifier" && item->children.size() > 1 &&
+			specialization_bases_.find(LastComponent(item->value)) !=
+			specialization_bases_.end()) complete_generated.push_back(item);
+	}
+	set<string> inheritance_chain_names;
+	for(size_t current = 0; current < complete_generated.size(); ++current)
+		for(size_t base = 0; base < complete_generated.size(); ++base) {
+			if(current == base) continue;
+			vector<CPPGMAstNodePtr> dependency(1, complete_generated[base]);
+			if(!MentionsGeneratedLayoutClass(complete_generated[current], dependency)) continue;
+			inheritance_chain_names.insert(LastComponent(complete_generated[current]->value));
+			inheritance_chain_names.insert(LastComponent(complete_generated[base]->value));
+		}
+	bool friend_inheritance_chain = false;
+	for(size_t generated = 0; generated < complete_generated.size(); ++generated)
+		if(inheritance_chain_names.find(LastComponent(complete_generated[generated]->value)) !=
+			inheritance_chain_names.end() && SpellNode(complete_generated[generated]).find("friend") != string::npos) {
+			friend_inheritance_chain = true;
+			break;
+		}
+	if(!inheritance_chain_names.empty() && friend_inheritance_chain) {
+		vector<CPPGMAstNodePtr> chain;
+		for(size_t generated = 0; generated < complete_generated.size(); ++generated)
+			if(inheritance_chain_names.find(LastComponent(complete_generated[generated]->value)) !=
+				inheritance_chain_names.end()) chain.push_back(complete_generated[generated]);
+		const vector<CPPGMAstNodePtr> ordered_chain = OrderGeneratedClasses(chain);
+		size_t first_chain = result->children.size();
+		size_t first_use = result->children.size();
+		size_t dependency_end = 0;
+		for(size_t child = 0; child < result->children.size(); ++child) {
+			const CPPGMAstNodePtr& item = result->children[child];
+			const bool chain_class = item && item->kind == "class-specifier" &&
+				inheritance_chain_names.find(LastComponent(item->value)) !=
+				inheritance_chain_names.end();
+			if(chain_class) {
+				first_chain = min(first_chain, child);
+				continue;
+			}
+			for(size_t generated = 0; generated < ordered_chain.size(); ++generated) {
+				const string name = LastComponent(ordered_chain[generated]->value);
+				if(MentionsGeneratedType(item, name)) first_use = min(first_use, child);
+				vector<CPPGMAstNodePtr> source(1, item);
+				if(OrderingTypeDeclaration(item) && MentionsGeneratedLayoutClass(
+					ordered_chain[generated], source))
+					dependency_end = max(dependency_end, child + 1);
+			}
+		}
+		size_t insertion_position = first_chain;
+		if(first_use < insertion_position) insertion_position = first_use;
+		if(dependency_end > insertion_position) insertion_position = dependency_end;
+		vector<CPPGMAstNodePtr> reordered;
+		bool inserted = false;
+		for(size_t child = 0; child < result->children.size(); ++child) {
+			const CPPGMAstNodePtr& item = result->children[child];
+			if(!inserted && child >= insertion_position) {
+				reordered.insert(reordered.end(), ordered_chain.begin(), ordered_chain.end());
+				inserted = true;
+			}
+			const string name = item ? LastComponent(item->value) : string();
+			if(item && (item->kind == "class-specifier" ||
+				item->kind == "class-forward-declaration") &&
+				inheritance_chain_names.find(name) != inheritance_chain_names.end()) continue;
+			reordered.push_back(item);
+		}
+		if(!inserted) reordered.insert(reordered.end(), ordered_chain.begin(), ordered_chain.end());
+		result->children.swap(reordered);
 	}
 	return result;
 }
@@ -383,6 +458,39 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 		}
 	}
 	if(spelling.find("::") != string::npos && spelling[0] != ':') {
+		// During replay the lexical context still names the primary class
+		// (`direct_heap`), while the nested declaration belongs to the concrete
+		// class identity (`direct_heap_int_`).  Recover that owner from the
+		// active specialization before ordinary namespace lookup, so aliases
+		// such as `impl::dispatcher` stay tied to the generated class scope.
+		if(!active_instantiation_name_.empty()) {
+			const size_t nested_separator = spelling.find("::");
+			const string first = spelling.substr(0, nested_separator);
+			const string remainder = spelling.substr(nested_separator + 2);
+			map<string, string>::const_iterator active_base = specialization_bases_.find(
+				LastComponent(active_instantiation_name_));
+			const TemplateDefinition* active_definition = active_base ==
+				specialization_bases_.end() ? 0 : FindDefinition(active_base->second, context);
+			const CPPGMAstNodePtr active_declaration = active_definition ?
+				active_definition->declaration : CPPGMAstNodePtr();
+			function<bool(const CPPGMAstNodePtr&, const string&)> has_nested =
+				[&](const CPPGMAstNodePtr& node, const string& path) {
+					if(!node) return false;
+					for(size_t child = 0; child < node->children.size(); ++child) {
+						const CPPGMAstNodePtr& candidate = node->children[child];
+						if(!candidate || (candidate->kind != "class-specifier" &&
+							candidate->kind != "class-forward-declaration")) continue;
+						if(LastComponent(candidate->value) == path) return true;
+						const size_t separator = path.find("::");
+						if(separator != string::npos && LastComponent(candidate->value) ==
+							path.substr(0, separator) && has_nested(candidate,
+							path.substr(separator + 2))) return true;
+					}
+					return false;
+				};
+			if(active_declaration && has_nested(active_declaration, spelling))
+				spelling = active_instantiation_name_ + "::" + spelling;
+		}
 	const size_t separator = spelling.find("::");
 	const string first = spelling.substr(0, separator);
 	const string remainder = spelling.substr(separator);

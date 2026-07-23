@@ -718,7 +718,7 @@ void PA14Lowerer::CollectClassMembers(const CPPGMAstNodePtr& node, Scope* scope)
           has_inheriting_constructor_using = true;
         continue;
       }
-      if(child->kind != "simple-declaration") continue;
+		if(child->kind != "simple-declaration" || child->friend_owner_only) continue;
       if(child->children.empty()) continue;
       Analyzer::SpecFacts facts;
       TypePtr base = analyzer_.TypeFromSpecSeq(child->children[0], class_scope, &facts);

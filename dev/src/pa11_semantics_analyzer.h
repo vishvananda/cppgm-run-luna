@@ -1172,7 +1172,7 @@ public:
 		if (node->kind == "class-forward-declaration") { ProcessForwardClass(node, scope); return; }
 		if (node->kind == "class-specifier") { ProcessClass(node, scope); return; }
 		if (node->kind == "enum-specifier") { ProcessEnum(node, scope); return; }
-		if (node->kind == "simple-declaration" || node->kind == "bit-field-declaration")
+		if ((node->kind == "simple-declaration" && !node->friend_owner_only) || node->kind == "bit-field-declaration")
 			return ProcessSimpleDeclaration(node, scope);
 		if (node->kind == "function-definition") return ProcessFunctionDefinition(node, scope);
 		if (node->kind == "static-assert-declaration") return ProcessStaticAssert(node, scope);

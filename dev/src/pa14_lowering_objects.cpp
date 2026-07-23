@@ -638,6 +638,34 @@ bool PA14Lowerer::EmitObjectTransferAt(const TypePtr& raw_target,
       arguments.push_back(source);
       return EmitConstructorAt(target, destination, arguments, scope, true);
     }
+    // A class-valued return/initializer may be produced by a conversion
+    // operator rather than by a converting constructor on the destination.
+    // Keep the destination as the conversion call's indirect result slot so
+    // a hidden friend/member conversion can construct the final object
+    // directly (and, importantly, perform its private construction in the
+    // selected friend context).
+    if(target && target->kind == TYPE_CLASS) {
+      Binding* conversion = FindConversionOperator(source_type, target, true);
+      if(conversion) {
+        CallChoice choice;
+        choice.binding = conversion;
+        choice.function = function_target_type(conversion->type);
+        choice.object = source;
+        choice.direct = true;
+        choice.member = true;
+        choice.static_member = false;
+        choice.conversion = true;
+        const Value converted = EmitChosenCall(choice, CPPGMAstNodePtr(),
+          vector<CPPGMAstNodePtr>(), scope, destination);
+        FunctionRecord* conversion_record = RecordForBinding(conversion);
+        if(conversion_record && conversion_record->indirect_result) return true;
+        if(converted.operand.empty()) return false;
+        AddInstruction("copyobj " + integer_text(static_cast<long long>(type_size(target))) +
+          "x" + integer_text(static_cast<long long>(type_alignment(target))) +
+          " " + converted.operand + ", " + destination);
+        return true;
+      }
+    }
     const bool same_type = PA12SameType(source_type, target, true);
     const bool move = source_info.category == "xvalue" || implicit_return_move;
     const bool template_context = type_value(target)->template_specialization ||

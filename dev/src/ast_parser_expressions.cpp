@@ -270,8 +270,28 @@ bool Parser::LooksLikeNamedCastType()
 	return result;
 }
 
+CPPGMAstNodePtr Parser::ParseDependentTypeConstruction()
+{
+	if(!Is("typename")) return CPPGMAstNodePtr();
+	Mark typename_mark = Save();
+	++position_;
+	string type_name;
+	if(ParseName(&type_name, false) && Is("(")) {
+		CPPGMAstNodePtr call = ParseCallSuffix(Node("id-expression", type_name), false);
+		if(call) return call;
+	}
+	Restore(typename_mark);
+	return CPPGMAstNodePtr();
+}
+
 CPPGMAstNodePtr Parser::ParsePrimaryExpression()
 {
+	// Keep dependent functional constructions in a call-shaped AST so PA18
+	// can substitute the enclosing specialization before semantic lowering.
+	if(Is("typename")) {
+		CPPGMAstNodePtr dependent = ParseDependentTypeConstruction();
+		if(dependent) return dependent;
+	}
 	if (Peek().kind == AST_LITERAL)
 	{
 		string literal;

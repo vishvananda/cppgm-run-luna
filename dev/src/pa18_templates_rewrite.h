@@ -1055,6 +1055,7 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 	}
 	CPPGMAstNodePtr TransformRegularNode(const CPPGMAstNodePtr& input,
 		const string& context, const map<string, string>& substitutions);
+	CPPGMAstNodePtr MakeFriendOwnerDeclaration(const CPPGMAstNodePtr& input) const;
 	CPPGMAstNodePtr RewriteRegularNodeValue(const CPPGMAstNodePtr& input,
 		const string& context, const map<string, string>& substitutions,
 		const CPPGMAstNodePtr& result, string* promoted_name);
@@ -1117,6 +1118,8 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 					}
 				}
 			}
+			CPPGMAstNodePtr friend_owner = MakeFriendOwnerDeclaration(input);
+			if(friend_owner) return friend_owner;
 				if(input->children.size() > 1 && input->children[1] &&
 					(input->children[1]->kind == "class-specifier" ||
 					 input->children[1]->kind == "class-forward-declaration"))

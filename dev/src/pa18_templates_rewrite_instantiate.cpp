@@ -167,11 +167,19 @@ bool PA18TemplateExpander::MemberOwnerPattern(const TemplateDefinition& candidat
 string PA18TemplateExpander::MemberSignatureKey(const TemplateDefinition& candidate) const
 {
 	string result = LastComponent(candidate.name);
+	map<string, string> template_parameter_names;
+	for(size_t parameter = 0; parameter < candidate.parameters.size(); ++parameter)
+		if(!candidate.parameters[parameter].name.empty()) {
+			ostringstream normalized;
+			normalized << "__pa18_template_parameter_" << parameter;
+			template_parameter_names[candidate.parameters[parameter].name] = normalized.str();
+		}
 	const CPPGMAstNodePtr declarator = FunctionDeclarator(candidate.declaration);
 	const CPPGMAstNodePtr clause = DescendantOfKind(declarator, "parameter-clause");
 	if(!clause) return result;
 	for(size_t i = 0; i < clause->children.size(); ++i)
-		if(clause->children[i]) result += "|" + ParameterTypeSpelling(clause->children[i]);
+		if(clause->children[i]) result += "|" + CanonicalSpelling(ReplaceIdentifiers(
+			ParameterTypeSpelling(clause->children[i]), template_parameter_names));
 	return result;
 }
 
