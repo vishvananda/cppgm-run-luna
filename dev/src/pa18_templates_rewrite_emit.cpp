@@ -226,7 +226,8 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 		HasStaticMemberDeclaration(member_owner_definition->declaration,
 			LastComponent(definition.name)))
 		MarkStaticGeneratedFunction(generated);
-	MarkGeneratedNode(generated, definition.qualified_name, metadata_args, explicit_instantiation);
+	MarkGeneratedNode(generated, definition.qualified_name, metadata_args,
+		explicit_instantiation, definition.explicit_specialization);
 	if(generated->kind == "simple-declaration") {
 		const CPPGMAstNodePtr identifier = DescendantOfKind(generated, "identifier");
 		if(identifier) identifier->value = local_name;
@@ -258,6 +259,11 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 		RenameGeneratedFunction(generated, special_member ?
 			LastComponent(concrete_owner) : operator_member ? local_name :
 			LastComponent(definition.name));
+		if(definition.explicit_specialization && generated->kind == "simple-declaration") {
+			const CPPGMAstNodePtr identifier = DescendantOfKind(generated, "identifier");
+			if(identifier)
+				identifier->value = concrete_owner + "::" + LastComponent(definition.name);
+		}
 	}
 	for(size_t i = 0; i < args.size(); ++i)
 		EnsureForwardClass(args[i], context, generated_owner);
@@ -271,7 +277,9 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 		(context.size() > definition_owner.size() && context.compare(0,
 			definition_owner.size(), definition_owner) == 0 &&
 			context[definition_owner.size()] == ':');
-	if(class_contexts_.find(context) != class_contexts_.end() && owner_is_context_ancestor &&
+	const bool explicit_static_data = definition.explicit_specialization &&
+		definition.variable_template && generated->kind == "simple-declaration";
+	if(!explicit_static_data && class_contexts_.find(context) != class_contexts_.end() && owner_is_context_ancestor &&
 		(!definition.class_template || !definition.owner.empty()) &&
 		context != definition.owner &&
 		!recursive_context_argument) {
@@ -281,7 +289,8 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 		!PrefixComponent(context).empty())
 		generated_before_class_[PrefixComponent(context)].push_back(generated);
 	else {
-	string generated_function_owner = concrete_owner.empty() ? generated_owner : concrete_owner;
+	string generated_function_owner = explicit_static_data ? PrefixComponent(definition.owner) :
+		(concrete_owner.empty() ? generated_owner : concrete_owner);
 	if(!concrete_owner.empty() && generated_function_owner.find("::") == string::npos &&
 		specialization_bases_.find(LastComponent(concrete_owner)) ==
 			specialization_bases_.end()) {

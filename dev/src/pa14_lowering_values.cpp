@@ -92,10 +92,36 @@ PA14Lowerer::Value PA14Lowerer::EmitIdentifier(const CPPGMAstNodePtr& node, Scop
 		(is_integral_type(binding_value_type) ||
 			(binding_value_type->kind == TYPE_FUNDAMENTAL &&
 			 binding_value_type->name == "bool"));
+	GlobalRecord* early_demanded_global = 0;
+	if(binding->is_member && binding->is_static && binding->member_owner)
+		early_demanded_global = EnsureStaticMemberStorage(binding);
+	const bool primary_template_static_member = binding->kind == BIND_VARIABLE &&
+		binding->is_member && binding->is_static && binding->member_owner &&
+		binding->member_owner->template_specialization && binding->declaration &&
+		binding->declaration->template_instantiation &&
+		!binding->declaration->explicit_specialization;
+	bool primary_has_explicit_specialization = false;
+	if(primary_template_static_member && binding->member_owner) {
+		const string member_name = LastComponent(binding->qualified_name);
+		for(size_t global = 0; global < globals_.size(); ++global) {
+			const GlobalRecord& candidate = globals_[global];
+			if(!candidate.explicit_specialization || !candidate.template_owner ||
+				LastComponent(candidate.qualified_name) != member_name ||
+				candidate.template_owner->template_primary !=
+					binding->member_owner->template_primary) continue;
+			primary_has_explicit_specialization = true;
+			break;
+		}
+	}
+	const bool template_static_storage_override = binding->member_owner &&
+		binding->member_owner->template_specialization &&
+		((primary_template_static_member && primary_has_explicit_specialization) ||
+		 (early_demanded_global && early_demanded_global->explicit_specialization));
+	const bool explicit_specialized_static_storage = early_demanded_global &&
+		early_demanded_global->explicit_specialization;
 	if(binding->kind == BIND_VARIABLE && binding->has_value && binding->declaration &&
-		binding->declaration->template_instantiation && binding_integral) {
-		if(binding->is_member && binding->is_static)
-			EnsureStaticMemberStorage(binding);
+		binding->declaration->template_instantiation && binding_integral &&
+		!template_static_storage_override) {
 		result.type = binding->type;
 		result.operand = integer_text(binding->value);
 		result.known_constant = true;
@@ -109,7 +135,7 @@ PA14Lowerer::Value PA14Lowerer::EmitIdentifier(const CPPGMAstNodePtr& node, Scop
       result.constant = binding->value;
       return result;
     }
-    if(binding->is_member && binding->member_owner) {
+	if(binding->is_member && binding->member_owner) {
       if(binding->kind == BIND_FUNCTION) {
         FunctionRecord* function = RecordForBinding(binding);
         if(!function) throw logic_error("unknown member function symbol during lowering");
@@ -119,28 +145,29 @@ PA14Lowerer::Value PA14Lowerer::EmitIdentifier(const CPPGMAstNodePtr& node, Scop
         result.operand = function_address(function);
         return result;
       }
-      result.type = binding->type;
-      if(binding->is_static) {
-        GlobalRecord* demanded_global = EnsureStaticMemberStorage(binding,
-          decltype_form);
-        if(binding->has_value && !decltype_form) {
+		result.type = binding->type;
+		if(binding->is_static) {
+		GlobalRecord* demanded_global = EnsureStaticMemberStorage(binding,
+			decltype_form);
+		if(binding->has_value && !decltype_form && !template_static_storage_override) {
           result.known_constant = true;
           result.constant = binding->value;
           result.operand = integer_text(result.constant);
           return result;
         }
         const TypePtr static_value_type = type_value(binding->type);
-        if(!decltype_form && demanded_global && demanded_global->initializer && static_value_type &&
-            static_value_type->is_const) {
-          long long constant = 0;
+		if(!decltype_form && demanded_global && demanded_global->initializer && static_value_type &&
+			static_value_type->is_const &&
+			(!template_static_storage_override || explicit_specialized_static_storage)) {
+			long long constant = 0;
           if(FoldInteger(InitializerExpression(demanded_global->initializer), scope,
               &constant, 0)) {
             result.known_constant = true;
             result.constant = constant;
             result.operand = integer_text(constant);
             return result;
-          }
-        }
+			}
+		}
         GlobalRecord* global_member = demanded_global ? demanded_global :
           FindGlobal(binding->qualified_name);
 		if(!global_member) throw logic_error("unknown static member during lowering");
@@ -617,7 +644,7 @@ PA14Lowerer::FunctionRecord* PA14Lowerer::EnsureImplicitAssignment(
          !type_is_reference(function->parameters[0]) ||
          !PA12SameType(type_value(function->parameters[0]), owner, true)) continue;
       FunctionRecord* candidate = RecordForBinding(candidates[i]);
-      if(!candidate) continue;
+      if(!candidate || candidate->member_template) continue;
       if(function->parameters[0]->kind == TYPE_RVALUE_REFERENCE) {
         if(move) return candidate;
       } else if(!copy_fallback) copy_fallback = candidate;

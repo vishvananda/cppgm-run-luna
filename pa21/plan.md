@@ -1,5 +1,97 @@
 # PA21 checkpoint plan
 
+## Current turn checkpoint result (2026-07-23)
+
+The clean required report, `make test-report ACTIVE_TEST_REPORT_PAS='pa21'`,
+is **170/215 passing** with **45 failures**, up from the turn-start baseline
+of **153/215**.  The clean rebuild also passes the through-PA20 suite at
+**1635/1635**.  The six-test Group C checkpoint is **5/6**: member-template
+assignment fallback, local-static specialization identity, explicit
+instantiation of a static member function, explicit static-data specialization,
+and rooted static-data ownership pass.  The remaining focused mismatch is
+`general/300-dependent-hidden-friend-static-member-definition`, whose lowered
+output still lacks the expected global storage and emits an extra empty-object
+operator call/copy sequence compared with the checked-in LowIR.
+
+### Remaining Work Map
+
+- **Owner replay, member/friend lookup, and generated-call lowering (19):**
+  `general/300-crtp-static-cast-reference-before-constructor-template`,
+  `general/300-dependent-hidden-friend-static-member-definition`,
+  `general/300-explicit-member-template-id-shares-ordinary-overload`,
+  `general/300-explicit-type-arg-decltype-member-access`,
+  `general/300-friend-existing-template-private-ctor-access`,
+  `general/300-function-pack-template-id-deduction-decltype`,
+  `general/300-local-qualified-argument-replay`,
+  `general/300-member-class-explicit-specialization-owner-lookup`,
+  `general/300-member-template-nontype-shadowed-global-replay`,
+  `general/300-namespace-function-template-hides-outer-callable-object`,
+  `general/300-nested-class-template-current-owner-lookup`,
+  `general/300-nested-class-template-reference-reset`,
+  `general/300-out-of-class-ctor-using-imported-member-template`,
+  `general/300-parenthesized-qualified-template-functional-call`,
+  `general/300-qualified-friend-member-template-access`,
+  `spec/300-hidden-friend-template-operator-adl`,
+  `spec/300-member-class-template-out-of-class`,
+  `spec/300-member-operator-template-active-owner`, and
+  `spec/300-member-operator-template-in-class-template`.
+
+- **Partial-specialization, alias, and cv/pack identity (15):**
+  `general/100-top-cv-pointer-does-not-match-unqualified-pointer-partial`,
+  `general/200-reference-alias-top-cv-return-binding`,
+  `general/300-function-signature-partial-specialization-functor-assignment`,
+  `general/300-nested-member-partial-specialization-apply-scope`,
+  `general/300-variable-template-forwarding-partial-top-cv`,
+  `general/400-alias-pack-nontype-expression-fast-path`,
+  `general/400-forward-primary-partial-switch-value`,
+  `general/400-inline-namespace-template-template-argument`,
+  `general/400-partial-specialization-conversion-operator-pointer-binding`,
+  `general/400-partial-specialization-redecl-member-template-empty-pack`,
+  `general/400-reference-member-depth-pack-sum`,
+  `general/400-reference-member-lookup-in-progress-base-typedef`,
+  `spec/100-inline-namespace-qualified-template-id-pack-expansion`,
+  `spec/300-defaulted-type-arg-specialization-nontype-value`, and
+  `spec/300-explicit-specialization-out-of-class-member-overrides-primary`.
+
+- **Explicit specialization/instantiation ordering and diagnostics (5):**
+  `general/300-extern-template-builtin-operator-function-declaration-bad`,
+  `general/300-template-instantiation-use-location-explicit-specialization`,
+  `spec/300-explicit-specialization-after-instantiation`,
+  `spec/300-explicit-specialization-refreshes-stale-primary-instantiation`,
+  and `spec/300-explicit-specialized-ctor-template-header-bad`.
+
+- **Dependent initialization, address, and ordinary lowering (6):**
+  `general/100-rvalue-reference-binds-converted-temporary`,
+  `general/300-anonymous-union-storage-constructor-noop`,
+  `general/300-array-functional-cast-pack-call`,
+  `general/300-constexpr-static-fn-template-address-pack`,
+  `general/300-single-pack-cast-target`, and
+  `general/300-static-constexpr-function-template-pointer-array`.
+
+### Checkpoint Scope and Result
+
+This turn implements the typed generated-entity slice needed by PA21:
+generated class layout is finalized after replayed dependent definitions are
+available; generated member templates remain distinct from copy/move special
+members; implicit copy/move assignment is inserted during replayed member-call
+selection and wins equal-rank overload ties over a member template; local
+static identities use the final template function object; explicit
+specialization facts survive AST/template replay into global records; and
+primary-template values remain protected from stale specialization data, while
+concrete explicit-specialization storage is folded from its own initializer.
+It also fixes nested owner rewriting for generated function definitions and the
+ABI name of nested member-template local statics.
+
+Validation for this scope is the focused **5/6** result above, the full
+PA21-local report at **170/215**, the through-PA20 report at **1635/1635**,
+and the PA21 file audit (pass, with warnings only).  The next checkpoint group
+is the four-case explicit-specialization/storage merge slice:
+
+- `general/300-dependent-hidden-friend-static-member-definition`
+- `spec/300-explicit-specialization-out-of-class-member-overrides-primary`
+- `spec/300-explicit-specialization-refreshes-stale-primary-instantiation`
+- `spec/300-explicit-specialization-after-instantiation`
+
 ## Checkpoint result: 153/215 (2026-07-23)
 
 The required report, `make test-report ACTIVE_TEST_REPORT_PAS='pa21'`, is
@@ -1306,3 +1398,18 @@ classification, static/local storage emission, and final LowIR body ordering.
 Retain the 16/16 focused replay probes, through-PA20, and the file audit as
 regression gates while addressing the remaining 35 semantic/diagnostic paths
 as subsequent grouped work.
+
+## Group C checkpoint scope (2026-07-23, before implementation)
+
+The current PA21 report revalidated at 165/215 with the complete 50-case map
+above: 35 exit-status failures and 15 relaxed LowIR mismatches. This checkpoint
+covers the shared generated-member/static-storage emission behavior in six of
+the LowIR cases: dependent hidden-friend static-member definition, function
+template local statics, explicit-instantiation static member function,
+explicit-specialization static data member, rooted qualified static-data
+member-template definition, and the generated member-template assignment
+classification. The behavior under test is typed owner selection followed by
+correct generated declaration/definition registration, static versus automatic
+storage, guarded local-static initialization, special-member classification,
+and final LowIR emission/order. Validation is the six focused fixtures plus
+the 16/16 replay probes, full PA21, through-PA20, and the file audit.

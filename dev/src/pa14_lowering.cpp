@@ -700,8 +700,7 @@ void PA14Lowerer::CollectClassMembers(const CPPGMAstNodePtr& node, Scope* scope)
         CollectFunction(child, class_scope, true);
         continue;
       }
-      if(child->kind == "special-member-definition" ||
-         child->kind == "special-member-declaration") {
+      if(child->kind == "special-member-definition" || child->kind == "special-member-declaration") {
         const CPPGMAstNodePtr special_declarator = ChildOfKind(child, "declarator");
         const CPPGMAstNodePtr special_initializer = ChildOfKind(
           special_declarator, "special-initializer");
@@ -744,6 +743,7 @@ void PA14Lowerer::CollectClassMembers(const CPPGMAstNodePtr& node, Scope* scope)
           record.template_owner = type_found->second;
           record.template_instantiation = type_found->second->template_specialization ||
 			child->template_instantiation;
+          record.explicit_specialization = child->explicit_specialization;
           record.weak_binding = record.template_instantiation;
           record.initializer = item->children.size() > 1 ? item->children[1] :
             CPPGMAstNodePtr();
@@ -751,15 +751,11 @@ void PA14Lowerer::CollectClassMembers(const CPPGMAstNodePtr& node, Scope* scope)
           record.internal = false;
           record.thread_local_storage = HasStorageSpecifier(child, "thread_local");
 			const TypePtr member_value = type_value(member_type);
-				const bool integral_constant = is_integral_type(member_value) ||
-				  (member_value && member_value->kind == TYPE_FUNDAMENTAL &&
-				   member_value->name == "bool");
+				const bool integral_constant = is_integral_type(member_value) || (member_value && member_value->kind == TYPE_FUNDAMENTAL && member_value->name == "bool");
 				Binding* semantic_binding = class_scope->local(name);
 				const bool initializer_calls = record.initializer &&
 					DescendantOfKind(record.initializer, "call-expression");
-				const bool typed_const = facts.is_const || facts.is_constexpr ||
-					(member_type && member_type->is_const) ||
-					(member_value && member_value->is_const);
+				const bool typed_const = facts.is_const || facts.is_constexpr || (member_type && member_type->is_const) || (member_value && member_value->is_const);
 				if(type_found->second->template_specialization && typed_const &&
 					integral_constant) continue;
 				if(typed_const && integral_constant && !record.initializer) continue;
@@ -777,6 +773,8 @@ void PA14Lowerer::CollectClassMembers(const CPPGMAstNodePtr& node, Scope* scope)
 			if(record.template_owner) prior->template_owner = record.template_owner;
 			prior->template_instantiation = prior->template_instantiation ||
 				record.template_instantiation;
+			prior->explicit_specialization = prior->explicit_specialization ||
+				record.explicit_specialization;
 			prior->weak_binding = prior->weak_binding || record.weak_binding;
             prior->thread_local_storage = prior->thread_local_storage ||
               record.thread_local_storage;
@@ -1055,6 +1053,8 @@ PA14Lowerer::GlobalRecord* PA14Lowerer::EnsureStaticMemberStorage(Binding* bindi
     record.template_owner = binding->member_owner;
     record.template_instantiation = binding->member_owner &&
       binding->member_owner->template_specialization;
+    record.explicit_specialization = binding->declaration &&
+      binding->declaration->explicit_specialization;
     record.weak_binding = record.template_instantiation;
     record.declaration = force_declaration;
     record.internal = false;

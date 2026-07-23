@@ -155,6 +155,7 @@ inline CPPGMAstNodePtr CloneNode(const CPPGMAstNodePtr& node)
 	CPPGMAstNodePtr result(new CPPGMAstNode(node->kind, node->value));
 	result->initializer_form = node->initializer_form;
 	result->template_instantiation = node->template_instantiation;
+	result->explicit_specialization = node->explicit_specialization;
 	result->explicit_instantiation = node->explicit_instantiation;
 	result->extern_instantiation = node->extern_instantiation;
 	result->dependent_base_lookup = node->dependent_base_lookup;
@@ -397,6 +398,7 @@ struct TemplateDefinition
 	CPPGMAstNodePtr declaration;
 	vector<TemplateParameter> parameters;
 	bool partial_specialization;
+	bool explicit_specialization;
 	vector<string> specialization_parameters;
 	vector<TemplateParameter> specialization_parameter_details;
 	vector<string> specialization_pack_names;
@@ -406,7 +408,7 @@ struct TemplateDefinition
 	bool variable_template;
 	bool member_template;
 	bool friend_declaration;
-	TemplateDefinition() : qualified_name(), name(), owner(), lexical_owner(), declaration(), parameters(), partial_specialization(false), specialization_parameters(), specialization_parameter_details(), specialization_pack_names(), specialization_pattern(), class_template(false), alias_template(false), variable_template(false), member_template(false), friend_declaration(false) {}
+	TemplateDefinition() : qualified_name(), name(), owner(), lexical_owner(), declaration(), parameters(), partial_specialization(false), explicit_specialization(false), specialization_parameters(), specialization_parameter_details(), specialization_pack_names(), specialization_pattern(), class_template(false), alias_template(false), variable_template(false), member_template(false), friend_declaration(false) {}
 };
 struct FunctionSignature
 {
@@ -849,6 +851,18 @@ private:
 		const string raw_declaration_name = DeclarationName(declaration);
 		string name = CanonicalSpelling(raw_declaration_name);
 		if(name.empty()) return;
+		string declaration_spelling = name;
+		if(declaration->kind == "function-definition" && declaration->children.size() > 1)
+			declaration_spelling = CanonicalSpelling(FirstIdentifierLocal(
+				declaration->children[1]));
+		else if(declaration->kind == "simple-declaration") {
+			const CPPGMAstNodePtr list = ChildOfKindLocal(declaration,
+				"init-declarator-list");
+			if(list && !list->children.empty() && list->children[0] &&
+				!list->children[0]->children.empty())
+				declaration_spelling = CanonicalSpelling(FirstIdentifierLocal(
+					list->children[0]->children[0]));
+		}
 		TemplateDefinition item;
 		item.name = name;
 		item.partial_specialization = false;
@@ -929,12 +943,17 @@ private:
 			 declaration->kind == "simple-declaration")) {
 			string specialization_base;
 			vector<string> specialization_arguments;
-			const size_t open = name.find('<');
+			const size_t open = declaration_spelling.find('<');
 			string argument_text;
 			size_t begin = 0, close = string::npos;
-			if(open != string::npos && TemplateBase(name, open, &begin,
-				&specialization_base) && TemplateRange(name, open, &argument_text, &close))
+			if(open != string::npos && TemplateBase(declaration_spelling, open, &begin,
+					&specialization_base) && TemplateRange(declaration_spelling, open,
+					&argument_text, &close)) {
+				const string suffix = declaration_spelling.substr(close + 1);
+				if(suffix.compare(0, 2, "::") == 0)
+					specialization_base += suffix;
 				specialization_arguments = SplitTemplateArguments(argument_text);
+			}
 			else specialization_base = name;
 			const TemplateDefinition* primary = FindDefinition(specialization_base, context);
 			if(primary && !primary->class_template && !primary->parameters.empty()) {
@@ -972,6 +991,7 @@ private:
 						}
 				}
 				if(specialization_arguments.size() == primary->parameters.size()) {
+					item.explicit_specialization = true;
 					item.name = primary->name;
 					item.owner = primary->owner;
 					item.lexical_owner = primary->lexical_owner;

@@ -919,6 +919,7 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 	CPPGMAstNodePtr result(new CPPGMAstNode(input->kind, input->value));
 	result->initializer_form = input->initializer_form;
 	result->template_instantiation = input->template_instantiation;
+	result->explicit_specialization = input->explicit_specialization;
 	result->explicit_instantiation = input->explicit_instantiation;
 	result->extern_instantiation = input->extern_instantiation;
 	result->dependent_base_lookup = input->dependent_base_lookup;

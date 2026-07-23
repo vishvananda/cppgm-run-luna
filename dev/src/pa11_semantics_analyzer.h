@@ -1,5 +1,6 @@
 #pragma once
 #include "pa11_semantics_model.h"
+#include "pa11_semantics_layout.h"
 #include "pa19_constants.h"
 class Analyzer {
 public:
@@ -13,6 +14,7 @@ public:
 	map<const CPPGMAstNode*, Scope*> namespace_scopes_;
 	map<const CPPGMAstNode*, TypePtr> class_types_;
 	map<const CPPGMAstNode*, TypePtr> enum_types_;
+	vector<PendingClassLayout> pending_class_layouts_;
 	map<const Binding*, ConstantValue> constant_binding_values_;
 	map<string, vector<Binding*> > constant_template_functions_;
 	vector<map<string, ConstantValue> > constant_frames_;
@@ -1075,6 +1077,7 @@ public:
 	void ProcessFunctionDefinition(const CPPGMAstNodePtr& node, Scope* scope);
 	void ProcessSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* scope);
 	void ProcessSpecialMember(const CPPGMAstNodePtr& node, Scope* scope);
+	bool LayoutDependenciesReady(const TypePtr& type) const; void FinishPendingClassLayouts();
 	bool HasTemplateParameterScope(Scope* scope) const;
 	bool IsDependentTemplateName(Scope* scope, const string& raw) const;
 	void ValidateNondependentTemplateNode(const CPPGMAstNodePtr& node,

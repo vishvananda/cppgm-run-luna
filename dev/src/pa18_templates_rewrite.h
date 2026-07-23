@@ -1078,6 +1078,8 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 	CPPGMAstNodePtr FinishRegularNode(const CPPGMAstNodePtr& input,
 		const string& context, const map<string, string>& substitutions,
 		const CPPGMAstNodePtr& result, const string& promoted_local_class);
+	bool TransformExplicitSpecialization(const CPPGMAstNodePtr& input,
+		const string& context, const map<string, string>& substitutions);
 	CPPGMAstNodePtr TransformNode(const CPPGMAstNodePtr& input, const string& context,
 		const map<string, string>& substitutions)
 	{
@@ -1113,24 +1115,8 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 				return CPPGMAstNodePtr();
 		}
 		if(input->kind == "template-declaration") {
-			if(input->children.size() > 1 && input->children[0] && input->children[1] &&
-				Parameters(input->children[0]).empty()) {
-				map<const CPPGMAstNode*, vector<string> >::const_iterator explicit_arguments =
-					explicit_function_arguments_.find(input->children[1].get());
-				if(explicit_arguments != explicit_function_arguments_.end()) {
-					const string raw_name = DeclarationName(input->children[1]);
-					const size_t open = raw_name.find('<');
-					const string base = open == string::npos ? raw_name :
-						raw_name.substr(0, open);
-					const TemplateDefinition* specialization =
-						FindExplicitFunctionSpecialization(base,
-							explicit_arguments->second, context);
-					if(specialization) {
-						Instantiate(*specialization, explicit_arguments->second, context);
-						return CPPGMAstNodePtr();
-					}
-				}
-			}
+			if(TransformExplicitSpecialization(input, context, substitutions))
+				return CPPGMAstNodePtr();
 			// Preserve a friend template declaration with its complete typed
 			// declarator.  The semantic pass records the friend edge from the
 			// normal template-parameter scope; no synthetic empty signature is

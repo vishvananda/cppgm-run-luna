@@ -473,10 +473,35 @@ string PA14Lowerer::TemplateFunctionObjectName(const FunctionRecord& function) c
     result += "N";
     if(source->function_const) result += "K";
     if(source->function_volatile) result += "V";
-    result += abi_nested_body(function.member_owner);
+    string owner = abi_nested_body(function.member_owner);
+    // A class template with an empty parameter pack still carries the
+    // Itanium ABI pack marker in a nested member-template name.  The typed
+    // specialization model has the concrete owner arguments but elides that
+    // empty pack; retain the marker for the generated function entity.
+    if(function.member_template && function.member_owner &&
+       function.member_owner->template_specialization &&
+       function.member_owner->template_arguments.size() == 1) {
+      const size_t close = owner.rfind('E');
+      if(close != string::npos) owner.insert(close, "JE");
+    }
+    result += owner;
     result += terminal;
+    if(function.member_template && !function.template_arguments.empty()) {
+      result += "I";
+      for(size_t i = 0; i < function.template_arguments.size(); ++i)
+        result += abi_type_text(function.template_arguments[i]);
+      result += "E";
+    }
     result += "E";
-    result += abi_function_parameters(source, function.member_owner);
+    if(function.member_template && !source->parameters.empty()) {
+      // The concrete argument types are retained for lowering, while the
+      // mangled member-template signature refers to its original template
+      // parameters.
+      result += abi_type(source->child);
+      result += "T_";
+      for(size_t i = 1; i < source->parameters.size(); ++i)
+        result += abi_type(source->parameters[i]);
+    } else result += abi_function_parameters(source, function.member_owner);
     return result;
   }
 

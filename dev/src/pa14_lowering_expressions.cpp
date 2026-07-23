@@ -306,7 +306,8 @@ PA14Lowerer::Value PA14Lowerer::EmitAssignment(const CPPGMAstNodePtr& node, Scop
         for(size_t i = 0; i < direct_assignments.size(); ++i)
           if(direct_assignments[i]->kind == BIND_FUNCTION &&
              (!RecordForBinding(direct_assignments[i]) ||
-              !RecordForBinding(direct_assignments[i])->template_instantiation)) {
+              (!RecordForBinding(direct_assignments[i])->template_instantiation &&
+               !RecordForBinding(direct_assignments[i])->member_template))) {
             has_direct_assignment = true;
           }
         // An inherited operator= does not suppress the derived class's
@@ -316,7 +317,8 @@ PA14Lowerer::Value PA14Lowerer::EmitAssignment(const CPPGMAstNodePtr& node, Scop
         bool has_direct_move_assignment = false;
         for(size_t i = 0; i < direct_assignments.size(); ++i) {
           FunctionRecord* direct_record = RecordForBinding(direct_assignments[i]);
-          if(direct_record && direct_record->move_assignment) {
+          if(direct_record && !direct_record->member_template &&
+             direct_record->move_assignment) {
             has_direct_move_assignment = true;
             break;
           }

@@ -1,5 +1,15 @@
 #pragma once
 
+struct PendingClassLayout
+{
+	CPPGMAstNodePtr node;
+	TypePtr type;
+	Scope* scope;
+	PendingClassLayout(const CPPGMAstNodePtr& layout_node = CPPGMAstNodePtr(),
+		const TypePtr& layout_type = TypePtr(), Scope* layout_scope = 0)
+		: node(layout_node), type(layout_type), scope(layout_scope) {}
+};
+
 inline bool SameLayoutType(const TypePtr& left, const TypePtr& right)
 {
 	if (left == right) return true;

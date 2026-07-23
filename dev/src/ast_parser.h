@@ -26,6 +26,7 @@ struct CPPGMAstNode
 	std::string value;
 	CPPGMAstInitializerForm initializer_form;
 	bool template_instantiation;
+	bool explicit_specialization;
 	bool explicit_instantiation;
 	bool extern_instantiation;
 	// PA18 preserves this source-level lookup fact on a materialized class

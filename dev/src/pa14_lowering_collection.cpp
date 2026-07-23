@@ -15,7 +15,33 @@ string SpecialMemberName(const string& raw_name)
       return "operator" + suffix;
     }
     return LastComponent(raw_name);
-  }
+}
+
+bool IsGeneratedMemberTemplate(const CPPGMAstNodePtr& node,
+                               const string& raw_name)
+{
+    if(!node || !node->template_instantiation || node->template_primary.empty())
+      return false;
+    const string primary = LastComponent(node->template_primary);
+    string raw_base = LastComponent(raw_name);
+    const size_t generated_suffix = raw_base.find("__inst_");
+    if(generated_suffix != string::npos) raw_base.erase(generated_suffix);
+    return node->template_primary.find("::") != string::npos &&
+      primary == raw_base;
+}
+
+string HexEncode(const string& value)
+{
+    static const char digits[] = "0123456789abcdef";
+    string result;
+    result.reserve(value.size() * 2);
+    for(size_t i = 0; i < value.size(); ++i) {
+      const unsigned char byte = static_cast<unsigned char>(value[i]);
+      result += digits[byte >> 4];
+      result += digits[byte & 15];
+    }
+    return result;
+}
 
 } // namespace
 
@@ -202,6 +228,8 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
     record->member = is_member;
     record->hidden_friend = hidden_friend;
     record->static_member = is_static;
+	record->member_template = record->member_template ||
+		(is_member && IsGeneratedMemberTemplate(node, raw_name));
 	record->template_instantiation = record->template_instantiation ||
 		node->template_instantiation ||
 		(member_owner && member_owner->template_specialization);
@@ -252,12 +280,19 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
     if(definition && facts.is_constexpr && record->member && record->static_member &&
        raw_name.find("::") != string::npos)
       record->needed = true;
-    if(definition && !hidden_friend && !member_owner) {
+    if(definition && !hidden_friend) {
       map<const CPPGMAstNode*, Scope*>::const_iterator function_scope =
         analyzer_.function_scopes_.find(node.get());
-      if(function_scope != analyzer_.function_scopes_.end())
+      if(function_scope != analyzer_.function_scopes_.end()) {
+        string local_static_function_name = qname;
+        if(record->member) {
+          const string object_name = TemplateFunctionObjectName(*record);
+          if(!object_name.empty())
+            local_static_function_name = "function_symbol_" + HexEncode(object_name);
+        }
         CollectLocalStatics(ChildOfKind(node, "compound-statement"),
-          function_scope->second, qname);
+          function_scope->second, local_static_function_name);
+      }
     }
   }
 
@@ -358,7 +393,7 @@ void PA14Lowerer::CollectLocalStatics(const CPPGMAstNodePtr& node, Scope* scope,
 
 void PA14Lowerer::ClassifySpecialMember(FunctionRecord* record)
 {
-    if(!record || !record->member || record->static_member ||
+    if(!record || !record->member || record->member_template || record->static_member ||
        !record->member_owner || !record->source_type) return;
     TypePtr owner = type_value(record->member_owner);
     TypePtr function = function_target_type(record->source_type);
@@ -704,6 +739,7 @@ void PA14Lowerer::CollectSimpleDeclarationItem(const CPPGMAstNodePtr& node,
       wrapper->children.push_back(declarator);
       if(item->children.size() > 1) wrapper->children.push_back(item->children[1]);
       wrapper->template_instantiation = node->template_instantiation;
+	  wrapper->explicit_specialization = node->explicit_specialization;
       wrapper->explicit_instantiation = node->explicit_instantiation;
       wrapper->extern_instantiation = node->extern_instantiation;
       wrapper->template_primary = node->template_primary;
@@ -731,6 +767,7 @@ bool PA14Lowerer::PrepareGlobalDeclaration(const CPPGMAstNodePtr& node,
     record->type = type;
     record->qualified_name = qualified_name(scope, name);
     record->template_instantiation = node->template_instantiation;
+    record->explicit_specialization = node->explicit_specialization;
     record->weak_binding = record->template_instantiation;
     if(name.find("::") != string::npos) {
       const size_t separator = name.rfind("::");
@@ -766,7 +803,8 @@ bool PA14Lowerer::PrepareGlobalDeclaration(const CPPGMAstNodePtr& node,
       !initializer && member_binding && member_binding->is_member &&
       member_binding->is_static && integral_storage &&
       (member_binding->has_value || facts.is_const || facts.is_constexpr);
-    const bool deferred_static_integral_definition = node->template_instantiation &&
+    const bool deferred_static_integral_definition =
+      !node->explicit_specialization && node->template_instantiation &&
       record->template_owner && initializer && member_binding &&
       member_binding->is_member && member_binding->is_static &&
       !member_binding->has_value &&
@@ -823,11 +861,13 @@ void PA14Lowerer::CollectGlobalDeclaration(const CPPGMAstNodePtr& node,
         for(size_t member = 0; member < members.size(); ++member)
           if(members[member] && members[member]->kind == BIND_VARIABLE &&
              type_value(members[member]->type) && type_value(members[member]->type)->is_const) {
-            members[member]->constant_value = PA19Convert(
-              PA19IntegralValue::Signed(constant, "long long", 64),
-              PA19Type(TypeText(members[member]->type, true)));
-            members[member]->has_value = true;
-            members[member]->value = PA19Signed(members[member]->constant_value);
+            if(record.explicit_specialization || !members[member]->has_value) {
+              members[member]->constant_value = PA19Convert(
+                PA19IntegralValue::Signed(constant, "long long", 64),
+                PA19Type(TypeText(members[member]->type, true)));
+              members[member]->has_value = true;
+              members[member]->value = PA19Signed(members[member]->constant_value);
+            }
           }
     }
     record.declaration = false;
@@ -844,7 +884,9 @@ void PA14Lowerer::CollectGlobalDeclaration(const CPPGMAstNodePtr& node,
     if(!is_extern && object) {
       const bool static_member_object = static_cast<bool>(record.template_owner);
       record.dynamic_initializer = !static_member_object ||
-        HasDefaultConstructionEffects(value_type);
+        HasDefaultConstructionEffects(value_type) ||
+        (value_type && value_type->kind == TYPE_CLASS &&
+         HasUserProvidedConstructor(value_type));
       // A constexpr object whose only construction is a trivial/defaulted
       // empty construction is already represented by its zero-initialized
       // static storage.  Do not manufacture a runtime constructor call for
@@ -919,12 +961,16 @@ void PA14Lowerer::StoreGlobalDeclaration(GlobalRecord& record,
       stored = &globals_.back();
     } else {
       GlobalRecord* prior = found->second;
-      if(record.initializer) prior->initializer = record.initializer;
+      if(record.initializer &&
+         (!prior->explicit_specialization || record.explicit_specialization))
+        prior->initializer = record.initializer;
       prior->type = record.type;
       if(record.object_name.size()) prior->object_name = record.object_name;
       if(record.template_owner) prior->template_owner = record.template_owner;
       prior->template_instantiation = prior->template_instantiation ||
-        record.template_instantiation;
+			record.template_instantiation;
+	      prior->explicit_specialization = prior->explicit_specialization ||
+			record.explicit_specialization;
       prior->weak_binding = prior->weak_binding || record.weak_binding;
       prior->declaration = false;
       prior->internal = prior->internal || record.internal;

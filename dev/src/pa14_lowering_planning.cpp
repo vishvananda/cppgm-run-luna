@@ -76,6 +76,29 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
         }
         direct = false;
       }
+      bool assignment_call = lookup_callee->children[1] &&
+        lookup_callee->children[1]->value == "operator=";
+      if(!assignment_call)
+        for(size_t i = 0; i < candidates.size(); ++i) {
+          FunctionRecord* candidate = RecordForBinding(candidates[i]);
+          if(candidate && candidate->member_template &&
+             LastComponent(candidate->qualified_name).find("operator=") == 0) {
+            assignment_call = true;
+            break;
+          }
+        }
+      if(direct && assignment_call) {
+        TypePtr assignment_owner = type_value(object_info.type);
+        if(assignment_owner && assignment_owner->kind == TYPE_CLASS) {
+          (void)EnsureImplicitAssignment(assignment_owner, false);
+          if(!arguments.empty() && arguments[0].category != "lvalue")
+            (void)EnsureImplicitAssignment(assignment_owner, true);
+          const vector<Binding*> ordinary = MemberBindings(assignment_owner, "operator=");
+          for(size_t i = 0; i < ordinary.size(); ++i)
+            if(find(candidates.begin(), candidates.end(), ordinary[i]) == candidates.end())
+              candidates.push_back(ordinary[i]);
+        }
+      }
     } else if(lookup_callee && lookup_callee->kind == "id-expression") {
       candidates = Lookup(lookup_callee->value, scope);
       // Ordinary unqualified calls participate in the same associated
@@ -201,7 +224,11 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
           total += rank;
         }
         if(!viable) continue;
-        if(!best.binding || user_defined < best.user_defined ||
+        FunctionRecord* candidate_record = RecordForBinding(binding);
+        FunctionRecord* best_record = RecordForBinding(best.binding);
+        const bool prefer_non_template = best_record && candidate_record &&
+          best_record->member_template && !candidate_record->member_template;
+        if(!best.binding || prefer_non_template || user_defined < best.user_defined ||
            (user_defined == best.user_defined &&
             (worst < best.worst || (worst == best.worst && total < best.total)))) {
           best.binding = binding;

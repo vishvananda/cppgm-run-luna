@@ -1,5 +1,57 @@
 #include "pa11_semantics_analyzer.h"
 #include "pa11_semantics_layout.h"
+#include <functional>
+
+bool Analyzer::LayoutDependenciesReady(const TypePtr& type) const
+{
+	if (!type) return true;
+	function<bool(const TypePtr&)> layout_ready =
+		[&layout_ready](const TypePtr& dependency) -> bool {
+			if (!dependency) return true;
+			switch (dependency->kind) {
+			case TYPE_CLASS: return dependency->complete && dependency->layout_complete;
+			case TYPE_ENUM: return dependency->complete;
+			case TYPE_ARRAY: return dependency->bound < 0 ||
+				layout_ready(dependency->child);
+			case TYPE_TEMPLATE_PARAMETER:
+			case TYPE_TEMPLATE_TEMPLATE_PARAMETER: return false;
+			default: return true;
+			}
+		};
+	if (type->kind != TYPE_CLASS || !type->complete) return false;
+	for (size_t base = 0; base < type->direct_bases.size(); ++base)
+		if (!layout_ready(type->direct_bases[base])) return false;
+	for (size_t member = 0; member < type->class_members.size(); ++member)
+		if (!type->class_members[member].is_static &&
+			!layout_ready(type->class_members[member].type)) return false;
+	return true;
+}
+
+void Analyzer::FinishPendingClassLayouts()
+{
+	while (!pending_class_layouts_.empty())
+	{
+		bool progress = false;
+		for (size_t i = 0; i < pending_class_layouts_.size(); )
+		{
+			PendingClassLayout pending = pending_class_layouts_[i];
+			if (!LayoutDependenciesReady(pending.type))
+			{
+				++i;
+				continue;
+			}
+			ComputeClassLayout(pending.node, pending.type, pending.scope);
+			pending_class_layouts_.erase(pending_class_layouts_.begin() + i);
+			progress = true;
+		}
+		if (progress) continue;
+		// Preserve the ordinary incomplete-class diagnostic when a generated
+		// specialization has an irreducible by-value dependency cycle.
+		const PendingClassLayout pending = pending_class_layouts_.front();
+		ComputeClassLayout(pending.node, pending.type, pending.scope);
+		break;
+	}
+}
 
 void Analyzer::ComputeClassMemberLayout(const TypePtr& type, size_t union_size,
 	size_t* offset, size_t* maximum_alignment)

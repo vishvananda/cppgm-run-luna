@@ -54,7 +54,8 @@ CPPGMAstNodePtr FindReturnStatement(const CPPGMAstNodePtr& node)
 }
 
 Analyzer::Analyzer()
-	: global_(new Scope(SCOPE_NAMESPACE, "<global>", 0)), anonymous_type_count_(0)
+	: global_(new Scope(SCOPE_NAMESPACE, "<global>", 0)), anonymous_type_count_(0),
+	  pending_class_layouts_()
 {
 }
 
@@ -141,6 +142,7 @@ void Analyzer::Analyze(const CPPGMAstNodePtr& tree)
 {
 	if (!tree || tree->kind != "translation-unit") throw logic_error("invalid translation unit");
 	for (size_t i = 0; i < tree->children.size(); ++i) Process(tree->children[i], global_.get());
+	FinishPendingClassLayouts();
 }
 
 void Analyzer::Print(ostream& out) const
@@ -1441,7 +1443,10 @@ TypePtr Analyzer::ProcessClass(const CPPGMAstNodePtr& node, Scope* scope)
 	// element for the single-inheritance consumers retained from earlier PAs.
 	type->class_members.clear();
 	RecordClassMembers(node, type, owner, class_scope);
-	ComputeClassLayout(node, type, class_scope);
+	if (node->template_instantiation && !LayoutDependenciesReady(type))
+		pending_class_layouts_.push_back(PendingClassLayout(node, type, class_scope));
+	else
+		ComputeClassLayout(node, type, class_scope);
 	class_types_[node.get()] = type;
 	return type;
 }

@@ -34,6 +34,7 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformSubscriptExpression(
 	CPPGMAstNodePtr transformed(new CPPGMAstNode(input->kind, input->value));
 	transformed->initializer_form = input->initializer_form;
 	transformed->template_instantiation = input->template_instantiation;
+	transformed->explicit_specialization = input->explicit_specialization;
 	transformed->explicit_instantiation = input->explicit_instantiation;
 	transformed->extern_instantiation = input->extern_instantiation;
 	transformed->dependent_base_lookup = input->dependent_base_lookup;
@@ -1378,6 +1379,50 @@ CPPGMAstNodePtr PA18TemplateExpander::FinishRegularNode(
 	return result;
 }
 
+bool PA18TemplateExpander::TransformExplicitSpecialization(
+	const CPPGMAstNodePtr& input, const string& context,
+	const map<string, string>&)
+{
+	if(!input || input->kind != "template-declaration" || input->children.size() <= 1 ||
+		!input->children[0] || !input->children[1] ||
+		!Parameters(input->children[0]).empty()) return false;
+	map<const CPPGMAstNode*, vector<string> >::const_iterator explicit_arguments =
+		explicit_function_arguments_.find(input->children[1].get());
+	if(explicit_arguments == explicit_function_arguments_.end()) return false;
+	string raw_name = DeclarationName(input->children[1]);
+	if(input->children[1]->kind == "simple-declaration") {
+		const CPPGMAstNodePtr list = ChildOfKindLocal(input->children[1], "init-declarator-list");
+		if(list && !list->children.empty() && list->children[0] &&
+			!list->children[0]->children.empty())
+			raw_name = FirstIdentifierLocal(list->children[0]->children[0]);
+	}
+	const size_t open = raw_name.find('<');
+	string base = open == string::npos ? raw_name : raw_name.substr(0, open);
+	if(open != string::npos) {
+		string ignored_arguments;
+		size_t close = string::npos;
+		if(TemplateRange(raw_name, open, &ignored_arguments, &close) &&
+			close + 1 < raw_name.size() && raw_name.compare(close + 1, 2, "::") == 0)
+			base += raw_name.substr(close + 1);
+	}
+	const TemplateDefinition* specialization = FindExplicitFunctionSpecialization(
+		base, explicit_arguments->second, context);
+	if(!specialization) return false;
+	string owner_local;
+	string owner_base = PrefixComponent(specialization->owner);
+	if(owner_base.empty()) owner_base = specialization->owner;
+	const size_t owner_angle = owner_base.find('<');
+	if(owner_angle != string::npos) owner_base.erase(owner_angle);
+	const TemplateDefinition* owner_definition = owner_base.empty() ? 0 :
+		FindDefinition(owner_base, context);
+	if(owner_definition && owner_definition->class_template)
+		owner_local = Instantiate(*owner_definition, explicit_arguments->second, context);
+	if(owner_local.empty()) Instantiate(*specialization, explicit_arguments->second, context);
+	else Instantiate(*specialization, explicit_arguments->second, context, false, 0, 0,
+		&owner_local);
+	return true;
+}
+
 CPPGMAstNodePtr PA18TemplateExpander::TransformRegularNode(
 	const CPPGMAstNodePtr& input, const string& context,
 	const map<string, string>& substitutions)
@@ -1423,6 +1468,7 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformRegularNode(
 		CPPGMAstNodePtr result(new CPPGMAstNode(input->kind, input->value));
 		result->initializer_form = input->initializer_form;
 		result->template_instantiation = input->template_instantiation;
+		result->explicit_specialization = input->explicit_specialization;
 		result->explicit_instantiation = input->explicit_instantiation;
 		result->extern_instantiation = input->extern_instantiation;
 		result->dependent_base_lookup = input->dependent_base_lookup;

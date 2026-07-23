@@ -89,6 +89,7 @@ class PA14Lowerer
     bool explicit_constructor;
 	bool builtin;
 	bool template_instantiation;
+	bool member_template;
 	bool extern_template;
 	bool inline_definition;
 	bool object_root;
@@ -123,8 +124,8 @@ class PA14Lowerer
         synthesized_value_member(false),
         hidden_friend(false),
         explicit_constructor(false),
-        builtin(false),
-		template_instantiation(false), extern_template(false), inline_definition(false), object_root(false), weak_binding(false),
+		builtin(false),
+		template_instantiation(false), member_template(false), extern_template(false), inline_definition(false), object_root(false), weak_binding(false),
         defaulted(false), deleted(false),
 		destructor(false), deleting_entry(false), needed(false),
         emitted(false), variadic(false), unwind_no(false), noreturn(false), base_entry(false),
@@ -143,6 +144,7 @@ class PA14Lowerer
 	string object_name;
 	TypePtr template_owner;
 	bool template_instantiation;
+	bool explicit_specialization;
 	bool weak_binding;
     CPPGMAstNodePtr initializer;
     bool declaration;
@@ -156,7 +158,7 @@ class PA14Lowerer
 
     GlobalRecord()
       : node(), scope(), type(), qualified_name(), symbol(), object_name(), template_owner(),
-        template_instantiation(false), weak_binding(false), initializer(),
+        template_instantiation(false), explicit_specialization(false), weak_binding(false), initializer(),
         declaration(false), internal(false), local_static(false), local_static_guard(false),
         thread_local_storage(false), tls_guard(false),
         dynamic_initializer(false), dynamic_finalizer(false) {}

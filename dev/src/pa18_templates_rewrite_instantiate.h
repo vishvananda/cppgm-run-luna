@@ -272,15 +272,18 @@
 	}
 
 	void MarkGeneratedNode(const CPPGMAstNodePtr& node, const string& primary,
-		const vector<string>& arguments, bool explicit_instantiation = false)
+		const vector<string>& arguments, bool explicit_instantiation = false,
+		bool explicit_specialization = false)
 	{
 		if(!node) return;
 		node->template_instantiation = true;
+		node->explicit_specialization = node->explicit_specialization || explicit_specialization;
 		node->explicit_instantiation = node->explicit_instantiation || explicit_instantiation;
 		node->template_primary = primary;
 		node->template_arguments = arguments;
 		for(size_t i = 0; i < node->children.size(); ++i)
-			MarkGeneratedNode(node->children[i], primary, arguments, false);
+			MarkGeneratedNode(node->children[i], primary, arguments, false,
+				explicit_specialization);
 	}
 	void RenameGeneratedFunction(const CPPGMAstNodePtr& declaration,
 		const string& name)
@@ -456,8 +459,11 @@
 				generated_context, substitutions, integral_substitutions,
 				pack_substitutions, map<string, FunctionSignature>());
 			if(!generated) continue;
-			if(generated->kind == "simple-declaration") {
-				const CPPGMAstNodePtr identifier = DescendantOfKind(generated, "identifier");
+			if(generated->kind == "simple-declaration" ||
+				generated->kind == "function-definition") {
+				const CPPGMAstNodePtr declarator = generated->kind == "function-definition" ?
+					FunctionDeclarator(generated) : generated;
+				const CPPGMAstNodePtr identifier = DescendantOfKind(declarator, "identifier");
 				if(identifier) {
 					while(identifier->value.compare(0, 2, "::") == 0)
 						identifier->value.erase(0, 2);
@@ -488,7 +494,10 @@
 						const string base = angle == string::npos ? components[component] :
 							components[component].substr(0, angle);
 						if(base == parent_local_name) break;
-						if(base == parent.name) {
+						if(base == parent.name ||
+							(base.size() > parent.name.size() &&
+							 base.compare(0, parent.name.size(), parent.name) == 0 &&
+							 base[parent.name.size()] == '_')) {
 							components[component] = parent_local_name;
 							break;
 						}
