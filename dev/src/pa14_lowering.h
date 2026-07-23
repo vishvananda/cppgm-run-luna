@@ -308,6 +308,7 @@ class PA14Lowerer
   vector<string> string_order_;
 	map<const CPPGMAstNode*, GlobalRecord*> local_static_plans_;
 	set<string> deferred_static_members_;
+	set<const Type*> complete_template_object_uses_;
 	bool needs_init_helper_;
 	bool needs_fini_helper_;
 	set<const Type*> emitted_vtables_;
@@ -317,6 +318,7 @@ class PA14Lowerer
 	  map<const CPPGMAstNode*, InferCacheEntry> infer_cache_;
 	map<const Type*, vector<TypePtr> > friend_owner_index_;
 	void IndexFriendOwners();
+	void IndexCompleteTemplateObjectUses(const CPPGMAstNodePtr& node);
 
 public:
 explicit PA14Lowerer(const vector<CPPGMAstNodePtr>& trees)

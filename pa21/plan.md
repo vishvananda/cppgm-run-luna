@@ -1,6 +1,94 @@
 # PA21 checkpoint plan
 
-## Current turn checkpoint result (2026-07-23)
+## Current turn checkpoint result (2026-07-23, final checkpoint)
+
+The fresh required report, `make test-report ACTIVE_TEST_REPORT_PAS='pa21'`,
+is **173/215 passing** with **42 failures**, up from the turn-start baseline
+of **153/215**.  The prior-PA gate remains clean at **1635/1635 through PA20**.
+The PA21 file audit passes with warnings only.
+
+### Remaining Work Map
+
+- **Owner replay, member/friend lookup, and generated-call lowering (18):**
+  `general/300-crtp-static-cast-reference-before-constructor-template`,
+  `general/300-dependent-hidden-friend-static-member-definition`,
+  `general/300-explicit-member-template-id-shares-ordinary-overload`,
+  `general/300-explicit-type-arg-decltype-member-access`,
+  `general/300-friend-existing-template-private-ctor-access`,
+  `general/300-function-pack-template-id-deduction-decltype`,
+  `general/300-local-qualified-argument-replay`,
+  `general/300-member-class-explicit-specialization-owner-lookup`,
+  `general/300-namespace-function-template-hides-outer-callable-object`,
+  `general/300-nested-class-template-current-owner-lookup`,
+  `general/300-nested-class-template-reference-reset`,
+  `general/300-out-of-class-ctor-using-imported-member-template`,
+  `general/300-parenthesized-qualified-template-functional-call`,
+  `general/300-qualified-friend-member-template-access`,
+  `spec/300-hidden-friend-template-operator-adl`,
+  `spec/300-member-class-template-out-of-class`,
+  `spec/300-member-operator-template-active-owner`, and
+  `spec/300-member-operator-template-in-class-template`.
+
+- **Partial-specialization, alias, cv, and pack identity (15):**
+  `general/100-top-cv-pointer-does-not-match-unqualified-pointer-partial`
+  (the comparison path currently reports an undefined canonical value),
+  `general/200-reference-alias-top-cv-return-binding`,
+  `general/300-function-signature-partial-specialization-functor-assignment`,
+  `general/300-nested-member-partial-specialization-apply-scope`,
+  `general/300-variable-template-forwarding-partial-top-cv`,
+  `general/400-alias-pack-nontype-expression-fast-path`,
+  `general/400-forward-primary-partial-switch-value`,
+  `general/400-inline-namespace-template-template-argument`,
+  `general/400-member-template-nontype-shadowed-global-replay`,
+  `general/400-partial-specialization-conversion-operator-pointer-binding`,
+  `general/400-partial-specialization-redecl-member-template-empty-pack`,
+  `general/400-reference-member-depth-pack-sum`,
+  `general/400-reference-member-lookup-in-progress-base-typedef`,
+  `spec/100-inline-namespace-qualified-template-id-pack-expansion`, and
+  `spec/300-defaulted-type-arg-specialization-nontype-value`.
+
+- **Explicit specialization/instantiation diagnostics (3):**
+  `general/300-extern-template-builtin-operator-function-declaration-bad`,
+  `general/300-template-instantiation-use-location-explicit-specialization`,
+  and `spec/300-explicit-specialized-ctor-template-header-bad`.
+
+- **Dependent initialization, references, and address lowering (6):**
+  `general/100-rvalue-reference-binds-converted-temporary`,
+  `general/300-anonymous-union-storage-constructor-noop`,
+  `general/300-array-functional-cast-pack-call`,
+  `general/300-constexpr-static-fn-template-address-pack`,
+  `general/300-single-pack-cast-target`, and
+  `general/300-static-constexpr-function-template-pointer-array`.
+
+### Checkpoint Scope and Result
+
+This checkpoint completes the typed specialization/source-order slice: builtin
+type spellings no longer become false template entities; out-of-class explicit
+member specializations retain their enclosing class specialization while the
+primary member body remains separate; concrete class materialization is tracked
+as typed state so a later explicit specialization is rejected without rejecting
+typedef-only uses; and dependent out-of-class integral static definitions emit
+storage only when a complete object use demands it, preserving pointer/typedef
+behavior from earlier PAs.
+
+Validation for the specialization slice is
+`make -C pa21 check TEST='tests/spec/300-explicit-specialization-*.t'`,
+which passes **7/7**, plus the PA19 regression test, which passes **1/1**.
+The hidden-friend static case now contains the expected weak global and only
+retains a separate LowIR mismatch in trivial-object operator/copy lowering;
+that residual is the next group rather than an unresolved storage-routing rule.
+The required report is **173/215**, the through report is **1635/1635**, and
+the file audit passes with warnings only.
+
+The next checkpoint group is friend/member call and trivial-object lowering:
+`general/300-dependent-hidden-friend-static-member-definition`,
+`general/300-explicit-member-template-id-shares-ordinary-overload`,
+`general/300-friend-existing-template-private-ctor-access`,
+`general/300-qualified-friend-member-template-access`,
+`spec/300-hidden-friend-template-operator-adl`, and
+`general/300-anonymous-union-storage-constructor-noop`.
+
+## Superseded checkpoint result (2026-07-23)
 
 The clean required report, `make test-report ACTIVE_TEST_REPORT_PAS='pa21'`,
 is **170/215 passing** with **45 failures**, up from the turn-start baseline

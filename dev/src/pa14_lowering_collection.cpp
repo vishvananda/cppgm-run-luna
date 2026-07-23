@@ -43,7 +43,59 @@ string HexEncode(const string& value)
     return result;
 }
 
+bool PA14ContainsKind(const CPPGMAstNodePtr& node, const string& kind)
+{
+    if(!node) return false;
+    if(node->kind == kind) return true;
+    for(size_t child = 0; child < node->children.size(); ++child)
+      if(PA14ContainsKind(node->children[child], kind)) return true;
+    return false;
+}
+
+string PA14NodeValues(const CPPGMAstNodePtr& node)
+{
+    if(!node) return string();
+    string result = node->value;
+    for(size_t child = 0; child < node->children.size(); ++child) {
+      const string value = PA14NodeValues(node->children[child]);
+      if(!value.empty()) {
+        if(!result.empty()) result += ' ';
+        result += value;
+      }
+    }
+    return result;
+}
+
 } // namespace
+
+void PA14Lowerer::IndexCompleteTemplateObjectUses(const CPPGMAstNodePtr& node)
+{
+    if(!node) return;
+    if(node->kind == "simple-declaration" && !node->children.empty() &&
+       PA14NodeValues(node->children[0]).find("typedef") == string::npos &&
+       !node->template_instantiation) {
+      const CPPGMAstNodePtr list = ChildOfKind(node, "init-declarator-list");
+      for(size_t item = 0; list && item < list->children.size(); ++item) {
+        const CPPGMAstNodePtr entry = list->children[item];
+        if(!entry || entry->children.empty()) continue;
+        const CPPGMAstNodePtr declarator = entry->children[0];
+        if(!declarator || declarator_name(declarator).find("::") != string::npos ||
+           PA14ContainsKind(declarator, "ptr-operator") ||
+           PA14ContainsKind(declarator, "parameter-clause")) continue;
+        const string spelling = PA14NodeValues(node->children[0]);
+        for(map<const CPPGMAstNode*, TypePtr>::const_iterator type =
+              analyzer_.class_types_.begin(); type != analyzer_.class_types_.end(); ++type) {
+          const TypePtr value = type_value(type->second);
+          if(!value || value->kind != TYPE_CLASS || !value->template_specialization ||
+             value->name.empty() || value->template_primary.empty() ||
+             spelling.find(LastComponent(value->template_primary)) == string::npos) continue;
+          complete_template_object_uses_.insert(value.get());
+        }
+      }
+    }
+    for(size_t child = 0; child < node->children.size(); ++child)
+      IndexCompleteTemplateObjectUses(node->children[child]);
+}
 
 bool PA14Lowerer::HasInline(const CPPGMAstNodePtr& node) const
 {
@@ -825,7 +877,13 @@ bool PA14Lowerer::PrepareGlobalDeclaration(const CPPGMAstNodePtr& node,
        deferred_static_integral_definition) {
       if(deferred_static_integral_storage || deferred_static_integral_definition)
         deferred_static_members_.insert(record->qualified_name);
-      return true;
+      // An out-of-class definition is storage when its class specialization
+      // has a complete object use.  Pointer and typedef-only uses keep the
+      // old deferred behavior and do not materialize this dependent member.
+      if(!deferred_static_integral_definition) return true;
+      if(!record->template_owner ||
+         complete_template_object_uses_.find(record->template_owner.get()) ==
+           complete_template_object_uses_.end()) return true;
     }
     return false;
   }

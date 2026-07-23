@@ -34,6 +34,8 @@ void PA14Lowerer::Lower(ostream& out)
         program_->children.push_back(trees_[i]->children[j]);
     }
     analyzer_.Analyze(program_);
+    complete_template_object_uses_.clear();
+    IndexCompleteTemplateObjectUses(program_);
     IndexFriendOwners();
     InstallBuiltins();
     CollectTopLevel(program_, analyzer_.global_.get());

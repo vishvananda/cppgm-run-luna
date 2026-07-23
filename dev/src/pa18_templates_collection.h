@@ -496,6 +496,11 @@ private:
 	map<string, string> specialization_bases_;
 	map<string, vector<string> > specialization_arguments_;
 	map<string, vector<string> > specialization_names_by_base_;
+	// Class specializations are subject to source-order rules: once a concrete
+	// specialization has been materialized, a later explicit specialization of
+	// that same primary is ill-formed.  Keep this semantic fact independently of
+	// the generated-name cache, whose keys also contain declaration identities.
+	set<string> instantiated_class_specializations_;
 	map<string, TemplateDefinition> explicit_function_specializations_;
 	map<const CPPGMAstNode*, vector<string> > explicit_function_arguments_;
 	set<string> extern_instantiation_keys_;

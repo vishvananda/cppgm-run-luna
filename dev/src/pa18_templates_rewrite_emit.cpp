@@ -6,6 +6,31 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
+void PA18TemplateExpander::CheckExplicitSpecializationOrder(
+	const CPPGMAstNodePtr& input, const string& context)
+{
+	if(input->children.size() <= 1 || !input->children[0] || !input->children[1] ||
+		!Parameters(input->children[0]).empty() ||
+		(input->children[1]->kind != "class-specifier" &&
+		 input->children[1]->kind != "class-forward-declaration")) return;
+	const string raw = CanonicalSpelling(DeclarationName(input->children[1]));
+	const size_t open = raw.find('<');
+	string base, argument_text;
+	size_t begin = 0, close = string::npos;
+	if(open == string::npos || !TemplateBase(raw, open, &begin, &base) ||
+		!TemplateRange(raw, open, &argument_text, &close)) return;
+	const TemplateDefinition* primary = FindDefinition(base, context);
+	if(!primary || !primary->class_template) return;
+	const vector<string> arguments = SplitTemplateArguments(argument_text);
+	string specialization_key = primary->qualified_name;
+	for(size_t argument = 0; argument < arguments.size(); ++argument)
+		specialization_key += "|" + NormalizeTypeArgument(
+			CanonicalSpelling(arguments[argument]));
+	if(instantiated_class_specializations_.find(specialization_key) !=
+		instantiated_class_specializations_.end())
+		throw logic_error("explicit specialization after instantiation");
+}
+
 namespace {
 
 bool HasStaticMemberDeclaration(const CPPGMAstNodePtr& node, const string& name)
@@ -237,6 +262,11 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 		generated->dependent_base_lookup = DefinitionHasDependentBase(definition);
 	const bool generated_special_member = generated->kind == "special-member-definition" ||
 		generated->kind == "special-member-declaration";
+	const bool explicit_static_data = definition.explicit_specialization &&
+		definition.variable_template && generated->kind == "simple-declaration";
+	const bool explicit_member_definition = definition.explicit_specialization &&
+		member_definition && !definition.class_template && !explicit_static_data &&
+		member_owner_definition;
 	if(!definition.class_template && !definition.alias_template &&
 		(!member_definition || concrete_owner.empty()) && !generated_special_member)
 		RenameGeneratedFunction(generated, local_name);
@@ -256,9 +286,10 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 			"operator") == 0;
 		if(special_member)
 			generated->value = concrete_owner + "::" + LastComponent(concrete_owner);
-		RenameGeneratedFunction(generated, special_member ?
-			LastComponent(concrete_owner) : operator_member ? local_name :
-			LastComponent(definition.name));
+		if(!explicit_member_definition)
+			RenameGeneratedFunction(generated, special_member ?
+				LastComponent(concrete_owner) : operator_member ? local_name :
+				LastComponent(definition.name));
 		if(definition.explicit_specialization && generated->kind == "simple-declaration") {
 			const CPPGMAstNodePtr identifier = DescendantOfKind(generated, "identifier");
 			if(identifier)
@@ -277,8 +308,6 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 		(context.size() > definition_owner.size() && context.compare(0,
 			definition_owner.size(), definition_owner) == 0 &&
 			context[definition_owner.size()] == ':');
-	const bool explicit_static_data = definition.explicit_specialization &&
-		definition.variable_template && generated->kind == "simple-declaration";
 	if(!explicit_static_data && class_contexts_.find(context) != class_contexts_.end() && owner_is_context_ancestor &&
 		(!definition.class_template || !definition.owner.empty()) &&
 		context != definition.owner &&
@@ -290,6 +319,7 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 		generated_before_class_[PrefixComponent(context)].push_back(generated);
 	else {
 	string generated_function_owner = explicit_static_data ? PrefixComponent(definition.owner) :
+		explicit_member_definition ? GeneratedOwner(*member_owner_definition) :
 		(concrete_owner.empty() ? generated_owner : concrete_owner);
 	if(!concrete_owner.empty() && generated_function_owner.find("::") == string::npos &&
 		specialization_bases_.find(LastComponent(concrete_owner)) ==

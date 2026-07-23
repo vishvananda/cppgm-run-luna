@@ -1359,19 +1359,45 @@ string PA18TemplateExpander::FindConcreteInstantiationOwner(
 	const TemplateDefinition& definition, const map<string, string>& substitutions,
 	const string& context, const string& requested_owner) const
 {
+	// Member definitions are collected under the primary's lexical spelling
+	// (`traits::identity_element<T>`), while the enclosing class is materialized
+	// under a generated name (`traits::identity_element_lib__date_`).  The
+	// owner passed by the class replay can be the short generated component, so
+	// resolve it back to the typed class-context entry before routing the member
+	// definition.  Without this bridge an explicit member specialization is
+	// queued beside the source template and the primary member body wins later
+	// in PA14's function table.
+	string source_owner = definition.owner;
+	const size_t source_open = source_owner.find('<');
+	if(source_open != string::npos) source_owner.erase(source_open);
+	const string source_namespace = PrefixComponent(source_owner);
+	const string context_namespace = PrefixComponent(context);
+	const auto materialized_context = [&](const string& candidate) {
+		if(candidate.empty()) return string();
+		if(class_contexts_.find(candidate) != class_contexts_.end()) return candidate;
+		for(set<string>::const_iterator it = class_contexts_.begin();
+			it != class_contexts_.end(); ++it) {
+			if(LastComponent(*it) != LastComponent(candidate)) continue;
+			const string prefix = PrefixComponent(*it);
+			if(prefix == source_namespace || prefix == context_namespace)
+				return *it;
+		}
+		return string();
+	};
 	string concrete_owner;
 	const string source_owner_name = LastComponent(definition.owner);
 	for(map<string, string>::const_iterator substitution = substitutions.begin();
 		substitution != substitutions.end(); ++substitution)
 		if(substitution->first == source_owner_name &&
-			class_contexts_.find(substitution->second) != class_contexts_.end()) {
-			concrete_owner = substitution->second;
+			!materialized_context(substitution->second).empty()) {
+			concrete_owner = materialized_context(substitution->second);
 			break;
 		}
 	if(!concrete_owner.empty()) return concrete_owner;
-	if(ConcreteOwnerMatches(definition, requested_owner) &&
-		class_contexts_.find(requested_owner) != class_contexts_.end())
-		return requested_owner;
+	if(ConcreteOwnerMatches(definition, requested_owner)) {
+		concrete_owner = materialized_context(requested_owner);
+		if(!concrete_owner.empty()) return concrete_owner;
+	}
 	const size_t owner_open = definition.owner.find('<');
 	string owner_arguments_text;
 	size_t owner_close = string::npos;
@@ -1390,7 +1416,7 @@ string PA18TemplateExpander::FindConcreteInstantiationOwner(
 		if(base == specialization_bases_.end() || arguments == specialization_arguments_.end() ||
 			LastComponent(base->second) != LastComponent(owner_base) ||
 			arguments->second.size() != owner_arguments.size() ||
-			class_contexts_.find(candidate) == class_contexts_.end()) continue;
+			materialized_context(candidate).empty()) continue;
 		bool same = true;
 		for(size_t argument = 0; argument < owner_arguments.size(); ++argument) {
 			const string expected = NormalizeTypeArgument(ResolveAlias(
@@ -1400,7 +1426,7 @@ string PA18TemplateExpander::FindConcreteInstantiationOwner(
 				break;
 			}
 		}
-		if(same) return candidate;
+		if(same) return materialized_context(candidate);
 	}
 	return string();
 }

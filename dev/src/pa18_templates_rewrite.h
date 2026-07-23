@@ -1080,6 +1080,8 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 		const CPPGMAstNodePtr& result, const string& promoted_local_class);
 	bool TransformExplicitSpecialization(const CPPGMAstNodePtr& input,
 		const string& context, const map<string, string>& substitutions);
+	void CheckExplicitSpecializationOrder(const CPPGMAstNodePtr& input,
+		const string& context);
 	CPPGMAstNodePtr TransformNode(const CPPGMAstNodePtr& input, const string& context,
 		const map<string, string>& substitutions)
 	{
@@ -1115,6 +1117,7 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 				return CPPGMAstNodePtr();
 		}
 		if(input->kind == "template-declaration") {
+			CheckExplicitSpecializationOrder(input, context);
 			if(TransformExplicitSpecialization(input, context, substitutions))
 				return CPPGMAstNodePtr();
 			// Preserve a friend template declaration with its complete typed

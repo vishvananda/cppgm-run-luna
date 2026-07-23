@@ -689,6 +689,18 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				throw;
 			}
 			active_concrete_owner_ = previous_concrete_owner;
+			// A bare class template-id in a declaration type (notably a typedef)
+			// does not instantiate the class definition.  Member-qualified uses do
+			// require the concrete class and are the source-order event relevant to
+			// a later explicit specialization.
+			if(resolve_member && definition->class_template && close + 2 < raw.size() &&
+				raw.compare(close + 1, 2, "::") == 0) {
+				string specialization_key = definition->qualified_name;
+				for(size_t argument = 0; argument < args.size(); ++argument)
+					specialization_key += "|" + NormalizeTypeArgument(
+						CanonicalSpelling(args[argument]));
+				instantiated_class_specializations_.insert(specialization_key);
+			}
 			string replacement = local_name;
 			const string qualifier = PrefixComponent(lookup_base);
 			if(!qualifier.empty()) replacement = qualifier + "::" + local_name;

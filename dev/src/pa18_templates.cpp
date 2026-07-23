@@ -970,7 +970,8 @@ void PA18TemplateExpander::InsertGenerated(vector<CPPGMAstNodePtr>* children,
 			const bool builtin = value == "bool" || value == "char" || value == "double" ||
 				value == "float" || value == "int" || value == "long" ||
 				value == "short" || value == "signed" || value == "unsigned" ||
-				value == "void" || value == "wchar_t";
+				value == "void" || value == "wchar_t" || value == "char16_t" ||
+				value == "char32_t";
 			if(!bare_identifier || builtin || value == "true" || value == "false") continue;
 			if(known_context_entity(value)) continue;
 			if(argument < definition->second.parameters.size() &&

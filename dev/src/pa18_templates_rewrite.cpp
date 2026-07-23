@@ -1409,8 +1409,8 @@ bool PA18TemplateExpander::TransformExplicitSpecialization(
 		base, explicit_arguments->second, context);
 	if(!specialization) return false;
 	string owner_local;
-	string owner_base = PrefixComponent(specialization->owner);
-	if(owner_base.empty()) owner_base = specialization->owner;
+	// TemplateDefinition::owner is the enclosing class specialization here.
+	string owner_base = specialization->owner;
 	const size_t owner_angle = owner_base.find('<');
 	if(owner_angle != string::npos) owner_base.erase(owner_angle);
 	const TemplateDefinition* owner_definition = owner_base.empty() ? 0 :
