@@ -53,6 +53,23 @@ CPPGMAstNodePtr FindReturnStatement(const CPPGMAstNodePtr& node)
 
 }
 
+Analyzer::Analyzer()
+	: global_(new Scope(SCOPE_NAMESPACE, "<global>", 0)), anonymous_type_count_(0)
+{
+}
+
+void Analyzer::Analyze(const CPPGMAstNodePtr& tree)
+{
+	if (!tree || tree->kind != "translation-unit") throw logic_error("invalid translation unit");
+	for (size_t i = 0; i < tree->children.size(); ++i) Process(tree->children[i], global_.get());
+}
+
+void Analyzer::Print(ostream& out) const
+{
+	out << "translation-unit\n";
+	PrintScope(global_.get(), out, 1);
+}
+
 ConstantValue Analyzer::FromIntegralValue(const PA19IntegralValue& value) const
 {
 	if (!value.known) return ConstantValue();

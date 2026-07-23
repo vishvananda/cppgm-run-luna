@@ -243,7 +243,7 @@ void PA14Lowerer::Lower(ostream& out)
     for(size_t i = 0; i < functions_.size(); ++i) {
       const FunctionRecord& function = functions_[i];
       if(!function.definition || !function.emitted || function.base_entry || !function.constructor ||
-         function.deleted || !function.template_instantiation || function.object_name.empty())
+         function.deleted || function.object_name.empty())
         continue;
       string base_object = function.object_name;
       const size_t constructor = base_object.find("C1");

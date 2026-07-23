@@ -1,4 +1,5 @@
 #pragma once
+
 	string NodeTypeSpelling(const CPPGMAstNodePtr& sequence) const
 	{
 		if(!sequence) return string();
@@ -270,8 +271,7 @@
 		node->template_primary = primary;
 		node->template_arguments = arguments;
 		for(size_t i = 0; i < node->children.size(); ++i)
-			MarkGeneratedNode(node->children[i], primary, arguments,
-				explicit_instantiation);
+			MarkGeneratedNode(node->children[i], primary, arguments, false);
 	}
 	void RenameGeneratedFunction(const CPPGMAstNodePtr& declaration,
 		const string& name)
@@ -361,6 +361,32 @@
 		const vector<string>& parent_args, const string& parent_local_name,
 		bool explicit_instantiation = false)
 	{
+		// A class template can be replayed once in its still-dependent form while
+		// a concrete use is being discovered.  Its out-of-class member definitions
+		// are declarations of the primary, not definitions for a synthetic
+		// `Class_T_` specialization; wait for the concrete replay instead.
+		for(size_t parameter = 0; parameter < parent.parameters.size() &&
+			parameter < parent_args.size(); ++parameter)
+			if(!parent.parameters[parameter].name.empty() &&
+				CanonicalSpelling(parent_args[parameter]) ==
+				parent.parameters[parameter].name) {
+				return;
+			}
+		for(size_t argument = 0; argument < parent_args.size(); ++argument) {
+			const string value = CanonicalSpelling(parent_args[argument]);
+			bool bare_identifier = !value.empty() &&
+				(isalpha(static_cast<unsigned char>(value[0])) || value[0] == '_');
+			for(size_t character = 1; bare_identifier && character < value.size(); ++character)
+				if(!IsIdentifierCharacter(value[character])) bare_identifier = false;
+			const bool builtin = value == "bool" || value == "char" || value == "double" ||
+				value == "float" || value == "int" || value == "long" ||
+				value == "short" || value == "signed" || value == "unsigned" ||
+				value == "void" || value == "wchar_t";
+			if(bare_identifier && !builtin && value != "true" && value != "false" &&
+				constant_values_.find(value) == constant_values_.end() &&
+				class_contexts_.find(value) == class_contexts_.end())
+				return;
+		}
 		const vector<const TemplateDefinition*> members = MemberDefinitions(parent, parent_args);
 		for(size_t i = 0; i < members.size(); ++i) {
 			const TemplateDefinition& member = *members[i];
@@ -385,8 +411,8 @@
 				substitution != owner_substitutions.end(); ++substitution)
 				substitutions[substitution->first] = substitution->second;
 			substitutions[parent.name] = parent_local_name;
-			const string generated_context = JoinPath(GeneratedOwner(parent),
-				parent_local_name);
+				const string generated_context = JoinPath(GeneratedOwner(parent),
+					parent_local_name);
 			map<string, CPPGMAstNodePtr>::const_iterator concrete = class_declarations_.find(
 				JoinPath(parent.owner, parent_local_name));
 			if(concrete != class_declarations_.end() && concrete->second) {
@@ -421,6 +447,53 @@
 				generated_context, substitutions, integral_substitutions,
 				pack_substitutions);
 			if(!generated) continue;
+			if(generated->kind == "simple-declaration") {
+				const CPPGMAstNodePtr identifier = DescendantOfKind(generated, "identifier");
+				if(identifier) {
+					while(identifier->value.compare(0, 2, "::") == 0)
+						identifier->value.erase(0, 2);
+					const string member_name = LastComponent(identifier->value);
+					string source_owner = PrefixComponent(identifier->value);
+					// The transformed definition normally already contains the
+					// concrete owner.  If it still carries the primary spelling,
+					// replace that one component while preserving nested owners such
+					// as `::inner::value`.
+					vector<string> components;
+					size_t component_begin = 0;
+					int template_depth = 0;
+					for(size_t character = 0; character <= source_owner.size(); ++character) {
+						if(character < source_owner.size()) {
+							if(source_owner[character] == '<') ++template_depth;
+							else if(source_owner[character] == '>') --template_depth;
+						}
+						if(character == source_owner.size() ||
+							(template_depth == 0 && source_owner.compare(character, 2, "::") == 0)) {
+							components.push_back(source_owner.substr(component_begin,
+								character - component_begin));
+							component_begin = character + 2;
+							++character;
+						}
+					}
+					for(size_t component = 0; component < components.size(); ++component) {
+						const size_t angle = components[component].find('<');
+						const string base = angle == string::npos ? components[component] :
+							components[component].substr(0, angle);
+						if(base == parent_local_name) break;
+						if(base == parent.name) {
+							components[component] = parent_local_name;
+							break;
+						}
+					}
+					if(!components.empty() && !components[0].empty()) {
+						source_owner.clear();
+						for(size_t component = 0; component < components.size(); ++component) {
+							if(component != 0) source_owner += "::";
+							source_owner += components[component];
+						}
+						identifier->value = source_owner + "::" + member_name;
+					}
+				}
+			}
 			if(member.declaration->kind == "special-member-definition" &&
 				LastComponent(member.declaration->value) == parent.name) {
 				const CPPGMAstNodePtr declarator = FunctionDeclarator(generated);
@@ -1018,9 +1091,12 @@
 	string GeneratedSpecializationName(const TemplateDefinition& definition,
 		const vector<string>& args, const vector<string>& metadata_args,
 		const map<string, string>& substitutions, const string& context,
-		const string& concrete_owner)
+		const string& concrete_owner, bool explicit_instantiation = false)
 	{
 		string local_name = definition.name;
+		if(explicit_instantiation && !definition.class_template &&
+			!definition.alias_template && !definition.variable_template)
+			return local_name;
 		if(definition.class_template || definition.alias_template || definition.variable_template) {
 			// An empty argument list is a real specialization for a parameter-pack
 			// template.  Keep its generated entity distinct from the primary name;
@@ -1080,6 +1156,12 @@
 		const map<string, vector<string> >* pack_hints = 0,
 		const map<string, string>* outer_substitutions = 0,
 		const string* concrete_owner = 0);
+	string MaterializeExternInstantiation(const TemplateDefinition& definition,
+		const vector<string>& args, const vector<string>& metadata_args,
+		map<string, string> substitutions,
+		const map<string, PA19IntegralValue>& integral_substitutions,
+		const map<string, vector<string> >& pack_substitutions,
+		const string& context, const string& key);
 	string MaterializeInstantiation(const TemplateDefinition& definition,
 		const vector<string>& args, const vector<string>& metadata_args,
 		map<string, string> substitutions,
@@ -1100,6 +1182,15 @@
 	string FindConcreteInstantiationOwner(const TemplateDefinition& definition,
 			const map<string, string>& substitutions, const string& context,
 			const string& requested_owner) const;
+	void RestoreGeneratedMemberParameterNames(const TemplateDefinition& definition,
+		const TemplateDefinition* member_owner_definition,
+		const CPPGMAstNodePtr& generated);
+	void RegisterGeneratedTypeEntity(const TemplateDefinition& definition,
+		const CPPGMAstNodePtr& generated, const string& generated_owner,
+		const string& local_name, const string& concrete_owner,
+		const map<string, string>& substitutions, const vector<string>& args,
+		const map<string, vector<string> >& pack_substitutions,
+		const string& context, bool explicit_instantiation);
 	string EmitInstantiation(const TemplateDefinition& definition,
 		const vector<string>& args, const vector<string>& metadata_args,
 		map<string, string> substitutions,

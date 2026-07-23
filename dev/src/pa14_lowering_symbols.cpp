@@ -151,6 +151,12 @@ string abi_type_text(const string& raw)
 {
   string value = abi_trim(raw);
   if(value.empty()) return "v";
+	// A boolean non-type template argument is encoded as a typed literal in
+	// the Itanium ABI.  PA18 keeps the source spelling (`true`/`false`) in
+	// typed compiler state, so normalize it at the ABI boundary instead of
+	// treating it as an identifier.
+	if(value == "true") return "Lb1E";
+	if(value == "false") return "Lb0E";
 	// PA19 preserves an enum non-type argument as `EnumType value` so the
 	// source type remains available for specialization names.  In the ABI it
 	// is a typed non-type literal, not a named type containing a space.
@@ -520,8 +526,8 @@ void PA14Lowerer::FinalizeSymbols()
               type_value(second->child)->name == "void")
         function.object_name = "_ZdlPvS_";
     }
-    if(function.template_instantiation || function.inline_definition) {
-      function.weak_binding = true;
+	if(function.template_instantiation || function.inline_definition) {
+		if(!function.extern_template) function.weak_binding = true;
       if(function.object_name.empty()) function.object_name = TemplateFunctionObjectName(function);
     }
   }

@@ -155,6 +155,7 @@ bool Parser::ParseOperatorName(string* value, bool allow_template)
 		result += op;
 		++position_;
 	}
+	if (allow_template) ParseTemplateSuffix(&result);
 	*value = result;
 	return true;
 }

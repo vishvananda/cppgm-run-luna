@@ -24,6 +24,26 @@ string PA14Lowerer::EmitReferenceArgument(const CPPGMAstNodePtr& node, Scope* sc
     TypePtr referred = target->child;
     if(node && node->kind == "cast-expression" && node->children.size() > 1 &&
        type_is_reference(target) && node->children[1] &&
+       node->children[1]->kind != "call-expression") {
+      const TypePtr cast_type = analyzer_.TypeFromTypeId(node->children[0], scope);
+      const TypePtr cast_value = cast_type ? type_value(cast_type) : TypePtr();
+      const TypePtr referred_value = referred ? type_value(referred) : TypePtr();
+      if(cast_type && type_is_reference(cast_type) && cast_value && referred_value &&
+         cast_value->kind == TYPE_CLASS && referred_value->kind == TYPE_CLASS &&
+         (PA12SameType(cast_value, referred_value, true) ||
+          IsDerivedFrom(cast_value, referred_value))) {
+        const string source_address = EmitAddress(node->children[1], scope);
+        const ExprInfo source_info = Infer(node->children[1], scope);
+        const TypePtr source_value = expression_value_type(source_info);
+        if(source_value && source_value->kind == TYPE_CLASS &&
+           IsDerivedFrom(source_value, cast_value))
+          return AdjustBaseAddress(source_address, source_value, cast_value);
+        return PA12SameType(cast_value, referred_value, true) ? source_address :
+          AdjustBaseAddress(source_address, cast_value, referred_value);
+      }
+    }
+    if(node && node->kind == "cast-expression" && node->children.size() > 1 &&
+       type_is_reference(target) && node->children[1] &&
        node->children[1]->kind == "call-expression") {
       const CPPGMAstNodePtr call = node->children[1];
       TypePtr cast_type = analyzer_.TypeFromTypeId(node->children[0], scope);
@@ -69,6 +89,32 @@ string PA14Lowerer::EmitReferenceArgument(const CPPGMAstNodePtr& node, Scope* sc
       if(EmitConstructorAt(object_type, address, arguments, scope, false,
                            false, true)) {
         RegisterTemporaryObject(object_type, address);
+        return address;
+        }
+    }
+    if(node && node->kind == "binary-expression" && referred &&
+       type_value(referred)->kind == TYPE_CLASS) {
+      vector<CPPGMAstNodePtr> operator_arguments;
+      operator_arguments.push_back(node->children.empty() ? CPPGMAstNodePtr() :
+        node->children[0]);
+      if(node->children.size() > 1) operator_arguments.push_back(node->children[1]);
+      CallChoice choice = ChooseOperatorCall(
+        OperatorFunctionName(PA12Operator(node->value)), operator_arguments, scope);
+      FunctionRecord* function = choice.binding ? RecordForBinding(choice.binding) : 0;
+      TypePtr result_type = function && function->source_type ?
+        type_value(function->source_type->child) :
+        (choice.function ? type_value(choice.function->child) : TypePtr());
+      if(function && function->indirect_result && result_type &&
+         result_type->kind == TYPE_CLASS) {
+        const string slot = new_special_slot("arg", low_type(result_type));
+        const string address = new_temp();
+        AddInstruction(address + " = addr $" + slot);
+        (void)EmitChosenCall(choice, CPPGMAstNodePtr(), operator_arguments,
+          scope, address);
+        RegisterTemporaryObject(result_type, address);
+        if(!PA12SameType(result_type, type_value(referred), true) &&
+           IsDerivedFrom(result_type, type_value(referred)))
+          return AdjustBaseAddress(address, result_type, type_value(referred));
         return address;
       }
     }
@@ -310,7 +356,8 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
         AddInstruction(object_operand + " = addr $" + slot);
       }
       object_operand = AdjustBaseAddress(object_operand, object_type,
-        choice.binding ? choice.binding->member_owner : TypePtr());
+        choice.binding ? choice.binding->member_owner : TypePtr(),
+        choice.project_base_path);
       operands.push_back(object_operand);
       if(choice.virtual_dispatch) virtual_object_operand = object_operand;
     }

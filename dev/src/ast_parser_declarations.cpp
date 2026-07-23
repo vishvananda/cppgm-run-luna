@@ -320,7 +320,7 @@ CPPGMAstNodePtr Parser::ParseTemplateDeclaration(bool member_context)
 CPPGMAstNodePtr Parser::ParseExplicitInstantiation()
 {
 	Mark mark = Save();
-	Take("extern");
+	const bool extern_template = Take("extern");
 	if (!Take("template"))
 	{
 		Restore(mark);
@@ -336,13 +336,26 @@ CPPGMAstNodePtr Parser::ParseExplicitInstantiation()
 			return CPPGMAstNodePtr();
 		}
 	}
-	else target = ParseSimpleOrFunctionDeclaration(false);
+	else {
+		// An explicit constructor instantiation has no return type: the
+		// qualified constructor-id itself is the declarator, for example
+		// `extern template box<int>::box();`.  Reuse the out-of-class special
+		// member parser before falling back to an ordinary function declaration.
+		if (Peek().kind == AST_IDENTIFIER && Peek(1).text == "<") {
+			Mark constructor_mark = Save();
+			target = ParseSpecialMember(false, false);
+			if (!target) Restore(constructor_mark);
+		}
+		if (!target) target = ParseSimpleOrFunctionDeclaration(false);
+	}
 	if (!target)
 	{
 		Restore(mark);
 		return CPPGMAstNodePtr();
 	}
 	CPPGMAstNodePtr result = Node("explicit-instantiation-declaration");
+	result->explicit_instantiation = !extern_template;
+	result->extern_instantiation = extern_template;
 	Add(result, target);
 	return result;
 }

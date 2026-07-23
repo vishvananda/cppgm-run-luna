@@ -304,7 +304,9 @@ PA14Lowerer::Value PA14Lowerer::EmitAssignment(const CPPGMAstNodePtr& node, Scop
           left_probe_type->owned_scope, "operator=");
         bool has_direct_assignment = false;
         for(size_t i = 0; i < direct_assignments.size(); ++i)
-          if(direct_assignments[i]->kind == BIND_FUNCTION) {
+          if(direct_assignments[i]->kind == BIND_FUNCTION &&
+             (!RecordForBinding(direct_assignments[i]) ||
+              !RecordForBinding(direct_assignments[i])->template_instantiation)) {
             has_direct_assignment = true;
           }
         // An inherited operator= does not suppress the derived class's

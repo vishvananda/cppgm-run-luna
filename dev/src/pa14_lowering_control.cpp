@@ -156,6 +156,24 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
       return false;
     }
     FunctionRecord* record = RecordForBinding(best_binding);
+    if(record && record->copy_constructor && raw_arguments.size() == 1 &&
+       raw_arguments[0] && IsTrivialValueStorage(object_type)) {
+      if(IsEmptyBaseStorage(object_type)) {
+        EmitTemporaryDestructors(temporary_mark, scope);
+        return true;
+      }
+      const ExprInfo source_info = Infer(raw_arguments[0], scope);
+      const TypePtr source_type = expression_value_type(source_info);
+      string source = EmitAddress(raw_arguments[0], scope);
+      if(source_type && IsDerivedFrom(source_type, object_type) &&
+         !PA12SameType(source_type, object_type, true))
+        source = AdjustBaseAddress(source, source_type, object_type);
+      AddInstruction("copyobj " + integer_text(static_cast<long long>(type_size(object_type))) +
+        "x" + integer_text(static_cast<long long>(type_alignment(object_type))) +
+        " " + source + ", " + address);
+      EmitTemporaryDestructors(temporary_mark, scope);
+      return true;
+    }
     if(record && base_entry) {
       const TypePtr first_parameter = record->source_type && !record->source_type->parameters.empty() ? record->source_type->parameters[0] : TypePtr();
       if(record->template_instantiation && !raw_arguments.empty() &&
@@ -408,6 +426,9 @@ void PA14Lowerer::EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr&
       emit_store(PointerTo(Fundamental("char")), address, destination);
       return;
     }
+    const bool multi_argument_parenthesized = !initializer->children.empty() &&
+      initializer->children[0] && initializer->children[0]->kind == "paren-initializer" &&
+      initializer->children[0]->children.size() > 1;
     if(variable->type->kind == TYPE_ARRAY) {
       if(!expression) return;
       string base = EmitAddress(CPPGMAstNodePtr(new CPPGMAstNode("id-expression", variable->source_name)), scope);
@@ -531,7 +552,18 @@ void PA14Lowerer::EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr&
       if(expression && expression->kind != "braced-init-list") {
         const ExprInfo source_info = Infer(expression, scope);
         const TypePtr source_type = expression_value_type(source_info);
-        if(source_type && source_type->kind == TYPE_CLASS) {
+        if(source_type && source_type->kind == TYPE_CLASS && !multi_argument_parenthesized) {
+          const TypePtr constructed = expression->kind == "call-expression" &&
+            !expression->children.empty() ?
+            ConstructorObjectType(expression->children[0], scope) : TypePtr();
+          const CPPGMAstNodePtr source_arguments = expression->children.size() > 1 ?
+            expression->children[1] : CPPGMAstNodePtr();
+          if(constructed && PA12SameType(constructed, aggregate_type, true) &&
+             (!source_arguments || source_arguments->children.empty()) &&
+             !HasDefaultInitializationEffects(aggregate_type)) {
+            variable->initialization_address.clear();
+            return;
+          }
           string destination;
           if(!variable->initialization_address.empty()) {
             destination = variable->initialization_address;

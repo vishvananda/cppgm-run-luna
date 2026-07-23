@@ -332,10 +332,6 @@
 			if(!result->empty()) return true;
 		}
 		if(!explicit_definition) {
-			// If no template overload is viable, an ellipsis declaration is the
-			// standard fallback for an overload probe.  The signature map's single
-			// entry is intentionally last-declaration-wins, so consult the complete
-			// overload set before using FindFunctionSignature.
 			for(map<string, vector<FunctionSignature> >::const_iterator overload =
 				function_overloads_.begin(); overload != function_overloads_.end(); ++overload) {
 				const string suffix = "::" + callee;
@@ -356,12 +352,14 @@
 						}
 					}
 					if(ellipsis && signature.result_specifiers)
-						return (*result = NodeTypeSpelling(signature.result_specifiers), true);
+						return (*result = NodeTypeSpelling(signature.result_specifiers) +
+							ReturnDeclaratorSuffix(signature.declarator), true);
 				}
 			}
 			const FunctionSignature* signature = FindFunctionSignature(callee, context);
 			if(signature && signature->result_specifiers) {
-				*result = NodeTypeSpelling(signature->result_specifiers);
+				*result = NodeTypeSpelling(signature->result_specifiers) +
+					ReturnDeclaratorSuffix(signature->declarator);
 				return !result->empty();
 			}
 			// A call through a local callable object is resolved from its

@@ -1099,9 +1099,10 @@ string PA14Lowerer::EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
         global = EnsureStaticMemberStorage(binding,
           decltype_form);
       if(global) {
-        const string address = global_address(global);
         if(type_is_reference(global->type))
-          return emit_load(address, PointerTo(Fundamental("char")));
+          return emit_load("@" + global->symbol,
+            PointerTo(Fundamental("char")));
+        const string address = global_address(global);
         return address;
       }
       if(binding->is_member && !binding->is_static) {
@@ -1110,8 +1111,7 @@ string PA14Lowerer::EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
         member->children.push_back(this_node);
         member->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("identifier", binding->name)));
         const string address = EmitMemberAddress(member, scope, true);
-        if(type_is_reference(binding->type))
-          return emit_load(address, PointerTo(Fundamental("char")));
+		if(type_is_reference(binding->type)) return emit_load(address, PointerTo(Fundamental("char")));
         return address;
       }
       throw logic_error("cannot take address of expression");
@@ -1125,6 +1125,14 @@ string PA14Lowerer::EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
     }
     if(node->kind == "literal" && !node->value.empty() && node->value[0] == '"')
       return EmitLiteralAddress(node);
+    if(node->kind == "unary-expression" && PA12Operator(node->value) == "&") {
+      vector<CPPGMAstNodePtr> arguments;
+      if(!node->children.empty()) arguments.push_back(node->children[0]);
+      CallChoice overloaded = ChooseOperatorCall("operator&", arguments, scope);
+      if(overloaded.binding) return EmitOperatorCall("operator&", arguments, scope).operand;
+      return EmitAddress(node->children.empty() ? CPPGMAstNodePtr() :
+        node->children[0], scope);
+    }
     if(node->kind == "unary-expression" || node->kind == "postfix-expression" ||
        node->kind == "binary-expression" || node->kind == "assignment-expression") {
       const string operator_address = EmitOperatorAddress(node, scope);
@@ -1324,7 +1332,8 @@ string PA14Lowerer::EmitMemberAddress(const CPPGMAstNodePtr& node, Scope* scope,
   }
 
 string PA14Lowerer::AdjustBaseAddress(const string& base, const TypePtr& raw_derived,
-                                      const TypePtr& target)
+                                      const TypePtr& target,
+                                      bool project_base_path)
 {
     TypePtr derived = type_value(raw_derived);
     TypePtr wanted = type_value(target);
@@ -1333,31 +1342,43 @@ string PA14Lowerer::AdjustBaseAddress(const string& base, const TypePtr& raw_der
       throw logic_error("member owner is not a base class");
     if(!IsDerivedFrom(derived, wanted))
       throw logic_error("member owner is not a base class");
-    size_t offset = 0;
-    bool found = false;
+    vector<size_t> path;
     set<const Type*> visited;
-    function<bool(const TypePtr&, size_t)> find_base =
-      [&](const TypePtr& current, size_t accumulated) {
+    function<bool(const TypePtr&)> find_base =
+      [&](const TypePtr& current) {
         if(!current || !visited.insert(current.get()).second) return false;
-        if(PA12SameType(current, wanted, true)) {
-          offset = accumulated;
-          return true;
-        }
+        if(PA12SameType(current, wanted, true)) return true;
         if(!current->direct_bases.empty()) {
           for(size_t i = 0; i < current->direct_bases.size(); ++i) {
             const size_t base_offset = i < current->direct_base_offsets.size() ?
               current->direct_base_offsets[i] : (i == 0 ? current->direct_base_offset : 0);
-            if(find_base(type_value(current->direct_bases[i]), accumulated + base_offset)) return true;
+            path.push_back(base_offset);
+            if(find_base(type_value(current->direct_bases[i]))) return true;
+            path.pop_back();
           }
-        } else if(current->direct_base && find_base(type_value(current->direct_base),
-            accumulated + current->direct_base_offset)) return true;
+        } else if(current->direct_base) {
+          path.push_back(current->direct_base_offset);
+          if(find_base(type_value(current->direct_base))) return true;
+          path.pop_back();
+        }
         return false;
       };
-    found = find_base(derived, 0);
-    if(!found) throw logic_error("member owner is not a base class");
-    const string adjusted = new_temp();
-    AddInstruction(adjusted + " = index i8 [projection=base_subobject] " + base + ", " +
-      integer_text(static_cast<long long>(offset)));
+    if(!find_base(derived)) throw logic_error("member owner is not a base class");
+    if(!project_base_path) {
+      size_t offset = 0;
+      for(size_t i = 0; i < path.size(); ++i) offset += path[i];
+      const string adjusted = new_temp();
+      AddInstruction(adjusted + " = index i8 [projection=base_subobject] " + base + ", " +
+        integer_text(static_cast<long long>(offset)));
+      return adjusted;
+    }
+    string adjusted = base;
+    for(size_t i = 0; i < path.size(); ++i) {
+      const string projected = new_temp();
+      AddInstruction(projected + " = index i8 [projection=base_subobject] " + adjusted + ", " +
+        integer_text(static_cast<long long>(path[i])));
+      adjusted = projected;
+    }
     return adjusted;
   }
 
@@ -1375,6 +1396,14 @@ void PA14Lowerer::EmitDynamicInitializers(vector<string>& entries)
         finalizers.push_back(&globals_[i]);
     }
     if(initializers.empty() && tls_initializers.empty() && finalizers.empty()) return;
+
+    // Binding a namespace-scope reference only publishes an address; it does
+    // not require the referred object's dynamic constructor to have run yet.
+    // Emit those address bindings first so the initialization stream follows
+    // the dependency shape represented in LowIR, while preserving source
+    // order within each category.
+    stable_partition(initializers.begin(), initializers.end(),
+      [](GlobalRecord* object) { return object && type_is_reference(object->type); });
 
     const auto render = [](FunctionState& state, const string& name,
                            const string& metadata) -> string {

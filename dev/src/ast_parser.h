@@ -27,6 +27,7 @@ struct CPPGMAstNode
 	CPPGMAstInitializerForm initializer_form;
 	bool template_instantiation;
 	bool explicit_instantiation;
+	bool extern_instantiation;
 	// PA18 preserves this source-level lookup fact on a materialized class
 	// specialization so PA14 can distinguish a dependent base from an
 	// ordinary concrete base during unqualified lookup.
@@ -35,6 +36,9 @@ struct CPPGMAstNode
 	// the local object address to be materialized by PA14.
 	bool materialize_object_address;
 	std::string materialize_object_name;
+	// PA18 records the concrete result type of a materialized member-template
+	// call so a surrounding deduction step can use the same typed fact.
+	std::string inferred_type;
 	// Normalized PA10 token range for declarations that need stable internal
 	// identities (notably function-local static storage).
 	std::size_t source_token_begin;

@@ -202,13 +202,15 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
     record->member = is_member;
     record->hidden_friend = hidden_friend;
     record->static_member = is_static;
-	record->template_instantiation = node->template_instantiation ||
+	record->template_instantiation = record->template_instantiation ||
+		node->template_instantiation ||
 		(member_owner && member_owner->template_specialization);
+	record->extern_template = record->extern_template || node->extern_instantiation;
 	record->object_root = record->object_root || node->explicit_instantiation;
-	if(node->explicit_instantiation) record->needed = true;
-	record->weak_binding = record->template_instantiation;
+	if(node->explicit_instantiation || node->extern_instantiation) record->needed = true;
+	record->weak_binding = record->template_instantiation && !record->extern_template;
 	record->inline_definition = record->inline_definition || HasInline(node) || facts.is_constexpr;
-	if(node->template_instantiation) {
+	if(node->template_instantiation || node->extern_instantiation) {
 		record->template_primary = node->template_primary;
 		record->template_arguments = node->template_arguments;
 	} else if(member_owner && member_owner->template_specialization) {
@@ -448,12 +450,17 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
     record->type = FunctionOf(parameters, function->variadic, function->child, false);
     record->member_owner = owner;
     record->qualified_name = qname;
-    record->member = true;
-    record->static_member = false;
+	record->member = true;
+	record->static_member = false;
 	record->template_instantiation = node->template_instantiation || owner->template_specialization ||
 		(owner->direct_base && type_value(owner->direct_base) &&
 		 type_value(owner->direct_base)->template_specialization);
 	record->weak_binding = record->template_instantiation;
+	// A special-member definition written in the class body is inline even
+	// when it is not a template.  Preserve that linkage fact so its emitted
+	// object uses the ABI constructor identity and receives the C2 alias.
+	record->inline_definition = record->inline_definition ||
+		(definition && node->value.find("::") == string::npos);
 	if(node->template_instantiation) {
 		record->template_primary = node->template_primary;
 		record->template_arguments = node->template_arguments;
@@ -696,6 +703,11 @@ void PA14Lowerer::CollectSimpleDeclarationItem(const CPPGMAstNodePtr& node,
       wrapper->children.push_back(node->children[0]);
       wrapper->children.push_back(declarator);
       if(item->children.size() > 1) wrapper->children.push_back(item->children[1]);
+      wrapper->template_instantiation = node->template_instantiation;
+      wrapper->explicit_instantiation = node->explicit_instantiation;
+      wrapper->extern_instantiation = node->extern_instantiation;
+      wrapper->template_primary = node->template_primary;
+      wrapper->template_arguments = node->template_arguments;
       CPPGMAstNodePtr special_initializer = ChildOfKind(initializer, "special-initializer");
       const bool definition = special_initializer && special_initializer->value == "default";
       CollectFunction(wrapper, scope, definition);

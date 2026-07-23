@@ -3,22 +3,9 @@
 #include "pa19_constants.h"
 class Analyzer {
 public:
-	Analyzer()
-		: global_(new Scope(SCOPE_NAMESPACE, "<global>", 0)),
-		  anonymous_type_count_(0) {}
-	void Analyze(const CPPGMAstNodePtr& tree)
-	{
-		if (!tree || tree->kind != "translation-unit") throw logic_error("invalid translation unit");
-		for (size_t i = 0; i < tree->children.size(); ++i)
-			Process(tree->children[i], global_.get());
-	}
-	void Print(ostream& out) const
-	{
-		out << "translation-unit\n";
-		PrintScope(global_.get(), out, 1);
-	}
+	Analyzer(); void Analyze(const CPPGMAstNodePtr& tree);
+	void Print(ostream& out) const;
 	void PrintSemantics(const CPPGMAstNodePtr& tree, ostream& out);
-public:
 	unique_ptr<Scope> global_;
 	unsigned int anonymous_type_count_;
 	map<const CPPGMAstNode*, Scope*> function_scopes_;
@@ -516,9 +503,15 @@ public:
 			const string value = child->value;
 			if (value == "KW_TYPEDEF:typedef") info.is_typedef = true;
 			else if (value == "KW_CONSTEXPR:constexpr") info.is_constexpr = true;
+			else if (value == "KW_INLINE:inline") {
+			}
 			else if (value == "KW_STATIC:static") info.is_static = true;
 			else if (value == "KW_MUTABLE:mutable") info.is_mutable = true;
-			else if (value == "KW_FRIEND:friend") info.is_friend = true;
+			else if (value == "KW_FRIEND:friend" || value == "friend") info.is_friend = true;
+			else if (value == "KW_EXTERN:extern") {
+			}
+			else if (value == "KW_THREAD_LOCAL:thread_local") {
+			}
 			else if (value == "KW_VIRTUAL:virtual") info.is_virtual = true;
 			else if (value == "KW_CONST:const") info.is_const = true;
 			else if (value == "KW_VOLATILE:volatile") info.is_volatile = true;
@@ -530,6 +523,12 @@ public:
 					word.erase(0, 1);
 				while (!word.empty() && isspace(static_cast<unsigned char>(word[word.size() - 1])))
 					word.erase(word.size() - 1, 1);
+				if (word.compare(0, 7, "friend ") == 0) {
+					info.is_friend = true;
+					word = word.substr(7);
+					while (!word.empty() && isspace(static_cast<unsigned char>(word[0])))
+						word.erase(word.begin());
+				}
 				const bool compound_leading_cv =
 					(value.find("TT_IDENTIFIER:") == 0 &&
 					 ((word.compare(0, 6, "const ") == 0 && word.size() > 6) ||
@@ -567,6 +566,8 @@ public:
 					}
 					info.named_type = ResolveSpelledType(StripTypeMarker(qualified), scope, info);
 				}
+				else
+					info.named_type = ResolveSpelledType(word, scope, info);
 			}
 		}
 		TypePtr result = info.named_type;
@@ -1190,7 +1191,6 @@ public:
 		}
 		if (node->kind == "access-specifier" || node->kind == "empty-declaration" ||
 			node->kind == "base-clause") return;
-		// Statements other than declarations are semantically outside PA11; recurse only through nested compounds and declarations they contain.
 		for (size_t i = 0; i < node->children.size(); ++i)
 			if (node->children[i] && (node->children[i]->kind == "compound-statement" ||
 				node->children[i]->kind == "simple-declaration" ||

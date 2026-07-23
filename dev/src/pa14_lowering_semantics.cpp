@@ -480,7 +480,19 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferIdentifier(const CPPGMAstNodePtr& node, 
     if(decltype_member) {
       result.binding = decltype_member;
       result.type = PA12AdjustedType(decltype_member->type);
-      result.category = "prvalue";
+      if(type_is_reference(result.type)) result.type = result.type->child;
+      result.category = "lvalue";
+      const TypePtr constant_type = type_value(result.type);
+      const bool integral_constant = is_integral_type(result.type) ||
+        (constant_type && constant_type->kind == TYPE_FUNDAMENTAL &&
+         constant_type->name == "bool");
+      if(decltype_member->is_static && decltype_member->has_value &&
+         integral_constant) {
+        result.known_constant = true;
+        result.constant = decltype_member->value;
+        result.operand = integer_text(result.constant);
+        result.category = "prvalue";
+      }
       return result;
     }
     result.candidates = Lookup(node->value, scope);
@@ -538,8 +550,12 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferIdentifier(const CPPGMAstNodePtr& node, 
          !result.binding->member_owner->class_members[result.binding->member_index].is_mutable)
         result.type = CloneWithCv(result.type, true, result.type->is_volatile);
       result.category = result.type && result.type->kind == TYPE_FUNCTION ? "lvalue" : "lvalue";
-      if(result.binding->is_member && result.binding->is_static &&
-         result.binding->has_value) {
+		const TypePtr constant_type = type_value(result.type);
+		const bool integral_constant = is_integral_type(result.type) ||
+			(constant_type && constant_type->kind == TYPE_FUNDAMENTAL &&
+				constant_type->name == "bool");
+		if(result.binding->is_member && result.binding->is_static &&
+			 result.binding->has_value && integral_constant) {
         result.known_constant = true;
         result.constant = result.binding->value;
         result.operand = integer_text(result.constant);

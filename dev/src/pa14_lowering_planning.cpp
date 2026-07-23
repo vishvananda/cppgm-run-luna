@@ -222,7 +222,7 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
         }
       }
       if(ambiguous_best) throw logic_error("ambiguous overload");
-      if(!best.binding) {
+        if(!best.binding) {
         string detail = "no viable function";
         for(size_t i = 0; i < candidates.size(); ++i)
           detail += " [" + candidates[i]->qualified_name + "]";
@@ -232,6 +232,7 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
       const bool qualified_member_id = lookup_callee &&
         lookup_callee->kind == "id-expression" &&
         lookup_callee->value.find("::") != string::npos;
+      best.project_base_path = qualified_member_id;
       const bool destructor_call = selected && selected->destructor;
       if(best.member && !best.static_member && !qualified_member_id &&
          !destructor_call) {

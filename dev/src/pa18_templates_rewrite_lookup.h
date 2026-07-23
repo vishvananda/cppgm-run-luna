@@ -20,11 +20,46 @@
 		}
 		return false;
 	}
+	bool IsGeneratedMemberTemplateUsingTarget(const string& raw_target,
+		const string& context, const map<string, string>& substitutions) const
+	{
+		const size_t separator = raw_target.rfind("::");
+		if(separator == string::npos) return false;
+		string owner = CanonicalSpelling(ReplaceIdentifiers(
+			raw_target.substr(0, separator), substitutions));
+		owner = CanonicalSpelling(ResolveAlias(owner, context));
+		const string member = LastComponent(raw_target);
+		map<string, string>::const_iterator generated = specialization_bases_.find(
+			LastComponent(owner));
+		if(generated == specialization_bases_.end()) return false;
+		const string source_owner = LastComponent(generated->second);
+		for(map<string, TemplateDefinition>::const_iterator it = definitions_.begin();
+			it != definitions_.end(); ++it) {
+			const TemplateDefinition& definition = it->second;
+			if(definition.class_template || definition.alias_template ||
+				definition.variable_template || definition.parameters.empty() ||
+				LastComponent(definition.name) != member) continue;
+			string definition_owner = definition.owner;
+			const size_t angle = definition_owner.find('<');
+			if(angle != string::npos) definition_owner.erase(angle);
+			if(LastComponent(definition_owner) == source_owner) return true;
+		}
+		return false;
+	}
 	string GeneratedFunctionQualifier(const TemplateDefinition& definition,
 		const string& raw_callee, const string& context) const
 	{
 		string qualifier = PrefixComponent(raw_callee);
 		if(!qualifier.empty()) return qualifier;
+		// A friend function template is declared lexically inside its class but
+		// belongs to the surrounding namespace.  The generated declaration is
+		// collected with the class as its replay owner so it can see the class's
+		// private state; its call spelling must nevertheless remain unqualified
+		// here, allowing PA14's friend-aware collection to assign the namespace
+		// qualified symbol.
+		if(definition.declaration && !definition.declaration->children.empty() &&
+			SpellNode(definition.declaration->children[0]).find("friend") != string::npos)
+			return string();
 		const string owner = GeneratedOwner(definition);
 		bool visible = owner.empty() || context == owner ||
 			(context.size() > owner.size() && context.compare(0, owner.size(), owner) == 0 &&

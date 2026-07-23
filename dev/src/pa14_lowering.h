@@ -89,6 +89,7 @@ class PA14Lowerer
     bool explicit_constructor;
 	bool builtin;
 	bool template_instantiation;
+	bool extern_template;
 	bool inline_definition;
 	bool object_root;
 	bool weak_binding;
@@ -123,7 +124,7 @@ class PA14Lowerer
         hidden_friend(false),
         explicit_constructor(false),
         builtin(false),
-		template_instantiation(false), inline_definition(false), object_root(false), weak_binding(false),
+		template_instantiation(false), extern_template(false), inline_definition(false), object_root(false), weak_binding(false),
         defaulted(false), deleted(false),
 		destructor(false), deleting_entry(false), needed(false),
         emitted(false), variadic(false), unwind_no(false), noreturn(false), base_entry(false),
@@ -200,6 +201,9 @@ class PA14Lowerer
     bool member;
 	bool static_member;
 	bool conversion;
+	// Qualified base calls retain each semantic base step in LowIR.  Ordinary
+	// member lookup still uses the canonical aggregate adjustment.
+	bool project_base_path;
 	bool virtual_dispatch;
 	size_t virtual_slot;
 	TypePtr virtual_owner;
@@ -209,7 +213,8 @@ class PA14Lowerer
 
     CallChoice()
       : binding(), function(), object(), direct(false), member(false),
-		static_member(false), conversion(false), virtual_dispatch(false),
+		static_member(false), conversion(false), project_base_path(false),
+		virtual_dispatch(false),
 		virtual_slot(0), virtual_owner(), user_defined(1000000),
         worst(1000000), total(1000000) {}
   };
@@ -752,7 +757,8 @@ string EmitMemberAddress(const CPPGMAstNodePtr& node, Scope* scope,
                          bool reference_projection = false);
 
 string AdjustBaseAddress(const string& base, const TypePtr& derived,
-                         const TypePtr& target);
+                         const TypePtr& target,
+                         bool project_base_path = false);
 
 Value EmitIdentifier(const CPPGMAstNodePtr& node, Scope* scope,
                      const TypePtr& expected);

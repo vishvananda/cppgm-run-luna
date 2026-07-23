@@ -1,10 +1,39 @@
+#include <functional>
 #include "pa18_templates_collection.h"
 #include "pa18_templates_rewrite.h"
-
-#include <functional>
 using namespace std;
 
 namespace pa18_templates_internal {
+
+namespace {
+
+bool HasStaticMemberDeclaration(const CPPGMAstNodePtr& node, const string& name)
+{
+	if(!node || name.empty()) return false;
+	if(node->kind == "simple-declaration" && !node->children.empty() &&
+		SpellNode(node->children[0]).find("static") != string::npos) {
+		const CPPGMAstNodePtr list = ChildOfKindLocal(node, "init-declarator-list");
+		if(list) for(size_t item = 0; item < list->children.size(); ++item) {
+			const CPPGMAstNodePtr entry = list->children[item];
+			if(!entry || entry->children.empty()) continue;
+			if(LastComponent(FirstIdentifierLocal(entry->children[0])) == name) return true;
+		}
+	}
+	for(size_t child = 0; child < node->children.size(); ++child)
+		if(HasStaticMemberDeclaration(node->children[child], name)) return true;
+	return false;
+}
+
+void MarkStaticGeneratedFunction(const CPPGMAstNodePtr& node)
+{
+	if(!node || node->kind != "function-definition" || node->children.empty() ||
+		!node->children[0]) return;
+	if(SpellNode(node->children[0]).find("static") != string::npos) return;
+	node->children[0]->children.insert(node->children[0]->children.begin(),
+		CPPGMAstNodePtr(new CPPGMAstNode("decl-specifier", "KW_STATIC:static")));
+}
+
+} // namespace
 
 bool PA18TemplateExpander::MemberOwnerPattern(const TemplateDefinition& candidate,
 	const TemplateDefinition& parent, const vector<string>& parent_args,
@@ -27,13 +56,17 @@ bool PA18TemplateExpander::MemberOwnerPattern(const TemplateDefinition& candidat
 	for(size_t search = 0; ; ) {
 		const size_t candidate_angle = candidate.owner.find('<', search);
 		if(candidate_angle == string::npos) break;
-		if(candidate.owner.substr(0, candidate_angle) == parent.qualified_name) {
+		if(candidate.owner.substr(0, candidate_angle) == parent.qualified_name ||
+			candidate.owner.substr(0, candidate_angle) == member_scope) {
 			angle = candidate_angle;
 			break;
 		}
 		search = candidate_angle + 1;
 	}
 	if(angle == string::npos)
+		return false;
+	const string owner_prefix = candidate.owner.substr(0, angle);
+	if(owner_prefix != parent.qualified_name && owner_prefix != member_scope)
 		return false;
 	string owner_arguments;
 	size_t close = string::npos;
@@ -43,6 +76,9 @@ bool PA18TemplateExpander::MemberOwnerPattern(const TemplateDefinition& candidat
 	for(size_t i = 0; i < parent.parameters.size(); ++i)
 		if(!parent.parameters[i].name.empty()) parameter_names.insert(
 			parent.parameters[i].name);
+	for(size_t i = 0; i < parent.specialization_parameters.size(); ++i)
+		if(!parent.specialization_parameters[i].empty()) parameter_names.insert(
+			parent.specialization_parameters[i]);
 	for(size_t i = 0; i < candidate.parameters.size(); ++i)
 		if(!candidate.parameters[i].name.empty()) parameter_names.insert(
 			candidate.parameters[i].name);
@@ -64,8 +100,23 @@ bool PA18TemplateExpander::MemberOwnerPattern(const TemplateDefinition& candidat
 			local[pack_name] = combined;
 			break;
 		}
-		if(argument_index >= parent_args.size() || !MatchTypePattern(pattern,
-			parent_args[argument_index++], parameter_names, &local, parent.owner, true)) return false;
+		if(argument_index >= parent_args.size()) return false;
+		const string actual = CanonicalSpelling(parent_args[argument_index++]);
+		if(pattern == actual) continue;
+		// Out-of-class member definitions may rename the enclosing class
+		// template parameters (`T` becomes `Tp`, for example).  The qualified
+		// owner is still the same template specialization; a bare non-builtin
+		// owner argument therefore matches positionally even when its spelling
+		// is not present in the primary class declaration's parameter list.
+		bool bare_identifier = !pattern.empty();
+		for(size_t character = 0; character < pattern.size(); ++character)
+			if(!IsIdentifierCharacter(pattern[character])) { bare_identifier = false; break; }
+		const bool builtin = pattern == "bool" || pattern == "char" || pattern == "double" ||
+			pattern == "float" || pattern == "int" || pattern == "long" ||
+			pattern == "short" || pattern == "signed" || pattern == "unsigned" ||
+			pattern == "void" || pattern == "wchar_t";
+		if(bare_identifier && !builtin) continue;
+		if(!MatchTypePattern(pattern, actual, parameter_names, &local, parent.owner, true)) return false;
 	}
 	if(argument_index != parent_args.size()) return false;
 	if(inferred) *inferred = local;
@@ -1284,228 +1335,6 @@ string PA18TemplateExpander::FindConcreteInstantiationOwner(
 		if(same) return candidate;
 	}
 	return string();
-}
-
-string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definition,
-	const vector<string>& args, const vector<string>& metadata_args,
-	map<string, string> substitutions,
-	const map<string, PA19IntegralValue>& integral_substitutions,
-	const map<string, vector<string> >& pack_substitutions, const string& context,
-	bool explicit_instantiation, const string& key, const string& local_name,
-	const string& requested_owner)
-{
-	const string generated_owner = definition.lexical_owner.empty() ?
-		definition.owner : definition.lexical_owner;
-	string member_owner_name = definition.owner;
-	const size_t member_owner_angle = member_owner_name.find('<');
-	if(member_owner_angle != string::npos) member_owner_name.erase(member_owner_angle);
-	const TemplateDefinition* member_owner_definition = member_owner_name.empty() ? 0 :
-		FindDefinition(member_owner_name, context);
-	if(!member_owner_definition && !member_owner_name.empty())
-		member_owner_definition = FindDefinition(LastComponent(member_owner_name), context);
-	const bool member_definition = !definition.owner.empty() &&
-		((member_owner_definition && member_owner_definition->class_template) ||
-		 class_contexts_.find(member_owner_name) != class_contexts_.end() ||
-		 FindClassDeclaration(member_owner_name, context));
-	const string concrete_owner = definition.class_template ?
-		FindConcreteInstantiationOwner(definition, substitutions, context, requested_owner) :
-		((member_definition && ConcreteOwnerMatches(definition, requested_owner)) ||
-		 (definition.alias_template && ConcreteOwnerMatches(definition, requested_owner)) ?
-			requested_owner : string());
-	if(definition.class_template) {
-		class_contexts_.insert(JoinPath(definition.owner, local_name));
-		class_contexts_.insert(JoinPath(generated_owner, local_name));
-	}
-	const string previous_instantiation_name = active_instantiation_name_;
-	active_instantiation_name_ = definition.class_template ? local_name : string();
-	CPPGMAstNodePtr generated;
-	try {
-		generated = TransformInstantiatedNode(definition, definition.owner,
-			substitutions, integral_substitutions, pack_substitutions);
-	} catch(...) {
-		active_instantiation_name_ = previous_instantiation_name;
-		throw;
-	}
-	active_instantiation_name_ = previous_instantiation_name;
-	if(!generated) throw logic_error("unable to instantiate template");
-	MarkGeneratedNode(generated, definition.qualified_name, metadata_args, explicit_instantiation);
-	if(generated->kind == "simple-declaration") {
-		const CPPGMAstNodePtr identifier = DescendantOfKind(generated, "identifier");
-		if(identifier) identifier->value = local_name;
-		RecordConstantDeclaration(generated, generated_owner);
-	}
-	if(definition.class_template)
-		generated->dependent_base_lookup = DefinitionHasDependentBase(definition);
-	if(!definition.class_template && !definition.alias_template && !member_definition)
-		RenameGeneratedFunction(generated, local_name);
-	if(definition.class_template || definition.alias_template) generated->value = local_name;
-	if(definition.alias_template) {
-		RegisterGeneratedTypeAlias(generated, generated_owner);
-		// A member alias template is emitted from its source lexical owner, but
-		// a template-template argument names it through the concrete enclosing
-		// specialization.  Register both spellings so a later `::value` or type
-		// lookup reaches the already rewritten alias target.
-		set<string> concrete_owners;
-		if(!concrete_owner.empty()) concrete_owners.insert(concrete_owner);
-		for(map<string, string>::const_iterator substitution = substitutions.begin();
-			substitution != substitutions.end(); ++substitution) {
-			const size_t separator = substitution->second.rfind("::");
-			if(separator == string::npos) continue;
-			const string owner = substitution->second.substr(0, separator);
-			if(specialization_bases_.find(LastComponent(owner)) !=
-				specialization_bases_.end() &&
-				specialization_arguments_.find(LastComponent(owner)) !=
-				specialization_arguments_.end()) concrete_owners.insert(owner);
-		}
-		for(set<string>::const_iterator owner = concrete_owners.begin();
-			owner != concrete_owners.end(); ++owner)
-			RegisterGeneratedTypeAlias(generated, *owner);
-	}
-	if(definition.class_template) {
-		const string generated_path = JoinPath(definition.owner, local_name);
-		class_declarations_[generated_path] = generated;
-		const string lexical_path = JoinPath(generated_owner, local_name);
-		class_declarations_[lexical_path] = generated;
-		class_contexts_.insert(generated_path);
-		RegisterGeneratedConstants(generated, generated_path);
-		if(!concrete_owner.empty()) {
-			const string concrete_path = JoinPath(concrete_owner, local_name);
-			class_declarations_[concrete_path] = generated;
-			class_contexts_.insert(concrete_path);
-			RegisterGeneratedConstants(generated, concrete_path);
-		}
-		const map<string, vector<string> > previous_packs = active_pack_substitutions_;
-		active_pack_substitutions_ = pack_substitutions;
-		try {
-			InstantiateRequestedNestedClasses(definition, args, local_name, context);
-			InstantiateMemberDefinitions(definition, args, local_name, explicit_instantiation);
-		} catch(...) {
-			active_pack_substitutions_ = previous_packs;
-			throw;
-		}
-		active_pack_substitutions_ = previous_packs;
-	}
-	EnsureDeclarationDependencies(generated, definition.owner, generated_owner);
-	// Text replay can encounter the same member template-id while resolving a
-	// dependent type and give the detached definition its standalone cache name.
-	// Once the entity is owned by a concrete class, the declaration must retain
-	// the member spelling so class-scope lookup can bind it.
-	if(member_definition) RenameGeneratedFunction(generated, LastComponent(definition.name));
-	for(size_t i = 0; i < args.size(); ++i)
-		EnsureForwardClass(args[i], context, generated_owner);
-	bool recursive_context_argument = false;
-	for(size_t i = 0; i < args.size(); ++i)
-		if(LastComponent(args[i]) == LastComponent(context) && !context.empty())
-			recursive_context_argument = true;
-	const string definition_owner = definition.lexical_owner.empty() ? definition.owner :
-		definition.lexical_owner;
-	const bool owner_is_context_ancestor = definition_owner.empty() || context == definition_owner ||
-		(context.size() > definition_owner.size() && context.compare(0,
-			definition_owner.size(), definition_owner) == 0 &&
-			context[definition_owner.size()] == ':');
-	if(class_contexts_.find(context) != class_contexts_.end() && owner_is_context_ancestor &&
-		context != definition.owner &&
-		!recursive_context_argument) {
-		generated_before_class_[context].push_back(generated);
-	}
-	else if(recursive_context_argument && definition.owner.empty() &&
-		!PrefixComponent(context).empty())
-		generated_before_class_[PrefixComponent(context)].push_back(generated);
-	else {
-		generated_by_owner_[concrete_owner.empty() ? generated_owner : concrete_owner].push_back(generated);
-	}
-	active_specializations_.erase(key);
-	return local_name;
-}
-
-string PA18TemplateExpander::MaterializeInstantiation(const TemplateDefinition& definition,
-	const vector<string>& args, const vector<string>& metadata_args,
-	map<string, string> substitutions,
-	const map<string, PA19IntegralValue>& integral_substitutions,
-	const map<string, vector<string> >& pack_substitutions, const string& context,
-	bool explicit_instantiation, const string& key, const string& concrete_owner)
-{
-	map<string, string>::const_iterator cached = specializations_.find(key);
-	if(cached != specializations_.end()) {
-		ReplayCachedInstantiation(definition, args, cached->second, context,
-			explicit_instantiation, pack_substitutions);
-		return cached->second;
-	}
-	const string local_name = GeneratedSpecializationName(definition, args,
-		metadata_args, substitutions, context, concrete_owner);
-	RegisterGeneratedSpecialization(definition, metadata_args, local_name);
-	if(definition.class_template) substitutions[definition.name] = local_name;
-	specializations_[key] = local_name;
-	if(DeferIncompleteAliasClass(definition, args, context)) {
-		const string generated_owner = definition.lexical_owner.empty() ?
-			definition.owner : definition.lexical_owner;
-		const string generated_path = JoinPath(definition.owner, local_name);
-		const string lexical_path = JoinPath(generated_owner, local_name);
-		class_contexts_.insert(generated_path);
-		class_contexts_.insert(lexical_path);
-		class_declarations_[generated_path] = MakeForwardClass(local_name);
-		class_declarations_[lexical_path] = class_declarations_[generated_path];
-		return local_name;
-	}
-	if(!active_specializations_.insert(key).second) return local_name;
-	return EmitInstantiation(definition, args, metadata_args, substitutions,
-		integral_substitutions, pack_substitutions, context, explicit_instantiation,
-		key, local_name, concrete_owner);
-}
-
-string PA18TemplateExpander::Instantiate(const TemplateDefinition& definition,
-	const vector<string>& raw_args, const string& context, bool explicit_instantiation,
-	const map<string, vector<string> >* pack_hints,
-	const map<string, string>* outer_substitutions, const string* requested_owner)
-{
-	if(definition.parameters.empty()) throw logic_error("template has no type parameters");
-	vector<string> args, metadata_args;
-	map<string, string> substitutions = outer_substitutions ? *outer_substitutions :
-		map<string, string>();
-	string concrete_owner = requested_owner ? *requested_owner : active_concrete_owner_;
-	if(!ConcreteOwnerMatches(definition, concrete_owner)) concrete_owner.clear();
-	// A template-template argument can name a member alias on a concrete
-	// specialization (for example `quote_X_::fn`).  Recover the outer class's
-	// typed bindings before replaying the member alias body; the source member
-	// definition itself only names those bindings as dependent parameters.
-	if(outer_substitutions) for(map<string, string>::const_iterator outer =
-		outer_substitutions->begin(); outer != outer_substitutions->end(); ++outer) {
-		const size_t separator = outer->second.rfind("::");
-		if(separator == string::npos) continue;
-		const string owner = outer->second.substr(0, separator);
-		AddConcreteOwnerSubstitutions(owner, context, &substitutions);
-	}
-	AddConcreteOwnerSubstitutions(concrete_owner, context, &substitutions);
-	map<string, PA19IntegralValue> integral_substitutions;
-	map<string, vector<string> > pack_substitutions;
-	ResolveTemplateArguments(definition, raw_args, context, &args, &metadata_args,
-		&substitutions, &integral_substitutions, &pack_substitutions, pack_hints);
-	if(definition.partial_specialization) {
-		map<string, string> specialized;
-		if(!MatchClassSpecializationPattern(definition, args, &specialized, context))
-			throw logic_error("class partial specialization does not match");
-		for(map<string, string>::const_iterator it = specialized.begin(); it != specialized.end(); ++it)
-			substitutions[it->first] = it->second;
-		for(size_t pack_index = 0; pack_index < definition.specialization_pack_names.size(); ++pack_index) {
-			const string& pack_name = definition.specialization_pack_names[pack_index];
-			map<string, string>::const_iterator binding = specialized.find(pack_name);
-			vector<string> values;
-			if(binding != specialized.end() && !binding->second.empty())
-				values = SplitTemplateArguments(binding->second);
-			if(!pack_name.empty()) {
-				pack_substitutions[pack_name] = values;
-				if(values.empty()) substitutions.erase(pack_name);
-				else substitutions[pack_name] = values[0];
-			}
-		}
-	}
-	ostringstream definition_key;
-	definition_key << definition.qualified_name << "@" << definition.declaration.get();
-	string key = definition_key.str();
-	for(size_t i = 0; i < args.size(); ++i) key += "|" + CanonicalSpelling(args[i]);
-	return MaterializeInstantiation(definition, args, metadata_args, substitutions,
-		integral_substitutions, pack_substitutions, context, explicit_instantiation, key,
-		concrete_owner);
 }
 
 } // namespace pa18_templates_internal

@@ -1,9 +1,6 @@
 #include "pa18_templates_collection.h"
 #include "pa18_templates_rewrite.h"
 
-
-
-
 using namespace std;
 
 namespace pa18_templates_internal {

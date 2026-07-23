@@ -491,6 +491,27 @@ CPPGMAstNodePtr Parser::ParseParameterClause()
 			Restore(mark);
 			return CPPGMAstNodePtr();
 		}
+		// In a block, `T object(expr)` is a direct initializer, but the
+		// declarator grammar initially has to try the indistinguishable
+		// function-declarator form.  A qualified value such as
+		// `enum_type::enumerator` is not a type-id; let the declarator backtrack
+		// so ParseInitializer can parse the parenthesized expression instead.
+		if (ordinary_depth_ > 1 && parameter->children.size() == 1 &&
+			parameter->children[0] && parameter->children[0]->kind == "decl-specifier-seq" &&
+			parameter->children[0]->children.size() == 1 &&
+			parameter->children[0]->children[0]) {
+			string spelling = parameter->children[0]->children[0]->value;
+			const size_t marker = spelling.find(':');
+			if (marker != string::npos) spelling = spelling.substr(marker + 1);
+			const size_t separator = spelling.rfind("::");
+			const string last = separator == string::npos ? spelling :
+				spelling.substr(separator + 2);
+			if (separator != string::npos && types_.find(last) == types_.end() &&
+				templates_.find(last) == templates_.end()) {
+				Restore(mark);
+				return CPPGMAstNodePtr();
+			}
+		}
 		Add(result, parameter);
 		while (Take(","))
 		{
@@ -504,6 +525,22 @@ CPPGMAstNodePtr Parser::ParseParameterClause()
 			{
 				Restore(mark);
 				return CPPGMAstNodePtr();
+			}
+			if (ordinary_depth_ > 1 && parameter->children.size() == 1 &&
+				parameter->children[0] && parameter->children[0]->kind == "decl-specifier-seq" &&
+				parameter->children[0]->children.size() == 1 &&
+				parameter->children[0]->children[0]) {
+				string spelling = parameter->children[0]->children[0]->value;
+				const size_t marker = spelling.find(':');
+				if (marker != string::npos) spelling = spelling.substr(marker + 1);
+				const size_t separator = spelling.rfind("::");
+				const string last = separator == string::npos ? spelling :
+					spelling.substr(separator + 2);
+				if (separator != string::npos && types_.find(last) == types_.end() &&
+					templates_.find(last) == templates_.end()) {
+					Restore(mark);
+					return CPPGMAstNodePtr();
+				}
 			}
 			Add(result, parameter);
 		}

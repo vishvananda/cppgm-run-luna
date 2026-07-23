@@ -140,9 +140,11 @@ inline CPPGMAstNodePtr CloneNode(const CPPGMAstNodePtr& node)
 	result->initializer_form = node->initializer_form;
 	result->template_instantiation = node->template_instantiation;
 	result->explicit_instantiation = node->explicit_instantiation;
+	result->extern_instantiation = node->extern_instantiation;
 	result->dependent_base_lookup = node->dependent_base_lookup;
 	result->materialize_object_address = node->materialize_object_address;
 	result->materialize_object_name = node->materialize_object_name;
+	result->inferred_type = node->inferred_type;
 	result->source_token_begin = node->source_token_begin; result->source_token_end = node->source_token_end;
 	result->template_primary = node->template_primary;
 	result->template_arguments = node->template_arguments;
@@ -359,16 +361,9 @@ struct TemplateParameter
 {
 	string name;
 	string default_type;
-	// `type` is retained for the PA18 type-parameter path.  PA19 records the
-	// declared integral type separately so value substitutions never get
-	// confused with type substitutions.
 	string non_type_type;
 	bool type;
 	bool pack;
-	// A type parameter whose declaration contains a nested template-parameter
-	// clause is a template-template parameter.  Keep that clause typed so
-	// argument matching can validate arity, defaults, and packs instead of
-	// treating the argument as an ordinary class type.
 	bool template_template;
 	vector<TemplateParameter> template_parameters;
 	TemplateParameter() : name(), default_type(), non_type_type(), type(false), pack(false),
@@ -382,10 +377,6 @@ struct TemplateDefinition
 	string lexical_owner;
 	CPPGMAstNodePtr declaration;
 	vector<TemplateParameter> parameters;
-	// Class partial specializations are kept alongside the primary definition.
-	// Their `parameters` are the primary template parameters used to build the
-	// concrete class name; the separate fields describe the specialization
-	// pattern and the names bound by its own template clause.
 	bool partial_specialization;
 	vector<string> specialization_parameters;
 	vector<TemplateParameter> specialization_parameter_details;
@@ -394,10 +385,6 @@ struct TemplateDefinition
 	bool class_template;
 	bool alias_template;
 	bool variable_template;
-	// True when the declaration belongs to a member-template declaration.  The
-	// parameter list of an out-of-class ordinary member definition contains the
-	// enclosing class template's parameters, so `parameters.empty()` cannot
-	// distinguish those definitions from a member template.
 	bool member_template;
 	TemplateDefinition() : qualified_name(), name(), owner(), lexical_owner(), declaration(), parameters(),
 		partial_specialization(false), specialization_parameters(), specialization_parameter_details(),
@@ -407,6 +394,7 @@ struct TemplateDefinition
 struct FunctionSignature
 {
 	CPPGMAstNodePtr result_specifiers;
+	CPPGMAstNodePtr declarator;
 	CPPGMAstNodePtr parameters;
 };
 class PA18TemplateExpander
@@ -438,13 +426,7 @@ private:
 		const map<string, bool>& inherited_parameters) const;
 	map<string, TemplateDefinition> definitions_;
 	map<string, vector<string> > definitions_by_name_;
-	// A using-directive needs only the first component exported from each
-	// namespace prefix.  Index those exports during collection instead of
-	// rescanning every definition for each replayed using-directive.
 	map<string, vector<pair<string, string> > > using_directive_exports_;
-	// Pack names can remain in a dependent argument while the target template
-	// is being resolved in another declaration scope.  Keep the fact indexed at
-	// collection time instead of rediscovering it by walking every definition.
 	set<string> template_pack_names_;
 	map<string, vector<TemplateDefinition> > class_specializations_;
 	map<const CPPGMAstNode*, string> lexical_contexts_;
@@ -466,12 +448,10 @@ private:
 	map<string, string> function_owners_;
 	map<string, string> local_class_names_;
 	map<string, CPPGMAstNodePtr> class_declarations_;
-	// Source constant members are indexed once during collection so dependent
-	// non-type replay can look up a named member without rescanning every class
-	// declaration and reparsing unrelated ASTs on each argument.
 	map<string, vector<string> > constant_member_owners_;
 	set<string> named_type_contexts_;
 	map<string, string> variable_types_;
+	map<string, map<string, string> > function_parameter_types_;
 	map<string, PA19IntegralValue> constant_values_;
 	map<string, vector<PA19IntegralValue> > constant_arrays_; map<string, size_t> constant_type_sizes_, constant_type_alignments_;
 	map<string, PA19IntegralValue> active_integral_substitutions_;
@@ -500,6 +480,8 @@ private:
 	map<string, vector<string> > specialization_names_by_base_;
 	map<string, TemplateDefinition> explicit_function_specializations_;
 	map<const CPPGMAstNode*, vector<string> > explicit_function_arguments_;
+	set<string> extern_instantiation_keys_;
+	map<string, CPPGMAstNodePtr> extern_instantiation_declarations_;
 	map<string, set<string> > requested_nested_classes_;
 	set<string> materialized_nested_classes_, materialized_member_definitions_;
 	set<string> active_template_member_types_;
@@ -513,6 +495,7 @@ private:
 		const string& template_owner = string()) const;
 	string NormalizeElaboratedSpelling(string raw, const string& context) const;
 	string DeclaratorSuffix(const CPPGMAstNodePtr& declarator) const;
+	string ReturnDeclaratorSuffix(const CPPGMAstNodePtr& declarator) const;
 	string DeclaratorArraySuffix(const CPPGMAstNodePtr& declarator) const;
 	string MemberAliasType(const string& class_key, const string& member) const;
 	string QualifyNestedMembers(string spelling, const string& class_key,
@@ -546,10 +529,17 @@ private:
 	bool InferBinaryArgument(const CPPGMAstNodePtr& expression, string* result,
 		const map<string, string>& substitutions, const string& context) const;
 	bool IsKnownMemberTemplateId(const string& raw) const;
+	void CollectInheritedMemberTemplates(const string& raw_class, const string& member,
+		const map<string, string>& substitutions, const string& context,
+		vector<const TemplateDefinition*>* result, set<string>* active,
+		map<const TemplateDefinition*, string>* concrete_owners);
 	bool InstantiateMemberCall(const CPPGMAstNodePtr& call,
 		const CPPGMAstNodePtr& callee, const string& original_member,
 		const string& context,
-		const map<string, string>& substitutions);
+		const map<string, string>& substitutions,
+		bool explicit_instantiation = false);
+	bool MaterializeExplicitInstantiation(const CPPGMAstNodePtr& target,
+		const string& context, bool extern_instantiation = false);
 	CPPGMAstNodePtr TransformCallExpression(const CPPGMAstNodePtr& input,
 		const string& context, const map<string, string>& substitutions);
 	string ResolveAlias(string spelling, const string& context) const;
@@ -594,6 +584,7 @@ private:
 		if(name.empty()) return;
 		FunctionSignature signature;
 		signature.result_specifiers = CloneNode(result_specs);
+		signature.declarator = CloneNode(declarator);
 		signature.parameters = CloneNode(DescendantOfKind(declarator, "parameter-clause"));
 		const string qualified = JoinPath(context, name);
 		function_overloads_[qualified].push_back(signature);
@@ -864,6 +855,12 @@ private:
 				}
 			}
 		}
+		// A qualified out-of-class declarator carries its owner in the
+		// declarator name (for example `box<T>::cast`).  The owner is indexed
+		// separately below; retaining the full spelling in `item.name` would
+		// duplicate it in the registry key and make the definition look like a
+		// different member from its in-class declaration.
+		name = LastComponent(name);
 		string declared_prefix;
 		if(declaration->kind == "class-specifier" ||
 			declaration->kind == "class-forward-declaration")
@@ -880,12 +877,14 @@ private:
 				declared_prefix = PrefixComponent(FirstIdentifierLocal(
 					list->children[0]->children[0]));
 		}
-		item.owner = JoinPath(context, declared_prefix);
-		map<const CPPGMAstNode*, string>::const_iterator lexical = lexical_contexts_.find(node.get());
-		item.lexical_owner = lexical == lexical_contexts_.end() ? item.owner :
-			JoinPath(lexical->second, declared_prefix);
-		item.qualified_name = JoinPath(item.owner, name);
-		item.declaration = declaration;
+	const bool rooted_prefix = declared_prefix.compare(0, 2, "::") == 0;
+	const string normalized_prefix = rooted_prefix ? declared_prefix.substr(2) : declared_prefix;
+	item.owner = rooted_prefix ? normalized_prefix : JoinPath(context, normalized_prefix);
+	map<const CPPGMAstNode*, string>::const_iterator lexical = lexical_contexts_.find(node.get());
+	item.lexical_owner = lexical == lexical_contexts_.end() || rooted_prefix ? item.owner :
+		JoinPath(lexical->second, normalized_prefix);
+	item.qualified_name = JoinPath(item.owner, name);
+	item.declaration = declaration;
 		item.parameters = Parameters(node->children[0]);
 		for(size_t parameter = 0; parameter < item.parameters.size(); ++parameter)
 			if(item.parameters[parameter].pack)
