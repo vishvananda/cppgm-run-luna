@@ -33,8 +33,13 @@
 			LastComponent(owner));
 		if(generated == specialization_bases_.end()) return false;
 		const string source_owner = LastComponent(generated->second);
-		for(map<string, TemplateDefinition>::const_iterator it = definitions_.begin();
-			it != definitions_.end(); ++it) {
+		map<string, vector<string> >::const_iterator indexed_members =
+			definitions_by_name_.find(member);
+		if(indexed_members == definitions_by_name_.end()) return false;
+		for(size_t indexed = 0; indexed < indexed_members->second.size(); ++indexed) {
+			map<string, TemplateDefinition>::const_iterator it = definitions_.find(
+				indexed_members->second[indexed]);
+			if(it == definitions_.end()) continue;
 			const TemplateDefinition& definition = it->second;
 			if(definition.class_template || definition.alias_template ||
 				definition.variable_template || definition.parameters.empty() ||

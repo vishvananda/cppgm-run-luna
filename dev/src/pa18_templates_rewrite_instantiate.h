@@ -131,6 +131,15 @@
 	string NormalizeIntegralExpression(string raw) const;
 	bool EvaluateActivePackSize(string raw, PA19IntegralValue* result) const;
 	string RewriteActivePackSizes(string raw) const;
+	bool PrepareIntegralText(string* raw, const string& context,
+		const map<string, string>& substitutions);
+	void NormalizeIntegralText(string* raw, const map<string, string>& substitutions);
+	bool EvaluateIntegralTextSpecialForms(const string& raw, const string& context,
+		const map<string, string>& substitutions, PA19IntegralValue* result);
+	bool EvaluateIntegralTextKnownValues(const string& raw, const string& context,
+		const map<string, string>& substitutions, PA19IntegralValue* result);
+	bool EvaluateIntegralTextFallbacks(const string& raw, const string& context,
+		const map<string, string>& substitutions, PA19IntegralValue* result);
 	bool EvaluateIntegralText(string raw, const string& context,
 		const map<string, string>& substitutions, PA19IntegralValue* result);
 	void RecordTemplateArrayValues(const TemplateDefinition& definition,
@@ -445,7 +454,7 @@
 			}
 			CPPGMAstNodePtr generated = TransformInstantiatedNode(member,
 				generated_context, substitutions, integral_substitutions,
-				pack_substitutions);
+				pack_substitutions, map<string, FunctionSignature>());
 			if(!generated) continue;
 			if(generated->kind == "simple-declaration") {
 				const CPPGMAstNodePtr identifier = DescendantOfKind(generated, "identifier");
@@ -785,46 +794,8 @@
 	CPPGMAstNodePtr TransformInstantiatedNode(const TemplateDefinition& definition,
 		const string& context, const map<string, string>& substitutions,
 		const map<string, PA19IntegralValue>& integral_substitutions,
-		const map<string, vector<string> >& pack_substitutions)
-	{
-		const map<string, PA19IntegralValue> previous = active_integral_substitutions_;
-		const map<string, vector<string> > previous_packs = active_pack_substitutions_;
-		const map<string, vector<string> > previous_pack_identifiers =
-			active_pack_identifier_substitutions_;
-		active_integral_substitutions_ = integral_substitutions;
-		active_pack_substitutions_ = previous_packs;
-		// An unnamed parameter pack is only an arity constraint.  It has no
-		// source spelling that can be substituted, so an empty map key must never
-		// reach text replay (where it would make every `...` look expandable).
-		active_pack_substitutions_.erase("");
-		for(map<string, vector<string> >::const_iterator pack = pack_substitutions.begin();
-			pack != pack_substitutions.end(); ++pack)
-			if(!pack->first.empty()) active_pack_substitutions_[pack->first] = pack->second;
-		for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter)
-			if(definition.parameters[parameter].pack &&
-				!definition.parameters[parameter].name.empty() &&
-				active_pack_substitutions_.find(definition.parameters[parameter].name) ==
-				active_pack_substitutions_.end())
-				active_pack_substitutions_[definition.parameters[parameter].name] = vector<string>();
-		for(size_t pack = 0; pack < definition.specialization_pack_names.size(); ++pack)
-			if(!definition.specialization_pack_names[pack].empty() &&
-				active_pack_substitutions_.find(definition.specialization_pack_names[pack]) ==
-				active_pack_substitutions_.end())
-				active_pack_substitutions_[definition.specialization_pack_names[pack]] = vector<string>();
-		active_pack_identifier_substitutions_.clear();
-		try {
-			CPPGMAstNodePtr result = TransformNode(definition.declaration, context, substitutions);
-			active_integral_substitutions_ = previous;
-			active_pack_substitutions_ = previous_packs;
-			active_pack_identifier_substitutions_ = previous_pack_identifiers;
-			return result;
-		} catch(...) {
-			active_integral_substitutions_ = previous;
-			active_pack_substitutions_ = previous_packs;
-			active_pack_identifier_substitutions_ = previous_pack_identifiers;
-			throw;
-		}
-	}
+		const map<string, vector<string> >& pack_substitutions,
+		const map<string, FunctionSignature>& function_substitutions);
 	bool DeferIncompleteAliasClass(const TemplateDefinition& definition,
 		const vector<string>& arguments, const string& context) const
 	{
@@ -1155,20 +1126,25 @@
 		const string& context, bool explicit_instantiation = false,
 		const map<string, vector<string> >* pack_hints = 0,
 		const map<string, string>* outer_substitutions = 0,
-		const string* concrete_owner = 0);
+		const string* concrete_owner = 0,
+		const map<string, FunctionSignature>* function_hints = 0);
 	string MaterializeExternInstantiation(const TemplateDefinition& definition,
 		const vector<string>& args, const vector<string>& metadata_args,
 		map<string, string> substitutions,
 		const map<string, PA19IntegralValue>& integral_substitutions,
 		const map<string, vector<string> >& pack_substitutions,
-		const string& context, const string& key);
+		const string& context, const string& key,
+		const map<string, FunctionSignature>& function_substitutions =
+			map<string, FunctionSignature>());
 	string MaterializeInstantiation(const TemplateDefinition& definition,
 		const vector<string>& args, const vector<string>& metadata_args,
 		map<string, string> substitutions,
 		const map<string, PA19IntegralValue>& integral_substitutions,
 		const map<string, vector<string> >& pack_substitutions,
 		const string& context, bool explicit_instantiation, const string& key,
-		const string& concrete_owner);
+		const string& concrete_owner,
+		const map<string, FunctionSignature>& function_substitutions =
+			map<string, FunctionSignature>());
 	void ReplayCachedInstantiation(const TemplateDefinition& definition,
 		const vector<string>& args, const string& cached, const string& context,
 		bool explicit_instantiation,
@@ -1197,4 +1173,6 @@
 		const map<string, PA19IntegralValue>& integral_substitutions,
 		const map<string, vector<string> >& pack_substitutions,
 		const string& context, bool explicit_instantiation, const string& key,
-		const string& local_name, const string& requested_owner);
+		const string& local_name, const string& requested_owner,
+		const map<string, FunctionSignature>& function_substitutions =
+			map<string, FunctionSignature>());

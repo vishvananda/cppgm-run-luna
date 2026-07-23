@@ -230,31 +230,6 @@ void PA18TemplateExpander::IndexConstantMembers(const CPPGMAstNodePtr& node,
 	}
 }
 
-string PA18TemplateExpander::FunctionMarker(const string& raw_name,
-	const string& context) const
-{
-	const FunctionSignature* signature = FindFunctionSignature(raw_name, context);
-	if(!signature) return string();
-	const string qualified = JoinPath(context, raw_name);
-	map<string, string>::const_iterator existing = function_markers_.find(qualified);
-	if(existing != function_markers_.end()) return existing->second;
-	string marker = "__PA18_FUNCTION_TYPE_" + LastComponent(raw_name);
-	unsigned int suffix = 0;
-	for(;; ++suffix) {
-		bool collision = false;
-		for(map<string, string>::const_iterator it = function_markers_.begin();
-			it != function_markers_.end(); ++it)
-			if(it->second == marker) collision = true;
-		if(!collision) break;
-		ostringstream candidate;
-		candidate << "__PA18_FUNCTION_TYPE_" << LastComponent(raw_name) << "_" << suffix;
-		marker = candidate.str();
-	}
-	function_markers_[qualified] = marker;
-	function_marker_names_[marker] = qualified;
-	return marker;
-}
-
 vector<CPPGMAstNodePtr> PA18TemplateExpander::Run(
 	const vector<CPPGMAstNodePtr>& input)
 {
@@ -665,8 +640,7 @@ bool PA18TemplateExpander::ContainsName(const CPPGMAstNodePtr& node,
 }
 
 CPPGMAstNodePtr PA18TemplateExpander::FunctionParameter(
-	const CPPGMAstNodePtr& original, const FunctionSignature& signature,
-	const string& marker) const
+	const CPPGMAstNodePtr& original, const FunctionSignature& signature) const
 {
 	if(!original || original->children.empty() || !signature.result_specifiers ||
 		!signature.parameters) return CPPGMAstNodePtr();
@@ -697,7 +671,6 @@ CPPGMAstNodePtr PA18TemplateExpander::FunctionParameter(
 	declarator->children.push_back(nested);
 	declarator->children.push_back(CloneNode(signature.parameters));
 	result->children.push_back(declarator);
-	(void)marker;
 	return result;
 }
 

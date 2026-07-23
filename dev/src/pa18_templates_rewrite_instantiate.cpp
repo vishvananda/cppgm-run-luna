@@ -24,16 +24,57 @@ bool HasStaticMemberDeclaration(const CPPGMAstNodePtr& node, const string& name)
 	return false;
 }
 
-void MarkStaticGeneratedFunction(const CPPGMAstNodePtr& node)
-{
-	if(!node || node->kind != "function-definition" || node->children.empty() ||
-		!node->children[0]) return;
-	if(SpellNode(node->children[0]).find("static") != string::npos) return;
-	node->children[0]->children.insert(node->children[0]->children.begin(),
-		CPPGMAstNodePtr(new CPPGMAstNode("decl-specifier", "KW_STATIC:static")));
-}
-
 } // namespace
+
+CPPGMAstNodePtr PA18TemplateExpander::TransformInstantiatedNode(
+	const TemplateDefinition& definition, const string& context,
+	const map<string, string>& substitutions,
+	const map<string, PA19IntegralValue>& integral_substitutions,
+	const map<string, vector<string> >& pack_substitutions,
+	const map<string, FunctionSignature>& function_substitutions)
+{
+	const map<string, PA19IntegralValue> previous = active_integral_substitutions_;
+	const map<string, vector<string> > previous_packs = active_pack_substitutions_;
+	const map<string, vector<string> > previous_pack_identifiers =
+		active_pack_identifier_substitutions_;
+	const map<string, FunctionSignature> previous_functions = active_function_substitutions_;
+	active_integral_substitutions_ = integral_substitutions;
+	active_function_substitutions_ = function_substitutions;
+	active_pack_substitutions_ = previous_packs;
+	// An unnamed parameter pack is only an arity constraint.  It has no source
+	// spelling that can be substituted, so an empty map key must never reach
+	// text replay (where it would make every `...` look expandable).
+	active_pack_substitutions_.erase("");
+	for(map<string, vector<string> >::const_iterator pack = pack_substitutions.begin();
+		pack != pack_substitutions.end(); ++pack)
+		if(!pack->first.empty()) active_pack_substitutions_[pack->first] = pack->second;
+	for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter)
+		if(definition.parameters[parameter].pack &&
+			!definition.parameters[parameter].name.empty() &&
+			active_pack_substitutions_.find(definition.parameters[parameter].name) ==
+			active_pack_substitutions_.end())
+			active_pack_substitutions_[definition.parameters[parameter].name] = vector<string>();
+	for(size_t pack = 0; pack < definition.specialization_pack_names.size(); ++pack)
+		if(!definition.specialization_pack_names[pack].empty() &&
+			active_pack_substitutions_.find(definition.specialization_pack_names[pack]) ==
+			active_pack_substitutions_.end())
+			active_pack_substitutions_[definition.specialization_pack_names[pack]] = vector<string>();
+	active_pack_identifier_substitutions_.clear();
+	try {
+		CPPGMAstNodePtr result = TransformNode(definition.declaration, context, substitutions);
+		active_integral_substitutions_ = previous;
+		active_pack_substitutions_ = previous_packs;
+		active_pack_identifier_substitutions_ = previous_pack_identifiers;
+		active_function_substitutions_ = previous_functions;
+		return result;
+	} catch(...) {
+		active_integral_substitutions_ = previous;
+		active_pack_substitutions_ = previous_packs;
+		active_pack_identifier_substitutions_ = previous_pack_identifiers;
+		active_function_substitutions_ = previous_functions;
+		throw;
+	}
+}
 
 bool PA18TemplateExpander::MemberOwnerPattern(const TemplateDefinition& candidate,
 	const TemplateDefinition& parent, const vector<string>& parent_args,
@@ -603,112 +644,102 @@ bool PA18TemplateExpander::ExpandNamedIntegralOperands(
 	return parser.Evaluate(expanded, result);
 }
 
-bool PA18TemplateExpander::EvaluateIntegralText(string raw, const string& context,
-	const map<string, string>& substitutions, PA19IntegralValue* result)
+bool PA18TemplateExpander::PrepareIntegralText(string* raw, const string& context,
+	const map<string, string>& substitutions)
 {
-	// A leading global-scope qualifier is semantically transparent once the
-	// expression has been detached from its source namespace.  Keep the typed
-	// constant tables canonical (they are indexed without that prefix) while
-	// still accepting source spellings such as `::meta::detail::Trait<...>::value`.
-	while(raw.compare(0, 2, "::") == 0) raw.erase(0, 2);
-	if(context.find('<') != string::npos) {
-		bool unresolved_scope = false;
-		if(!HasReplayContext(substitutions)) {
-			for(size_t position = 0; position < raw.size() && !unresolved_scope;) {
-				if(!isalpha(static_cast<unsigned char>(raw[position])) && raw[position] != '_') {
-					++position;
-					continue;
-				}
-				const size_t begin = position;
-				while(position < raw.size() && IsIdentifierCharacter(raw[position])) ++position;
-				const string word = raw.substr(begin, position - begin);
-				if(word != "true" && word != "false" && word != "sizeof")
-					unresolved_scope = true;
+	if(!raw) return false;
+	while(raw->compare(0, 2, "::") == 0) raw->erase(0, 2);
+	if(context.find('<') == string::npos) return true;
+	bool unresolved_scope = false;
+	if(!HasReplayContext(substitutions)) {
+		for(size_t position = 0; position < raw->size() && !unresolved_scope;) {
+			if(!isalpha(static_cast<unsigned char>((*raw)[position])) && (*raw)[position] != '_') {
+				++position;
+				continue;
 			}
+			const size_t begin = position;
+			while(position < raw->size() && IsIdentifierCharacter((*raw)[position])) ++position;
+			const string word = raw->substr(begin, position - begin);
+			if(word != "true" && word != "false" && word != "sizeof") unresolved_scope = true;
 		}
-		for(map<string,string>::const_iterator it = substitutions.begin();
-			it != substitutions.end(); ++it)
-			if(it->second.find("decltype") != string::npos ||
-				it->second.find("...") != string::npos ||
-				HasDependentVariableTemplate(it->second, context, substitutions)) {
-				unresolved_scope = true;
+	}
+	for(map<string,string>::const_iterator it = substitutions.begin();
+		it != substitutions.end(); ++it)
+		if(it->second.find("decltype") != string::npos || it->second.find("...") != string::npos ||
+			HasDependentVariableTemplate(it->second, context, substitutions)) {
+			unresolved_scope = true;
+			break;
+		}
+	if(unresolved_scope && raw->find("::value") != string::npos) {
+		bool concrete_values = true;
+		bool found_value = false;
+		for(size_t marker = raw->find("::value"); marker != string::npos;
+			marker = raw->find("::value", marker + 7)) {
+			size_t begin = marker;
+			if(begin > 0 && (*raw)[begin - 1] == '>') {
+				int angle_depth = 0;
+				while(begin > 0) {
+					const char character = (*raw)[begin - 1];
+					if(character == '>') ++angle_depth;
+					else if(character == '<' && angle_depth > 0) {
+						--angle_depth;
+						--begin;
+						if(angle_depth == 0) break;
+						continue;
+					}
+					--begin;
+				}
+			}
+			while(begin > 0 && (IsIdentifierCharacter((*raw)[begin - 1]) ||
+				(*raw)[begin - 1] == ':')) --begin;
+			const string operand = raw->substr(begin, marker + 7 - begin);
+			const string owner = operand.substr(0, operand.size() - 7);
+			found_value = true;
+			if(constant_values_.find(operand) != constant_values_.end()) continue;
+			if(owner.find('<') != string::npos) {
+				const string replayed_owner = CanonicalSpelling(RemoveMarker(
+					RewriteText(owner, context, substitutions, 0)));
+				if(replayed_owner != owner && replayed_owner.find('<') == string::npos) continue;
+				concrete_values = false;
 				break;
 			}
-		if(unresolved_scope && raw.find("::value") != string::npos) {
-			bool concrete_values = true;
-			bool found_value = false;
-			for(size_t marker = raw.find("::value"); marker != string::npos;
-				marker = raw.find("::value", marker + 7)) {
-				size_t begin = marker;
-				if(begin > 0 && raw[begin - 1] == '>') {
-					int angle_depth = 0;
-					while(begin > 0) {
-						const char character = raw[begin - 1];
-						if(character == '>') ++angle_depth;
-						else if(character == '<' && angle_depth > 0) {
-							--angle_depth;
-							--begin;
-							if(angle_depth == 0) break;
-							continue;
-						}
-						--begin;
-					}
-				}
-				while(begin > 0 && (IsIdentifierCharacter(raw[begin - 1]) ||
-					raw[begin - 1] == ':')) --begin;
-				const string operand = raw.substr(begin, marker + 7 - begin);
-				const string owner = operand.substr(0, operand.size() - 7);
-				found_value = true;
-				if(constant_values_.find(operand) != constant_values_.end()) continue;
-				if(owner.find('<') != string::npos) {
-					const string replayed_owner = CanonicalSpelling(RemoveMarker(
-						RewriteText(owner, context, substitutions, 0)));
-					if(replayed_owner != owner && replayed_owner.find('<') == string::npos)
-						continue;
-					concrete_values = false;
-					break;
-				}
-				if(class_declarations_.find(owner) == class_declarations_.end() &&
-					specialization_bases_.find(LastComponent(owner)) == specialization_bases_.end()) {
-					concrete_values = false;
-					break;
-				}
+			if(class_declarations_.find(owner) == class_declarations_.end() &&
+				specialization_bases_.find(LastComponent(owner)) == specialization_bases_.end()) {
+				concrete_values = false;
+				break;
 			}
-			if(found_value && concrete_values) unresolved_scope = false;
 		}
-		if(unresolved_scope) return false;
+		if(found_value && concrete_values) unresolved_scope = false;
 	}
-	// Expand pack sizes while the operand still carries its source identifier.
-	// The ordinary scalar substitution map intentionally keeps the first pack
-	// element for compatibility with older rewrite paths; applying it first
-	// would make `sizeof...(Args)` indistinguishable from a size query on that
-	// element and would require a guessed pack or a registry-wide search.
-	raw = CanonicalSpelling(raw);
-	raw = CanonicalSpelling(RewriteActivePackSizes(raw));
+	return !unresolved_scope;
+}
+
+void PA18TemplateExpander::NormalizeIntegralText(string* raw,
+	const map<string, string>& substitutions)
+{
+	if(!raw) return;
+	*raw = CanonicalSpelling(*raw);
+	*raw = CanonicalSpelling(RewriteActivePackSizes(*raw));
 	map<string, string> expression_substitutions = substitutions;
 	for(map<string,string>::const_iterator it = substitutions.begin();
 		it != substitutions.end(); ++it)
-		if(raw.find(it->first + "...") != string::npos)
+		if(raw->find(it->first + "...") != string::npos)
 			expression_substitutions.erase(it->first);
-	raw = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(raw,
+	*raw = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(*raw,
 		expression_substitutions));
-	raw = NormalizeIntegralExpression(raw);
-	// A dependent member initializer can reach this evaluator before the
-	// ordinary text rewriter has materialized the nested class whose `value`
-	// it names.  Replay template-ids in the expression first; the resulting
-	// generated spelling is then handled by the typed constant tables below.
+	*raw = NormalizeIntegralExpression(*raw);
+}
+
+bool PA18TemplateExpander::EvaluateIntegralTextSpecialForms(const string& raw,
+	const string& context, const map<string, string>& substitutions,
+	PA19IntegralValue* result)
+{
 	if(raw.find('<') != string::npos) {
 		const string rewritten = CanonicalSpelling(RemoveMarker(
 			RewriteText(raw, context, substitutions, 0)));
 		if(rewritten != raw && EvaluateIntegralText(rewritten, context,
 			substitutions, result)) return true;
 	}
-	// `sizeof` may take an overloaded function call as its operand.  The
-	// ordinary constant-expression parser only has a type spelling at this
-	// point, so use the decltype call resolver to select the viable template
-	// overload and then measure its typed result.  This is particularly
-	// important for arity probes whose functions return a reference to an
-	// array (`char (&)[N]`).
 	if(raw.compare(0, 7, "sizeof(") == 0 && !raw.empty() && raw[raw.size() - 1] == ')') {
 		const string operand = raw.substr(7, raw.size() - 8);
 		string call_type;
@@ -774,6 +805,13 @@ bool PA18TemplateExpander::EvaluateIntegralText(string raw, const string& contex
 		map<string, PA19IntegralValue>::const_iterator known = constant_values_.find(unscoped);
 		if(known != constant_values_.end()) { *result = known->second; return result->known; }
 	}
+	return false;
+}
+
+bool PA18TemplateExpander::EvaluateIntegralTextKnownValues(const string& raw,
+	const string& context, const map<string, string>& substitutions,
+	PA19IntegralValue* result)
+{
 	PA19ConstantExpressionParser parser(constant_values_, substitutions,
 		constant_type_sizes_, constant_type_alignments_, type_aliases_);
 	if(raw.find("::") == string::npos && !active_instantiation_name_.empty()) {
@@ -790,10 +828,7 @@ bool PA18TemplateExpander::EvaluateIntegralText(string raw, const string& contex
 		*result = direct_value->second;
 		return true;
 	}
-	// Alias-template materialization can register the source owner as a class
-	// declaration while the transformed node names the concrete target class.
-	// Reconnect that owner spelling to the generated declaration before treating
-	// the member as an unresolved expression.
+	const size_t value_separator = raw.rfind("::value");
 	if(value_separator != string::npos) {
 		const string owner = raw.substr(0, value_separator);
 		map<string, CPPGMAstNodePtr>::const_iterator declaration =
@@ -839,9 +874,17 @@ bool PA18TemplateExpander::EvaluateIntegralText(string raw, const string& contex
 		}
 	}
 	const bool qualified_value_expression = raw.find("::value") != string::npos;
-	if(!qualified_value_expression || constant_values_.find(raw) != constant_values_.end()) {
+	if(!qualified_value_expression || constant_values_.find(raw) != constant_values_.end())
 		if(parser.Evaluate(raw, result)) return true;
-	}
+	return false;
+}
+
+bool PA18TemplateExpander::EvaluateIntegralTextFallbacks(const string& raw,
+	const string& context, const map<string, string>& substitutions,
+	PA19IntegralValue* result)
+{
+	PA19ConstantExpressionParser parser(constant_values_, substitutions,
+		constant_type_sizes_, constant_type_alignments_, type_aliases_);
 	if(ExpandNamedIntegralOperands(raw, context, substitutions, result)) return true;
 	if(EvaluateSourceIntegralExpression(raw, context, substitutions, result)) return true;
 	if(EvaluateMaterializedTemplateValue(raw, context, substitutions, result)) return true;
@@ -887,6 +930,16 @@ bool PA18TemplateExpander::EvaluateIntegralText(string raw, const string& contex
 		}
 	}
 	return false;
+}
+
+bool PA18TemplateExpander::EvaluateIntegralText(string raw, const string& context,
+	const map<string, string>& substitutions, PA19IntegralValue* result)
+{
+	if(!PrepareIntegralText(&raw, context, substitutions)) return false;
+	NormalizeIntegralText(&raw, substitutions);
+	if(EvaluateIntegralTextSpecialForms(raw, context, substitutions, result)) return true;
+	if(EvaluateIntegralTextKnownValues(raw, context, substitutions, result)) return true;
+	return EvaluateIntegralTextFallbacks(raw, context, substitutions, result);
 }
 
 CPPGMAstNodePtr PA18TemplateExpander::FindSourceConstantFunction(

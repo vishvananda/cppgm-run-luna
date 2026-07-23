@@ -121,6 +121,7 @@ bool PA18TemplateExpander::MaterializeExplicitInstantiation(
 		}
 
 		vector<string> complete_arguments;
+		map<string, FunctionSignature> inferred_function_values;
 		vector<string> normalized_explicit = explicit_arguments;
 		for(size_t argument = 0; argument < normalized_explicit.size(); ++argument)
 			normalized_explicit[argument] = NormalizeTypeArgument(RewriteText(
@@ -129,7 +130,8 @@ bool PA18TemplateExpander::MaterializeExplicitInstantiation(
 			&normalized_explicit;
 		try {
 			if(!InferFunctionArguments(definition, call, &complete_arguments,
-				map<string, string>(), context, explicit_prefix)) continue;
+				map<string, string>(), context, explicit_prefix, 0,
+				&inferred_function_values)) continue;
 			if(extern_instantiation) {
 				ostringstream request_key;
 				request_key << definition.qualified_name << "@" << definition.declaration.get();
@@ -138,7 +140,8 @@ bool PA18TemplateExpander::MaterializeExplicitInstantiation(
 				extern_instantiation_keys_.insert(request_key.str());
 				return true;
 			}
-			Instantiate(definition, complete_arguments, context, true);
+			Instantiate(definition, complete_arguments, context, true, 0, 0, 0,
+				&inferred_function_values);
 			return true;
 		} catch(const logic_error&) {
 			continue;
@@ -311,7 +314,11 @@ bool PA18TemplateExpander::InferBinaryArgument(const CPPGMAstNodePtr& expression
 		*result = CommonBuiltinArithmeticType(left, right);
 		return true;
 	}
-	return InferArgument(expression->children[0], result, substitutions, context);
+	string fallback;
+	if(!InferArgument(expression->children[0], &fallback, substitutions, context) ||
+		!IsKnownTypeSpelling(fallback, context)) return false;
+	*result = fallback;
+	return true;
 }
 
 bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
@@ -453,8 +460,13 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 	}
 
 	vector<const TemplateDefinition*> candidates;
-	for(map<string, TemplateDefinition>::const_iterator it = definitions_.begin();
-		it != definitions_.end(); ++it) {
+	map<string, vector<string> >::const_iterator indexed_members =
+		definitions_by_name_.find(member_name);
+	if(indexed_members != definitions_by_name_.end()) for(size_t indexed = 0;
+		indexed < indexed_members->second.size(); ++indexed) {
+		map<string, TemplateDefinition>::const_iterator it = definitions_.find(
+			indexed_members->second[indexed]);
+		if(it == definitions_.end()) continue;
 		const TemplateDefinition& definition = it->second;
 		if(definition.class_template || definition.alias_template ||
 			definition.variable_template || definition.parameters.empty() ||
@@ -548,6 +560,7 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 		}
 		vector<string> member_arguments;
 		map<string, vector<string> > inferred_pack_values;
+		map<string, FunctionSignature> inferred_function_values;
 		vector<string> explicit_arguments = explicit_member_arguments;
 		for(size_t argument = 0; argument < explicit_arguments.size(); ++argument) {
 			explicit_arguments[argument] = NormalizeTypeArgument(RewriteText(
@@ -570,7 +583,8 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 			deduction_substitutions.erase(parent->name);
 		try {
 			inferred = InferFunctionArguments(definition, call, &member_arguments,
-				deduction_substitutions, context, explicit_prefix, &inferred_pack_values);
+				deduction_substitutions, context, explicit_prefix, &inferred_pack_values,
+				&inferred_function_values);
 		} catch(const logic_error&) {
 			inferred = false;
 		}
@@ -626,7 +640,7 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 		generated_name = Instantiate(definition, member_arguments, context,
 			explicit_instantiation,
 				&instantiation_pack_hints, &candidate_substitutions,
-				requested_owner_pointer);
+				requested_owner_pointer, &inferred_function_values);
 		} catch(const logic_error&) {
 			continue;
 		}
@@ -689,9 +703,12 @@ bool PA18TemplateExpander::IsKnownMemberTemplateId(const string& raw) const
 	if(!TemplateBase(spelling, open, &begin, &base) ||
 		!TemplateRange(spelling, open, &arguments, &close)) return false;
 	const string member_name = LastComponent(base);
-	for(map<string, TemplateDefinition>::const_iterator it = definitions_.begin();
-		it != definitions_.end(); ++it) {
-		const TemplateDefinition& definition = it->second;
+	map<string, vector<string> >::const_iterator indexed = definitions_by_name_.find(member_name);
+	if(indexed == definitions_by_name_.end()) return false;
+	for(size_t i = 0; i < indexed->second.size(); ++i) {
+		map<string, TemplateDefinition>::const_iterator found = definitions_.find(indexed->second[i]);
+		if(found == definitions_.end()) continue;
+		const TemplateDefinition& definition = found->second;
 		if(definition.member_template && !definition.class_template &&
 			LastComponent(definition.name) == member_name)
 			return true;
@@ -801,8 +818,13 @@ void PA18TemplateExpander::CollectInheritedMemberTemplates(const string& raw_cla
 				if(!base_definition->parameters[parameter].name.empty())
 					base_substitutions[base_definition->parameters[parameter].name] =
 						base_arguments[parameter];
-			for(map<string, TemplateDefinition>::const_iterator it = definitions_.begin();
-				it != definitions_.end(); ++it) {
+			map<string, vector<string> >::const_iterator indexed_members =
+				definitions_by_name_.find(member);
+			if(indexed_members != definitions_by_name_.end()) for(size_t indexed = 0;
+				indexed < indexed_members->second.size(); ++indexed) {
+				map<string, TemplateDefinition>::const_iterator it = definitions_.find(
+					indexed_members->second[indexed]);
+				if(it == definitions_.end()) continue;
 				const TemplateDefinition& candidate = it->second;
 				if(candidate.class_template || candidate.alias_template ||
 					candidate.variable_template || candidate.parameters.empty() ||
@@ -855,7 +877,11 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 	result->explicit_instantiation = input->explicit_instantiation;
 	result->extern_instantiation = input->extern_instantiation;
 	result->dependent_base_lookup = input->dependent_base_lookup;
+	result->materialize_object_address = input->materialize_object_address;
+	result->materialize_object_name = input->materialize_object_name;
 	result->inferred_type = input->inferred_type;
+	result->source_token_begin = input->source_token_begin;
+	result->source_token_end = input->source_token_end;
 	result->template_primary = input->template_primary;
 	result->template_arguments = input->template_arguments;
 	CPPGMAstNodePtr input_callee = input->children.empty() ? CPPGMAstNodePtr() :
@@ -925,6 +951,7 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 					FindExplicitFunctionSpecialization(base, explicit_args, context);
 				if(explicit_specialization) explicit_definition = explicit_specialization;
 				vector<string> complete_args;
+				map<string, FunctionSignature> inferred_function_values;
 				bool has_parameter_pack = false;
 				size_t fixed_template_parameters = 0;
 				for(size_t parameter = 0; parameter < explicit_definition->parameters.size(); ++parameter)
@@ -942,9 +969,11 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 				if(complete) complete_args = explicit_args;
 					else if(explicit_args.size() < explicit_definition->parameters.size())
 						complete = InferFunctionArguments(*explicit_definition, input,
-							&complete_args, substitutions, context, &explicit_args);
+							&complete_args, substitutions, context, &explicit_args, 0,
+							&inferred_function_values);
 				if(complete) {
-					const string local_name = Instantiate(*explicit_definition, complete_args, context);
+					const string local_name = Instantiate(*explicit_definition, complete_args, context,
+						false, 0, 0, 0, &inferred_function_values);
 					result->template_primary = explicit_definition->qualified_name;
 					result->template_arguments = complete_args;
 					const string qualifier = PrefixComponent(base);
@@ -1208,8 +1237,10 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 				}
 				vector<string> inferred;
 				map<string, vector<string> > inferred_pack_values;
+				map<string, FunctionSignature> inferred_function_values;
 				const bool inferred_ok = InferFunctionArguments(*definition, result, &inferred,
-					substitutions, context, 0, &inferred_pack_values);
+					substitutions, context, 0, &inferred_pack_values,
+					&inferred_function_values);
 				if(!inferred_ok) continue;
 				const TemplateDefinition* selected_definition =
 					FindExplicitFunctionSpecialization(definition->qualified_name, inferred, context);
@@ -1225,7 +1256,7 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 					specialization_bases_.end() && !selected_definition->owner.empty();
 				const string* requested_owner = concrete_member_owner ? &requested_owner_name : 0;
 				const string local_name = Instantiate(*selected_definition, inferred, context, false,
-					&inferred_pack_values, 0, requested_owner);
+					&inferred_pack_values, 0, requested_owner, &inferred_function_values);
 				result->template_primary = definition->qualified_name;
 				result->template_arguments = inferred;
 				const string qualifier = concrete_member_owner ? requested_owner_name :

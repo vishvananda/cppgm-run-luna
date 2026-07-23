@@ -427,7 +427,7 @@ private:
 	map<string, TemplateDefinition> definitions_;
 	map<string, vector<string> > definitions_by_name_;
 	map<string, vector<pair<string, string> > > using_directive_exports_;
-	set<string> template_pack_names_;
+	set<string> template_pack_names_, template_parameter_names_;
 	map<string, vector<TemplateDefinition> > class_specializations_;
 	map<const CPPGMAstNode*, string> lexical_contexts_;
 	set<string> lexical_namespace_paths_;
@@ -446,8 +446,7 @@ private:
 	set<string> class_contexts_;
 	set<string> function_contexts_;
 	map<string, string> function_owners_;
-	map<string, string> local_class_names_;
-	map<string, CPPGMAstNodePtr> class_declarations_;
+	map<string, string> local_class_names_; map<string, CPPGMAstNodePtr> class_declarations_; set<string> using_member_template_names_;
 	map<string, vector<string> > constant_member_owners_;
 	set<string> named_type_contexts_;
 	map<string, string> variable_types_;
@@ -484,8 +483,7 @@ private:
 	map<string, CPPGMAstNodePtr> extern_instantiation_declarations_;
 	map<string, set<string> > requested_nested_classes_;
 	set<string> materialized_nested_classes_, materialized_member_definitions_;
-	set<string> active_template_member_types_;
-	mutable map<string, string> function_markers_, function_marker_names_;
+	set<string> active_template_member_types_; map<string, FunctionSignature> active_function_substitutions_;
 	size_t EstimateTypeSize(string raw, const string& context) const;
 	void RecordClassTypeSize(const CPPGMAstNodePtr& node, const string& context,
 		const string& class_path);
@@ -518,7 +516,9 @@ private:
 		const string& context) const;
 	bool IsTopLevelPackPattern(const string& value) const;
 	CPPGMAstNodePtr FunctionDeclarator(const CPPGMAstNodePtr& declaration) const;
-	bool IsBuiltinArithmeticType(string raw) const;
+	bool IsBuiltinArithmeticType(string raw) const; bool IsKnownTypeSpelling(string raw, const string& context) const;
+	bool HasUnresolvedTemplateParameter(string raw, const string& context,
+		const map<string, string>& substitutions) const;
 	string CommonBuiltinArithmeticType(const string& left, const string& right) const;
 	bool InferOperatorResult(const string& operation, const string& left,
 		const string& right, const string& context, string* result) const;
@@ -614,9 +614,7 @@ private:
 			names->second[0]);
 		return found == function_signatures_.end() ? 0 : &found->second;
 	}
-	string FunctionMarker(const string& raw_name, const string& context) const;
-	CPPGMAstNodePtr FunctionParameter(const CPPGMAstNodePtr& original,
-		const FunctionSignature& signature, const string& marker) const;
+	CPPGMAstNodePtr FunctionParameter(const CPPGMAstNodePtr& original, const FunctionSignature& signature) const;
 	CPPGMAstNodePtr MakeForwardClass(const string& name) const;
 	CPPGMAstNodePtr MakeClassShell(const string& name) const
 	{
@@ -887,8 +885,11 @@ private:
 	item.declaration = declaration;
 		item.parameters = Parameters(node->children[0]);
 		for(size_t parameter = 0; parameter < item.parameters.size(); ++parameter)
-			if(item.parameters[parameter].pack)
-				template_pack_names_.insert(item.parameters[parameter].name);
+			if(!item.parameters[parameter].name.empty()) {
+				template_parameter_names_.insert(item.parameters[parameter].name);
+				if(item.parameters[parameter].pack)
+					template_pack_names_.insert(item.parameters[parameter].name);
+			}
 		for(size_t parameter = 0; parameter < item.specialization_pack_names.size(); ++parameter)
 			template_pack_names_.insert(item.specialization_pack_names[parameter]);
 		item.class_template = declaration->kind == "class-specifier" ||
@@ -1029,12 +1030,11 @@ private:
 		// is still useful to register its lexical spelling now.
 		Collect(declaration, item.class_template ? JoinPath(item.owner, name) : item.owner);
 	}
-	void IndexConstantMembers(const CPPGMAstNodePtr& node, const string& owner);
-	void IndexUsingDirectiveDefinition(const TemplateDefinition& definition,
-		const string& key);
+	void IndexConstantMembers(const CPPGMAstNodePtr& node, const string& owner); void IndexUsingDirectiveDefinition(const TemplateDefinition& definition, const string& key);
 	void Collect(const CPPGMAstNodePtr& node, const string& context)
 	{
 		if(!node) return;
+		if(node->kind == "using-declaration" && class_contexts_.find(context) != class_contexts_.end()) { const CPPGMAstNodePtr target = ChildOfKindLocal(node, "target"); if(target) using_member_template_names_.insert(LastComponent(target->value)); }
 		if(node->kind == "translation-unit") {
 			for(size_t i = 0; i < node->children.size(); ++i) Collect(node->children[i], context);
 			return;
@@ -1196,5 +1196,4 @@ private:
 	bool MentionsGeneratedLayoutClass(const CPPGMAstNodePtr& node,
 		const vector<CPPGMAstNodePtr>& generated) const;
 	bool MentionsTemplateId(const CPPGMAstNodePtr& node) const;
-	vector<CPPGMAstNodePtr> OrderGeneratedClasses(
-		const vector<CPPGMAstNodePtr>& input) const;
+	vector<CPPGMAstNodePtr> OrderGeneratedClasses(const vector<CPPGMAstNodePtr>& input) const;

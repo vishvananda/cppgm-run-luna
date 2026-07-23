@@ -450,7 +450,7 @@
 				context, substitutions);
 			if(left.empty() || right.empty()) return string();
 			CPPGMAstNodePtr declaration = FindClassDeclaration(left, context);
-			if(!declaration) return left;
+			if(!declaration) return IsKnownTypeSpelling(left, context) ? left : string();
 			for(size_t child = 0; child < declaration->children.size(); ++child) {
 				const CPPGMAstNodePtr member = declaration->children[child];
 				if(!member || member->kind != "function-definition" || member->children.size() < 2 ||
@@ -458,7 +458,7 @@
 				return RewriteText(NodeTypeSpelling(member->children[0]) +
 					DeclaratorSuffix(member->children[1]), context, substitutions, 0);
 			}
-			return left;
+			return IsKnownTypeSpelling(left, context) ? left : string();
 		}
 		// Preserve the historical member-shift path above, then handle the
 		// other top-level binary operators with the typed operator and builtin
@@ -494,7 +494,7 @@
 			if(InferOperatorResult(operation, left, right, context, &result)) return result;
 			if(IsBuiltinArithmeticType(left) && IsBuiltinArithmeticType(right))
 				return CommonBuiltinArithmeticType(left, right);
-			return left;
+			return IsKnownTypeSpelling(left, context) ? left : string();
 		}
 		return string();
 	}
@@ -577,7 +577,8 @@
 		if(open != string::npos && expression[expression.size() - 1] == ')') {
 			string cast_type = ReplaceIdentifiers(Trim(expression.substr(0, open)), substitutions);
 			cast_type = ResolveAlias(cast_type, context);
-			if(!cast_type.empty()) return NormalizeTypeArgument(cast_type);
+			if(IsKnownTypeSpelling(cast_type, context))
+				return NormalizeTypeArgument(cast_type);
 		}
 		map<string, string>::const_iterator substituted = substitutions.find(expression);
 		if(substituted != substitutions.end()) return substituted->second;
@@ -617,8 +618,9 @@
 		const size_t open = normalized.find('(');
 		if(open != string::npos && open > 0 && normalized[normalized.size() - 1] == ')') {
 			*result = NormalizeTypeArgument(ResolveAlias(ReplaceIdentifiers(
-				Trim(normalized.substr(0, open)), substitutions), context));
-			return !result->empty();
+			Trim(normalized.substr(0, open)), substitutions), context));
+			if(!IsKnownTypeSpelling(*result, context)) return false;
+			return true;
 		}
 		*result = ExpressionTypeSpelling(normalized, context, substitutions);
 		return !result->empty();

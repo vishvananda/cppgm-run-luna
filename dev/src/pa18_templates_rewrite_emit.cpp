@@ -155,7 +155,8 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 	const map<string, PA19IntegralValue>& integral_substitutions,
 	const map<string, vector<string> >& pack_substitutions, const string& context,
 	bool explicit_instantiation, const string& key, const string& local_name,
-	const string& requested_owner)
+	const string& requested_owner,
+	const map<string, FunctionSignature>& function_substitutions)
 {
 	const string generated_owner = definition.lexical_owner.empty() ?
 		definition.owner : definition.lexical_owner;
@@ -186,7 +187,8 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 		concrete_owner;
 	try {
 		generated = TransformInstantiatedNode(definition, transform_context,
-			substitutions, integral_substitutions, pack_substitutions);
+			substitutions, integral_substitutions, pack_substitutions,
+			function_substitutions);
 	} catch(...) {
 		active_instantiation_name_ = previous_instantiation_name;
 		throw;
@@ -271,12 +273,14 @@ string PA18TemplateExpander::MaterializeExternInstantiation(
 	const vector<string>& metadata_args, map<string, string> substitutions,
 	const map<string, PA19IntegralValue>& integral_substitutions,
 	const map<string, vector<string> >& pack_substitutions,
-	const string& context, const string& key)
+	const string& context, const string& key,
+	const map<string, FunctionSignature>& function_substitutions)
 {
 	map<string, string>::const_iterator cached = specializations_.find(key);
 	if(cached != specializations_.end()) return cached->second;
 	CPPGMAstNodePtr generated = TransformInstantiatedNode(definition,
-		definition.owner, substitutions, integral_substitutions, pack_substitutions);
+		definition.owner, substitutions, integral_substitutions, pack_substitutions,
+		function_substitutions);
 	if(!generated || generated->kind != "function-definition" ||
 		generated->children.size() < 2)
 		throw logic_error("unable to materialize extern template declaration");
@@ -309,7 +313,8 @@ string PA18TemplateExpander::MaterializeInstantiation(const TemplateDefinition& 
 	map<string, string> substitutions,
 	const map<string, PA19IntegralValue>& integral_substitutions,
 	const map<string, vector<string> >& pack_substitutions, const string& context,
-	bool explicit_instantiation, const string& key, const string& concrete_owner)
+	bool explicit_instantiation, const string& key, const string& concrete_owner,
+	const map<string, FunctionSignature>& function_substitutions)
 {
 	map<string, string>::const_iterator cached = specializations_.find(key);
 	if(cached != specializations_.end()) {
@@ -352,18 +357,21 @@ string PA18TemplateExpander::MaterializeInstantiation(const TemplateDefinition& 
 	if(!active_specializations_.insert(key).second) return local_name;
 	return EmitInstantiation(definition, args, metadata_args, substitutions,
 		integral_substitutions, pack_substitutions, context, explicit_instantiation,
-		key, local_name, concrete_owner);
+		key, local_name, concrete_owner, function_substitutions);
 }
 
 string PA18TemplateExpander::Instantiate(const TemplateDefinition& definition,
 	const vector<string>& raw_args, const string& context, bool explicit_instantiation,
 	const map<string, vector<string> >* pack_hints,
-	const map<string, string>* outer_substitutions, const string* requested_owner)
+	const map<string, string>* outer_substitutions, const string* requested_owner,
+	const map<string, FunctionSignature>* function_hints)
 {
 	if(definition.parameters.empty()) throw logic_error("template has no type parameters");
 	vector<string> args, metadata_args;
 	map<string, string> substitutions = outer_substitutions ? *outer_substitutions :
 		map<string, string>();
+	const map<string, FunctionSignature> function_substitutions = function_hints ?
+		*function_hints : map<string, FunctionSignature>();
 	string concrete_owner = requested_owner ? *requested_owner : active_concrete_owner_;
 	if(!ConcreteOwnerMatches(definition, concrete_owner)) concrete_owner.clear();
 	// A template-template argument can name a member alias on a concrete
@@ -413,10 +421,11 @@ string PA18TemplateExpander::Instantiate(const TemplateDefinition& definition,
 	if(!explicit_instantiation && extern_instantiation_keys_.find(request_key) !=
 		extern_instantiation_keys_.end())
 		return MaterializeExternInstantiation(definition, args, metadata_args,
-			substitutions, integral_substitutions, pack_substitutions, context, key);
+			substitutions, integral_substitutions, pack_substitutions, context, key,
+			function_substitutions);
 	return MaterializeInstantiation(definition, args, metadata_args, substitutions,
 		integral_substitutions, pack_substitutions, context, explicit_instantiation, key,
-		concrete_owner);
+		concrete_owner, function_substitutions);
 }
 
 

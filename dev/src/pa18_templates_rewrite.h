@@ -326,8 +326,9 @@ bool MatchTypePattern(string pattern, string actual,
 		active->erase(active_key);
 		return false;
 	}
-bool InferArgument(const CPPGMAstNodePtr& expression, string* result,
-		const map<string, string>& substitutions, const string& context) const;
+	bool InferArgument(const CPPGMAstNodePtr& expression, string* result,
+		const map<string, string>& substitutions, const string& context,
+		FunctionSignature* function_signature = 0) const;
 	bool IsFunctionParameterPack(const CPPGMAstNodePtr& parameter) const
 	{
 		return parameter && DescendantOfKind(parameter, "parameter-pack");
@@ -391,11 +392,34 @@ bool InferArgument(const CPPGMAstNodePtr& expression, string* result,
 		}
 		return result;
 	}
-bool InferFunctionArguments(const TemplateDefinition& definition,
+	bool InferFunctionArguments(const TemplateDefinition& definition,
 		const CPPGMAstNodePtr& call, vector<string>* result,
 		const map<string, string>& substitutions, const string& context,
 		const vector<string>* explicit_prefix = 0,
-		map<string, vector<string> >* inferred_pack_values = 0) const;
+		map<string, vector<string> >* inferred_pack_values = 0,
+		map<string, FunctionSignature>* inferred_function_values = 0) const;
+	bool MergeInferredFunctionArgument(const TemplateDefinition& definition,
+		const string& pattern, const string& type, const FunctionSignature& signature,
+		const map<string, string>& substitutions, const string& context,
+		const set<string>& parameter_names, map<string, string>* inferred,
+		map<string, vector<string> >* inferred_packs,
+		map<string, FunctionSignature>* inferred_functions) const;
+	bool InferFunctionParameter(const TemplateDefinition& definition,
+		const CPPGMAstNodePtr& parameter, const CPPGMAstNodePtr& parameter_list,
+		size_t parameter_position, const CPPGMAstNodePtr& arguments,
+		size_t* argument_index, const map<string, string>& substitutions,
+		const string& context, const set<string>& parameter_names,
+		map<string, string>* inferred, map<string, vector<string> >* inferred_packs,
+		vector<string>* deferred_patterns,
+		vector<CPPGMAstNodePtr>* deferred_arguments,
+		map<string, FunctionSignature>* inferred_functions) const;
+	bool CompleteFunctionArguments(const TemplateDefinition& definition,
+		const vector<string>& deferred_patterns,
+		const vector<CPPGMAstNodePtr>& deferred_arguments,
+		const set<string>& parameter_names, map<string, string>* inferred,
+		const map<string, vector<string> >& inferred_packs, vector<string>* result,
+		map<string, vector<string> >* inferred_pack_values,
+		const string& context) const;
 	bool SplitFunctionPointerType(string raw, string* result_type,
 		vector<string>* parameters) const
 	{
@@ -527,9 +551,12 @@ bool InferFunctionArguments(const TemplateDefinition& definition,
 		for(size_t i = 0; i < candidates.size(); ++i) {
 			vector<string> inferred;
 			map<string, vector<string> > inferred_pack_values;
+			map<string, FunctionSignature> inferred_function_values;
 			if(!InferFunctionArguments(*candidates[i], call, &inferred,
-				substitutions, context, 0, &inferred_pack_values)) continue;
-			Instantiate(*candidates[i], inferred, context, false, &inferred_pack_values);
+				substitutions, context, 0, &inferred_pack_values,
+				&inferred_function_values)) continue;
+			Instantiate(*candidates[i], inferred, context, false, &inferred_pack_values,
+				0, 0, &inferred_function_values);
 			return;
 		}
 	}
@@ -1090,79 +1117,34 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 					}
 				}
 			}
-			if(input->children.size() > 1 && input->children[1] &&
-				(input->children[1]->kind == "class-specifier" ||
-					input->children[1]->kind == "class-forward-declaration"))
-				return PrefixComponent(input->children[1]->value).find('<') == string::npos ?
-					MakeClassShell(LastComponent(input->children[1]->value).substr(0,
-						LastComponent(input->children[1]->value).find('<'))) :
-					CPPGMAstNodePtr();
-			// PA18 normally removes source function-template declarations after
-			// collecting them, because calls are replaced by concrete functions.
-			// A non-template class that is the source of a using-declaration still
-			// needs its member-template declaration in the semantic AST so PA11 can
-			// validate the imported entity.  Retain only those declarations, and
-			// only on the original class (materialized specializations get concrete
-			// members through Instantiate).
-			if(input->children.size() > 1 && input->children[1] &&
-				input->children[1]->kind == "function-definition" && !context.empty() &&
-				specialization_bases_.find(LastComponent(context)) == specialization_bases_.end()) {
-				const string member = LastComponent(DeclarationName(input->children[1]));
-				bool used_by_class = false;
-				for(map<string, CPPGMAstNodePtr>::const_iterator declaration =
-					class_declarations_.begin(); declaration != class_declarations_.end() &&
-					!used_by_class; ++declaration) {
-					const CPPGMAstNodePtr& class_node = declaration->second;
-					if(!class_node || (class_node->kind != "class-specifier" &&
-						class_node->kind != "class-forward-declaration")) continue;
-					for(size_t child = 0; child < class_node->children.size(); ++child) {
-						const CPPGMAstNodePtr using_node = class_node->children[child];
-						if(!using_node || using_node->kind != "using-declaration") continue;
-						const CPPGMAstNodePtr target = ChildOfKindLocal(using_node, "target");
-						if(target && LastComponent(target->value) == member) {
-							used_by_class = true;
-							break;
+				if(input->children.size() > 1 && input->children[1] &&
+					(input->children[1]->kind == "class-specifier" ||
+					 input->children[1]->kind == "class-forward-declaration"))
+					return PrefixComponent(input->children[1]->value).find('<') == string::npos ?
+						MakeClassShell(LastComponent(input->children[1]->value).substr(0,
+							LastComponent(input->children[1]->value).find('<'))) :
+						CPPGMAstNodePtr();
+				if(input->children.size() > 1 && input->children[1] &&
+					input->children[1]->kind == "function-definition" && !context.empty()) {
+					const string member = LastComponent(DeclarationName(input->children[1]));
+					if(using_member_template_names_.find(member) != using_member_template_names_.end()) {
+						// PA11 needs the template entity for using-declaration lookup. Keep the real dependent signature, but expose it as a declaration so
+						// PA14 never lowers the source body; concrete calls use Instantiate().
+						CPPGMAstNodePtr declaration = CloneNode(input);
+						CPPGMAstNodePtr function = declaration->children[1];
+						if(function->children.size() > 1) {
+							CPPGMAstNodePtr simple(new CPPGMAstNode("simple-declaration"));
+							simple->children.push_back(CloneNode(function->children[0]));
+							CPPGMAstNodePtr list(new CPPGMAstNode("init-declarator-list"));
+							CPPGMAstNodePtr item(new CPPGMAstNode("init-declarator"));
+							item->children.push_back(CloneNode(function->children[1]));
+							list->children.push_back(item);
+							simple->children.push_back(list);
+							declaration->children[1] = simple;
 						}
+						return declaration;
 					}
 				}
-				if(used_by_class) {
-					// PA11 only needs a declaration identity for this imported
-					// entity; its real dependent signature remains in the PA18
-					// TemplateDefinition.  Emit a nondependent prototype so the
-					// analyzer can bind the using target without replaying a
-					// template-id before PA18 has selected an overload.
-					const CPPGMAstNodePtr function = input->children[1];
-					CPPGMAstNodePtr declaration(new CPPGMAstNode("simple-declaration"));
-					CPPGMAstNodePtr result_specs(new CPPGMAstNode("decl-specifier-seq"));
-					result_specs->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
-						"decl-specifier", "KW_INT:int")));
-					declaration->children.push_back(result_specs);
-					CPPGMAstNodePtr list(new CPPGMAstNode("init-declarator-list"));
-					CPPGMAstNodePtr item(new CPPGMAstNode("init-declarator"));
-					CPPGMAstNodePtr declarator = function->children.size() > 1 ?
-						CloneNode(function->children[1]) : CPPGMAstNodePtr();
-					if(!declarator) return CPPGMAstNodePtr();
-					const CPPGMAstNodePtr parameters = DescendantOfKind(declarator,
-						"parameter-clause");
-					if(parameters) for(size_t parameter = 0; parameter < parameters->children.size();
-						++parameter) {
-						CPPGMAstNodePtr parameter_declaration = parameters->children[parameter];
-						if(!parameter_declaration || parameter_declaration->kind !=
-							"parameter-declaration") continue;
-						CPPGMAstNodePtr parameter_specs(new CPPGMAstNode("decl-specifier-seq"));
-						parameter_specs->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
-							"decl-specifier", "KW_INT:int")));
-						if(!parameter_declaration->children.empty())
-							parameter_declaration->children[0] = parameter_specs;
-						while(parameter_declaration->children.size() > 2)
-							parameter_declaration->children.pop_back();
-					}
-					item->children.push_back(declarator);
-					list->children.push_back(item);
-					declaration->children.push_back(list);
-					return declaration;
-				}
-			}
 			return CPPGMAstNodePtr();
 		}
 		if(input->kind == "using-declaration") {
@@ -1180,13 +1162,10 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 				const string name = RemoveMarker(specifier->value);
 				map<string, string>::const_iterator substitution = substitutions.find(name);
 				if(substitution == substitutions.end()) continue;
-				map<string, string>::const_iterator marker = function_marker_names_.find(substitution->second);
-				if(marker == function_marker_names_.end()) continue;
-				map<string, FunctionSignature>::const_iterator signature = function_signatures_.find(marker->second);
-				if(signature != function_signatures_.end())
-					return FunctionParameter(input, signature->second, substitution->second);
-				const FunctionSignature* recovered = FindFunctionSignature(marker->second, context);
-				if(recovered) return FunctionParameter(input, *recovered, substitution->second);
+				map<string, FunctionSignature>::const_iterator signature =
+					active_function_substitutions_.find(name);
+				if(signature != active_function_substitutions_.end())
+					return FunctionParameter(input, signature->second);
 			}
 		}
 		if(input->kind == "namespace-definition") return TransformNamespace(input, context, substitutions);

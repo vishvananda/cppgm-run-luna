@@ -1,12 +1,13 @@
 # PA21 checkpoint plan
 
-## Turn checkpoint: 146/215 (2026-07-23)
+## Checkpoint audit result: 146/215 (2026-07-23)
 
 The required report, `make test-report ACTIVE_TEST_REPORT_PAS='pa21'`, is
-**146/215 passing** with **69 failures**.  This is **+27** over the
-119/215 turn-start baseline.  The required through report remains
-**1635/1635 through PA20**.  The complete current failure set is grouped by
-shared compiler behavior below; every failure appears exactly once.
+**146/215 passing** with **69 failures** after the checkpoint audit.  This is
+**+27** over the 119/215 turn-start baseline and preserves the checkpoint
+baseline.  The required through report remains **1635/1635 through PA20**.
+The map below is refreshed from the complete current-PA report; every failure
+appears exactly once and is grouped by shared compiler behavior.
 
 ### Remaining Work Map
 
@@ -110,6 +111,11 @@ clean at 1635/1635.
 The checkpoint improves PA21 by 27 tests over the turn-start baseline.  The
 implementation compiles with the added PA18 translation units, and
 `cppgm_file_audit.pl --stage pa21 --paths dev/src` passes with warnings only.
+The audit removes string-encoded function facts, unrestricted fallback type
+acceptance, broad dependent replay deferral, and registry-wide hot-path scans;
+it also keeps class-scoped using-imported member templates as real dependent
+declarations until PA18 materializes their concrete definitions.  The current
+report stays at the 146/215 checkpoint baseline with no earlier-PA regression.
 The next group is the remaining friend/access and member-owner subset of the
 member/friend map: propagate friend ownership through wrapped template
 declarations and concrete class replay, then validate private/protected type

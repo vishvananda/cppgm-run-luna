@@ -531,8 +531,25 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 					if(!definition->parameters[i].name.empty())
 						default_substitutions[definition->parameters[i].name] = argument;
 				}
-			}
-			// Resolve non-type arguments in the surrounding substitution scope
+				}
+				// A type template-id may be encountered while forming the signature of
+				// another dependent call.  Its argument is not a concrete type until the
+				// enclosing replay installs the bindings; materializing it here would
+				// register a bogus specialization such as `view<T>` in the source pass.
+				// Defer only when the typed argument still contains an indexed template
+				// parameter; unknown-but-concrete local classes remain materializable.
+				bool unresolved_type_argument = false;
+				for(size_t i = 0; i < args.size() && i < definition->parameters.size(); ++i)
+					if(definition->parameters[i].type &&
+						HasUnresolvedTemplateParameter(args[i], context, substitutions)) {
+						unresolved_type_argument = true;
+						break;
+					}
+				if(unresolved_type_argument) {
+					search = close + 1;
+					continue;
+				}
+				// Resolve non-type arguments in the surrounding substitution scope
 			// before Instantiate creates its fresh local map.  This preserves
 			// member constants such as `num` while materializing a nested
 			// specialization inside `ratio1<N>`.

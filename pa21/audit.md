@@ -2,87 +2,92 @@
 
 ## Scope Reviewed
 
-Reviewed the latest Checkpoint Scope and failure map in `pa21/plan.md`, the
-PA21 contract in `pa21/README.md`, `TESTING_AND_REFERENCES.md`, the changed
-source and source-set entries, recent commits `ff9d4f3`, `6b2c6fc`, and
-`64aa678` (with `07fc383`, `c4e148e`, and `a2afd2e` for preceding ownership
-context), and the complete PA21 log supplied at
+Reviewed the latest Checkpoint Scope and complete failure map in
+`pa21/plan.md`, the PA21 contract in `pa21/README.md`,
+`TESTING_AND_REFERENCES.md`, the changed source files and source-set entries,
+recent commits `297acef`, `a74b4e5`, `a916cd1`, `64aa678`, `6b2c6fc`, and
+`ff9d4f3`, and the supplied full primary log at
 `/home/vishvananda/work/.ralph/luna-gpt-5.6-luna-ultra/last-test.log`.
 
-The landed checkpoint is the dependent typed-value and generated-layout
-increment: recursive non-type/pack replay, declarator-shell preservation,
-empty-pack completion, concrete template-member replay, multi-base layout and
-owner adjustments, and deferred local-class layout materialization.  The
-audit-turn baseline was 118/215 PA21 tests.
+The landed checkpoint is the hidden-friend namespace/ADL increment: replayed
+friend function templates retain an unqualified generated declarator so PA14
+can assign the surrounding namespace symbol, and normalized `friend`
+specifiers remain semantic facts rather than becoming types.  The audit also
+covers the supporting PA18 replay changes required by that checkpoint:
+structured function-signature propagation, typed lookup indexes, bounded
+dependent replay, integral-evaluation phase separation, and using-imported
+member-template declarations.
 
 ## Findings
 
-- The complete compiler pipeline remains active: preprocessing, tokenization,
-  parsing, semantic collection/rewrite, and ordinary LowIR lowering all run.
-  There is no skipped phase, dummy or embedded output, reference/host compiler
-  invocation, interpreter/VM/trampoline substitute, source/test-specific
-  acceptance gate, fallback success path, or timeout workaround.
+- The full compiler pipeline remains active: preprocessing, tokenization,
+  parsing, PA11 semantic analysis, PA14 lowering, PA18 replay, and ordinary
+  LowIR emission all run.  There is no skipped phase, dummy or embedded
+  output, reference/host compiler invocation, interpreter/VM/trampoline
+  substitute, source/test-specific acceptance gate, timeout workaround, or
+  fallback success path.
 
-- One checkpoint-generated LowIR result was structurally invalid.  A
-  using-directive was flattening imported function templates into scalar name
-  substitutions, so a local object named `next` was rewritten as `std::next`.
-  Function entities are now excluded from scalar substitution, while function
-  lookup remains available through the typed definition index.  The focused
-  regression now passes and the invalid-LowIR entry is gone from the full
-  report.
+- The source prototype retained for a using-imported member template is a
+  real dependent declaration: it preserves the collected result specifier,
+  declarator, template parameters, and semantic identity, while omitting only
+  the source body at the declaration boundary.  PA11 processes that
+  declaration, PA14 processes the resulting declaration node, and PA18
+  materializes the concrete definition through `Instantiate`; it is not dummy
+  output or a skipped semantic/lowering path.
 
-- Concrete enclosing ownership had been encoded as the reserved fake
-  identifier `__PA18_CONCRETE_OWNER__` inside the ordinary substitution map.
-  That stringly fact has been replaced by a scoped typed owner context,
-  explicit owner-binding recovery, owner/definition matching that handles
-  templated owner spellings, and concrete alias registration.  Nested replay
-  preserves the owner without leaking it into unrelated target classes.
+- Function types are carried as `FunctionSignature` values through deduction,
+  instantiation, and parameter replay.  The former reserved string markers and
+  fake function payloads are gone.  Call, cast, binary, and `decltype`
+  fallbacks now accept only known typed spellings, so arbitrary source text
+  cannot manufacture a successful semantic result.
 
-- The specialization-ordering implementation was a class-body `.inc`
-  fragment included from a header and therefore outside the file-audit source
-  set.  It is now a normal `pa18_templates_rewrite_specialization.cpp`, listed
-  in `dev/frontend_source_sets.mk`; the fragment was removed.  No code was
-  hidden in an unchecked path and no file-size or audit check was weakened.
+- Dependent replay defers only identifiers registered as template parameters;
+  concrete local classes and known aliases materialize normally.  Lookup facts
+  are retained in `definitions_by_name_`, namespace-export indexes, and
+  a class-scoped collection-time using-member index.  Function-local and
+  namespace-level using declarations do not retain unrelated source template
+  bodies.  Member-template lookup no longer performs registry-wide scans on
+  its normal indexed paths, and no emitted LowIR or generated text is reparsed
+  to recover semantic facts.
 
-- Using-directive replay no longer performs a registry-wide definition walk:
-  class contexts use an ordered prefix range, and collection builds a typed
-  namespace-export index.  Existing `definitions_by_name_`, pack-name, and
-  constant-member indexes remain the owners of their respective facts.  The
-  owner fallback examines bounded source-definition metadata on a cache miss;
-  it does not reparse emitted text or LowIR.
+- Function-argument inference and integral evaluation are split into focused
+  preparation, matching, completion, normalization, special-form, known-value,
+  and fallback phases.  This removes the oversized hot routines while keeping
+  pack arity, defaults, reference adjustment, overload deferral, and typed
+  constant values explicit.
 
-- `direct_bases` and `direct_base_offsets` are the canonical multi-base
-  representations.  `direct_base` and `direct_base_offset` are compatibility
-  projections for earlier single-inheritance consumers; their writes remain
-  centralized in class processing/layout, so downstream code does not own a
-  second independently updated base graph.  This preserves earlier PA
-  behavior while making the new multi-base facts available to layout and
-  lowering.
+- No file-audit bypass, hidden implementation fragment, weakened check, or
+  code moved to an unchecked path remains.  The specialization matcher is an
+  audited `.cpp` translation unit listed in `dev/frontend_source_sets.mk`.
+  Earlier assignments remain clean, and the current PA remains at the landed
+  checkpoint baseline.
 
 ## Changes Made
 
-- Added the typed scoped owner context and owner-binding helper, removed the
-  reserved owner marker, and retained concrete-owner alias registration.
-- Fixed using-directive scalar substitution and replaced its repeated scans
-  with collection-time namespace-export indexing and ordered class-context
-  lookup.
-- Moved specialization matching into an audited `.cpp` translation unit and
-  registered it in the frontend source set.
-- Updated this audit and refreshed the concise 96-failure map and next
-  checkpoint group in `pa21/plan.md`.
+- Removed fake function markers and the temporary template-entity-only path;
+  propagated typed function signatures through concrete replay.
+- Added strict known-type checks to semantic fallbacks and corrected dependent
+  replay to distinguish unresolved template parameters from concrete classes.
+- Replaced normal full-registry member/template lookup walks with collection-
+  time indexes, scoped the using-member index to class contexts, and retained
+  a real dependent prototype for using-imported member templates.
+- Split function inference and integral evaluation into auditable helpers,
+  kept the specialization implementation in the checked source set, and
+  refreshed the current failure map and next substantial checkpoint in
+  `pa21/plan.md`.
 
 ## Validation
 
-- `make -C dev cppgm++`: passed.
-- Focused owner-replay probes for alias rebinding and dependent member-class
-  partial specialization: passed; the local-value/using-directive invalid-
-  LowIR regression: passed.
-- `make test-report ACTIVE_TEST_REPORT_PAS='pa21'`: **119/215 passed**;
-  96 semantic/LowIR failures remain, with no timeout or invalid-LowIR result.
-  The command is nonzero because PA21 is not complete, but the result is above
-  the 118/215 audit-turn baseline.
-- Required prior-through gate (`make test-report-through-pa20`): **1635/1635**.
+- `make -j2`: passed.
+- Required prior-through check (`make test-report-through-pa20`):
+  **1635/1635 passed**.
 - `perl scripts/cppgm_file_audit.pl --stage pa21 --paths dev/src`: passed with
-  warning-only header-division findings and no fatal finding.
-- `git diff --check`: passed.  The cohesive audit fixes and documentation are
-  committed together, and the final worktree is clean.
+  warning-only findings and no fatal file, size, or source-set finding.
+- `make test-report ACTIVE_TEST_REPORT_PAS='pa21'`: **146/215 passed** with
+  **69 failures**, matching the complete map in `pa21/plan.md`.  This equals
+  the checkpoint baseline and remains above the turn-start 119/215 baseline;
+  earlier PAs still pass.
+- Focused hidden-friend ADL/operator, using-imported member-template, and PA18
+  inference regressions passed.
+- `git diff --check`: passed.  The implementation is ready for the next
+  member/friend owner-replay checkpoint group.
