@@ -160,7 +160,8 @@
 			// concrete specialization has a substitution scope.  Leaving it
 			// deferred avoids treating the member itself as an unqualified constant
 			// operand (`value`) and recursively evaluating its own initializer.
-			if(substitutions.empty() && expression_text.find("decltype(") != string::npos)
+			if(!HasReplayContext(substitutions) &&
+				expression_text.find("decltype(") != string::npos)
 				continue;
 			if(!EvaluateIntegralText(expression_text, context,
 				substitutions, &value)) continue;
@@ -1052,7 +1053,8 @@
 	}
 	string GeneratedSpecializationName(const TemplateDefinition& definition,
 		const vector<string>& args, const vector<string>& metadata_args,
-		const map<string, string>& substitutions, const string& context)
+		const map<string, string>& substitutions, const string& context,
+		const string& concrete_owner)
 	{
 		string local_name = definition.name;
 		if(definition.class_template || definition.alias_template || definition.variable_template) {
@@ -1105,41 +1107,39 @@
 		// `allocator_traits<standard_allocator<void>>::rebind_traits<double>`
 		// cannot reuse the alias materialized for
 		// `allocator_traits<simple_allocator<int>>::rebind_traits<double>`.
-		if(definition.alias_template) {
-			map<string, string>::const_iterator owner = substitutions.find(
-				"__PA18_CONCRETE_OWNER__");
-			if(owner != substitutions.end()) {
-				const string marker = "::__PA18_OWNER";
-				const size_t end = owner->second.find(marker);
-				const string concrete = owner->second.substr(0,
-					end == string::npos ? string::npos : end);
-				if(!concrete.empty()) local_name += "__" + TypeSuffix(concrete);
-			}
-		}
+		if(definition.alias_template && !concrete_owner.empty())
+			local_name += "__" + TypeSuffix(concrete_owner);
 		return local_name;
 	}
 	string Instantiate(const TemplateDefinition& definition, const vector<string>& raw_args,
 		const string& context, bool explicit_instantiation = false,
 		const map<string, vector<string> >* pack_hints = 0,
-		const map<string, string>* outer_substitutions = 0);
+		const map<string, string>* outer_substitutions = 0,
+		const string* concrete_owner = 0);
 	string MaterializeInstantiation(const TemplateDefinition& definition,
 		const vector<string>& args, const vector<string>& metadata_args,
 		map<string, string> substitutions,
 		const map<string, PA19IntegralValue>& integral_substitutions,
 		const map<string, vector<string> >& pack_substitutions,
-		const string& context, bool explicit_instantiation, const string& key);
+		const string& context, bool explicit_instantiation, const string& key,
+		const string& concrete_owner);
 	void ReplayCachedInstantiation(const TemplateDefinition& definition,
 		const vector<string>& args, const string& cached, const string& context,
 		bool explicit_instantiation,
 		const map<string, vector<string> >& pack_substitutions);
 	void RegisterGeneratedSpecialization(const TemplateDefinition& definition,
 		const vector<string>& metadata_args, const string& local_name);
+	void AddConcreteOwnerSubstitutions(const string& concrete_owner,
+		const string& context, map<string, string>* substitutions);
+	bool ConcreteOwnerMatches(const TemplateDefinition& definition,
+		const string& concrete_owner) const;
 	string FindConcreteInstantiationOwner(const TemplateDefinition& definition,
-		const map<string, string>& substitutions, const string& context) const;
+			const map<string, string>& substitutions, const string& context,
+			const string& requested_owner) const;
 	string EmitInstantiation(const TemplateDefinition& definition,
 		const vector<string>& args, const vector<string>& metadata_args,
 		map<string, string> substitutions,
 		const map<string, PA19IntegralValue>& integral_substitutions,
 		const map<string, vector<string> >& pack_substitutions,
 		const string& context, bool explicit_instantiation, const string& key,
-		const string& local_name);
+		const string& local_name, const string& requested_owner);

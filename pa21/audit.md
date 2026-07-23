@@ -2,76 +2,87 @@
 
 ## Scope Reviewed
 
-Reviewed the latest Checkpoint Scope and failure map in pa21/plan.md, the
-PA21 contract in pa21/README.md, TESTING_AND_REFERENCES.md, recent commits
-8e50532, c4e148e, 07fc383, and a2afd2e, every source file changed by
-the checkpoint, and the complete current-PA log at
-/home/vishvananda/work/.ralph/luna-gpt-5.6-luna-ultra/last-test.log.
-The checkpoint under review is the template-template/typed matching increment:
-typed template entities and arguments, pack-aware replay, dependent integral
-evaluation, generated specialization matching, and incomplete alias-class
-deferral over the existing LowIR path.
+Reviewed the latest Checkpoint Scope and failure map in `pa21/plan.md`, the
+PA21 contract in `pa21/README.md`, `TESTING_AND_REFERENCES.md`, the changed
+source and source-set entries, recent commits `ff9d4f3`, `6b2c6fc`, and
+`64aa678` (with `07fc383`, `c4e148e`, and `a2afd2e` for preceding ownership
+context), and the complete PA21 log supplied at
+`/home/vishvananda/work/.ralph/luna-gpt-5.6-luna-ultra/last-test.log`.
+
+The landed checkpoint is the dependent typed-value and generated-layout
+increment: recursive non-type/pack replay, declarator-shell preservation,
+empty-pack completion, concrete template-member replay, multi-base layout and
+owner adjustments, and deferred local-class layout materialization.  The
+audit-turn baseline was 118/215 PA21 tests.
 
 ## Findings
 
-- The compiler still executes preprocessing, tokenization, parsing, semantic
-  collection/rewrite, and ordinary LowIR lowering. There is no skipped phase,
-  dummy output, embedded payload, reference/host-compiler invocation,
-  interpreter/VM/trampoline substitute, source/test-specific acceptance gate,
-  or fallback success path.
-- GeneratedSpecializationName indexed the definition parameter list without
-  proving that a flattened argument still had a corresponding definition
-  parameter. Partial definitions with an unnamed primary pack could trigger
-  out-of-bounds access and runaway replay. The access is now bounds-checked.
-- The same unnamed primary pack was also entering active pack maps under an
-  empty key. Text replay then interpreted that key as a wildcard for every
-  ..., causing recursive argument growth and the two observed 10-second
-  timeouts. Named-pack ownership is now enforced across argument resolution,
-  member/decltype replay, nested-owner replay, constant evaluation, and text
-  expansion; empty keys are never installed or expanded. This is an
-  algorithmic termination fix, not a timeout workaround.
-- Dependent variable-template detection used the string suffix heuristic
-  "_v". It now scans parsed template-id ranges and asks the typed definition
-  graph whether the resolved base is a variable template.
-- FindFunctionDefinitions and ordinary-template-using lookup performed
-  avoidable full registry walks. Both now use the collection-time
-  definitions_by_name_ index. The checkpoint's pack-name and
-  constant-member-owner indexes remain the semantic owners for their facts;
-  replay does not recover them by reparsing emitted text or LowIR.
-- The file audit caught a one-line crossing of the pa18_templates.cpp
-  limit while adding the unnamed-parameter guard. The guard remains in
-  checked source and the simple statement was compacted, restoring the
-  1500-line limit. No implementation was hidden, moved to an unchecked path,
-  or used to weaken the audit.
+- The complete compiler pipeline remains active: preprocessing, tokenization,
+  parsing, semantic collection/rewrite, and ordinary LowIR lowering all run.
+  There is no skipped phase, dummy or embedded output, reference/host compiler
+  invocation, interpreter/VM/trampoline substitute, source/test-specific
+  acceptance gate, fallback success path, or timeout workaround.
+
+- One checkpoint-generated LowIR result was structurally invalid.  A
+  using-directive was flattening imported function templates into scalar name
+  substitutions, so a local object named `next` was rewritten as `std::next`.
+  Function entities are now excluded from scalar substitution, while function
+  lookup remains available through the typed definition index.  The focused
+  regression now passes and the invalid-LowIR entry is gone from the full
+  report.
+
+- Concrete enclosing ownership had been encoded as the reserved fake
+  identifier `__PA18_CONCRETE_OWNER__` inside the ordinary substitution map.
+  That stringly fact has been replaced by a scoped typed owner context,
+  explicit owner-binding recovery, owner/definition matching that handles
+  templated owner spellings, and concrete alias registration.  Nested replay
+  preserves the owner without leaking it into unrelated target classes.
+
+- The specialization-ordering implementation was a class-body `.inc`
+  fragment included from a header and therefore outside the file-audit source
+  set.  It is now a normal `pa18_templates_rewrite_specialization.cpp`, listed
+  in `dev/frontend_source_sets.mk`; the fragment was removed.  No code was
+  hidden in an unchecked path and no file-size or audit check was weakened.
+
+- Using-directive replay no longer performs a registry-wide definition walk:
+  class contexts use an ordered prefix range, and collection builds a typed
+  namespace-export index.  Existing `definitions_by_name_`, pack-name, and
+  constant-member indexes remain the owners of their respective facts.  The
+  owner fallback examines bounded source-definition metadata on a cache miss;
+  it does not reparse emitted text or LowIR.
+
+- `direct_bases` and `direct_base_offsets` are the canonical multi-base
+  representations.  `direct_base` and `direct_base_offset` are compatibility
+  projections for earlier single-inheritance consumers; their writes remain
+  centralized in class processing/layout, so downstream code does not own a
+  second independently updated base graph.  This preserves earlier PA
+  behavior while making the new multi-base facts available to layout and
+  lowering.
 
 ## Changes Made
 
-- Added the specialization-parameter bound check and filtered unnamed
-  parameters from scalar, integral, pack, member, decltype, and inferred
-  substitution maps.
-- Removed empty pack keys at every active replay boundary and skipped empty
-  pack expansion tokens.
-- Replaced suffix-based variable-template detection with typed
-  TemplateDefinition::variable_template lookup.
-- Replaced repeated function-template registry scans with indexed lookup.
-- Updated this audit and refreshed the concise current failure/next-checkpoint
-  map in pa21/plan.md.
+- Added the typed scoped owner context and owner-binding helper, removed the
+  reserved owner marker, and retained concrete-owner alias registration.
+- Fixed using-directive scalar substitution and replaced its repeated scans
+  with collection-time namespace-export indexing and ordered class-context
+  lookup.
+- Moved specialization matching into an audited `.cpp` translation unit and
+  registered it in the frontend source set.
+- Updated this audit and refreshed the concise 96-failure map and next
+  checkpoint group in `pa21/plan.md`.
 
 ## Validation
 
-- make -C dev cppgm++: passed.
-- Focused regression
-  tests/general/400-template-template-fixed-prefix-pack-order.t: passed
-  (1/1).
-- The two former timeout fixtures now terminate in about 0.2 seconds each;
-  they remain ordinary current-PA semantic status failures rather than
-  timeouts. No timeout failure remains in the full report.
-- Required make test-report ACTIVE_TEST_REPORT_PAS='pa21': 96/215 passed,
-  preserving the audit-turn baseline of 96/215. The remaining set is
-  104 exit-status mismatches, 14 relaxed LowIR mismatches, and one invalid
-  LowIR result; the command is nonzero because PA21 is not complete yet.
-- Required prior-through gate: 1635/1635 through PA20 passed.
-- perl scripts/cppgm_file_audit.pl --stage pa21 --paths dev/src: passed with
-  eight warning-only header-division findings and no fatal finding.
-- git diff --check: passed. The audit fixes and documentation are committed
-  together, and the final worktree is clean.
+- `make -C dev cppgm++`: passed.
+- Focused owner-replay probes for alias rebinding and dependent member-class
+  partial specialization: passed; the local-value/using-directive invalid-
+  LowIR regression: passed.
+- `make test-report ACTIVE_TEST_REPORT_PAS='pa21'`: **119/215 passed**;
+  96 semantic/LowIR failures remain, with no timeout or invalid-LowIR result.
+  The command is nonzero because PA21 is not complete, but the result is above
+  the 118/215 audit-turn baseline.
+- Required prior-through gate (`make test-report-through-pa20`): **1635/1635**.
+- `perl scripts/cppgm_file_audit.pl --stage pa21 --paths dev/src`: passed with
+  warning-only header-division findings and no fatal finding.
+- `git diff --check`: passed.  The cohesive audit fixes and documentation are
+  committed together, and the final worktree is clean.

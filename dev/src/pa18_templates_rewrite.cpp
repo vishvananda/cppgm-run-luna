@@ -1192,7 +1192,7 @@ void PA18TemplateExpander::TransformRegularChildren(const CPPGMAstNodePtr& input
 							"literal", IntegralValueSpelling(bound)));
 				}
 			if(child && input->kind == "class-specifier" &&
-				child->kind == "simple-declaration" && !substitutions.empty())
+				child->kind == "simple-declaration" && HasReplayContext(substitutions))
 				RecordConstantDeclaration(child, child_context, *local_substitutions);
 			if(child && input->kind == "class-specifier" &&
 				child->kind == "simple-declaration")
@@ -1207,7 +1207,7 @@ void PA18TemplateExpander::TransformRegularChildren(const CPPGMAstNodePtr& input
 						result->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
 							"decl-specifier", "TT_IDENTIFIER:" + LastComponent(promoted->second))));
 				}
-				if(child && !drop_function_using && !(input->kind == "compound-statement" && !substitutions.empty() &&
+				if(child && !drop_function_using && !(input->kind == "compound-statement" && HasReplayContext(substitutions) &&
 					(original_child->kind == "alias-declaration" || (original_child->kind == "simple-declaration" &&
 					SpellNode(original_child->children.empty() ? CPPGMAstNodePtr() : original_child->children[0]).find("typedef") != string::npos)))) result->children.push_back(child);
 				if(original_child && original_child->kind == "alias-declaration" && !original_child->value.empty() &&
@@ -1267,7 +1267,7 @@ void PA18TemplateExpander::TransformRegularChildren(const CPPGMAstNodePtr& input
 				} if(original_child && original_child->kind == "using-directive") RecordUsingDirective(original_child, local_substitutions);
 			if(original_child && original_child->kind == "simple-declaration" && !original_child->children.empty() &&
 				SpellNode(original_child->children[0]).find("typedef") != string::npos &&
-				(!substitutions.empty() || SpellNode(original_child).find('<') != string::npos))
+				(HasReplayContext(substitutions) || SpellNode(original_child).find('<') != string::npos))
 				RecordTypedefSubstitutions(original_child, child_context, local_substitutions);
 		}
 }
@@ -1342,7 +1342,7 @@ CPPGMAstNodePtr PA18TemplateExpander::RewriteRegularNodeValue(
 			const string spelling = RemoveMarker(result->value);
 			string qualified = QualifyTypeArgument(spelling, context);
 			string resolved = ResolveAlias(qualified, context);
-			if(substitutions.empty() && input->value.find('<') == string::npos)
+			if(!HasReplayContext(substitutions) && input->value.find('<') == string::npos)
 				resolved = qualified;
 			if(resolved.find('<') != string::npos)
 				resolved = RewriteText(resolved, context, substitutions, 0);
@@ -1403,7 +1403,7 @@ CPPGMAstNodePtr PA18TemplateExpander::FinishRegularNode(
 		TransformRegularChildren(input, child_context, function_context, substitutions,
 			&local_substitutions, result);
 		if((input->kind == "parameter-declaration" || input->kind == "type-id") &&
-			!substitutions.empty())
+			HasReplayContext(substitutions))
 			for(map<string, string>::const_iterator substitution = substitutions.begin();
 				substitution != substitutions.end(); ++substitution)
 				if(!substitution->second.empty() && substitution->second[substitution->second.size() - 1] == '&' &&

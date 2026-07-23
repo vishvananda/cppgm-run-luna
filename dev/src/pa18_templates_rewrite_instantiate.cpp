@@ -429,7 +429,7 @@ bool PA18TemplateExpander::EvaluateUnqualifiedConstantMember(
 	// concrete substitution scope.  Its dependent initializer must stay
 	// deferred; attempting to resolve an unqualified member against that same
 	// source declaration recursively re-enters this helper.
-	if(context.find('<') != string::npos && substitutions.empty() &&
+	if(context.find('<') != string::npos && !HasReplayContext(substitutions) &&
 		active_pack_substitutions_.empty() &&
 		active_pack_identifier_substitutions_.empty()) return false;
 	for(size_t i = 0; i < raw.size(); ++i)
@@ -565,7 +565,7 @@ bool PA18TemplateExpander::EvaluateIntegralText(string raw, const string& contex
 	while(raw.compare(0, 2, "::") == 0) raw.erase(0, 2);
 	if(context.find('<') != string::npos) {
 		bool unresolved_scope = false;
-		if(substitutions.empty()) {
+		if(!HasReplayContext(substitutions)) {
 			for(size_t position = 0; position < raw.size() && !unresolved_scope;) {
 				if(!isalpha(static_cast<unsigned char>(raw[position])) && raw[position] != '_') {
 					++position;
@@ -1206,9 +1206,42 @@ void PA18TemplateExpander::RegisterGeneratedSpecialization(
 	forwards.push_back(MakeForwardClass(local_name));
 }
 
+void PA18TemplateExpander::AddConcreteOwnerSubstitutions(
+	const string& concrete_owner, const string& context,
+	map<string, string>* substitutions)
+{
+	if(concrete_owner.empty() || !substitutions) return;
+	map<string, string>::const_iterator owner_base = specialization_bases_.find(
+		LastComponent(concrete_owner));
+	map<string, vector<string> >::const_iterator owner_arguments =
+		specialization_arguments_.find(LastComponent(concrete_owner));
+	if(owner_base == specialization_bases_.end() ||
+		owner_arguments == specialization_arguments_.end()) return;
+	const TemplateDefinition* owner_definition = FindDefinition(owner_base->second, context);
+	if(!owner_definition || !owner_definition->class_template) return;
+	for(size_t parameter = 0; parameter < owner_definition->parameters.size() &&
+		parameter < owner_arguments->second.size(); ++parameter)
+		if(!owner_definition->parameters[parameter].name.empty())
+			(*substitutions)[owner_definition->parameters[parameter].name] =
+				owner_arguments->second[parameter];
+}
+
+bool PA18TemplateExpander::ConcreteOwnerMatches(
+	const TemplateDefinition& definition, const string& concrete_owner) const
+{
+	if(concrete_owner.empty() || definition.owner.empty()) return false;
+	map<string, string>::const_iterator base = specialization_bases_.find(
+		LastComponent(concrete_owner));
+	if(base == specialization_bases_.end()) return false;
+	string source_owner = definition.owner;
+	const size_t template_open = source_owner.find('<');
+	if(template_open != string::npos) source_owner.erase(template_open);
+	return LastComponent(base->second) == LastComponent(source_owner);
+}
+
 string PA18TemplateExpander::FindConcreteInstantiationOwner(
 	const TemplateDefinition& definition, const map<string, string>& substitutions,
-	const string& context) const
+	const string& context, const string& requested_owner) const
 {
 	string concrete_owner;
 	const string source_owner_name = LastComponent(definition.owner);
@@ -1220,16 +1253,9 @@ string PA18TemplateExpander::FindConcreteInstantiationOwner(
 			break;
 		}
 	if(!concrete_owner.empty()) return concrete_owner;
-	map<string, string>::const_iterator marker = substitutions.find(
-		"__PA18_CONCRETE_OWNER__");
-	if(marker != substitutions.end()) {
-		const string suffix = "::__PA18_OWNER";
-		const size_t end = marker->second.find(suffix);
-		const string candidate = marker->second.substr(0,
-			end == string::npos ? string::npos : end);
-		if(!candidate.empty() && class_contexts_.find(candidate) != class_contexts_.end())
-			return candidate;
-	}
+	if(ConcreteOwnerMatches(definition, requested_owner) &&
+		class_contexts_.find(requested_owner) != class_contexts_.end())
+		return requested_owner;
 	const size_t owner_open = definition.owner.find('<');
 	string owner_arguments_text;
 	size_t owner_close = string::npos;
@@ -1268,12 +1294,15 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 	map<string, string> substitutions,
 	const map<string, PA19IntegralValue>& integral_substitutions,
 	const map<string, vector<string> >& pack_substitutions, const string& context,
-	bool explicit_instantiation, const string& key, const string& local_name)
+	bool explicit_instantiation, const string& key, const string& local_name,
+	const string& requested_owner)
 {
 	const string generated_owner = definition.lexical_owner.empty() ?
 		definition.owner : definition.lexical_owner;
 	const string concrete_owner = definition.class_template ?
-		FindConcreteInstantiationOwner(definition, substitutions, context) : string();
+		FindConcreteInstantiationOwner(definition, substitutions, context, requested_owner) :
+		(definition.alias_template && ConcreteOwnerMatches(definition, requested_owner) ?
+			requested_owner : string());
 	if(definition.class_template) {
 		class_contexts_.insert(JoinPath(definition.owner, local_name));
 		class_contexts_.insert(JoinPath(generated_owner, local_name));
@@ -1308,6 +1337,7 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 		// specialization.  Register both spellings so a later `::value` or type
 		// lookup reaches the already rewritten alias target.
 		set<string> concrete_owners;
+		if(!concrete_owner.empty()) concrete_owners.insert(concrete_owner);
 		for(map<string, string>::const_iterator substitution = substitutions.begin();
 			substitution != substitutions.end(); ++substitution) {
 			const size_t separator = substitution->second.rfind("::");
@@ -1379,7 +1409,7 @@ string PA18TemplateExpander::MaterializeInstantiation(const TemplateDefinition& 
 	map<string, string> substitutions,
 	const map<string, PA19IntegralValue>& integral_substitutions,
 	const map<string, vector<string> >& pack_substitutions, const string& context,
-	bool explicit_instantiation, const string& key)
+	bool explicit_instantiation, const string& key, const string& concrete_owner)
 {
 	map<string, string>::const_iterator cached = specializations_.find(key);
 	if(cached != specializations_.end()) {
@@ -1388,7 +1418,7 @@ string PA18TemplateExpander::MaterializeInstantiation(const TemplateDefinition& 
 		return cached->second;
 	}
 	const string local_name = GeneratedSpecializationName(definition, args,
-		metadata_args, substitutions, context);
+		metadata_args, substitutions, context, concrete_owner);
 	RegisterGeneratedSpecialization(definition, metadata_args, local_name);
 	if(definition.class_template) substitutions[definition.name] = local_name;
 	specializations_[key] = local_name;
@@ -1406,18 +1436,20 @@ string PA18TemplateExpander::MaterializeInstantiation(const TemplateDefinition& 
 	if(!active_specializations_.insert(key).second) return local_name;
 	return EmitInstantiation(definition, args, metadata_args, substitutions,
 		integral_substitutions, pack_substitutions, context, explicit_instantiation,
-		key, local_name);
+		key, local_name, concrete_owner);
 }
 
 string PA18TemplateExpander::Instantiate(const TemplateDefinition& definition,
 	const vector<string>& raw_args, const string& context, bool explicit_instantiation,
 	const map<string, vector<string> >* pack_hints,
-	const map<string, string>* outer_substitutions)
+	const map<string, string>* outer_substitutions, const string* requested_owner)
 {
 	if(definition.parameters.empty()) throw logic_error("template has no type parameters");
 	vector<string> args, metadata_args;
 	map<string, string> substitutions = outer_substitutions ? *outer_substitutions :
 		map<string, string>();
+	string concrete_owner = requested_owner ? *requested_owner : active_concrete_owner_;
+	if(!ConcreteOwnerMatches(definition, concrete_owner)) concrete_owner.clear();
 	// A template-template argument can name a member alias on a concrete
 	// specialization (for example `quote_X_::fn`).  Recover the outer class's
 	// typed bindings before replaying the member alias body; the source member
@@ -1427,20 +1459,9 @@ string PA18TemplateExpander::Instantiate(const TemplateDefinition& definition,
 		const size_t separator = outer->second.rfind("::");
 		if(separator == string::npos) continue;
 		const string owner = outer->second.substr(0, separator);
-		map<string, string>::const_iterator owner_base = specialization_bases_.find(
-			LastComponent(owner));
-		map<string, vector<string> >::const_iterator owner_arguments =
-			specialization_arguments_.find(LastComponent(owner));
-		if(owner_base == specialization_bases_.end() ||
-			owner_arguments == specialization_arguments_.end()) continue;
-		const TemplateDefinition* owner_definition = FindDefinition(owner_base->second, context);
-		if(!owner_definition || !owner_definition->class_template) continue;
-		for(size_t parameter = 0; parameter < owner_definition->parameters.size() &&
-			parameter < owner_arguments->second.size(); ++parameter)
-			if(!owner_definition->parameters[parameter].name.empty())
-				substitutions[owner_definition->parameters[parameter].name] =
-					owner_arguments->second[parameter];
+		AddConcreteOwnerSubstitutions(owner, context, &substitutions);
 	}
+	AddConcreteOwnerSubstitutions(concrete_owner, context, &substitutions);
 	map<string, PA19IntegralValue> integral_substitutions;
 	map<string, vector<string> > pack_substitutions;
 	ResolveTemplateArguments(definition, raw_args, context, &args, &metadata_args,
@@ -1469,7 +1490,8 @@ string PA18TemplateExpander::Instantiate(const TemplateDefinition& definition,
 	string key = definition_key.str();
 	for(size_t i = 0; i < args.size(); ++i) key += "|" + CanonicalSpelling(args[i]);
 	return MaterializeInstantiation(definition, args, metadata_args, substitutions,
-		integral_substitutions, pack_substitutions, context, explicit_instantiation, key);
+		integral_substitutions, pack_substitutions, context, explicit_instantiation, key,
+		concrete_owner);
 }
 
 } // namespace pa18_templates_internal

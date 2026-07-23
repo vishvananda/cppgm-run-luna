@@ -2,7 +2,18 @@
 #include "pa18_templates_rewrite_lookup.h"
 #include "pa18_templates_rewrite_decltype.h"
 #include "pa18_templates_rewrite_instantiate.h"
-#include "pa18_templates_rewrite_specialization.inc"
+bool MatchOrderingTypePattern(const string& raw_pattern, const string& raw_actual,
+	const set<string>& parameter_names, map<string, string>* inferred) const;
+bool MatchOrderingPatternList(const vector<string>& patterns,
+	const vector<string>& actual, const set<string>& parameter_names,
+	map<string, string>* inferred) const;
+bool ClassPartialMoreSpecialized(const TemplateDefinition& lhs,
+	const TemplateDefinition& rhs, const string& context) const;
+string ExpandAliasPattern(string pattern, const string& context,
+	set<string>* active) const;
+bool MatchClassSpecializationPattern(const TemplateDefinition& definition,
+	const vector<string>& arguments, map<string, string>* inferred,
+	const string& context) const;
 bool MatchTypePattern(string pattern, string actual,
 		const set<string>& parameter_names, map<string, string>* inferred, const string& context, bool class_pattern = false) const;
 	int MatchGeneratedBaseTypePattern(const string& pattern, const string& actual,
@@ -635,7 +646,8 @@ bool InferFunctionArguments(const TemplateDefinition& definition,
 	{
 		if(!input || !original_child ||
 			(input->kind != "class-specifier" && input->kind != "class-forward-declaration") ||
-			(PrefixComponent(input->value).find('<') == string::npos && substitutions.empty()) ||
+			(PrefixComponent(input->value).find('<') == string::npos &&
+				!HasReplayContext(substitutions)) ||
 			(original_child->kind != "class-specifier" &&
 				original_child->kind != "class-forward-declaration")) return false;
 		const string nested_name = LastComponent(original_child->value);
@@ -846,23 +858,35 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 		const CPPGMAstNodePtr target = ChildOfKindLocal(original_child, "target");
 		if(!target || target->value.empty()) return;
 		const string prefix = target->value + "::";
-		for(set<string>::const_iterator type = class_contexts_.begin();
-			type != class_contexts_.end(); ++type) {
-			if(type->compare(0, prefix.size(), prefix) != 0) continue;
+		for(set<string>::const_iterator type = class_contexts_.lower_bound(prefix);
+			type != class_contexts_.end() &&
+				type->compare(0, prefix.size(), prefix) == 0; ++type) {
 			const string relative = type->substr(prefix.size());
 			const size_t separator = relative.find("::");
 			const string visible = relative.substr(0, separator);
 			if(!visible.empty() && local_substitutions->find(visible) == local_substitutions->end())
 				(*local_substitutions)[visible] = target->value + "::" + visible;
 		}
-		for(map<string, TemplateDefinition>::const_iterator definition = definitions_.begin();
-			definition != definitions_.end(); ++definition) {
-			if(definition->second.qualified_name.compare(0, prefix.size(), prefix) != 0) continue;
-			const string relative = definition->second.qualified_name.substr(prefix.size());
-			const size_t separator = relative.find("::");
-			const string visible = relative.substr(0, separator);
-			if(!visible.empty() && local_substitutions->find(visible) == local_substitutions->end())
-				(*local_substitutions)[visible] = target->value + "::" + visible;
+		map<string, vector<pair<string, string> > >::const_iterator indexed =
+			using_directive_exports_.find(target->value);
+		if(indexed == using_directive_exports_.end()) return;
+		for(size_t index = 0; index < indexed->second.size(); ++index) {
+			const string& visible = indexed->second[index].first;
+			const string qualified_prefix = target->value + "::" + visible;
+			map<string, TemplateDefinition>::const_iterator definition = definitions_.find(
+				indexed->second[index].second);
+				if(definition == definitions_.end()) continue;
+			// A using-directive contributes function overloads to lookup, but it
+			// must not become a scalar identifier substitution.  Rewriting every
+			// occurrence of a local object named `next` to `std::next`, for
+			// example, confuses a value binding with the imported function entity.
+			// Function lookup already consults the indexed definition set.
+			if(!definition->second.class_template &&
+				!definition->second.alias_template &&
+				!definition->second.variable_template) continue;
+			if(definition->second.qualified_name != qualified_prefix) continue;
+			if(local_substitutions->find(visible) == local_substitutions->end())
+				(*local_substitutions)[visible] = qualified_prefix;
 		}
 	}
 	void RecordTypedefSubstitutions(const CPPGMAstNodePtr& original_child,

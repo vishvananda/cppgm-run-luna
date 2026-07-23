@@ -430,6 +430,10 @@ private:
 		const map<string, bool>& inherited_parameters) const;
 	map<string, TemplateDefinition> definitions_;
 	map<string, vector<string> > definitions_by_name_;
+	// A using-directive needs only the first component exported from each
+	// namespace prefix.  Index those exports during collection instead of
+	// rescanning every definition for each replayed using-directive.
+	map<string, vector<pair<string, string> > > using_directive_exports_;
 	// Pack names can remain in a dependent argument while the target template
 	// is being resolved in another declaration scope.  Keep the fact indexed at
 	// collection time instead of rediscovering it by walking every definition.
@@ -468,6 +472,9 @@ private:
 	// typed state so an unqualified static member such as `_v` resolves to the
 	// current specialization rather than a previous specialization's fallback.
 	string active_instantiation_name_;
+	// Propagate the concrete enclosing specialization through nested RewriteText
+	// calls without smuggling it through the ordinary identifier substitutions.
+	string active_concrete_owner_;
 	// A template parameter pack is a collection of typed substitutions.  Keep
 	// the collection separate from the scalar substitution map so an expanded
 	// declaration or call can consume every element without losing the first
@@ -510,6 +517,10 @@ private:
 	// Keep generated declaration ownership in one typed helper so forwards,
 	// class shells, and materialized definitions cannot diverge.
 	string GeneratedOwner(const TemplateDefinition& definition) const;
+	bool HasReplayContext(const map<string, string>& substitutions) const
+	{
+		return !substitutions.empty() || !active_concrete_owner_.empty();
+	}
 	bool PreserveInlineGeneratedOrder(const vector<CPPGMAstNodePtr>& generated_classes,
 		const string& owner) const;
 	bool HasInlineTemplateCandidate(const vector<const TemplateDefinition*>& definitions,
@@ -972,6 +983,7 @@ private:
 			overload_key << item.qualified_name << "#overload" << definitions_by_name_[item.name].size();
 			definitions_[overload_key.str()] = item;
 			definitions_by_name_[item.name].push_back(overload_key.str());
+			IndexUsingDirectiveDefinition(item, overload_key.str());
 			Collect(declaration, item.owner);
 			return;
 		}
@@ -995,12 +1007,15 @@ private:
 		} else {
 			definitions_[item.qualified_name] = item;
 			definitions_by_name_[item.name].push_back(item.qualified_name);
+			IndexUsingDirectiveDefinition(item, item.qualified_name);
 		}
 		// A nested template is looked up in the concrete class scope later.  It
 		// is still useful to register its lexical spelling now.
 		Collect(declaration, item.class_template ? JoinPath(item.owner, name) : item.owner);
 	}
 	void IndexConstantMembers(const CPPGMAstNodePtr& node, const string& owner);
+	void IndexUsingDirectiveDefinition(const TemplateDefinition& definition,
+		const string& key);
 	void Collect(const CPPGMAstNodePtr& node, const string& context)
 	{
 		if(!node) return;

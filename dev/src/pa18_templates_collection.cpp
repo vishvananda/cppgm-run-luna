@@ -7,6 +7,31 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
+void PA18TemplateExpander::IndexUsingDirectiveDefinition(
+	const TemplateDefinition& definition, const string& key)
+{
+	const string& qualified = definition.qualified_name;
+	size_t component_begin = 0;
+	string target;
+	while(true) {
+		const size_t separator = qualified.find("::", component_begin);
+		if(separator == string::npos) break;
+		const string component = qualified.substr(component_begin,
+			separator - component_begin);
+		if(component.empty()) break;
+		if(!target.empty()) target += "::";
+		target += component;
+		const size_t visible_begin = separator + 2;
+		const size_t visible_end = qualified.find("::", visible_begin);
+		if(visible_begin < qualified.size())
+			using_directive_exports_[target].push_back(make_pair(
+				qualified.substr(visible_begin,
+					visible_end == string::npos ? string::npos : visible_end - visible_begin),
+				key));
+		component_begin = visible_begin;
+	}
+}
+
 string PA18TemplateExpander::GeneratedOwner(const TemplateDefinition& definition) const
 {
 	return definition.lexical_owner.empty() ? definition.owner : definition.lexical_owner;
@@ -546,8 +571,7 @@ string PA18TemplateExpander::ResolveAlias(string spelling, const string& context
 				if(declaration != class_declarations_.end())
 					target = QualifyNestedMembers(target, owner, declaration->second);
 			}
-			spelling = CanonicalSpelling(target);
-			continue;
+				spelling = CanonicalSpelling(target); continue;
 		}
 		const size_t separator = spelling.rfind("::");
 		if(separator == string::npos) break;

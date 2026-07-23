@@ -392,7 +392,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				// replay it.
 					if(i < definition->parameters.size() &&
 						!definition->parameters[i].type) {
-						bool unresolved_scope = substitutions.empty();
+						bool unresolved_scope = !HasReplayContext(substitutions);
 						for(map<string,string>::const_iterator scope = substitutions.begin();
 							scope != substitutions.end() && !unresolved_scope; ++scope)
 							if(scope->second.find("decltype") != string::npos ||
@@ -613,14 +613,14 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				}
 			}
 			map<string, string> instantiation_substitutions = substitutions;
+			string concrete_owner_for_instantiation;
 			const size_t base_separator = base.rfind("::");
 			if(base_separator != string::npos) {
 				const string concrete_owner = base.substr(0, base_separator);
 				if(class_contexts_.find(concrete_owner) != class_contexts_.end() &&
 					specialization_bases_.find(LastComponent(concrete_owner)) !=
 					specialization_bases_.end())
-					instantiation_substitutions["__PA18_CONCRETE_OWNER__"] =
-						concrete_owner + "::__PA18_OWNER";
+					concrete_owner_for_instantiation = concrete_owner;
 			}
 			// Once an enclosing dependent owner has already been materialized, a
 			// later replay can see `owner_X::member_template<...>` instead of the
@@ -634,9 +634,8 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				const string concrete_owner = raw.substr(owner_begin, owner_end - owner_begin);
 				if(class_contexts_.find(concrete_owner) != class_contexts_.end() &&
 					specialization_bases_.find(LastComponent(concrete_owner)) !=
-						specialization_bases_.end())
-					instantiation_substitutions["__PA18_CONCRETE_OWNER__"] =
-						concrete_owner + "::__PA18_OWNER";
+					specialization_bases_.end())
+					concrete_owner_for_instantiation = concrete_owner;
 			}
 			// When a member alias is reached through a generated enclosing class,
 			// the source member definition has only its own template parameters.
@@ -659,14 +658,23 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 						if(!owner_definition->parameters[parameter].name.empty())
 							instantiation_substitutions[owner_definition->parameters[parameter].name] =
 								concrete_arguments->second[parameter];
-					// This typed marker is consumed only by alias registration below; it
-					// never appears in source text.
-					instantiation_substitutions["__PA18_CONCRETE_OWNER__"] =
-						concrete_owner + "::__PA18_OWNER";
+						concrete_owner_for_instantiation = concrete_owner;
 				}
 			}
-			const string local_name = Instantiate(*definition, args, context, false, 0,
-				&instantiation_substitutions);
+			const string previous_concrete_owner = active_concrete_owner_;
+			if(!concrete_owner_for_instantiation.empty())
+				active_concrete_owner_ = concrete_owner_for_instantiation;
+			const string* requested_owner = active_concrete_owner_.empty() ? 0 :
+				&active_concrete_owner_;
+			string local_name;
+			try {
+				local_name = Instantiate(*definition, args, context, false, 0,
+					&instantiation_substitutions, requested_owner);
+			} catch(...) {
+				active_concrete_owner_ = previous_concrete_owner;
+				throw;
+			}
+			active_concrete_owner_ = previous_concrete_owner;
 			string replacement = local_name;
 			const string qualifier = PrefixComponent(lookup_base);
 			if(!qualifier.empty()) replacement = qualifier + "::" + local_name;

@@ -869,7 +869,8 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 		if(definitions.empty()) {
 			const FunctionSignature* signature = FindFunctionSignature(callee_name, context);
 			if(signature && callee_name.find("::") == string::npos &&
-				class_contexts_.find(context) == class_contexts_.end() && substitutions.empty()) {
+				class_contexts_.find(context) == class_contexts_.end() &&
+				!HasReplayContext(substitutions)) {
 				map<string, vector<string> >::const_iterator names =
 					function_signatures_by_name_.find(LastComponent(callee_name));
 				if(names != function_signatures_by_name_.end())

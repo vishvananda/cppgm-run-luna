@@ -4,15 +4,17 @@
 
 ### Turn-start audit
 
-The turn-start stage baseline was **96/215 PA21 tests**.  The complete
-current-PA failure set was inspected before implementation and grouped by
-shared behavior: dependent value/member replay, generated pack and base
-layout, alias/template-template entities, member/friend owner lookup and
-overload/ADL, explicit instantiation ownership, and ordinary lowering/layout.
+The audit-turn stage baseline was **118/215 PA21 tests**, which is the result
+of the landed checkpoint under review.  Its complete current-PA failure set
+was inspected before the audit and grouped by shared behavior: dependent
+value/member replay, generated pack and base layout, alias/template-template
+entities, member/friend owner lookup and overload/ADL, explicit instantiation
+ownership, and ordinary lowering/layout.
 
 ### Checkpoint Scope
 
-This turn completes the dependent value and generated-layout increment:
+The landed checkpoint completes the dependent value and generated-layout
+increment:
 
 - preserve typed non-type values while recursively replaying variadic static
   members and global typedefs;
@@ -30,25 +32,27 @@ and generated-base probes.  The complete report was rerun after cleanup.
 
 ### Checkpoint Result
 
-The focused depth-sum fixture now passes with generated value **64**
-(previously **1**), and the empty-pack/generated-base and alias declarator
-probes remain passing.  The current PA report is **118/215**, an improvement
-of **22 tests** over the turn-start baseline and **2 tests** over the prior
-checkpoint.
+The focused depth-sum fixture passes with generated value **64** (previously
+**1**), and the empty-pack/generated-base and alias declarator probes remain
+passing.  The landed checkpoint report was **118/215**, an improvement of
+**22 tests** over the implementation-turn baseline and **2 tests** over the
+prior checkpoint.
 
 The two through-PA20 regressions found during validation were repaired as
 well: qualified generated-owner member replay now preserves the resolved
 member type, and dependent static initializers remain deferred until concrete
-	substitutions exist.  Focused PA18/PA19 validation passes, the full
-	through-PA20 gate is **1635/1635**, and the PA21 report is **118/215**.  The
-	required file audit now passes with only the repository's existing
-	non-fatal header-shape warnings.  The layout pass, template owner lookup,
-	specialization-ordering fragment, and template type helpers were split into
-	cohesive source units without changing the passing report.
+substitutions exist.  The audit also repaired one invalid-LowIR result caused
+by using-directive function names entering scalar substitutions, promoted the
+specialization matcher into an audited `.cpp` source unit, and replaced the
+reserved owner-substitution marker with scoped typed owner state.  The
+post-audit report is **119/215**, so current-PA progress is preserved and
+improved by one test; through PA20 remains **1635/1635**.
 
 ### Remaining Work Map
 
-The post-checkpoint report has **97** failures, grouped as follows:
+The post-audit report has **96** failures.  The complete report set is covered
+by the following groups; the one removed entry was the invalid-LowIR local
+using-directive case:
 
 - **Member/friend owner replay and lookup (52):** out-of-class and nested
   member-template definitions, using imports, hidden friends/ADL, inherited
@@ -59,7 +63,7 @@ The post-checkpoint report has **97** failures, grouped as follows:
 - **Explicit specialization/instantiation ownership (18):** explicit and
   extern instantiation materialization, specialization ordering, constructors,
   static data/functions, and use-location replay.
-- **Partial-selection and ordinary lowering/layout (10):** remaining
+- **Partial-selection and ordinary lowering/layout (9):** remaining
   reference/cv/pack selection, incomplete-class checks, anonymous storage,
   static-constexpr array arguments, and LowIR/ABI presentation.
 
