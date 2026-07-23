@@ -133,6 +133,33 @@ definitions.  Focus next on
 `spec/300-using-imported-member-template-active-owner`, and
 `spec/300-using-inherited-alias-operator-template`.
 
+## Current turn checkpoint scope (before implementation)
+
+The turn-start report was 153/215 with 62 failures; the grouped path
+inventory above is the complete source set for this checkpoint.  No failure
+is being moved between groups for this checkpoint.
+
+This checkpoint selects the five-test inherited/using member-template owner
+group named by the previous handoff.  It covers one typed behavior: when a
+member template is reached through a dependent base or a class
+using-declaration, replay must retain the class specialization that declared
+the member, select the derived direct member over an inherited fallback, and
+lower overloaded `operator[]`, member calls, ADL-sensitive calls, and
+`operator=` through the ordinary selected-function path.  The focused
+validation set is:
+
+`general/300-inherited-member-template-subscript-action`,
+`general/300-member-template-local-using-does-not-suppress-adl`,
+`spec/300-member-call-template-hides-inherited-instantiation`,
+`spec/300-using-imported-member-template-active-owner`, and
+`spec/300-using-inherited-alias-operator-template`.
+
+The checkpoint is substantial because it spans PA18 typed owner replay and
+the PA14 call/assignment/subscript consumers; it is not an acceptance rule
+for any individual fixture.  Success requires these five focused tests to
+pass, the full PA21 count to increase above 153/215 (or finish PA21), and the
+through-PA20 report to remain 1635/1635.
+
 ## Archived 151/215 checkpoint
 
 ### Remaining Work Map
@@ -991,3 +1018,58 @@ architecture/audit blocker is being carried forward as assignment work.
 The next substantial checkpoint is Group B: alias/variable-template entities
 and template-template-parameter binding, with the shared typed argument
 normalization and dependent non-type expression paths.
+
+## Current turn checkpoint result (2026-07-23)
+
+The selected inherited/using owner-replay slice is complete.  Member templates
+reached through dependent bases and using-declarations now retain the concrete
+declaring specialization while operator subscripting, assignment, unary
+operators, member calls, ADL-sensitive calls, and member-template constructors
+use the ordinary typed call-materialization path.  The implementation was
+split so AST rewrite helpers live with the rewrite module; no fixture-specific
+logic or external compiler path was added.
+
+Validation is green for all five focused PA21 probes and the PA19
+`general/200-member-init-covarying-type-index-pack` regression.  The full PA21
+report is **156/215**, improving the turn-start **153/215** baseline.  The
+through-PA20 report remains **1635/1635**, and the PA21 file audit passes with
+warnings only.
+
+### Remaining Work Map
+
+The current report has 59 failures.  Groups A, B, D, and E from the exact
+turn-start map above remain unchanged at 7, 14, 8, and 8 paths respectively:
+partial-specialization identity; alias/template-template and dependent
+non-type replay; explicit ownership/order; and dependent lowering/layout.
+Group C is reduced to these 22 remaining member/friend owner-replay paths:
+
+`general/300-basic-template-operator-overloads`,
+`general/300-crtp-static-cast-reference-before-constructor-template`,
+`general/300-dependent-base-qualified-rvalue-assignment`,
+`general/300-dependent-hidden-friend-static-member-definition`,
+`general/300-explicit-member-template-id-shares-ordinary-overload`,
+`general/300-explicit-type-arg-decltype-member-access`,
+`general/300-friend-existing-template-private-ctor-access`,
+`general/300-function-pack-template-id-deduction-decltype`,
+`general/300-local-qualified-argument-replay`,
+`general/300-member-template-assignment-not-special-member`,
+`general/300-member-template-assignment-operator-value`,
+`general/300-nested-class-template-current-owner-lookup`,
+`general/300-nested-class-template-reference-reset`,
+`general/300-out-of-class-ctor-using-imported-member-template`,
+`general/300-parenthesized-qualified-template-functional-call`,
+`general/300-qualified-friend-member-template-access`,
+`general/300-templated-constructor-special-member-collection`,
+`general/300-unary-member-operator-template-default`,
+`spec/300-member-class-template-out-of-class`,
+`spec/300-member-operator-template-active-owner`,
+`spec/300-member-operator-template-in-class-template`, and
+`spec/300-rooted-qualified-static-data-member-template-definition`.
+
+## Next Checkpoint Group
+
+Continue Group C with generated-member and constructor/assignment owner replay:
+resolve the remaining special-member-vs-member-template distinction, then
+carry the concrete owner through explicit member-template IDs, qualified
+friend/member definitions, and nested/out-of-class definitions.  Keep the
+existing five-test owner slice and the through-PA20 report as regression gates.

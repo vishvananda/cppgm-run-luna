@@ -26,6 +26,155 @@ bool HasStaticDataMemberLocal(const CPPGMAstNodePtr& node, const string& name)
 
 } // namespace
 
+CPPGMAstNodePtr PA18TemplateExpander::TransformSubscriptExpression(
+	const CPPGMAstNodePtr& input, const string& context,
+	const map<string, string>& substitutions)
+{
+	if(!input || input->children.size() < 2) return CPPGMAstNodePtr();
+	CPPGMAstNodePtr transformed(new CPPGMAstNode(input->kind, input->value));
+	transformed->initializer_form = input->initializer_form;
+	transformed->template_instantiation = input->template_instantiation;
+	transformed->explicit_instantiation = input->explicit_instantiation;
+	transformed->extern_instantiation = input->extern_instantiation;
+	transformed->dependent_base_lookup = input->dependent_base_lookup;
+	transformed->materialize_object_address = input->materialize_object_address;
+	transformed->materialize_object_name = input->materialize_object_name;
+	transformed->source_token_begin = input->source_token_begin;
+	transformed->source_token_end = input->source_token_end;
+	for(size_t child = 0; child < input->children.size(); ++child) {
+		CPPGMAstNodePtr rewritten = TransformNode(input->children[child], context,
+			substitutions);
+		if(rewritten) transformed->children.push_back(rewritten);
+	}
+	if(transformed->children.size() < 2) return transformed;
+	CPPGMAstNodePtr member(new CPPGMAstNode("member-expression", "."));
+	member->children.push_back(transformed->children[0]);
+	member->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("identifier",
+		"operator[]")));
+	CPPGMAstNodePtr call(new CPPGMAstNode("call-expression"));
+	call->children.push_back(member);
+	CPPGMAstNodePtr arguments(new CPPGMAstNode("argument-list"));
+	arguments->children.push_back(transformed->children[1]);
+	call->children.push_back(arguments);
+	if(InstantiateMemberCall(call, member, "operator[]", context, substitutions))
+		return call;
+	return transformed;
+}
+
+CPPGMAstNodePtr PA18TemplateExpander::TransformAssignmentExpression(
+	const CPPGMAstNodePtr& input, const string& context,
+	const map<string, string>& substitutions)
+{
+	if(!input || input->children.size() < 2 ||
+		RemoveMarker(input->value) != "=") return CPPGMAstNodePtr();
+	CPPGMAstNodePtr left = TransformNode(input->children[0], context, substitutions);
+	CPPGMAstNodePtr right = TransformNode(input->children[1], context, substitutions);
+	if(!left || !right) return CPPGMAstNodePtr();
+	CPPGMAstNodePtr member(new CPPGMAstNode("member-expression", "."));
+	member->children.push_back(left);
+	member->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("identifier",
+		"operator=")));
+	CPPGMAstNodePtr call(new CPPGMAstNode("call-expression"));
+	call->children.push_back(member);
+	CPPGMAstNodePtr arguments(new CPPGMAstNode("argument-list"));
+	arguments->children.push_back(right);
+	call->children.push_back(arguments);
+	if(!InstantiateMemberCall(call, member, "operator=", context, substitutions))
+		return CPPGMAstNodePtr();
+	return call;
+}
+
+CPPGMAstNodePtr PA18TemplateExpander::TransformUnaryExpression(
+	const CPPGMAstNodePtr& input, const string& context,
+	const map<string, string>& substitutions)
+{
+	if(!input || input->children.empty()) return CPPGMAstNodePtr();
+	const string operation = RemoveMarker(input->value);
+	if(operation.empty()) return CPPGMAstNodePtr();
+	CPPGMAstNodePtr operand = TransformNode(input->children[0], context, substitutions);
+	if(!operand) return CPPGMAstNodePtr();
+	CPPGMAstNodePtr member(new CPPGMAstNode("member-expression", "."));
+	member->children.push_back(operand);
+	member->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("identifier",
+		"operator" + operation)));
+	CPPGMAstNodePtr call(new CPPGMAstNode("call-expression"));
+	call->children.push_back(member);
+	call->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("argument-list")));
+	if(!InstantiateMemberCall(call, member, "operator" + operation,
+		context, substitutions)) {
+		return CPPGMAstNodePtr();
+	}
+	return call;
+}
+
+void PA18TemplateExpander::MaterializeInitializerConstructor(
+	const CPPGMAstNodePtr& input, const CPPGMAstNodePtr& result,
+	const string& context, const map<string, string>& substitutions)
+{
+	if(!input || !result || input->kind != "simple-declaration") return;
+	const CPPGMAstNodePtr original_list = ChildOfKindLocal(input,
+		"init-declarator-list");
+	const CPPGMAstNodePtr transformed_list = ChildOfKindLocal(result,
+		"init-declarator-list");
+	if(!original_list || !transformed_list || original_list->children.size() != 1 ||
+		transformed_list->children.size() != 1) return;
+	const CPPGMAstNodePtr original_item = original_list->children[0];
+	const CPPGMAstNodePtr transformed_item = transformed_list->children[0];
+	if(!original_item || !transformed_item || original_item->children.size() < 2 ||
+		transformed_item->children.size() < 2) return;
+	CPPGMAstNodePtr original_initializer = original_item->children[1];
+	CPPGMAstNodePtr transformed_initializer = transformed_item->children[1];
+	if(!original_initializer || !transformed_initializer) return;
+	vector<CPPGMAstNodePtr> arguments;
+	CPPGMAstNodePtr initializer_expression = transformed_initializer;
+	if(initializer_expression->kind == "initializer" &&
+		initializer_expression->children.size() == 1)
+		initializer_expression = initializer_expression->children[0];
+	if(initializer_expression->kind == "paren-initializer" ||
+		initializer_expression->kind == "braced-init-list")
+		arguments = initializer_expression->children;
+	else if(initializer_expression->kind != "initializer")
+		arguments.push_back(initializer_expression);
+	if(arguments.empty() && original_initializer->kind != "paren-initializer" &&
+		original_initializer->kind != "braced-init-list") return;
+	if(input->children.empty()) return;
+	const CPPGMAstNodePtr declarator = original_item->children[0];
+	string target = DeclaratorTypeSpelling(NodeTypeSpelling(input->children[0]),
+		declarator);
+	target = CanonicalSpelling(ResolveAlias(RewriteText(target, context,
+		substitutions, 0), context));
+	if(target.empty() || !FindClassDeclaration(target, context)) return;
+	const string constructor_name = LastComponent(target);
+	map<string, vector<string> >::const_iterator indexed_constructors =
+		definitions_by_name_.find(constructor_name);
+	bool has_member_template_constructor = false;
+	if(indexed_constructors != definitions_by_name_.end())
+		for(size_t candidate = 0; candidate < indexed_constructors->second.size(); ++candidate) {
+			map<string, TemplateDefinition>::const_iterator found = definitions_.find(
+				indexed_constructors->second[candidate]);
+			if(found == definitions_.end()) continue;
+			const TemplateDefinition& definition = found->second;
+			if(!definition.class_template && !definition.alias_template &&
+				definition.member_template && LastComponent(definition.name) == constructor_name) {
+				has_member_template_constructor = true;
+				break;
+			}
+		}
+	if(!has_member_template_constructor) return;
+	CPPGMAstNodePtr object(new CPPGMAstNode("id-expression"));
+	object->inferred_type = target;
+	CPPGMAstNodePtr member(new CPPGMAstNode("member-expression", "."));
+	member->children.push_back(object);
+	member->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("identifier",
+		LastComponent(target))));
+	CPPGMAstNodePtr call(new CPPGMAstNode("call-expression"));
+	call->children.push_back(member);
+	CPPGMAstNodePtr argument_list(new CPPGMAstNode("argument-list"));
+	argument_list->children = arguments;
+	call->children.push_back(argument_list);
+	InstantiateMemberCall(call, member, LastComponent(target), context, substitutions);
+}
+
 void PA18TemplateExpander::ResolveMemberFunctionArguments(
 	const CPPGMAstNodePtr& result, const string& context,
 	const map<string, string>& substitutions)
@@ -1183,8 +1332,9 @@ CPPGMAstNodePtr PA18TemplateExpander::FinishRegularNode(
 					ContainsName(input, "&&"))
 					CollapseForwardingReference(result);
 		RewriteTemplateInitializer(input, context, substitutions, result);
+		MaterializeInitializerConstructor(input, result, context, substitutions);
 		if(input->kind == "simple-declaration") ReifyReferenceType(result);
-		if(input->kind == "binary-expression") {
+		if(input->kind == "binary-expression" || input->kind == "assignment-expression") {
 			InstantiateOperatorTemplate(result, context, substitutions);
 			RewriteOperatorFunctionArgument(result, context, substitutions);
 		}
@@ -1214,6 +1364,21 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformRegularNode(
 	const CPPGMAstNodePtr& input, const string& context,
 	const map<string, string>& substitutions)
 {
+	if(input->kind == "subscript-expression") {
+		CPPGMAstNodePtr transformed = TransformSubscriptExpression(input, context,
+			substitutions);
+		if(transformed) return transformed;
+	}
+	if(input->kind == "assignment-expression") {
+		CPPGMAstNodePtr transformed = TransformAssignmentExpression(input, context,
+			substitutions);
+		if(transformed) return transformed;
+	}
+	if(input->kind == "unary-expression") {
+		CPPGMAstNodePtr transformed = TransformUnaryExpression(input, context,
+			substitutions);
+		if(transformed) return transformed;
+	}
 		CPPGMAstNodePtr user_defined_literal = RewriteUserDefinedIntegerLiteral(
 			input, context, substitutions);
 		if(user_defined_literal) return user_defined_literal;

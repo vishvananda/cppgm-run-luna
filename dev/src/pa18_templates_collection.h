@@ -516,17 +516,14 @@ private:
 	bool IsTopLevelPackPattern(const string& value) const;
 	CPPGMAstNodePtr FunctionDeclarator(const CPPGMAstNodePtr& declaration) const;
 	bool IsBuiltinArithmeticType(string raw) const; bool IsKnownTypeSpelling(string raw, const string& context) const;
-	bool HasUnresolvedTemplateParameter(string raw, const string& context,
-		const map<string, string>& substitutions) const;
+	bool HasUnresolvedTemplateParameter(string raw, const string& context, const map<string, string>& substitutions) const;
 	string CommonBuiltinArithmeticType(const string& left, const string& right) const;
-	bool InferOperatorResult(const string& operation, const string& left,
-		const string& right, const string& context, string* result) const;
+	bool InferOperatorResult(const string& operation, const string& left, const string& right, const string& context, string* result) const;
 	bool InferTemplateOperatorResult(const string& operation,
 		const CPPGMAstNodePtr& left_expression, const CPPGMAstNodePtr& right_expression,
 		const map<string, string>& substitutions, const string& context,
 		string* result) const;
-	bool InferBinaryArgument(const CPPGMAstNodePtr& expression, string* result,
-		const map<string, string>& substitutions, const string& context) const;
+	bool InferBinaryArgument(const CPPGMAstNodePtr& expression, string* result, const map<string, string>& substitutions, const string& context) const;
 	bool IsKnownMemberTemplateId(const string& raw) const;
 	void CollectInheritedMemberTemplates(const string& raw_class, const string& member,
 		const map<string, string>& substitutions, const string& context,
@@ -537,6 +534,10 @@ private:
 		const string& context,
 		const map<string, string>& substitutions,
 		bool explicit_instantiation = false);
+	CPPGMAstNodePtr TransformSubscriptExpression(const CPPGMAstNodePtr& input, const string& context, const map<string, string>& substitutions);
+	CPPGMAstNodePtr TransformAssignmentExpression(const CPPGMAstNodePtr& input, const string& context, const map<string, string>& substitutions);
+	CPPGMAstNodePtr TransformUnaryExpression(const CPPGMAstNodePtr& input, const string& context, const map<string, string>& substitutions);
+	void MaterializeInitializerConstructor(const CPPGMAstNodePtr& input, const CPPGMAstNodePtr& result, const string& context, const map<string, string>& substitutions);
 	bool MaterializeExplicitInstantiation(const CPPGMAstNodePtr& target,
 		const string& context, bool extern_instantiation = false);
 	CPPGMAstNodePtr TransformCallExpression(const CPPGMAstNodePtr& input,

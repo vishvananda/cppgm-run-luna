@@ -350,6 +350,11 @@ bool PA14Lowerer::IsTrivialValueStorage(const TypePtr& raw_type) const
       if(binding.kind != BIND_FUNCTION) continue;
       FunctionRecord* record = RecordForBinding(const_cast<Binding*>(&binding));
       if(!record || !record->value_special_member) continue;
+      // A user-defined assignment operator does not change the ABI's
+      // register/aggregate classification for returning the object.  Only
+      // copy/move construction (and the corresponding destruction rules)
+      // make the value non-trivial for this storage decision.
+      if(record->copy_assignment || record->move_assignment) continue;
       if(record->deleted) continue;
       if(!record->defaulted && !record->implicit_constructor) return false;
     }

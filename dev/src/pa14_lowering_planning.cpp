@@ -222,7 +222,7 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
         }
       }
       if(ambiguous_best) throw logic_error("ambiguous overload");
-        if(!best.binding) {
+      if(!best.binding) {
         string detail = "no viable function";
         for(size_t i = 0; i < candidates.size(); ++i)
           detail += " [" + candidates[i]->qualified_name + "]";

@@ -130,12 +130,24 @@ bool PA18TemplateExpander::InferArgument(const CPPGMAstNodePtr& expression,
 				}
 				if(object_type.empty()) object_type = context;
 			}
-			else InferArgument(expression->children[0], &object_type, substitutions, context);
+			else {
+				InferArgument(expression->children[0], &object_type, substitutions, context);
+				if(object_type.empty() && expression->children[0] &&
+					expression->children[0]->kind == "id-expression")
+					object_type = CanonicalSpelling(ResolveAlias(
+						expression->children[0]->value, context));
+			}
 			const string member = expression->children[1] ?
 				LastComponent(expression->children[1]->value) : string();
 			set<string> active;
 			if(!object_type.empty() && !member.empty() && FindClassMemberType(
 				object_type, member, substitutions, context, result, &active)) return true;
+			if(!object_type.empty() && named_type_contexts_.find(
+				CanonicalSpelling(ResolveAlias(object_type, context))) !=
+				named_type_contexts_.end()) {
+				*result = CanonicalSpelling(ResolveAlias(object_type, context));
+				return true;
+			}
 		}
 		if(expression->kind == "cast-expression" && !expression->children.empty()) {
 			const CPPGMAstNodePtr type_id = expression->children[0];
@@ -145,6 +157,16 @@ bool PA18TemplateExpander::InferArgument(const CPPGMAstNodePtr& expression,
 			}
 		}
 		if(expression->kind == "id-expression") {
+			const string qualified_name = RemoveMarker(expression->value);
+			const size_t qualified_separator = qualified_name.rfind("::");
+			if(qualified_separator != string::npos) {
+				const string qualified_owner = CanonicalSpelling(ResolveAlias(
+					qualified_name.substr(0, qualified_separator), context));
+				if(named_type_contexts_.find(qualified_owner) != named_type_contexts_.end()) {
+					*result = qualified_owner;
+					return true;
+				}
+			}
 			// The same source identifier can be reused by a later local
 			// declaration.  Prefer the parameter belonging to the current class
 			// constructor over the collector's translation-unit fallback map.
@@ -267,6 +289,17 @@ bool PA18TemplateExpander::InferArgument(const CPPGMAstNodePtr& expression,
 				*result = fallback;
 				return true;
 		}
+		if(expression->kind == "unary-expression" && !expression->children.empty()) {
+			const string op = RemoveMarker(expression->value);
+			if(op == "*") {
+				string object_type;
+				if(InferArgument(expression->children[0], &object_type, substitutions, context)) {
+					set<string> active;
+					if(FindClassMemberType(object_type, "operator*", substitutions, context,
+						result, &active)) return true;
+				}
+			}
+		}
 		if(expression->kind == "binary-expression" &&
 			InferBinaryArgument(expression, result, substitutions, context)) return true;
 		if(expression->kind == "unary-expression" && !expression->children.empty()) {
@@ -293,12 +326,30 @@ bool PA18TemplateExpander::MergeInferredFunctionArgument(
 {
 	map<string, string> one;
 	string match_pattern = pattern;
-	if(!inferred->empty() && pattern.find('<') != string::npos &&
-		pattern.find("::") != string::npos) {
-		map<string, string> pattern_substitutions = substitutions;
-		for(map<string, string>::const_iterator value = inferred->begin();
-			value != inferred->end(); ++value)
-			pattern_substitutions[value->first] = value->second;
+	map<string, string> pattern_substitutions;
+	bool alias_substitution = false;
+	for(map<string, string>::const_iterator substitution = substitutions.begin();
+		substitution != substitutions.end(); ++substitution)
+		if(parameter_names.find(substitution->first) == parameter_names.end() &&
+			template_parameter_names_.find(substitution->first) ==
+				template_parameter_names_.end()) {
+			pattern_substitutions[substitution->first] = substitution->second;
+			if(type_aliases_by_name_.find(substitution->first) != type_aliases_by_name_.end()) {
+				const size_t position = pattern.find(substitution->first);
+				const size_t end = position == string::npos ? string::npos :
+					position + substitution->first.size();
+				const bool left = position == 0 || position == string::npos ||
+					!IsIdentifierCharacter(pattern[position - 1]);
+				const bool right = position == string::npos || end == pattern.size() ||
+					!IsIdentifierCharacter(pattern[end]);
+				if(position != string::npos && left && right) alias_substitution = true;
+			}
+		}
+	for(map<string, string>::const_iterator value = inferred->begin();
+		value != inferred->end(); ++value)
+		pattern_substitutions[value->first] = value->second;
+	if(!pattern_substitutions.empty() && pattern.find('<') != string::npos &&
+		(alias_substitution || (!inferred->empty() && pattern.find("::") != string::npos))) {
 		match_pattern = const_cast<PA18TemplateExpander*>(this)->RewriteText(
 			pattern, context, pattern_substitutions, 0);
 		match_pattern = NormalizeTypeArgument(ReplaceIdentifiers(match_pattern,
@@ -499,10 +550,12 @@ bool PA18TemplateExpander::InferFunctionArguments(const TemplateDefinition& defi
 			!definition.parameters[i].name.empty()) inferred[definition.parameters[i].name] = (*explicit_prefix)[i];
 	}
 	size_t argument_index = 0;
-	for(size_t i = 0; i < parameters->children.size(); ++i)
-		if(!InferFunctionParameter(definition, parameters->children[i], parameters, i, arguments, &argument_index,
+	for(size_t i = 0; i < parameters->children.size(); ++i) {
+		const bool parameter_ok = InferFunctionParameter(definition, parameters->children[i], parameters, i, arguments, &argument_index,
 			substitutions, context, parameter_names, &inferred, &inferred_packs,
-			&deferred_patterns, &deferred_arguments, inferred_function_values)) return false;
+			&deferred_patterns, &deferred_arguments, inferred_function_values);
+		if(!parameter_ok) return false;
+	}
 	if(argument_index != arguments->children.size()) return false;
 	return CompleteFunctionArguments(definition, deferred_patterns, deferred_arguments,
 		parameter_names, &inferred, inferred_packs, result, inferred_pack_values, context);

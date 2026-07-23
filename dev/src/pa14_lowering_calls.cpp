@@ -193,13 +193,14 @@ string PA14Lowerer::EmitReferenceArgument(const CPPGMAstNodePtr& node, Scope* sc
       // prvalue needs a real temporary object, and a derived result needs its
       // typed base projection; storing the value into a refarg slot loses
       // both lifetime and base-subobject shape.
-      bool template_call = false;
+      bool template_context = state_ && state_->record &&
+        state_->record->template_instantiation;
       if(node && node->kind == "call-expression") {
         const CallChoice choice = ChooseCall(node, scope);
         FunctionRecord* function = choice.binding ? RecordForBinding(choice.binding) : 0;
-        template_call = function && function->template_instantiation;
+        template_context = template_context || (function && function->template_instantiation);
       }
-      const string slot = new_special_slot(template_call ? "arg" : "tmpobj",
+      const string slot = new_special_slot(template_context ? "arg" : "tmpobj",
         low_type(source_type));
       const string address = new_temp();
       AddInstruction(address + " = addr $" + slot);

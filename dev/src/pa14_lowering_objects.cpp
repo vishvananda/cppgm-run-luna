@@ -674,7 +674,12 @@ bool PA14Lowerer::EmitObjectTransferAt(const TypePtr& raw_target,
       (state_ && state_->record && state_->record->member_owner &&
        state_->record->member_owner->template_specialization);
     if(same_type && source_info.category == "lvalue" && template_context &&
-       IsEmptyBaseStorage(target) && IsTrivialValueStorage(target)) return true;
+       IsEmptyBaseStorage(target) && IsTrivialValueStorage(target)) {
+      // Even an empty object reference must be evaluated: the reference
+      // parameter itself is stored as an address-valued slot.
+      if(source->kind == "id-expression") (void)EmitAddress(source, scope);
+      return true;
+    }
     if(source_type && source_type->kind == TYPE_CLASS &&
        IsDerivedFrom(source_type, target)) {
       FunctionRecord* target_copy = FindValueMember(target, false, false);
