@@ -112,6 +112,11 @@ void PA18TemplateExpander::RegisterGeneratedTypeEntity(
 		if(!concrete_owner.empty()) concrete_owners.insert(concrete_owner);
 		for(map<string, string>::const_iterator substitution = substitutions.begin();
 			substitution != substitutions.end(); ++substitution) {
+			const string value = CanonicalSpelling(substitution->second);
+			if(specialization_bases_.find(LastComponent(value)) !=
+				specialization_bases_.end() &&
+				specialization_arguments_.find(LastComponent(value)) !=
+				specialization_arguments_.end()) concrete_owners.insert(value);
 			const size_t separator = substitution->second.rfind("::");
 			if(separator == string::npos) continue;
 			const string owner = substitution->second.substr(0, separator);
@@ -187,10 +192,12 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 		concrete_owner = LastComponent(concrete_owner);
 	else if(!concrete_owner.empty() && specialization_bases_.find(
 		LastComponent(concrete_owner)) != specialization_bases_.end()) {
+		const string generated_namespace = PrefixComponent(generated_owner);
 		for(set<string>::const_iterator candidate = class_contexts_.begin();
 			candidate != class_contexts_.end(); ++candidate)
-			if(LastComponent(*candidate) == LastComponent(concrete_owner)) {
-				concrete_owner = LastComponent(concrete_owner);
+			if(LastComponent(*candidate) == LastComponent(concrete_owner) &&
+				(generated_namespace.empty() || PrefixComponent(*candidate) == generated_namespace)) {
+				concrete_owner = *candidate;
 				break;
 			}
 	}

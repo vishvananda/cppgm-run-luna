@@ -185,7 +185,7 @@ string PA18TemplateExpander::ExpandAliasPattern(string pattern, const string& co
 				if(!combined.empty()) combined += ',';
 				combined += arguments[argument++];
 			}
-			substitutions[item.name] = combined;
+			if(combined != item.name + "...") substitutions[item.name] = combined;
 		} else if(argument < arguments.size())
 			substitutions[item.name] = arguments[argument++];
 	}

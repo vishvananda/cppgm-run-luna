@@ -943,7 +943,14 @@ bool PA18TemplateExpander::EvaluateIntegralTextFallbacks(const string& raw,
 bool PA18TemplateExpander::EvaluateIntegralText(string raw, const string& context,
 	const map<string, string>& substitutions, PA19IntegralValue* result)
 {
-	if(!PrepareIntegralText(&raw, context, substitutions)) return false;
+	// A compact replay can replace the operand of `sizeof...(Pack)` with the
+	// first scalar element before the dependent-scope guard runs.  The active
+	// typed pack still carries the complete arity, so resolve this value before
+	// treating the surrounding source context as unresolved.
+	if(EvaluateActivePackSize(raw, result)) return true;
+	if(!PrepareIntegralText(&raw, context, substitutions) &&
+		active_pack_substitutions_.empty() && active_pack_identifier_substitutions_.empty())
+		return false;
 	NormalizeIntegralText(&raw, substitutions);
 	if(EvaluateIntegralTextSpecialForms(raw, context, substitutions, result)) return true;
 	if(EvaluateIntegralTextKnownValues(raw, context, substitutions, result)) return true;

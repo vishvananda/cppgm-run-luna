@@ -170,6 +170,15 @@
 			const string candidate = JoinPath(current, raw_name);
 			map<string, TemplateDefinition>::const_iterator found = definitions_.find(candidate);
 			if(found != definitions_.end()) return &found->second;
+			// In-class member templates are sometimes collected through the
+			// class-definition context (`Owner::Owner`) even though lookup starts
+			// from the ordinary class scope (`Owner`).  Keep that typed owner alias
+			// visible for dependent calls such as `check<F>(0)`.
+			if(!current.empty()) {
+				const string repeated = JoinPath(current, JoinPath(current, raw_name));
+				found = definitions_.find(repeated);
+				if(found != definitions_.end()) return &found->second;
+			}
 			const size_t separator = current.rfind("::");
 			if(separator == string::npos) break;
 			current.erase(separator);
@@ -224,6 +233,8 @@
 		set<string> candidates;
 		for(string current = context; ; ) {
 			candidates.insert(JoinPath(current, raw_name));
+			if(!current.empty()) candidates.insert(JoinPath(current,
+				JoinPath(current, raw_name)));
 			if(current.empty()) break;
 			const size_t separator = current.rfind("::");
 			if(separator == string::npos) current.clear();

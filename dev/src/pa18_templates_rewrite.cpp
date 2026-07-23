@@ -484,7 +484,20 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 	const string& context, bool class_pattern) const
 {
 	pattern = NormalizeTypeArgument(pattern);
-	pattern = NormalizeTypeArgument(ResolveAlias(pattern, context));
+	bool dependent_pattern = false;
+	for(size_t position = 0; position < pattern.size();) {
+		if(!IsIdentifierCharacter(pattern[position])) {
+			++position;
+			continue;
+		}
+		const size_t begin = position;
+		while(position < pattern.size() && IsIdentifierCharacter(pattern[position])) ++position;
+		if(parameter_names.find(pattern.substr(begin, position - begin)) != parameter_names.end()) {
+			dependent_pattern = true;
+			break;
+		}
+	}
+	if(!dependent_pattern) pattern = NormalizeTypeArgument(ResolveAlias(pattern, context));
 	actual = NormalizeTypeArgument(ResolveAlias(actual, context));
 	const auto pointer_depth = [](const string& spelling) {
 		size_t depth = 0;

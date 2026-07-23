@@ -523,7 +523,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 						string normalized;
 						if(!CompatibleTemplateTemplateArgument(definition->parameters[i], argument,
 							context, default_substitutions, &normalized))
-							throw logic_error("template-template argument does not match");
+						throw logic_error("template-template argument does not match");
 						argument = normalized;
 					}
 					argument = QualifyTypeArgument(argument, context, definition->owner);

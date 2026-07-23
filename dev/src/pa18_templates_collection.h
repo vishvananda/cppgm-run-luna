@@ -53,7 +53,13 @@ inline string CanonicalSpelling(string raw)
 		}
 		if(previous_space && !compact.empty()) {
 			const char prior = compact[compact.size() - 1];
-			if(IsIdentifierCharacter(prior) && IsIdentifierCharacter(ch)) compact += ' ';
+			const bool cv_after_pointer = (prior == '*' || prior == '&') &&
+				((raw.compare(i, 5, "const") == 0 &&
+					(i + 5 == raw.size() || !IsIdentifierCharacter(raw[i + 5]))) ||
+				 (raw.compare(i, 8, "volatile") == 0 &&
+					(i + 8 == raw.size() || !IsIdentifierCharacter(raw[i + 8]))));
+			if((IsIdentifierCharacter(prior) && IsIdentifierCharacter(ch)) || cv_after_pointer)
+				compact += ' ';
 		}
 		previous_space = false;
 		compact += ch;
@@ -66,8 +72,15 @@ inline string CanonicalSpelling(string raw)
 			result.erase(result.size() - 1);
 		result += ch;
 		if((ch == '<' || ch == ',' || ch == '>' || ch == '*' || ch == '&') &&
-			i + 1 < compact.size() && compact[i + 1] == ' ')
-			++i;
+			i + 1 < compact.size() && compact[i + 1] == ' ') {
+			const size_t next = i + 2;
+			const bool cv_after_pointer = (ch == '*' || ch == '&') &&
+				((compact.compare(next, 5, "const") == 0 &&
+					(next + 5 == compact.size() || !IsIdentifierCharacter(compact[next + 5]))) ||
+				 (compact.compare(next, 8, "volatile") == 0 &&
+					(next + 8 == compact.size() || !IsIdentifierCharacter(compact[next + 8]))));
+			if(!cv_after_pointer) ++i;
+		}
 	}
 	return result;
 }
@@ -88,6 +101,8 @@ inline string JoinPath(const string& prefix, const string& name)
 	return prefix + "::" + name;
 }
 inline bool IsTemplateAngleOpen(const string& raw, size_t position);
+inline bool IsTemplateAngleClose(const string& raw, size_t position);
+bool LooksLikeRelationalLessThan(const string& raw, size_t position);
 size_t TopLevelScopeSeparator(const string& raw);
 inline string LastComponent(const string& raw)
 {
@@ -324,7 +339,10 @@ inline bool IsTemplateAngleOpen(const string& raw, size_t position)
 	// than is an operator (including the first half of <<), not a nested
 	// template delimiter.
 	if(isalpha(static_cast<unsigned char>(prior)) || prior == '_' ||
-		prior == ':' || prior == '>') return true;
+		prior == ':' || prior == '>') {
+		if(LooksLikeRelationalLessThan(raw, position)) return false;
+		return true;
+	}
 	if(isdigit(static_cast<unsigned char>(prior))) {
 		size_t begin = previous - 1;
 		while(begin > 0 && IsIdentifierCharacter(raw[begin - 1])) --begin;

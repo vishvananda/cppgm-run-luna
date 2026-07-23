@@ -7,6 +7,37 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
+bool LooksLikeRelationalLessThan(const string& raw, size_t position)
+{
+	int enclosing_parentheses = 0;
+	for(size_t i = 0; i < position; ++i) {
+		if(raw[i] == '(') ++enclosing_parentheses;
+		else if(raw[i] == ')' && enclosing_parentheses > 0) --enclosing_parentheses;
+	}
+	if(enclosing_parentheses == 0) return false;
+	int nested_parentheses = 0, angle = 1;
+	for(size_t i = position + 1; i < raw.size(); ++i) {
+		if(raw[i] == '(') { ++nested_parentheses; continue; }
+		if(raw[i] == ')') {
+			if(nested_parentheses > 0) { --nested_parentheses; continue; }
+			return angle != 0;
+		}
+		if(raw[i] == '<' && IsTemplateAngleOpen(raw, i)) { ++angle; continue; }
+		if(raw[i] == '>' && IsTemplateAngleClose(raw, i) && angle > 0 && --angle == 0)
+			return false;
+	}
+	return angle != 0;
+}
+
+string QualifyAliasTarget(const string& target, const string& alias,
+	const set<string>& class_contexts)
+{
+	const string owner = PrefixComponent(alias);
+	return !owner.empty() && target.find("::") == string::npos &&
+		class_contexts.find(JoinPath(owner, target)) != class_contexts.end() ?
+		JoinPath(owner, target) : target;
+}
+
 bool HasFriendSpecifier(const CPPGMAstNodePtr& node)
 {
 	if(!node) return false;
@@ -98,7 +129,12 @@ string NormalizeTypeArgument(string raw)
 		const string word = cv_words[word_index];
 		for(size_t at = raw.find(word); at != string::npos;
 			at = raw.find(word, at + word.size() + 1)) {
-			if(at > 0 && IsIdentifierCharacter(raw[at - 1])) {
+			const bool attached_to_pointer = at > 0 &&
+				(raw[at - 1] == '*' || raw[at - 1] == '&');
+			const bool attached_to_identifier = at > 1 &&
+				IsIdentifierCharacter(raw[at - 1]) &&
+				!IsIdentifierCharacter(raw[at - 2]);
+			if(attached_to_pointer || attached_to_identifier) {
 				const size_t end = at + word.size();
 				if(end == raw.size() || !IsIdentifierCharacter(raw[end])) {
 					size_t next = end;
@@ -143,12 +179,17 @@ string NormalizeTypeArgument(string raw)
 		if(pointer != string::npos && raw.rfind("volatile") < pointer) raw += " volatile"; }
 	if(raw.size() > 5 && raw.compare(raw.size() - 5, 5, "const") == 0 &&
 		raw.find(' ') == string::npos && raw.find('_') == string::npos &&
-		raw.find('(') == string::npos)
-		raw = "const " + raw.substr(0, raw.size() - 5);
-	else if(raw.size() > 8 && raw.compare(raw.size() - 8, 8, "volatile") == 0 &&
+		raw.find('(') == string::npos) {
+		const size_t qualifier = raw.size() - 5;
+		if(qualifier > 0 && raw[qualifier - 1] == '*') raw.insert(qualifier, " ");
+		else raw = "const " + raw.substr(0, qualifier);
+	} else if(raw.size() > 8 && raw.compare(raw.size() - 8, 8, "volatile") == 0 &&
 		raw.find(' ') == string::npos && raw.find('_') == string::npos &&
-		raw.find('(') == string::npos)
-		raw = "volatile " + raw.substr(0, raw.size() - 8);
+		raw.find('(') == string::npos) {
+		const size_t qualifier = raw.size() - 8;
+		if(qualifier > 0 && raw[qualifier - 1] == '*') raw.insert(qualifier, " ");
+		else raw = "volatile " + raw.substr(0, qualifier);
+	}
 	return CanonicalSpelling(raw);
 }
 
@@ -588,7 +629,7 @@ string PA18TemplateExpander::ResolveAlias(string spelling, const string& context
 			}
 		}
 		if(direct != type_aliases_.end()) {
-			string target = direct->second;
+			string target = QualifyAliasTarget(direct->second, direct->first, class_contexts_);
 			const size_t owner_separator = spelling.rfind("::");
 			if(owner_separator != string::npos) {
 				const string owner = spelling.substr(0, owner_separator);

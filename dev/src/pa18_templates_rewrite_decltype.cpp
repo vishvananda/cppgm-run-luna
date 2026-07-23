@@ -5,6 +5,27 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
+string PA18TemplateExpander::FunctionLookupContext(const string& context) const
+{
+	string generated_owner = active_instantiation_name_.empty() ?
+		LastComponent(context) : active_instantiation_name_;
+	map<string, string>::const_iterator generated_base = specialization_bases_.find(
+		LastComponent(generated_owner));
+	return generated_base == specialization_bases_.end() || generated_base->second.empty() ?
+		context : generated_base->second;
+}
+
+const TemplateDefinition* PA18TemplateExpander::FindExplicitFunctionTemplate(
+	const string& base, const string& context) const
+{
+	const TemplateDefinition* direct = FindDefinition(base, context);
+	if(direct) return direct;
+	const vector<const TemplateDefinition*> visible = FindFunctionDefinitions(base, context);
+	for(size_t candidate = 0; candidate < visible.size(); ++candidate)
+		if(visible[candidate]->member_template) return visible[candidate];
+	return visible.empty() ? 0 : visible[0];
+}
+
 string CollapseRepeatedQualifier(string raw)
 {
 	for(size_t position = 0; position < raw.size();) {
@@ -344,8 +365,12 @@ bool PA18TemplateExpander::FindInheritedTemplateMemberType(
 					base_arguments[argument], context, local, 0, false, false));
 				base_arguments[argument] = NormalizeTypeArgument(ReplaceIdentifiers(
 					base_arguments[argument], local));
-				base_arguments[argument] = ResolveAlias(base_arguments[argument], context);
-				if(argument < base_definition->parameters.size() && base_definition->parameters[argument].type)
+				const bool template_entity = argument < base_definition->parameters.size() &&
+					base_definition->parameters[argument].template_template;
+				if(!template_entity)
+					base_arguments[argument] = ResolveAlias(base_arguments[argument], context);
+				if(argument < base_definition->parameters.size() &&
+					base_definition->parameters[argument].type)
 					base_arguments[argument] = QualifyTypeArgument(base_arguments[argument],
 						context, base_definition->owner);
 			}
@@ -415,7 +440,10 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 			owner_arguments[owner_argument], context, substitutions, 0, false, false));
 		owner_arguments[owner_argument] = NormalizeTypeArgument(ReplaceIdentifiers(
 			owner_arguments[owner_argument], substitutions));
-		owner_arguments[owner_argument] = ResolveAlias(owner_arguments[owner_argument], context);
+		const bool template_entity = owner_argument < owner_definition->parameters.size() &&
+			owner_definition->parameters[owner_argument].template_template;
+		if(!template_entity)
+			owner_arguments[owner_argument] = ResolveAlias(owner_arguments[owner_argument], context);
 	}
 	const TemplateDefinition* selected_owner = SelectClassTemplateDefinition(
 		owner_definition, owner_arguments, context);
@@ -523,8 +551,10 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 							nested_substitutions, context, &concrete_member, &nested_active,
 							true) && !concrete_member.empty();
 						if(concrete_found) {
+							const string member_context = selected_nested->qualified_name.empty() ?
+								context : selected_nested->qualified_name;
 							concrete_member = NormalizeTypeArgument(RewriteText(
-								concrete_member, context, nested_substitutions, 0));
+								concrete_member, member_context, nested_substitutions, 0));
 							size_t replacement_begin = begin;
 							while(replacement_begin > 0 && isspace(static_cast<unsigned char>(
 								(*raw)[replacement_begin - 1]))) --replacement_begin;
@@ -558,7 +588,9 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 		concrete_substitutions, context, &concrete_member, &concrete_active, true) &&
 		!concrete_member.empty();
 	if(!concrete_found) return false;
-	concrete_member = NormalizeTypeArgument(RewriteText(concrete_member, context,
+	const string member_context = selected_owner->qualified_name.empty() ? context :
+		selected_owner->qualified_name;
+	concrete_member = NormalizeTypeArgument(RewriteText(concrete_member, member_context,
 		concrete_substitutions, 0));
 	// `TemplateBase` points at the nested component after a dependent
 	// qualifier, so `Ptr::template rebind<U>::other` would otherwise become

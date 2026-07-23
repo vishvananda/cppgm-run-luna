@@ -264,6 +264,9 @@
 		result = CollapseReferenceSpelling(ReplaceIdentifiers(result, local));
 		return NormalizeTypeArgument(result);
 	}
+	string FunctionLookupContext(const string& context) const;
+	const TemplateDefinition* FindExplicitFunctionTemplate(const string& base,
+		const string& context) const;
 
 	bool FunctionCallResultType(string expression, const string& context,
 		const map<string, string>& substitutions, string* result)
@@ -272,9 +275,15 @@
 		if(!SplitTextCall(expression, &callee, &argument_text)) return false;
 		callee = StripTextParentheses(callee);
 		if(callee.empty()) return false;
+		// A member call replayed while a class specialization is being
+		// transformed has the generated class as its active typed owner, while
+		// the source member templates remain indexed under the primary class.
+		// Recover that source scope before resolving `check<F>(...)` or any
+		// equivalent dependent member call.
+		const string function_context = FunctionLookupContext(context);
 		if(callee[callee.size() - 1] == ')') {
 			string returned;
-			if(FunctionCallResultType(callee, context, substitutions, &returned)) {
+			if(FunctionCallResultType(callee, function_context, substitutions, &returned)) {
 				returned = ResolveAlias(CollapseReferenceSpelling(returned), context);
 				while(!returned.empty() && returned[returned.size() - 1] == '&') {
 					returned.erase(returned.size() - 1);
@@ -296,28 +305,29 @@
 			size_t template_close = string::npos, begin = 0;
 			if(!TemplateBase(callee, template_open, &begin, &base) ||
 				!TemplateRange(callee, template_open, &base_arguments, &template_close)) return false;
-			explicit_definition = FindDefinition(base, context);
+			explicit_definition = FindExplicitFunctionTemplate(base, function_context);
 			if(!explicit_definition || explicit_definition->class_template) return false;
 			explicit_arguments = SplitTemplateArguments(base_arguments);
 			for(size_t i = 0; i < explicit_arguments.size(); ++i) {
-				explicit_arguments[i] = RewriteText(explicit_arguments[i], context,
+				explicit_arguments[i] = RewriteText(explicit_arguments[i], function_context,
 					substitutions, 0);
 				explicit_arguments[i] = NormalizeTypeArgument(ReplaceIdentifiers(
 					explicit_arguments[i], substitutions));
-				explicit_arguments[i] = ResolveAlias(explicit_arguments[i], context);
+				explicit_arguments[i] = ResolveAlias(explicit_arguments[i], function_context);
 			}
 		}
 		vector<string> actual_types;
 		const vector<string> actual_expressions = SplitTemplateArguments(argument_text);
 		for(size_t i = 0; i < actual_expressions.size(); ++i) {
 			if(actual_expressions[i].empty()) continue;
-			const string actual = ExpressionTypeSpelling(actual_expressions[i], context, substitutions);
+			const string actual = ExpressionTypeSpelling(actual_expressions[i], function_context,
+				substitutions);
 			if(actual.empty()) return false;
 			actual_types.push_back(actual);
 		}
 		vector<const TemplateDefinition*> candidates;
 		if(explicit_definition) candidates.push_back(explicit_definition);
-		else candidates = FindFunctionDefinitions(callee, context);
+		else candidates = FindFunctionDefinitions(callee, function_context);
 		for(size_t i = 0; i < candidates.size(); ++i) {
 			const TemplateDefinition& definition = *candidates[i];
 			vector<string> arguments;
@@ -325,10 +335,10 @@
 				explicit_arguments.size() == definition.parameters.size();
 			if(complete) arguments = explicit_arguments;
 			else if(!InferFunctionTypeArguments(definition, actual_types, &arguments,
-				substitutions, context, explicit_definition ? &explicit_arguments : 0)) {
+				substitutions, function_context, explicit_definition ? &explicit_arguments : 0)) {
 				continue;
 			}
-			*result = FunctionResultType(definition, arguments, context);
+			*result = FunctionResultType(definition, arguments, function_context);
 			if(!result->empty()) return true;
 		}
 		if(!explicit_definition) {

@@ -192,12 +192,15 @@ bool MatchTypePattern(string pattern, string actual,
 					const TemplateDefinition* selected_class = SelectClassTemplateDefinition(
 						class_definition, class_arguments, context);
 					if(selected_class) class_definition = selected_class;
-					for(size_t parameter = 0; parameter < class_definition->parameters.size() &&
-						parameter < class_arguments.size(); ++parameter)
-						if(!class_definition->parameters[parameter].name.empty())
-							class_substitutions[class_definition->parameters[parameter].name] =
-								CanonicalSpelling(ResolveAlias(ReplaceIdentifiers(
-									class_arguments[parameter], class_substitutions), context));
+						for(size_t parameter = 0; parameter < class_definition->parameters.size() &&
+							parameter < class_arguments.size(); ++parameter)
+							if(!class_definition->parameters[parameter].name.empty()) {
+								const string argument = CanonicalSpelling(ReplaceIdentifiers(
+									class_arguments[parameter], class_substitutions));
+								class_substitutions[class_definition->parameters[parameter].name] =
+									class_definition->parameters[parameter].template_template ? argument :
+									CanonicalSpelling(ResolveAlias(argument, context));
+							}
 					if(!class_definition->name.empty()) class_substitutions[class_definition->name] =
 						class_key;
 				}
@@ -808,8 +811,19 @@ bool MatchTypePattern(string pattern, string actual,
 			return LastComponent(value);
 		}
 		if(node->kind == "type-name" || node->kind == "decl-specifier" ||
-			node->kind == "type-specifier")
-			return LastComponent(RemoveMarker(node->value));
+			node->kind == "type-specifier") {
+			const string value = RemoveMarker(node->value);
+			for(size_t i = 0; i < value.size();) {
+				if(!IsIdentifierCharacter(value[i])) { ++i; continue; }
+				const size_t begin = i;
+				while(i < value.size() && IsIdentifierCharacter(value[i])) ++i;
+				const string word = value.substr(begin, i - begin);
+				if(active_pack_substitutions_.find(word) != active_pack_substitutions_.end() ||
+					active_pack_identifier_substitutions_.find(word) !=
+						active_pack_identifier_substitutions_.end()) return word;
+			}
+			return LastComponent(value);
+		}
 		for(size_t i = 0; i < node->children.size(); ++i) {
 			const string found = PackExpansionIdentifier(node->children[i]);
 			if(!found.empty()) return found;
