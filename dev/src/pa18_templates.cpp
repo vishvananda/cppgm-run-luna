@@ -706,6 +706,212 @@ bool PA18TemplateExpander::InferBinaryArgument(const CPPGMAstNodePtr& expression
 	return InferArgument(expression->children[0], result, substitutions, context);
 }
 
+bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
+	const CPPGMAstNodePtr& callee, const string& original_member,
+	const string& context,
+	const map<string, string>& substitutions)
+{
+	if(!call || !callee || callee->kind != "member-expression" ||
+		callee->children.size() < 2 || !callee->children[1]) return false;
+	string member_spelling = original_member.empty() ? callee->children[1]->value :
+		original_member;
+	member_spelling = RemoveMarker(member_spelling);
+	member_spelling = CanonicalSpelling(member_spelling);
+	if(member_spelling.empty()) return false;
+	string member_name = member_spelling;
+	vector<string> explicit_member_arguments;
+	const size_t member_open = member_spelling.find('<');
+	if(member_open != string::npos) {
+		string member_base;
+		string member_argument_text;
+		size_t member_begin = 0;
+		size_t member_close = string::npos;
+		if(!TemplateBase(member_spelling, member_open, &member_begin, &member_base) ||
+			!TemplateRange(member_spelling, member_open, &member_argument_text,
+				&member_close)) return false;
+		member_name = LastComponent(member_base);
+		explicit_member_arguments = SplitTemplateArguments(member_argument_text);
+	} else member_name = LastComponent(member_name);
+	if(member_name.empty()) return false;
+
+	string object_type;
+	if(callee->children[0] && callee->children[0]->kind == "keyword-literal" &&
+		RemoveMarker(callee->children[0]->value) == "this") {
+		for(string current = context; ; ) {
+			if(class_contexts_.find(current) != class_contexts_.end()) {
+				object_type = current;
+				break;
+			}
+			if(current.empty()) break;
+			const size_t separator = current.rfind("::");
+			if(separator == string::npos) current.clear();
+			else current.erase(separator);
+		}
+		if(object_type.empty()) object_type = context;
+	} else if(!InferArgument(callee->children[0], &object_type, substitutions, context))
+		return false;
+	object_type = CanonicalSpelling(RewriteText(object_type, context, substitutions, 0));
+	object_type = ResolveAlias(object_type, context);
+	while(object_type.compare(0, 6, "const ") == 0 ||
+		object_type.compare(0, 9, "volatile ") == 0)
+		object_type = CanonicalSpelling(object_type.substr(object_type.find(' ') + 1));
+	while(!object_type.empty() && (object_type[object_type.size() - 1] == '*' ||
+		object_type[object_type.size() - 1] == '&'))
+		object_type = CanonicalSpelling(object_type.substr(0, object_type.size() - 1));
+	if(object_type.empty()) return false;
+
+	const TemplateDefinition* parent = 0;
+	vector<string> parent_arguments;
+	map<string, string> member_substitutions = substitutions;
+	map<string, string>::const_iterator owner_base = specialization_bases_.find(
+		LastComponent(object_type));
+	map<string, vector<string> >::const_iterator owner_arguments =
+		specialization_arguments_.find(LastComponent(object_type));
+	if(owner_base != specialization_bases_.end() &&
+		owner_arguments != specialization_arguments_.end()) {
+		parent = FindDefinition(owner_base->second, context);
+		parent_arguments = owner_arguments->second;
+	} else {
+		string source_owner = object_type;
+		const size_t source_open = source_owner.find('<');
+		if(source_open != string::npos) source_owner.erase(source_open);
+		const TemplateDefinition* candidate_parent = FindDefinition(source_owner, context);
+		if(candidate_parent && candidate_parent->class_template) parent = candidate_parent;
+	}
+	if(parent) {
+		// A member template-id in the definition of a function template still
+		// needs the dependent-name `template` disambiguator.  Do not turn a
+		// dependent `Box<Tag>` object into a concrete member specialization merely
+		// because its member has explicit arguments; the normal dependent-name
+		// validation must reject the missing keyword.
+		if(parent_arguments.empty() && object_type.find('<') != string::npos) {
+			for(size_t parameter = 0; parameter < parent->parameters.size(); ++parameter) {
+				const string& name = parent->parameters[parameter].name;
+				if(name.empty()) continue;
+				for(size_t position = object_type.find(name); position != string::npos;
+					position = object_type.find(name, position + name.size())) {
+					const bool left = position == 0 || !IsIdentifierCharacter(object_type[position - 1]);
+					const size_t end = position + name.size();
+					const bool right = end == object_type.size() ||
+						!IsIdentifierCharacter(object_type[end]);
+					if(left && right) return false;
+				}
+			}
+		}
+		for(size_t parameter = 0; parameter < parent->parameters.size() &&
+			parameter < parent_arguments.size(); ++parameter)
+			if(!parent->parameters[parameter].name.empty())
+				member_substitutions[parent->parameters[parameter].name] =
+					parent_arguments[parameter];
+		if(!parent->name.empty()) member_substitutions[parent->name] = object_type;
+	}
+
+	vector<const TemplateDefinition*> candidates;
+	for(map<string, TemplateDefinition>::const_iterator it = definitions_.begin();
+		it != definitions_.end(); ++it) {
+		const TemplateDefinition& definition = it->second;
+		if(definition.class_template || definition.alias_template ||
+			definition.variable_template || definition.parameters.empty() ||
+			LastComponent(definition.name) != member_name || !definition.declaration)
+			continue;
+		const bool declaration_kind = definition.declaration->kind == "function-definition" ||
+			definition.declaration->kind == "simple-declaration" ||
+			definition.declaration->kind == "special-member-definition";
+		if(!declaration_kind) continue;
+		bool owner_matches = false;
+		if(parent) owner_matches = MemberOwnerPattern(definition, *parent,
+			parent_arguments, 0);
+		else {
+			string source_owner = definition.owner;
+			const size_t source_open = source_owner.find('<');
+			if(source_open != string::npos) source_owner.erase(source_open);
+			owner_matches = source_owner == object_type ||
+				LastComponent(source_owner) == LastComponent(object_type);
+		}
+		if(owner_matches) candidates.push_back(&definition);
+	}
+	if(candidates.empty()) return false;
+
+	for(size_t candidate_index = 0; candidate_index < candidates.size();
+		++candidate_index) {
+		const TemplateDefinition& definition = *candidates[candidate_index];
+		if(definition.declaration->kind == "simple-declaration") {
+			bool has_definition = false;
+			for(size_t other_index = 0; other_index < candidates.size(); ++other_index) {
+				const TemplateDefinition& other = *candidates[other_index];
+				if(other.declaration->kind == "function-definition" &&
+					MemberSignatureKey(other) == MemberSignatureKey(definition)) {
+					has_definition = true;
+					break;
+				}
+			}
+			if(has_definition) continue;
+		}
+		vector<string> member_arguments;
+		map<string, vector<string> > inferred_pack_values;
+		vector<string> explicit_arguments = explicit_member_arguments;
+		for(size_t argument = 0; argument < explicit_arguments.size(); ++argument) {
+			explicit_arguments[argument] = NormalizeTypeArgument(RewriteText(
+				explicit_arguments[argument], context, member_substitutions, 0));
+			explicit_arguments[argument] = NormalizeTypeArgument(ReplaceIdentifiers(
+				explicit_arguments[argument], member_substitutions));
+			explicit_arguments[argument] = ResolveAlias(explicit_arguments[argument], context);
+			explicit_arguments[argument] = QualifyTypeArgument(
+				explicit_arguments[argument], context, definition.owner);
+		}
+		const vector<string>* explicit_prefix = explicit_arguments.empty() ? 0 :
+			&explicit_arguments;
+		bool inferred = false;
+		try {
+			inferred = InferFunctionArguments(definition, call, &member_arguments,
+				member_substitutions, context, explicit_prefix, &inferred_pack_values);
+		} catch(const logic_error&) {
+			inferred = false;
+		}
+		if(!inferred) continue;
+
+		string requested_owner = object_type;
+		const bool concrete_owner = class_contexts_.find(requested_owner) !=
+			class_contexts_.end() && specialization_bases_.find(
+				LastComponent(requested_owner)) != specialization_bases_.end();
+		const string* requested_owner_pointer = concrete_owner ? &requested_owner : 0;
+		try {
+			Instantiate(definition, member_arguments, context, false,
+				&inferred_pack_values, &member_substitutions,
+				requested_owner_pointer);
+		} catch(const logic_error&) {
+			continue;
+		}
+		call->template_primary = definition.qualified_name;
+		call->template_arguments = member_arguments;
+		callee->children[1]->value = member_name;
+		return true;
+	}
+	return false;
+}
+
+bool PA18TemplateExpander::IsKnownMemberTemplateId(const string& raw) const
+{
+	const string spelling = CanonicalSpelling(RemoveMarker(raw));
+	const size_t open = spelling.find('<');
+	if(open == string::npos) return false;
+	string base;
+	string arguments;
+	size_t begin = 0;
+	size_t close = string::npos;
+	if(!TemplateBase(spelling, open, &begin, &base) ||
+		!TemplateRange(spelling, open, &arguments, &close)) return false;
+	const string member_name = LastComponent(base);
+	for(map<string, TemplateDefinition>::const_iterator it = definitions_.begin();
+		it != definitions_.end(); ++it) {
+		const TemplateDefinition& definition = it->second;
+		if(definition.member_template && !definition.class_template &&
+			LastComponent(definition.name) == member_name)
+			return true;
+	}
+	return false;
+}
+
 CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 	const CPPGMAstNodePtr& input, const string& context,
 	const map<string, string>& substitutions)
@@ -837,6 +1043,12 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 	// class specialization has already been rewritten at this point, so use
 	// its concrete constructor declaration before ordinary call deduction.
 	ResolveClassConstructorFunctionArguments(result, context);
+	string original_member;
+	if(input_callee && input_callee->kind == "member-expression" &&
+		input_callee->children.size() >= 2 && input_callee->children[1])
+		original_member = input_callee->children[1]->value;
+	if(result_callee && result_callee->kind == "member-expression")
+		InstantiateMemberCall(result, result_callee, original_member, context, substitutions);
 	if(result_callee && result_callee->kind == "id-expression" &&
 		result_callee->value.find('<') == string::npos) {
 		const string callee_name = result_callee->value;

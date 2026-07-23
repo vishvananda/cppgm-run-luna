@@ -2,6 +2,160 @@
 
 ## Latest checkpoint and next scope
 
+### Remaining Work Map (after checkpoint)
+
+The required PA21-local report was rerun after this checkpoint with
+`make test-report ACTIVE_TEST_REPORT_PAS='pa21'`.  It is **122/215 passing**
+with **93 failures**: 82 exit-status mismatches and 11 relaxed-LowIR
+mismatches.  There are no timeout failures.  The complete remaining failure
+set is grouped below by shared compiler behavior; each reported path appears
+exactly once.
+
+- **Member/friend owner replay and lookup (56):**
+  `general/300-basic-template-operator-overloads`,
+  `general/300-class-template-member-overload-braced-call-operator`,
+  `general/300-crtp-static-cast-reference-before-constructor-template`,
+  `general/300-dependent-base-qualified-rvalue-assignment`,
+  `general/300-dependent-hidden-friend-static-member-definition`,
+  `general/300-explicit-member-call-function-template-id`,
+  `general/300-explicit-member-template-id-shares-ordinary-overload`,
+  `general/300-explicit-type-arg-decltype-member-access`,
+  `general/300-friend-existing-template-private-ctor-access`,
+  `general/300-friend-function-template-access`,
+  `general/300-function-pack-template-id-deduction-decltype`,
+  `general/300-hidden-friend-template-call-adl`,
+  `general/300-inherited-member-template-subscript-action`,
+  `general/300-local-qualified-argument-replay`,
+  `general/300-member-class-explicit-specialization-owner-lookup`,
+  `general/300-member-template-assignment-operator-value`,
+  `general/300-member-template-class-pack-forward-before-token`,
+  `general/300-member-template-local-using-does-not-suppress-adl`,
+  `general/300-namespace-function-template-hides-outer-callable-object`,
+  `general/300-nested-class-friend-template-namespace-scope`,
+  `general/300-nested-class-template-current-owner-lookup`,
+  `general/300-nested-class-template-reference-reset`,
+  `general/300-nested-member-partial-specialization-apply-scope`,
+  `general/300-nested-member-partial-specialization-survives-reference-reset`,
+  `general/300-out-of-class-ctor-using-imported-member-template`,
+  `general/300-parenthesized-qualified-template-functional-call`,
+  `general/300-qualified-friend-member-template-access`,
+  `general/300-qualified-preselected-member-template-call`,
+  `general/300-single-pack-cast-target`,
+  `general/300-template-friend-class-constructor-access`,
+  `general/300-templated-constructor-special-member-collection`,
+  `general/300-unary-member-operator-template-default`,
+  `general/300-using-base-same-signature-derived-template-preferred`,
+  `general/400-reference-member-lookup-in-progress-base-typedef`,
+  `spec/300-const-member-function-template-overload`,
+  `spec/300-dependent-super-member-template-chain`,
+  `spec/300-friend-class-template-nested-private-typedef-access`,
+  `spec/300-friend-class-template-protected-base-access`,
+  `spec/300-hidden-friend-template-call-adl`,
+  `spec/300-hidden-friend-template-operator-adl`,
+  `spec/300-member-call-template-hides-inherited-instantiation`,
+  `spec/300-member-class-template-out-of-class`,
+  `spec/300-member-operator-template-active-owner`,
+  `spec/300-member-operator-template-in-class-template`,
+  `spec/300-member-template-cache-hit-concrete-scope`,
+  `spec/300-noexcept-member-template-call-operator`,
+  `spec/300-out-of-class-member-template-owner-param-rename`,
+  `spec/300-out-of-class-member-template-tag-dispatch-definition`,
+  `spec/300-out-of-class-overloaded-member-template-definition`,
+  `spec/300-qualified-friend-function-template-member-access`,
+  `spec/300-rooted-qualified-static-data-member-template-definition`,
+  `spec/300-static-member-function-template-out-of-class`,
+  `spec/300-template-friend-inside-class-template`,
+  `spec/300-using-imported-member-template-active-owner`,
+  `spec/300-using-inherited-alias-operator-template`, and
+  `spec/300-qualified-member-template-hides-base-function`.
+
+- **Alias/template-template and dependent non-type replay (13):**
+  `general/200-reference-alias-top-cv-return-binding`,
+  `general/400-alias-nontype-expression-declaration-scope`,
+  `general/400-alias-nontype-pack-partial-specialization-pattern`,
+  `general/400-alias-pack-nontype-expression-fast-path`,
+  `general/400-alias-template-nontype-shadowed-by-inner-value`,
+  `general/400-alias-template-pointer-cv-cache-distinction`,
+  `general/400-dependent-pack-typename-nontype-expression`,
+  `general/400-function-parameter-pack-alias-expansion`,
+  `general/400-inline-namespace-template-template-argument`,
+  `general/400-member-alias-template-owner-rebind-cache`,
+  `general/400-member-alias-template-template-dependent-replay`,
+  `spec/100-inline-namespace-qualified-template-id-pack-expansion`, and
+  `general/400-member-template-nontype-shadowed-global-replay`.
+
+- **Class partial-selection and current-specialization identity (5):**
+  `general/100-reference-shell-out-of-class-current-specialization-iterator`,
+  `general/400-partial-specialization-conversion-operator-pointer-binding`,
+  `general/400-partial-specialization-redecl-member-template-empty-pack`,
+  `spec/300-defaulted-type-arg-specialization-nontype-value`, and
+  `general/400-forward-primary-partial-switch-value`.
+
+- **Explicit specialization/instantiation ownership (12):**
+  `general/300-template-instantiation-use-location-explicit-specialization`,
+  `spec/300-explicit-instantiation-class`,
+  `spec/300-explicit-instantiation-deduced-member-function-template`,
+  `spec/300-explicit-instantiation-free-function-emits-definition`,
+  `spec/300-explicit-instantiation-function`,
+  `spec/300-explicit-instantiation-static-member-function`,
+  `spec/300-explicit-specialization-after-instantiation`,
+  `spec/300-explicit-specialization-static-data-member`,
+  `spec/300-explicit-specialized-ctor-template-header-bad`,
+  `spec/300-extern-template-constructor-declaration`,
+  `spec/300-extern-template-function-call-suppresses-materialization`,
+  `spec/300-extern-template-operator-function-declaration`.
+
+- **Dependent values and ordinary lowering/layout (7):**
+  `general/300-anonymous-union-storage-constructor-noop`,
+  `general/300-array-functional-cast-pack-call`,
+  `general/300-constexpr-static-fn-template-address-pack`,
+  `general/300-function-signature-partial-specialization-functor-assignment`,
+  `general/300-function-template-local-static-per-specialization`,
+  `general/300-static-constexpr-function-template-pointer-array`, and
+  `general/400-reference-member-depth-pack-sum`.
+
+The report's count is authoritative for the stage gate.  The path lists above
+are the current report inventory; the broad historical group descriptions below
+are retained only as provenance.
+
+### Checkpoint Result
+
+This checkpoint completed the first owner-reconstruction slice of the
+member/friend group.  It adds a typed member-template fact so enclosing class
+parameters are not confused with member parameters, replays out-of-class
+member definitions with owner-pattern substitutions, preserves namespace-level
+static-data ownership, rejects a missing dependent `template` disambiguator,
+and selects explicit member specializations before primary definitions.
+
+Focused validation passed for:
+
+- `general/300-explicit-member-function-template-call`
+- `general/300-nondependent-member-template-id-call`
+- `general/300-out-of-class-member-function-template-definition`
+- `general/300-out-of-class-member-template-namespace-typedef`
+- `general/100-partial-specialization-member-typedef-outdef`
+- `general/100-partial-specialization-nested-template-id-member-outdef`
+- `general/300-partial-owner-out-of-class-member-binding-args`
+- `general/300-dependent-member-template-missing-keyword-bad`
+- `general/400-bool-or-dependent-member-type-conditional-base`
+- `spec/300-explicit-specialization-member-function`
+- `spec/300-explicit-specialization-out-of-class-member-overrides-primary`
+
+The full report improved from the 119-test turn-start baseline to 122/215.
+The selected parser, inherited lookup, and member-template overload cases that
+remain failures are listed in the remaining-work map above; no fixture-specific
+branching was added.
+
+### Next Checkpoint Group
+
+Handle qualified member-template lookup through aliases and dependent bases:
+route qualified-id calls such as `super::insert_` through the same owner-aware
+member-call path, then extend it to inherited/using and friend-member lookup.
+Validate `spec/300-qualified-member-template-hides-base-function` first, then
+the remaining qualified/preselected and inherited member-template cases from
+the member/friend group.  Keep the alias/template-template and explicit
+instantiation groups unchanged until this lookup slice is stable.
+
 ### Turn-start audit
 
 The audit-turn stage baseline was **118/215 PA21 tests**, which is the result

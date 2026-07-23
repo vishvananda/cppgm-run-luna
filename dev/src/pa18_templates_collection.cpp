@@ -396,6 +396,52 @@ void PA18TemplateExpander::ValidateTemplateNode(const CPPGMAstNodePtr& node,
 			next_class, in_function || function_node, special_members, node, i);
 }
 
+void PA18TemplateExpander::ValidateDependentMemberTemplateNode(
+	const CPPGMAstNodePtr& node, const set<string>& parameters,
+	const map<string, string>& variables) const
+{
+	if(!node) return;
+	set<string> local_parameters = parameters;
+	map<string, string> local_variables = variables;
+	if(node->kind == "template-declaration" && node->children.size() > 1) {
+		const vector<TemplateParameter> own = Parameters(node->children[0]);
+		for(size_t i = 0; i < own.size(); ++i)
+			if(!own[i].name.empty()) local_parameters.insert(own[i].name);
+		ValidateDependentMemberTemplateNode(node->children[1], local_parameters,
+			local_variables);
+		return;
+	}
+	if(node->kind == "function-definition" && node->children.size() > 1) {
+		const CPPGMAstNodePtr clause = DescendantOfKind(node->children[1],
+			"parameter-clause");
+		if(clause) for(size_t i = 0; i < clause->children.size(); ++i) {
+			const CPPGMAstNodePtr parameter = clause->children[i];
+			if(!parameter || parameter->kind != "parameter-declaration" ||
+				parameter->children.size() < 2) continue;
+			const string name = FirstIdentifierLocal(parameter->children[1]);
+			if(!name.empty()) local_variables[name] = ParameterTypeSpelling(parameter);
+		}
+	}
+	if(node->kind == "member-expression" && node->children.size() >= 2 &&
+		node->children[0] && node->children[0]->kind == "id-expression" &&
+		node->children[1] && node->children[1]->kind == "identifier" &&
+		node->children[1]->value.find('<') != string::npos) {
+		map<string, string>::const_iterator variable = local_variables.find(
+			LastComponent(node->children[0]->value));
+		if(variable != local_variables.end() &&
+			ValidationDependentName(variable->second, local_parameters)) {
+			const string member = CanonicalSpelling(RemoveMarker(node->children[1]->value));
+			const bool disambiguated = member.compare(0, 8, "template") == 0 &&
+				(member.size() == 8 || isspace(static_cast<unsigned char>(member[8])));
+			if(!disambiguated)
+				throw logic_error("dependent member template requires template keyword");
+		}
+	}
+	for(size_t i = 0; i < node->children.size(); ++i)
+		ValidateDependentMemberTemplateNode(node->children[i], local_parameters,
+			local_variables);
+}
+
 void PA18TemplateExpander::ValidateTemplateDiagnostics(
 	const vector<CPPGMAstNodePtr>& input) const
 {
@@ -417,6 +463,8 @@ void PA18TemplateExpander::ValidateTemplateDiagnosticsNode(
 		for(size_t i = 0; i < values.size(); ++i) parameters.insert(values[i].name);
 		ValidateTemplateNode(node->children[1], parameters, known_names,
 			string(), false, special_members);
+		ValidateDependentMemberTemplateNode(node->children[1], parameters,
+			map<string, string>());
 		return;
 	}
 	for(size_t i = 0; i < node->children.size(); ++i)

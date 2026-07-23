@@ -17,15 +17,9 @@ bool PA18TemplateExpander::MemberOwnerPattern(const TemplateDefinition& candidat
 	// member of the concrete parent specialization.
 	const string member_scope = JoinPath(parent.qualified_name, parent.name);
 	if(candidate.owner == parent.qualified_name || candidate.owner == member_scope) {
-		size_t argument = 0;
-		for(size_t parameter = 0; parameter < candidate.parameters.size(); ++parameter) {
-			if(candidate.parameters[parameter].pack) continue;
-			if(argument >= parent_args.size()) return false;
-			if(!candidate.parameters[parameter].type &&
-				!PA19Type(CanonicalSpelling(parent_args[argument])).integral)
-				return false;
-			++argument;
-		}
+		// An in-class member declaration has no separate owner pattern.  Its
+		// template parameters describe the member itself, not the enclosing
+		// class, so they must not be matched against the class arguments.
 		if(inferred) inferred->clear();
 		return true;
 	}
@@ -46,6 +40,9 @@ bool PA18TemplateExpander::MemberOwnerPattern(const TemplateDefinition& candidat
 	if(!TemplateRange(candidate.owner, angle, &owner_arguments, &close)) return false;
 	const vector<string> patterns = SplitTemplateArguments(owner_arguments);
 	set<string> parameter_names;
+	for(size_t i = 0; i < parent.parameters.size(); ++i)
+		if(!parent.parameters[i].name.empty()) parameter_names.insert(
+			parent.parameters[i].name);
 	for(size_t i = 0; i < candidate.parameters.size(); ++i)
 		if(!candidate.parameters[i].name.empty()) parameter_names.insert(
 			candidate.parameters[i].name);
@@ -1299,9 +1296,21 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 {
 	const string generated_owner = definition.lexical_owner.empty() ?
 		definition.owner : definition.lexical_owner;
+	string member_owner_name = definition.owner;
+	const size_t member_owner_angle = member_owner_name.find('<');
+	if(member_owner_angle != string::npos) member_owner_name.erase(member_owner_angle);
+	const TemplateDefinition* member_owner_definition = member_owner_name.empty() ? 0 :
+		FindDefinition(member_owner_name, context);
+	if(!member_owner_definition && !member_owner_name.empty())
+		member_owner_definition = FindDefinition(LastComponent(member_owner_name), context);
+	const bool member_definition = !definition.owner.empty() &&
+		((member_owner_definition && member_owner_definition->class_template) ||
+		 class_contexts_.find(member_owner_name) != class_contexts_.end() ||
+		 FindClassDeclaration(member_owner_name, context));
 	const string concrete_owner = definition.class_template ?
 		FindConcreteInstantiationOwner(definition, substitutions, context, requested_owner) :
-		(definition.alias_template && ConcreteOwnerMatches(definition, requested_owner) ?
+		((member_definition && ConcreteOwnerMatches(definition, requested_owner)) ||
+		 (definition.alias_template && ConcreteOwnerMatches(definition, requested_owner)) ?
 			requested_owner : string());
 	if(definition.class_template) {
 		class_contexts_.insert(JoinPath(definition.owner, local_name));
@@ -1327,7 +1336,7 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 	}
 	if(definition.class_template)
 		generated->dependent_base_lookup = DefinitionHasDependentBase(definition);
-	if(!definition.class_template && !definition.alias_template)
+	if(!definition.class_template && !definition.alias_template && !member_definition)
 		RenameGeneratedFunction(generated, local_name);
 	if(definition.class_template || definition.alias_template) generated->value = local_name;
 	if(definition.alias_template) {
@@ -1377,6 +1386,11 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 		active_pack_substitutions_ = previous_packs;
 	}
 	EnsureDeclarationDependencies(generated, definition.owner, generated_owner);
+	// Text replay can encounter the same member template-id while resolving a
+	// dependent type and give the detached definition its standalone cache name.
+	// Once the entity is owned by a concrete class, the declaration must retain
+	// the member spelling so class-scope lookup can bind it.
+	if(member_definition) RenameGeneratedFunction(generated, LastComponent(definition.name));
 	for(size_t i = 0; i < args.size(); ++i)
 		EnsureForwardClass(args[i], context, generated_owner);
 	bool recursive_context_argument = false;

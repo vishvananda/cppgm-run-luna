@@ -1,5 +1,4 @@
 #pragma once
-
 	string NodeTypeSpelling(const CPPGMAstNodePtr& sequence) const
 	{
 		if(!sequence) return string();
@@ -365,64 +364,26 @@
 		const vector<const TemplateDefinition*> members = MemberDefinitions(parent, parent_args);
 		for(size_t i = 0; i < members.size(); ++i) {
 			const TemplateDefinition& member = *members[i];
+			// A member template is not a member of the enclosing specialization
+			// until its own template arguments are known.  Replaying it while the
+			// class is materialized would leave names such as `U` dependent in a
+				// non-template generated function; the member-call path materializes
+				// this entity after deduction instead.
+			if(member.member_template) continue;
 			const string key = member.qualified_name + "@" + parent_local_name;
 			if(!materialized_member_definitions_.insert(key).second) continue;
 			map<string, string> substitutions;
+			map<string, string> owner_substitutions;
+			if(!MemberOwnerPattern(member, parent, parent_args, &owner_substitutions)) continue;
 			map<string, vector<string> > pack_substitutions;
 			map<string, PA19IntegralValue> integral_substitutions;
 			for(size_t parameter = 0; parameter < parent.parameters.size() &&
 				parameter < parent_args.size(); ++parameter)
 				if(!parent.parameters[parameter].name.empty())
 					substitutions[parent.parameters[parameter].name] = parent_args[parameter];
-			map<string, string> owner_substitutions;
-			MemberOwnerPattern(member, parent, parent_args, &owner_substitutions);
-			size_t parent_argument = 0;
-			for(size_t parameter = 0; parameter < member.parameters.size(); ++parameter) {
-				const TemplateParameter& member_parameter = member.parameters[parameter];
-				map<string, string>::const_iterator owner_value = owner_substitutions.find(
-					member_parameter.name);
-				if(member_parameter.pack) {
-					vector<string> values;
-					if(owner_value != owner_substitutions.end())
-						values = SplitTemplateArguments(owner_value->second);
-					else {
-						size_t trailing_fixed = 0;
-						for(size_t later = parameter + 1; later < member.parameters.size(); ++later)
-							if(!member.parameters[later].pack) ++trailing_fixed;
-						const size_t available = parent_args.size() > parent_argument ?
-							parent_args.size() - parent_argument : 0;
-						const size_t count = available > trailing_fixed ? available - trailing_fixed : 0;
-						for(size_t value = 0; value < count; ++value)
-							values.push_back(parent_args[parent_argument++]);
-					}
-					if(!member_parameter.name.empty()) {
-						pack_substitutions[member_parameter.name] = values;
-						if(!values.empty()) substitutions[member_parameter.name] = values[0];
-						else substitutions.erase(member_parameter.name);
-					}
-					continue;
-				}
-				if(owner_value != owner_substitutions.end())
-				{
-					string value = owner_value->second;
-					if(member_parameter.type && value.size() > 1 &&
-						(value.compare(value.size() - 2, 2, "&&") == 0 ||
-						 value[value.size() - 1] == '&'))
-						value.erase(value.size() - (value.compare(value.size() - 2, 2, "&&") == 0 ? 2 : 1));
-					if(!member_parameter.name.empty())
-						substitutions[member_parameter.name] = CanonicalSpelling(value);
-				}
-				else if(parent_argument < parent_args.size())
-				{
-					string value = parent_args[parent_argument++];
-					if(member_parameter.type && value.size() > 1 &&
-						(value.compare(value.size() - 2, 2, "&&") == 0 ||
-						 value[value.size() - 1] == '&'))
-						value.erase(value.size() - (value.compare(value.size() - 2, 2, "&&") == 0 ? 2 : 1));
-					if(!member_parameter.name.empty())
-						substitutions[member_parameter.name] = CanonicalSpelling(value);
-				}
-			}
+			for(map<string, string>::const_iterator substitution = owner_substitutions.begin();
+				substitution != owner_substitutions.end(); ++substitution)
+				substitutions[substitution->first] = substitution->second;
 			substitutions[parent.name] = parent_local_name;
 			const string generated_context = JoinPath(GeneratedOwner(parent),
 				parent_local_name);
@@ -474,8 +435,11 @@
 			}
 			MarkGeneratedNode(generated, parent.qualified_name, parent_args,
 				explicit_instantiation);
-			const string generated_owner = GeneratedOwner(parent);
-			generated_by_owner_[generated_owner].push_back(generated);
+			// A replayed out-of-class member is a namespace-level LowIR entity.  Its
+			// owner remains encoded in the declarator/mangled name; queue it beside
+			// the source owner so both functions and static data definitions are
+			// visible to the ordinary top-level lowering path.
+			generated_by_owner_[GeneratedOwner(parent)].push_back(generated);
 		}
 	}
 	void InstantiateNestedClass(const TemplateDefinition& parent,

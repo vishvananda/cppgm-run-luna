@@ -394,10 +394,15 @@ struct TemplateDefinition
 	bool class_template;
 	bool alias_template;
 	bool variable_template;
+	// True when the declaration belongs to a member-template declaration.  The
+	// parameter list of an out-of-class ordinary member definition contains the
+	// enclosing class template's parameters, so `parameters.empty()` cannot
+	// distinguish those definitions from a member template.
+	bool member_template;
 	TemplateDefinition() : qualified_name(), name(), owner(), lexical_owner(), declaration(), parameters(),
 		partial_specialization(false), specialization_parameters(), specialization_parameter_details(),
 		specialization_pack_names(), specialization_pattern(),
-		class_template(false), alias_template(false), variable_template(false) {}
+		class_template(false), alias_template(false), variable_template(false), member_template(false) {}
 };
 struct FunctionSignature
 {
@@ -420,6 +425,9 @@ private:
 		map<string, bool>& special_members,
 		const CPPGMAstNodePtr& parent = CPPGMAstNodePtr(),
 		size_t child_index = static_cast<size_t>(-1)) const;
+	void ValidateDependentMemberTemplateNode(const CPPGMAstNodePtr& node,
+		const set<string>& parameters,
+		const map<string, string>& variables) const;
 	void ValidateTemplateDiagnostics(const vector<CPPGMAstNodePtr>& input) const;
 	void ValidateTemplateDiagnosticsNode(const CPPGMAstNodePtr& node,
 		const set<string>& known_names, map<string, bool>& special_members) const;
@@ -537,6 +545,11 @@ private:
 		string* result) const;
 	bool InferBinaryArgument(const CPPGMAstNodePtr& expression, string* result,
 		const map<string, string>& substitutions, const string& context) const;
+	bool IsKnownMemberTemplateId(const string& raw) const;
+	bool InstantiateMemberCall(const CPPGMAstNodePtr& call,
+		const CPPGMAstNodePtr& callee, const string& original_member,
+		const string& context,
+		const map<string, string>& substitutions);
 	CPPGMAstNodePtr TransformCallExpression(const CPPGMAstNodePtr& input,
 		const string& context, const map<string, string>& substitutions);
 	string ResolveAlias(string spelling, const string& context) const;
@@ -815,12 +828,13 @@ private:
 		for(size_t i = 0; i < node->children.size(); ++i)
 			CollectLexical(node->children[i], child_context, child_logical_context);
 	}
-	void RegisterTemplate(const CPPGMAstNodePtr& node, const string& context)
+	void RegisterTemplate(const CPPGMAstNodePtr& node, const string& context,
+		bool nested_member_template = false)
 	{
 		if(!node || node->kind != "template-declaration" || node->children.size() < 2) return;
 		const CPPGMAstNodePtr declaration = node->children[1];
 		if(declaration && declaration->kind == "template-declaration") {
-			RegisterTemplate(declaration, context);
+			RegisterTemplate(declaration, context, true);
 			return;
 		}
 		const string raw_declaration_name = DeclarationName(declaration);
@@ -883,6 +897,9 @@ private:
 		item.alias_template = declaration->kind == "alias-declaration";
 		item.variable_template = declaration->kind == "simple-declaration" &&
 			DescendantOfKind(declaration, "parameter-clause") == CPPGMAstNodePtr();
+		item.member_template = nested_member_template ||
+			(!item.class_template && class_declarations_.find(context) !=
+				class_declarations_.end());
 		// `template<>` function declarations are explicit specializations, not
 		// overloads of the primary template.  Keep their concrete body in typed
 		// state so a later call can select it after normal template deduction.
