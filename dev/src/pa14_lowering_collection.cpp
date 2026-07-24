@@ -307,15 +307,27 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
         false, function->function_lvalue_ref_qualified,
         function->function_rvalue_ref_qualified);
     } else record->type = function;
-    record->qualified_name = qname;
-	// Materialized member-operator templates retain a generated declarator
-	// spelling (`operator-__inst_...`) for symbol uniqueness.  Overload lookup
-	// still needs the source operator name, so install a typed alias binding to
-	// the same record without changing its emitted qualified symbol.
+	record->qualified_name = qname;
+	if(is_member && !record->member_template && member_owner) {
+		const string ordinary_member_name = LastComponent(raw_name);
+		if(ordinary_member_name.compare(0, 8, "operator") != 0) {
+			for(size_t prior = 0; prior < functions_.size(); ++prior) {
+				const FunctionRecord& materialized = functions_[prior];
+				if(!materialized.member_template || materialized.member_owner != member_owner ||
+					LastComponent(materialized.template_primary) != ordinary_member_name) continue;
+				record->needed = true;
+				break;
+			}
+		}
+	}
+	// Materialized member templates retain a generated declarator spelling
+	// (`choose__inst_...`, or `operator-__inst_...`) for symbol uniqueness.
+	// Overload lookup still needs the source member name, so install a typed
+	// alias binding to the same record without changing its emitted symbol.
 	if(record->member_template && is_member && member_owner->owned_scope &&
-		node->template_primary.find("operator") != string::npos) {
+		node->template_primary.find("::") != string::npos) {
 		const string source_member = LastComponent(node->template_primary);
-		if(source_member.compare(0, 8, "operator") == 0 && source_member != LastComponent(raw_name)) {
+		if(!source_member.empty() && source_member != LastComponent(raw_name)) {
 			const vector<Binding*> operator_bindings = DirectBindings(
 				member_owner->owned_scope, source_member);
 			bool has_alias = false;

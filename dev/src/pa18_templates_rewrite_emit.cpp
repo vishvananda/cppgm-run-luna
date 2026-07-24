@@ -237,6 +237,7 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 	const bool ordinary_class_member = member_definition &&
 		member_owner_name.find('<') == string::npos &&
 		FindClassDeclaration(member_owner_name, context) != CPPGMAstNodePtr() &&
+		!definition.member_template &&
 		LastComponent(definition.name).compare(0, 8, "operator") != 0 &&
 		!free_generated_member;
 	string concrete_owner = definition.class_template ?

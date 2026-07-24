@@ -733,9 +733,10 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 		}
 	const bool static_member = definition.static_member;
 		const bool generated_operator = member_name.compare(0, 8, "operator") == 0;
-		const bool ordinary_class_member = !definition.owner.empty() &&
+	const bool ordinary_class_member = !definition.owner.empty() &&
 			definition.owner.find('<') == string::npos &&
-			FindClassDeclaration(definition.owner, context) != CPPGMAstNodePtr();
+			FindClassDeclaration(definition.owner, context) != CPPGMAstNodePtr() &&
+			!definition.member_template;
 		if(static_member && definition.owner.find("::") == string::npos && concrete_owner) {
 			call->children[0] = CPPGMAstNodePtr(new CPPGMAstNode("id-expression",
 				definition.owner + "::" + member_name));
@@ -959,6 +960,54 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 		TransformQualifiedMemberTemplateCall(input, input_callee, context,
 			substitutions, result))
 		return result;
+	// The parser leaves an unqualified explicit member-template-id as an
+	// id-expression; replay it through typed `this` lookup before free lookup.
+	if(input_callee && input_callee->kind == "id-expression") {
+		const string raw_member_id = RemoveMarker(input_callee->value);
+		const size_t member_id_open = raw_member_id.find('<');
+		if(member_id_open != string::npos) {
+			string member_id_base, member_id_arguments; size_t member_id_begin = 0, member_id_close = string::npos;
+			if(TemplateBase(raw_member_id, member_id_open, &member_id_begin, &member_id_base) &&
+				TemplateRange(raw_member_id, member_id_open, &member_id_arguments, &member_id_close)) {
+			const vector<const TemplateDefinition*> member_candidates = FindFunctionDefinitions(LastComponent(member_id_base), context);
+			bool member_context = function_owners_.find(context) != function_owners_.end();
+			for(string current = context; !member_context && !current.empty(); ) {
+				if(class_contexts_.find(current) != class_contexts_.end()) {
+					member_context = true;
+					break;
+				}
+				const size_t separator = current.rfind("::");
+				if(separator == string::npos) current.clear();
+					else current.erase(separator);
+				}
+				bool has_member_candidate = false;
+				for(size_t candidate = 0; candidate < member_candidates.size(); ++candidate)
+					if(member_candidates[candidate]->member_template) { has_member_candidate = true; break; }
+				if(member_context && has_member_candidate) {
+					CPPGMAstNodePtr member(new CPPGMAstNode("member-expression", "."));
+					member->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
+						"keyword-literal", "KW_THIS:this")));
+					member->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
+						"identifier", raw_member_id)));
+					CPPGMAstNodePtr member_call(new CPPGMAstNode("call-expression")); member_call->children.push_back(member); CPPGMAstNodePtr member_arguments(new CPPGMAstNode("argument-list"));
+					if(input->children.size() > 1 && input->children[1]) {
+						CPPGMAstNodePtr transformed_arguments = TransformNode(input->children[1],
+							context, substitutions);
+						if(transformed_arguments) member_arguments = transformed_arguments;
+					}
+					member_call->children.push_back(member_arguments);
+					if(InstantiateMemberCall(member_call, member, raw_member_id, context,
+						substitutions)) {
+						result->children = member_call->children;
+						result->template_primary = member_call->template_primary; result->template_arguments = member_call->template_arguments;
+						result->template_instantiation = true;
+						result->inferred_type = member_call->inferred_type;
+						return result;
+					}
+				}
+			}
+		}
+	}
 	if(input_callee && input_callee->kind == "id-expression") {
 		const string raw_callee = input_callee->value;
 		string lookup_callee = raw_callee;
