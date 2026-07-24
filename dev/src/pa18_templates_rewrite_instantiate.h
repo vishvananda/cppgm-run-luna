@@ -619,8 +619,9 @@
 		MarkGeneratedNode(generated, parent.qualified_name, parent_args);
 		generated->value = nested_name;
 		class_declarations_[parent_local_name + "::" + nested_name] = generated;
-		EnsureDeclarationDependencies(generated, parent_local_name, parent_local_name);
-		generated_by_owner_[parent_local_name].push_back(generated);
+		class_declarations_[generated_context + "::" + nested_name] = generated;
+		EnsureDeclarationDependencies(generated, generated_context, generated_context);
+		generated_by_owner_[generated_context].push_back(generated);
 	}
 	void InstantiateRequestedNestedClasses(const TemplateDefinition& parent,
 		const vector<string>& parent_args, const string& parent_local_name,

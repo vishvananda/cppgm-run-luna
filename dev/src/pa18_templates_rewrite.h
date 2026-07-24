@@ -570,6 +570,25 @@ bool MatchTypePattern(string pattern, string actual,
 		arguments->children.push_back(expression->children[1]);
 		call->children.push_back(arguments);
 		for(size_t i = 0; i < candidates.size(); ++i) {
+			// A forward declaration and its later definition are both indexed as
+			// function templates.  Replay the definition when the signatures match;
+			// otherwise operator discovery can materialize only the declaration and
+			// lose the body (including accesses made by a friend definition).
+			if(candidates[i]->declaration && candidates[i]->declaration->kind ==
+				"simple-declaration") {
+				bool has_definition = false;
+				for(size_t other = 0; other < candidates.size(); ++other) {
+					const TemplateDefinition* replacement = candidates[other];
+					if(replacement == candidates[i] || !replacement->declaration ||
+						replacement->declaration->kind != "function-definition") continue;
+					if(MemberSignatureKey(*replacement) ==
+						MemberSignatureKey(*candidates[i])) {
+						has_definition = true;
+						break;
+					}
+				}
+				if(has_definition) continue;
+			}
 			vector<string> inferred;
 			map<string, vector<string> > inferred_pack_values;
 			map<string, FunctionSignature> inferred_function_values;

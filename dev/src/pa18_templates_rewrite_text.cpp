@@ -76,7 +76,30 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			const string member = raw.substr(at + token.size(), end - at - token.size());
 			const string member_type = TemplateMemberType(*definition, arguments->second,
 				member, context);
-			if(member_type.empty()) break;
+			if(member_type.empty()) {
+				// A generated specialization can be used through a nested class
+				// (`Owner_T::traits::fn`) even when that nested class was omitted
+				// from the first replay because it was not needed by the class body.
+				// Materialize the requested nested declaration now so qualified
+				// static-member lookup sees its typed owner and bindings.
+				bool nested_class = false;
+				if(definition->declaration) for(size_t child = 0;
+					child < definition->declaration->children.size(); ++child) {
+					const CPPGMAstNodePtr candidate = definition->declaration->children[child];
+					if(!candidate || (candidate->kind != "class-specifier" &&
+						candidate->kind != "class-forward-declaration") ||
+						LastComponent(candidate->value) != member) continue;
+					nested_class = true;
+					break;
+				}
+				if(nested_class) {
+					requested_nested_classes_[definition->qualified_name].insert(member);
+					requested_nested_classes_[LastComponent(definition->qualified_name)].insert(member);
+					InstantiateNestedClass(*definition, arguments->second,
+						current->second, member, context);
+				}
+				break;
+			}
 			size_t replacement_begin = at;
 			size_t word_begin = at;
 			while(word_begin > 0 && isspace(static_cast<unsigned char>(raw[word_begin - 1]))) --word_begin;

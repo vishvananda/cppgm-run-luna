@@ -1,5 +1,66 @@
 # PA21 checkpoint plan
 
+## Checkpoint 69 result — 2026-07-24 (189/215)
+
+### Checkpoint Scope
+
+Completed the operator-template definition replay slice.  Operator discovery
+now skips a matching forward declaration when a later function definition is
+indexed, and a generated specialization lazily materializes a nested class
+used through a qualified static-member call.  The nested declaration is
+queued under its namespace-qualified generated owner so semantic lookup and
+LowIR emission retain the nested owner.
+
+### Validation
+
+The full PA21 report remains **189/215**, above the turn-start **182/215**;
+the focused friend-template input now compiles and emits the complete
+operator body, including the private-constructor access path.  Its checked
+fixture still has a relaxed LowIR mismatch because the reference omits the
+source-level `x` initializer call.  Through PA20 is green at **1635/1635**,
+and the PA21 file audit passes with the nine pre-existing warnings.
+
+### Remaining Work Map
+
+The current report has 26 failures, grouped by shared behavior:
+
+- **Owner/member replay and generated-call lowering (7):**
+  `general/300-dependent-hidden-friend-static-member-definition`,
+  `general/300-explicit-type-arg-decltype-member-access`,
+  `general/300-friend-existing-template-private-ctor-access`,
+  `general/300-function-pack-template-id-deduction-decltype`,
+  `general/300-local-qualified-argument-replay`,
+  `general/300-namespace-function-template-hides-outer-callable-object`, and
+  `general/300-out-of-class-ctor-using-imported-member-template`.
+- **Specialization, alias, cv, and pack identity (14):**
+  `general/100-top-cv-pointer-does-not-match-unqualified-pointer-partial`,
+  `general/200-reference-alias-top-cv-return-binding`,
+  `general/300-function-signature-partial-specialization-functor-assignment`,
+  `general/300-variable-template-forwarding-partial-top-cv`,
+  `general/400-alias-pack-nontype-expression-fast-path`,
+  `general/400-forward-primary-partial-switch-value`,
+  `general/400-inline-namespace-template-template-argument`,
+  `general/400-member-template-nontype-shadowed-global-replay`,
+  `general/400-partial-specialization-conversion-operator-pointer-binding`,
+  `general/400-partial-specialization-redecl-member-template-empty-pack`,
+  `general/400-reference-member-depth-pack-sum`,
+  `general/400-reference-member-lookup-in-progress-base-typedef`,
+  `spec/100-inline-namespace-qualified-template-id-pack-expansion`, and
+  `spec/300-defaulted-type-arg-specialization-nontype-value`.
+- **Dependent initialization, references, and address lowering (5):**
+  `general/100-rvalue-reference-binds-converted-temporary`,
+  `general/300-array-functional-cast-pack-call`,
+  `general/300-constexpr-static-fn-template-address-pack`,
+  `general/300-single-pack-cast-target`, and
+  `general/300-static-constexpr-function-template-pointer-array`.
+
+### Next Checkpoint Group
+
+Address the remaining generated-call/object emission cases, beginning with
+the hidden-friend and explicit-decltype member paths.  Retain the **189/215**
+PA21 report, **1635/1635** through-PA20 gate, and file audit as regression
+gates; then bundle the smaller identity and initialization/address groups.
+
 ## Checkpoint 68 result — 2026-07-24 (189/215)
 
 ### Checkpoint Scope
