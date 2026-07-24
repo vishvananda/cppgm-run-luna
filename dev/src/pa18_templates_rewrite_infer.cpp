@@ -38,7 +38,8 @@ bool PA18TemplateExpander::IsKnownTypeSpelling(string raw, const string& context
 	if(named_alias || raw == "void" || raw == "nullptr_t" ||
 		raw == "std::nullptr_t" || raw == "wchar_t" || raw == "char16_t" ||
 		raw == "char32_t" || raw == "__int128" || raw == "unsigned __int128" ||
-		IsBuiltinArithmeticType(raw) || FindClassDeclaration(raw, context)) return true;
+		IsBuiltinArithmeticType(raw) || class_contexts_.find(raw) != class_contexts_.end() ||
+		FindClassDeclaration(raw, context)) return true;
 	for(string current = context; ; ) {
 		if(named_type_contexts_.find(JoinPath(current, raw)) != named_type_contexts_.end()) return true;
 		if(current.empty()) break;
@@ -194,6 +195,23 @@ bool PA18TemplateExpander::InferArgument(const CPPGMAstNodePtr& expression,
 					return true;
 				}
 			}
+			// Function-local classes are promoted into translation-unit entities
+			// during collection.  A call that deduces a template argument at the
+			// original function's scope must carry that promoted identity into the
+			// generated specialization; returning the source spelling here makes
+			// the later semantic pass look for a class named only `Local`.
+			for(string current = context; ; ) {
+				map<string, string>::const_iterator promoted = local_class_names_.find(
+					JoinPath(current, LastComponent(qualified_name)));
+				if(promoted != local_class_names_.end() && !promoted->second.empty()) {
+					*result = promoted->second;
+					return true;
+				}
+				if(current.empty()) break;
+				const size_t separator = current.rfind("::");
+				if(separator == string::npos) current.clear();
+				else current.erase(separator);
+			}
 			// The same source identifier can be reused by a later local
 			// declaration.  Prefer the parameter belonging to the current class
 			// constructor over the collector's translation-unit fallback map.
@@ -225,7 +243,25 @@ bool PA18TemplateExpander::InferArgument(const CPPGMAstNodePtr& expression,
 			}
 			string variable_type;
 			if(LookupVariableType(expression->value, context, &variable_type)) {
-				*result = ReplaceIdentifiers(ResolveAlias(variable_type, context), substitutions);
+				string promoted_type = variable_type;
+				const size_t array_suffix = promoted_type.find('[');
+				const string variable_base = CanonicalSpelling(promoted_type.substr(0,
+					array_suffix == string::npos ? promoted_type.size() : array_suffix));
+				for(string current = context; ; ) {
+					map<string, string>::const_iterator promoted = local_class_names_.find(
+						JoinPath(current, variable_base));
+					if(promoted != local_class_names_.end() && !promoted->second.empty()) {
+						map<string, string> local_substitution;
+						local_substitution[variable_base] = promoted->second;
+						promoted_type = ReplaceIdentifiers(promoted_type, local_substitution);
+						break;
+					}
+					if(current.empty()) break;
+					const size_t separator = current.rfind("::");
+					if(separator == string::npos) current.clear();
+					else current.erase(separator);
+				}
+				*result = ReplaceIdentifiers(ResolveAlias(promoted_type, context), substitutions);
 				return true;
 			}
 			const FunctionSignature* signature = FindFunctionSignature(
@@ -504,6 +540,14 @@ bool PA18TemplateExpander::InferFunctionParameter(
 		if(inferred_argument && (pattern.empty() || pattern[pattern.size() - 1] != '&'))
 			while(!type.empty() && type[type.size() - 1] == '&')
 				type = CanonicalSpelling(type.substr(0, type.size() - 1));
+		// Array expressions undergo the standard function-parameter decay before
+		// template deduction.  Keep the promoted local-class element type while
+		// changing only the array transport to a pointer (`T a[N]` -> `T*`).
+		if(inferred_argument && pattern.find('*') != string::npos) {
+			const size_t array = type.find('[');
+			if(array != string::npos)
+				type = CanonicalSpelling(type.substr(0, array) + "*");
+		}
 		const vector<string> function_types = pattern.find(")(") != string::npos ?
 			FunctionExpressionTypes(argument, context) : vector<string>();
 		if(!function_types.empty()) {

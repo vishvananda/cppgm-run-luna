@@ -1264,7 +1264,8 @@ void PA14Lowerer::EmitStatement(const CPPGMAstNodePtr& node, Scope* scope)
           }
           TypePtr element_type = object_type->child ? type_value(object_type->child) : TypePtr();
           if(object_type->kind != TYPE_ARRAY || object_type->bound < 0 ||
-             !element_type || element_type->kind != TYPE_CLASS) continue;
+             !element_type || element_type->kind != TYPE_CLASS ||
+             !HasDestructor(element_type) || !DestructorHasEffects(element_type)) continue;
           for(size_t element_index = 0;
               element_index < static_cast<size_t>(object_type->bound); ++element_index) {
             const string base = local_address(&variable);
@@ -1369,10 +1370,16 @@ void PA14Lowerer::EmitStatement(const CPPGMAstNodePtr& node, Scope* scope)
                   type_value(found->second->type->child) &&
                   type_value(found->second->type->child)->kind == TYPE_CLASS &&
                   found->second->type->bound >= 0) {
+            string base;
+            if(!found->second->initialization_address.empty()) {
+              base = found->second->initialization_address;
+              found->second->initialization_address.clear();
+            } else base = local_address(found->second);
             for(size_t element_index = 0;
                 element_index < static_cast<size_t>(found->second->type->bound);
                 ++element_index) {
-              const string base = local_address(found->second);
+              if(element_index != 0)
+                base = local_address(found->second);
               const string decay = new_temp();
               AddInstruction(decay + " = unary decay ptr " + base);
               const string element = new_temp();

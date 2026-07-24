@@ -1061,9 +1061,12 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 		call->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
 			"id-expression", callee)));
 		CPPGMAstNodePtr call_arguments(new CPPGMAstNode("argument-list"));
-		call_arguments->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
-			"id-expression", argument_name)));
-		call->children.push_back(call_arguments);
+		CPPGMAstNodePtr argument(new CPPGMAstNode("id-expression", argument_name));
+		const CPPGMAstNodePtr nested_pointer = DescendantOfKind(parameter->children.size() > 1 ? parameter->children[1] : CPPGMAstNodePtr(), "ptr-operator");
+		if(nested_pointer && RemoveMarker(nested_pointer->value) == "*") { CPPGMAstNodePtr dereference(new CPPGMAstNode("unary-expression", "OP_STAR:*")); dereference->children.push_back(argument); argument = dereference; }
+		call_arguments->children.push_back(argument); call->children.push_back(call_arguments);
+		CPPGMAstNodePtr transformed_call = TransformNode(call, context, substitutions);
+		if(transformed_call) call = transformed_call;
 		for(size_t i = 0; i < transformed_declarator->children.size();) {
 			if(transformed_declarator->children[i] &&
 				transformed_declarator->children[i]->kind == "parameter-clause")

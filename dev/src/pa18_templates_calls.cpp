@@ -30,12 +30,33 @@ bool PA18TemplateExpander::MaterializeExplicitInstantiation(
 	if(function_open != string::npos) {
 		string argument_text;
 		size_t close = string::npos;
-		if(!TemplateRange(member_name, function_open, &argument_text, &close))
-			return false;
+		if(member_name.compare(0, 8, "operator") == 0) { int depth = 0;
+			for(size_t position = function_open; position < member_name.size(); ++position) {
+				if(member_name[position] == '<') ++depth;
+				else if(member_name[position] == '>' && --depth == 0) {
+					argument_text = member_name.substr(function_open + 1, position - function_open - 1);
+					close = position; break;
+				}
+			}
+		}
+		if(close == string::npos && !TemplateRange(member_name, function_open, &argument_text, &close)) return false;
 		function_name = member_name.substr(0, function_open);
 		explicit_arguments = SplitTemplateArguments(argument_text);
 	}
 	if(function_name.empty()) return false;
+	if(function_name.compare(0, 8, "operator") == 0) { bool user_defined_operand = false;
+		for(size_t parameter = 0; parameter < parameters->children.size(); ++parameter) {
+			const CPPGMAstNodePtr parameter_node = parameters->children[parameter];
+			if(!parameter_node || parameter_node->kind != "parameter-declaration") continue;
+			string operand = CanonicalSpelling(ParameterTypeSpelling(parameter_node));
+			while(operand.compare(0, 6, "const ") == 0 || operand.compare(0, 9, "volatile ") == 0) operand = CanonicalSpelling(operand.substr(operand.find(' ') + 1));
+			while(operand.size() > 6 && operand.compare(operand.size() - 6, 6, " const") == 0) operand = CanonicalSpelling(operand.substr(0, operand.size() - 6));
+			while(operand.size() > 9 && operand.compare(operand.size() - 9, 9, " volatile") == 0) operand = CanonicalSpelling(operand.substr(0, operand.size() - 9));
+			while(!operand.empty() && (operand[operand.size() - 1] == '&' || operand[operand.size() - 1] == '*')) operand = CanonicalSpelling(operand.substr(0, operand.size() - 1));
+			if(!IsBuiltinArithmeticType(operand) && (FindClassDeclaration(operand, context) || named_type_contexts_.find(operand) != named_type_contexts_.end())) { user_defined_operand = true; break; }
+		}
+		if(!user_defined_operand) throw logic_error("explicit instantiation of builtin operator");
+	}
 	string lookup_owner = owner;
 	vector<string> owner_arguments;
 	if(!lookup_owner.empty()) {

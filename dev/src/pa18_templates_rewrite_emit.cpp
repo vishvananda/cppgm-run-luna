@@ -10,9 +10,45 @@ void PA18TemplateExpander::CheckExplicitSpecializationOrder(
 	const CPPGMAstNodePtr& input, const string& context)
 {
 	if(input->children.size() <= 1 || !input->children[0] || !input->children[1] ||
-		!Parameters(input->children[0]).empty() ||
-		(input->children[1]->kind != "class-specifier" &&
-		 input->children[1]->kind != "class-forward-declaration")) return;
+		!Parameters(input->children[0]).empty()) return;
+	const CPPGMAstNodePtr declaration = input->children[1];
+	if(declaration->kind == "special-member-definition" ||
+		declaration->kind == "special-member-declaration") {
+		const string member = CanonicalSpelling(declaration->value);
+		const size_t separator = member.rfind("::");
+		if(separator != string::npos) {
+			const string owner = member.substr(0, separator);
+			const size_t owner_open = owner.find('<');
+			string owner_base, owner_arguments;
+			size_t owner_begin = 0, owner_close = string::npos;
+			if(owner_open != string::npos && TemplateBase(owner, owner_open,
+				&owner_begin, &owner_base) && TemplateRange(owner, owner_open,
+				&owner_arguments, &owner_close)) {
+				const vector<string> arguments = SplitTemplateArguments(owner_arguments);
+				map<string, vector<TemplateDefinition> >::const_iterator candidates =
+					class_specializations_.find(owner_base);
+				if(candidates != class_specializations_.end())
+					for(size_t candidate_index = 0; candidate_index < candidates->second.size();
+						++candidate_index) {
+						const TemplateDefinition& candidate = candidates->second[candidate_index];
+						if(!candidate.specialization_parameters.empty() ||
+							candidate.specialization_pattern.size() != arguments.size()) continue;
+						bool same = true;
+						for(size_t argument = 0; argument < arguments.size(); ++argument)
+							if(NormalizeTypeArgument(CanonicalSpelling(
+								candidate.specialization_pattern[argument])) !=
+								NormalizeTypeArgument(CanonicalSpelling(arguments[argument]))) {
+								same = false;
+								break;
+							}
+						if(same) throw logic_error(
+							"member of explicit class specialization must not use template<>");
+					}
+			}
+		}
+	}
+	if(declaration->kind != "class-specifier" &&
+		declaration->kind != "class-forward-declaration") return;
 	const string raw = CanonicalSpelling(DeclarationName(input->children[1]));
 	const size_t open = raw.find('<');
 	string base, argument_text;

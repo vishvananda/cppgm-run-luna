@@ -1,5 +1,6 @@
 #include "pa18_templates_collection.h"
 #include "pa18_templates_rewrite.h"
+#include <functional>
 
 using namespace std;
 namespace pa18_templates_internal {
@@ -1265,6 +1266,22 @@ CPPGMAstNodePtr PA18TemplateExpander::FinishRegularNode(
 			// follow that promoted identity as well; retaining the source-local
 			// `pair_like` name makes the generated class appear to have no viable
 			// constructor when it is initialized.
+			map<string, string> promoted_substitution;
+			promoted_substitution[LastComponent(input->value)] = promoted_local_class;
+			function<void(const CPPGMAstNodePtr&)> rewrite_promoted_types =
+				[&](const CPPGMAstNodePtr& node) {
+					if(!node) return;
+					if(node->kind == "decl-specifier" || node->kind == "type-name" ||
+						node->kind == "type-specifier") {
+						const size_t marker = node->value.find(':');
+						const string prefix = marker != string::npos ?
+							node->value.substr(0, marker + 1) : string();
+						node->value = prefix + ReplaceIdentifiers(
+							RemoveMarker(node->value), promoted_substitution);
+					}
+					for(size_t child = 0; child < node->children.size(); ++child)
+						rewrite_promoted_types(node->children[child]);
+				};
 			for(size_t child = 0; child < result->children.size(); ++child) {
 				const CPPGMAstNodePtr member = result->children[child];
 				if(!member || (member->kind != "special-member-definition" &&
@@ -1272,6 +1289,7 @@ CPPGMAstNodePtr PA18TemplateExpander::FinishRegularNode(
 				member->value = promoted_local_class;
 				const CPPGMAstNodePtr declarator = FunctionDeclarator(member);
 				RenameParameterIdentifier(declarator, promoted_local_class);
+				rewrite_promoted_types(member);
 			}
 			const map<string, string>::const_iterator owner = function_owners_.find(context);
 			generated_by_owner_[owner == function_owners_.end() ? PrefixComponent(context) :

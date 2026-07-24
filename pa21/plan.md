@@ -1,5 +1,129 @@
 # PA21 checkpoint plan
 
+## Implementation checkpoint 63 scope (2026-07-24, baseline 179/215)
+
+### Remaining Work Map
+
+The complete current-PA failure set from `make test-report
+ACTIVE_TEST_REPORT_PAS='pa21'` is grouped by shared compiler behavior:
+
+- **Owner/member replay, lookup, and generated-call lowering (14):**
+  `general/300-crtp-static-cast-reference-before-constructor-template`,
+  `general/300-dependent-hidden-friend-static-member-definition`,
+  `general/300-explicit-member-template-id-shares-ordinary-overload`,
+  `general/300-explicit-type-arg-decltype-member-access`,
+  `general/300-friend-existing-template-private-ctor-access`,
+  `general/300-function-pack-template-id-deduction-decltype`,
+  `general/300-local-qualified-argument-replay`,
+  `general/300-member-class-explicit-specialization-owner-lookup`,
+  `general/300-namespace-function-template-hides-outer-callable-object`,
+  `general/300-nested-class-template-current-owner-lookup`,
+  `general/300-parenthesized-qualified-template-functional-call`,
+  `general/300-qualified-friend-member-template-access`,
+  `spec/300-member-operator-template-active-owner`, and
+  `spec/300-member-operator-template-in-class-template`.
+- **Specialization, alias, cv, and pack identity (14):**
+  `general/100-top-cv-pointer-does-not-match-unqualified-pointer-partial`
+  (the comparator reports an undefined canonical value),
+  `general/200-reference-alias-top-cv-return-binding`,
+  `general/300-function-signature-partial-specialization-functor-assignment`,
+  `general/300-variable-template-forwarding-partial-top-cv`,
+  `general/400-alias-pack-nontype-expression-fast-path`,
+  `general/400-forward-primary-partial-switch-value`,
+  `general/400-inline-namespace-template-template-argument`,
+  `general/400-member-template-nontype-shadowed-global-replay`,
+  `general/400-partial-specialization-conversion-operator-pointer-binding`,
+  `general/400-partial-specialization-redecl-member-template-empty-pack`,
+  `general/400-reference-member-depth-pack-sum`,
+  `general/400-reference-member-lookup-in-progress-base-typedef`,
+  `spec/100-inline-namespace-qualified-template-id-pack-expansion`, and
+  `spec/300-defaulted-type-arg-specialization-nontype-value`.
+- **Explicit specialization/instantiation ordering and diagnostics (3):**
+  `general/300-extern-template-builtin-operator-function-declaration-bad`,
+  `general/300-template-instantiation-use-location-explicit-specialization`,
+  and `spec/300-explicit-specialized-ctor-template-header-bad`.
+- **Dependent initialization, references, and address lowering (5):**
+  `general/100-rvalue-reference-binds-converted-temporary`,
+  `general/300-array-functional-cast-pack-call`,
+  `general/300-constexpr-static-fn-template-address-pack`,
+  `general/300-single-pack-cast-target`, and
+  `general/300-static-constexpr-function-template-pointer-array`.
+
+No failure is omitted from this map; the comparator internal failure is counted
+in the identity group rather than treated as a compiler success.
+
+### Checkpoint Scope
+
+Implement the explicit-specialization/instantiation ordering slice as real
+typed semantic state: reject explicit specialization syntax that cannot denote
+a specialization, reject explicit instantiation declarations that target a
+builtin operator without a valid template entity, and preserve the source/use
+ordering facts needed to diagnose a specialization after an instantiated use.
+The focused validation set is the three diagnostic fixtures named above, plus
+the through-PA20 report and the PA21 file audit.  This is a coherent
+checkpoint because all three failures arise while validating declarations
+against the template entity and its materialization history, before ordinary
+LowIR lowering.
+
+## Checkpoint 63 result (2026-07-24, 182/215)
+
+The three scoped fixtures now pass.  The implementation keeps explicit
+specialization and instantiation facts in the template registry, validates
+builtin operator instantiation targets, replays synthesized functional
+initializers through typed member-template deduction, carries promoted local
+class identity into constructor and array deduction, and reuses planned array
+addresses during construction/destruction lowering.  The current-PA report
+rose from **179/215 to 182/215**; the through-PA20 report passes at
+**1635/1635**, and the PA21 file audit passes with only the nine pre-existing
+header-division warnings.
+
+### Remaining Work Map
+
+The fresh current-PA report has 33 failures, grouped by shared behavior:
+
+- **Owner/member replay, lookup, and generated-call lowering (14):**
+  `general/300-crtp-static-cast-reference-before-constructor-template`,
+  `general/300-dependent-hidden-friend-static-member-definition`,
+  `general/300-explicit-member-template-id-shares-ordinary-overload`,
+  `general/300-explicit-type-arg-decltype-member-access`,
+  `general/300-friend-existing-template-private-ctor-access`,
+  `general/300-function-pack-template-id-deduction-decltype`,
+  `general/300-local-qualified-argument-replay`,
+  `general/300-member-class-explicit-specialization-owner-lookup`,
+  `general/300-namespace-function-template-hides-outer-callable-object`,
+  `general/300-nested-class-template-current-owner-lookup`,
+  `general/300-parenthesized-qualified-template-functional-call`,
+  `general/300-qualified-friend-member-template-access`,
+  `spec/300-member-operator-template-active-owner`, and
+  `spec/300-member-operator-template-in-class-template`.
+- **Specialization, alias, cv, and pack identity (14):**
+  `general/100-top-cv-pointer-does-not-match-unqualified-pointer-partial`,
+  `general/200-reference-alias-top-cv-return-binding`,
+  `general/300-function-signature-partial-specialization-functor-assignment`,
+  `general/300-variable-template-forwarding-partial-top-cv`,
+  `general/400-alias-pack-nontype-expression-fast-path`,
+  `general/400-forward-primary-partial-switch-value`,
+  `general/400-inline-namespace-template-template-argument`,
+  `general/400-member-template-nontype-shadowed-global-replay`,
+  `general/400-partial-specialization-conversion-operator-pointer-binding`,
+  `general/400-partial-specialization-redecl-member-template-empty-pack`,
+  `general/400-reference-member-depth-pack-sum`,
+  `general/400-reference-member-lookup-in-progress-base-typedef`,
+  `spec/100-inline-namespace-qualified-template-id-pack-expansion`, and
+  `spec/300-defaulted-type-arg-specialization-nontype-value`.
+  The top-cv fixture remains a comparator-internal failure.
+- **Dependent initialization, references, and address lowering (5):**
+  `general/100-rvalue-reference-binds-converted-temporary`,
+  `general/300-array-functional-cast-pack-call`,
+  `general/300-constexpr-static-fn-template-address-pack`,
+  `general/300-single-pack-cast-target`, and
+  `general/300-static-constexpr-function-template-pointer-array`.
+
+The next checkpoint group is the owner/member replay slice, beginning with
+the two member-operator fixtures, explicit member-template overload lookup,
+and concrete nested-owner replay; validate it against the owner group above,
+then rerun the full current-PA report and the through-PA20/file-audit gates.
+
 ## Implementation checkpoint 61 scope (2026-07-24, baseline 176/215)
 
 ### Remaining Work Map
