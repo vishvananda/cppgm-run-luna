@@ -878,7 +878,6 @@ CPPGMAstNodePtr PA18TemplateExpander::FunctionParameter(
 			}
 		}
 	}
-	if(parameter_name.empty()) parameter_name = "function";
 	CPPGMAstNodePtr result(new CPPGMAstNode("parameter-declaration"));
 	result->children.push_back(CloneNode(signature.result_specifiers));
 	CPPGMAstNodePtr declarator(new CPPGMAstNode("declarator"));
@@ -886,7 +885,8 @@ CPPGMAstNodePtr PA18TemplateExpander::FunctionParameter(
 	CPPGMAstNodePtr inner(new CPPGMAstNode("declarator"));
 	inner->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("ptr-operator",
 		reference ? (rvalue_reference ? "OP_LAND:&&" : "OP_AMP:&") : "OP_STAR:*")));
-	inner->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("identifier", parameter_name)));
+	if(!parameter_name.empty()) inner->children.push_back(CPPGMAstNodePtr(
+		new CPPGMAstNode("identifier", parameter_name)));
 	nested->children.push_back(inner);
 	declarator->children.push_back(nested);
 	declarator->children.push_back(CloneNode(signature.parameters));

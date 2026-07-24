@@ -1,5 +1,63 @@
 # PA21 checkpoint plan
 
+## Checkpoint 68 result — 2026-07-24 (189/215)
+
+### Checkpoint Scope
+
+Completed the generated parameter-identity slice of member replay.  A
+function-typed template argument now preserves an unnamed source parameter
+instead of inventing a `function` identifier, and a materialized qualified
+friend member can recover parameter names from the existing non-template owner
+declaration when no class-template definition object exists.
+
+### Validation
+
+The current PA report is **189/215**, above checkpoint 67's **187/215** and
+the turn-start baseline of **182/215**.  Both the parenthesized qualified
+functional-call and qualified friend member-access fixtures pass.  Through
+PA20 and the PA21 audit remain required gates for this checkpoint commit.
+
+### Remaining Work Map
+
+The current report has 26 failures, grouped by shared behavior:
+
+- **Owner/member replay, lookup, and generated-call lowering (7):**
+  `general/300-dependent-hidden-friend-static-member-definition`,
+  `general/300-explicit-type-arg-decltype-member-access`,
+  `general/300-friend-existing-template-private-ctor-access`,
+  `general/300-function-pack-template-id-deduction-decltype`,
+  `general/300-local-qualified-argument-replay`,
+  `general/300-namespace-function-template-hides-outer-callable-object`, and
+  `general/300-out-of-class-ctor-using-imported-member-template`.
+- **Specialization, alias, cv, and pack identity (14):**
+  `general/100-top-cv-pointer-does-not-match-unqualified-pointer-partial`,
+  `general/200-reference-alias-top-cv-return-binding`,
+  `general/300-function-signature-partial-specialization-functor-assignment`,
+  `general/300-variable-template-forwarding-partial-top-cv`,
+  `general/400-alias-pack-nontype-expression-fast-path`,
+  `general/400-forward-primary-partial-switch-value`,
+  `general/400-inline-namespace-template-template-argument`,
+  `general/400-member-template-nontype-shadowed-global-replay`,
+  `general/400-partial-specialization-conversion-operator-pointer-binding`,
+  `general/400-partial-specialization-redecl-member-template-empty-pack`,
+  `general/400-reference-member-depth-pack-sum`,
+  `general/400-reference-member-lookup-in-progress-base-typedef`,
+  `spec/100-inline-namespace-qualified-template-id-pack-expansion`, and
+  `spec/300-defaulted-type-arg-specialization-nontype-value`.
+- **Dependent initialization, references, and address lowering (5):**
+  `general/100-rvalue-reference-binds-converted-temporary`,
+  `general/300-array-functional-cast-pack-call`,
+  `general/300-constexpr-static-fn-template-address-pack`,
+  `general/300-single-pack-cast-target`, and
+  `general/300-static-constexpr-function-template-pointer-array`.
+
+### Next Checkpoint Group
+
+Continue with friend-template materialization and the remaining generated
+object/lifetime cases, starting from the existing-template private-constructor
+fixture.  Keep the 189/215 current report, through-PA20 report, and file audit
+as regression gates.
+
 ## Checkpoint 67 result — 2026-07-24 (187/215)
 
 ### Checkpoint Scope

@@ -83,7 +83,7 @@ void PA18TemplateExpander::RestoreGeneratedMemberParameterNames(
 	const TemplateDefinition* member_owner_definition,
 	const CPPGMAstNodePtr& generated)
 {
-	if(!member_owner_definition || generated->kind != "function-definition") return;
+	if(generated->kind != "function-definition") return;
 	const CPPGMAstNodePtr source_declarator = FunctionDeclarator(definition.declaration);
 	const CPPGMAstNodePtr source_clause = DescendantOfKind(source_declarator,
 		"parameter-clause");
@@ -118,7 +118,11 @@ void PA18TemplateExpander::RestoreGeneratedMemberParameterNames(
 			}
 			return CPPGMAstNodePtr();
 		};
-	owner_member = find_owner_member(member_owner_definition->declaration);
+	const CPPGMAstNodePtr owner_declaration = member_owner_definition ?
+		member_owner_definition->declaration : FindClassDeclaration(
+		definition.owner, definition.owner);
+	if(!owner_declaration) return;
+	owner_member = find_owner_member(owner_declaration);
 	const CPPGMAstNodePtr generated_clause = DescendantOfKind(
 		FunctionDeclarator(generated), "parameter-clause");
 	const CPPGMAstNodePtr owner_clause = owner_member ? DescendantOfKind(
