@@ -362,7 +362,8 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 		explicit_instantiation);
 	EnsureDeclarationDependencies(generated, definition.owner, generated_owner);
 	if(definition.class_template)
-		RecordTemplateArrayValues(definition, args, context, substitutions);
+		RecordTemplateArrayValues(definition, args, context, substitutions,
+			pack_substitutions);
 	// Text replay can encounter the same member template-id while resolving a
 	// dependent type and give the detached definition its standalone cache name.
 	// Once the entity is owned by a concrete class, the declaration must retain

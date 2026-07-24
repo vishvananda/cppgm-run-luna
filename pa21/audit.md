@@ -1,5 +1,90 @@
 # PA21 checkpoint audit
 
+## Checkpoint 72 audit — 2026-07-24
+
+### Scope Reviewed
+
+Reviewed the latest Checkpoint 72 Scope, Validation, Remaining Work Map, and
+next group in `pa21/plan.md`; the PA21 contract in `pa21/README.md`;
+`TESTING_AND_REFERENCES.md`; the recent replay commits from `dcc09f1` through
+`ff52aee` (including `50f43b7`, `cbb6caf`, `33d18b2`, `8a9fa9a`, `1185297`,
+and `d51bb76`); every changed PA18 source file and
+`dev/frontend_source_sets.mk`; the complete current-PA log at
+`/home/vishvananda/work/.ralph/luna-gpt-5.6-luna-ultra/last-test.log`; and
+the focused PA21 and PA20 preservation fixtures.
+
+The review traced explicit template-prefix deduction and function-parameter
+packs through typed inference, class replay, generated declarations, static
+array value recording, integral evaluation, and the normal PA11/PA14/PA18 to
+LowIR handoff.  It also checked source ownership, per-tool registration, and
+the complete current-PA failure set.
+
+### Findings
+
+- Explicitly supplied function-parameter packs were treated as owned by the
+  explicit prefix and then skipped during ordinary deduction without checking
+  call arity or the selected element type.  That was an under-validated
+  success path and could accept a call whose arguments did not match the
+  explicit pack.
+- Static constexpr array replay expanded a pack initializer against the
+  flattened template-argument vector.  A fixed argument could therefore be
+  consumed as a pack element, duplicating ownership information that should
+  come from the typed pack substitution map.
+- Newly touched constant-array and constexpr-selection paths recovered
+  semantic facts from rendered `SpellNode` text.  The `sizeof` materialization
+  check also inspected only the expression root, which regressed a nested
+  `sizeof(array) / sizeof(element)` initializer.
+- The corrected array replay implementation crossed the 1500-line source
+  audit limit when kept in the existing instantiation unit.  Leaving it there,
+  or hiding it in an unchecked path, would have been a file-audit bypass.
+- No skipped compiler phase, dummy or embedded output, interpreter/VM/
+  trampoline substitute, reference-binary or host-compiler invocation,
+  timeout workaround, source/test-specific acceptance gate, weakened check,
+  avoidable full-suite walk, or emitted-text reparse was found after the fixes.
+
+### Changes Made
+
+- Explicit-pack deduction now requires the explicit pack length to equal the
+  function-argument visits and matches each selected element against the
+  deduced argument type.  It no longer appends ordinary deduction results a
+  second time, and it performs that validation without mutating the expander
+  from a const inference path.
+- `RecordTemplateArrayValues` now receives the propagated typed pack map,
+  derives only missing pack slices from the typed template-parameter order,
+  and expands only the selected pack.  Pack identity fallback walks typed AST
+  identifier nodes, including qualified template-id values, rather than
+  searching rendered expressions; suffix accounting is linear in the number
+  of template parameters.
+- Declaration classification now uses `HasDeclarationSpecifier`, and size or
+  alignment materialization walks the typed expression tree.  This preserves
+  nested size expressions while avoiding string searches for declaration facts.
+- Moved the array replay implementation to the checked
+  `pa18_templates_rewrite_instantiate_arrays.cpp` translation unit and
+  registered it in `dev/frontend_source_sets.mk`.  No tests or reference
+  fixtures were changed.
+
+### Validation
+
+- `make -C dev cppgm++` — passed.
+- Focused PA21 preservation checks for the static constexpr function-pointer
+  array, array functional cast pack call, and out-of-class namespace-typedef
+  member template — **3/3 passed**.
+- `make test-report ACTIVE_TEST_REPORT_PAS='pa21'` — **197/215 passed**; the
+  complete 18-case failure set is the one recorded in the current plan map.
+  The result stayed at or above the checkpoint baseline, with no newly failing
+  earlier PA.
+- Required prior-through command for `n=21` — **1635/1635 passed** through
+  PA20, including the preserved
+  `400-pack-expanded-static-constexpr-array-member` fixture after its
+  qualified-id pack replay was restored.
+- `perl scripts/cppgm_file_audit.pl --stage pa21 --paths dev/src` — passed
+  with ten nonfatal pre-existing warnings (nine header-division warnings and
+  one complexity warning), with no fatal size, source-set, or unchecked-path
+  finding.
+- `git diff --check` — passed.  The audit fixes remain cohesive and leave the
+  implementation ready for the planned specialization/non-type identity
+  checkpoint.
+
 ## Checkpoint 63 audit — 2026-07-24
 
 ### Scope Reviewed

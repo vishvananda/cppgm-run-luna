@@ -25,9 +25,8 @@ bool PA18TemplateExpander::EvaluateSourceArrayFunction(
 	for(size_t candidate = 0; candidate < overloads.size(); ++candidate) {
 		const TemplateDefinition* definition = overloads[candidate];
 		if(!definition || !definition->declaration ||
-			SpellNode(definition->declaration->children.empty() ?
-				CPPGMAstNodePtr() : definition->declaration->children[0]).find(
-					"constexpr") == string::npos) continue;
+			definition->declaration->children.empty() ||
+			!HasDeclarationSpecifier(definition->declaration->children[0], "constexpr")) continue;
 		const CPPGMAstNodePtr declarator = FunctionDeclarator(definition->declaration);
 		const CPPGMAstNodePtr parameters = DescendantOfKind(declarator,
 			"parameter-clause");
@@ -42,7 +41,7 @@ bool PA18TemplateExpander::EvaluateSourceArrayFunction(
 		break;
 	}
 	if(!function || function->children.size() < 3 ||
-		SpellNode(function->children[0]).find("constexpr") == string::npos)
+		!HasDeclarationSpecifier(function->children[0], "constexpr"))
 		return false;
 
 	struct SourceValue {
@@ -149,8 +148,8 @@ bool PA18TemplateExpander::EvaluateSourceArrayFunction(
 			const TemplateDefinition* definition = candidates[candidate];
 			if(!definition || !definition->declaration) continue;
 			const CPPGMAstNodePtr declaration = definition->declaration;
-			if(SpellNode(declaration->children.empty() ? CPPGMAstNodePtr() :
-				declaration->children[0]).find("constexpr") == string::npos) continue;
+			if(declaration->children.empty() ||
+				!HasDeclarationSpecifier(declaration->children[0], "constexpr")) continue;
 			const CPPGMAstNodePtr parameters = DescendantOfKind(
 				FunctionDeclarator(declaration), "parameter-clause");
 			size_t total = 0, required = 0;
@@ -167,7 +166,7 @@ bool PA18TemplateExpander::EvaluateSourceArrayFunction(
 			function_definitions_.begin(); ordinary != function_definitions_.end(); ++ordinary) {
 			if(LastComponent(ordinary->first) != LastComponent(raw_name) ||
 				!ordinary->second || ordinary->second->children.size() < 3 ||
-				SpellNode(ordinary->second->children[0]).find("constexpr") == string::npos)
+				!HasDeclarationSpecifier(ordinary->second->children[0], "constexpr"))
 				continue;
 			const CPPGMAstNodePtr declarator = FunctionDeclarator(ordinary->second);
 			const CPPGMAstNodePtr parameters = DescendantOfKind(declarator,

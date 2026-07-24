@@ -6,6 +6,18 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
+bool ContainsSizeOrAlignExpression(const CPPGMAstNodePtr& node)
+{
+	if(!node) return false;
+	if(node->kind == "sizeof-expression" ||
+		node->kind == "sizeof-pack-expression") return true;
+	if(node->kind == "type-trait-expression" &&
+		RemoveMarker(node->value) == "alignof") return true;
+	for(size_t child = 0; child < node->children.size(); ++child)
+		if(ContainsSizeOrAlignExpression(node->children[child])) return true;
+	return false;
+}
+
 CPPGMAstNodePtr PA18TemplateExpander::TransformInstantiatedNode(
 	const TemplateDefinition& definition, const string& context,
 	const map<string, string>& substitutions,
@@ -245,8 +257,8 @@ void PA18TemplateExpander::RecordConstantDeclaration(
 {
 	if(!node || node->kind != "simple-declaration" || node->children.empty()) return;
 	RecordConstantArrayDeclaration(node, context, substitutions);
-	const string specifiers = SpellNode(node->children[0]);
-	if(specifiers.find("const") == string::npos && specifiers.find("constexpr") == string::npos) return;
+	if(!HasDeclarationSpecifier(node->children[0], "const") &&
+		!HasDeclarationSpecifier(node->children[0], "constexpr")) return;
 	const string base_type = NodeTypeSpelling(node->children[0]);
 	const string resolved_base_type = ResolveAlias(ReplaceIdentifiers(base_type, substitutions), context);
 	if(!PA19Type(resolved_base_type).integral) return;
@@ -260,12 +272,14 @@ void PA18TemplateExpander::RecordConstantDeclaration(
 		const CPPGMAstNodePtr initializer = item->children[1];
 		if(name.empty() || !initializer || initializer->children.empty()) continue;
 		PA19IntegralValue value;
-		const string expression_text = ConstantExpressionSpelling(initializer->children[0]);
+		const CPPGMAstNodePtr expression = initializer->children[0];
+		const string expression_text = ConstantExpressionSpelling(expression);
 		// Leave dependent primary-template initializers for replay in their scope.
 		if(!HasReplayContext(substitutions) && expression_text.find("decltype(") != string::npos)
 			continue;
 		if(!EvaluateIntegralText(expression_text, context, substitutions, &value)) continue;
-		if((expression_text.find("sizeof") != string::npos || expression_text.find("alignof") != string::npos) &&
+		const bool size_expression = ContainsSizeOrAlignExpression(expression);
+		if(size_expression &&
 			initializer->kind == "initializer" && initializer->children.size() == 1)
 			initializer->children[0] = CPPGMAstNodePtr(new CPPGMAstNode("literal",
 				TemplateIntegralValueSpelling(value)));
@@ -286,9 +300,8 @@ void PA18TemplateExpander::RecordConstantArrayDeclaration(
 	const map<string, string>& substitutions)
 {
 	if(!node || node->kind != "simple-declaration" || node->children.empty()) return;
-	const string specifiers = SpellNode(node->children[0]);
-	if(specifiers.find("constexpr") == string::npos &&
-		specifiers.find("const") == string::npos) return;
+	if(!HasDeclarationSpecifier(node->children[0], "constexpr") &&
+		!HasDeclarationSpecifier(node->children[0], "const")) return;
 	const string element_type = ResolveAlias(RewriteText(
 		NodeTypeSpelling(node->children[0]), context, substitutions, 0), context);
 	if(!PA19Type(element_type).integral) return;
@@ -957,8 +970,8 @@ bool PA18TemplateExpander::EvaluateIntegralTextFallbacks(const string& raw,
 	if(declaration) for(size_t i = 0; i < declaration->children.size(); ++i) {
 		const CPPGMAstNodePtr child = declaration->children[i];
 		if(!child || child->kind != "simple-declaration" || child->children.empty()) continue;
-		const string specifiers = SpellNode(child->children[0]);
-		if(specifiers.find("const") == string::npos && specifiers.find("constexpr") == string::npos) continue;
+		if(!HasDeclarationSpecifier(child->children[0], "const") &&
+			!HasDeclarationSpecifier(child->children[0], "constexpr")) continue;
 		const CPPGMAstNodePtr list = ChildOfKindLocal(child, "init-declarator-list");
 		if(!list) continue;
 		for(size_t j = 0; j < list->children.size(); ++j) {
@@ -1162,7 +1175,8 @@ bool PA18TemplateExpander::EvaluateSourceClassTruth(
 		if(!member || (member->kind != "function-definition" &&
 			member->kind != "special-member-definition") || member->children.size() < 2)
 			continue;
-		if(SpellNode(member).find("constexpr") == string::npos) continue;
+		if(member->children.empty() ||
+			!HasDeclarationSpecifier(member->children[0], "constexpr")) continue;
 		const string name = member->kind == "special-member-definition" ?
 			member->value : LastComponent(FirstIdentifierLocal(member->children[1]));
 		if(name.compare(0, 8, "operator") != 0) continue;
@@ -1260,71 +1274,6 @@ bool PA18TemplateExpander::EvaluateSourceIntegralExpression(
 		raw.substr(raw.size() - 2) == "()"))
 		if(EvaluateSourceClassTruth(raw, context, substitutions, result)) return true;
 	return false;
-}
-
-void PA18TemplateExpander::RecordTemplateArrayValues(
-	const TemplateDefinition& definition, const vector<string>& arguments,
-	const string& context, const map<string, string>& substitutions)
-{
-	if(!definition.declaration) return;
-	for(size_t child_index = 0; child_index < definition.declaration->children.size(); ++child_index) {
-		const CPPGMAstNodePtr child = definition.declaration->children[child_index];
-		if(!child || child->kind != "simple-declaration" || child->children.empty() ||
-			SpellNode(child->children[0]).find("constexpr") == string::npos) continue;
-		const CPPGMAstNodePtr list = ChildOfKindLocal(child, "init-declarator-list");
-		if(!list) continue;
-		for(size_t item_index = 0; item_index < list->children.size(); ++item_index) {
-			const CPPGMAstNodePtr item = list->children[item_index];
-			if(!item || item->children.size() < 2 || !item->children[0]) continue;
-			if(DeclaratorArraySuffix(item->children[0]).empty()) continue;
-			const string name = LastComponent(FirstIdentifierLocal(item->children[0]));
-			CPPGMAstNodePtr initializer = item->children[1];
-			if(initializer->kind == "initializer" && initializer->children.size() == 1)
-				initializer = initializer->children[0];
-			if(name.empty() || !initializer || initializer->kind != "braced-init-list") continue;
-			vector<PA19IntegralValue> values;
-			for(size_t value_index = 0; value_index < initializer->children.size(); ++value_index) {
-				const CPPGMAstNodePtr element = initializer->children[value_index];
-				CPPGMAstNodePtr expression = element;
-				string pack_name;
-				if(element && element->kind == "pack-expansion-expression" &&
-					!element->children.empty()) {
-					pack_name = PackExpansionIdentifier(element->children[0]);
-					const string source_text = ConstantExpressionSpelling(element->children[0]);
-					for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter)
-						if(definition.parameters[parameter].pack &&
-							source_text.find(definition.parameters[parameter].name) != string::npos)
-							pack_name = definition.parameters[parameter].name;
-				}
-				if(!pack_name.empty()) {
-					for(size_t argument = 0; argument < arguments.size(); ++argument) {
-						map<string, string> one = substitutions;
-						one[pack_name] = arguments[argument];
-						string text = ConstantExpressionSpelling(expression->children.empty() ?
-							CPPGMAstNodePtr() : expression->children[0]);
-						text = RewriteText(text, context, one, 0);
-						PA19IntegralValue value;
-						if(!EvaluateIntegralText(text, context, one, &value)) {
-							values.clear();
-							break;
-						}
-						values.push_back(value);
-					}
-				} else {
-					const string text = ConstantExpressionSpelling(expression);
-					PA19IntegralValue value;
-					if(!EvaluateIntegralText(text, context, substitutions, &value)) {
-						values.clear();
-						break;
-					}
-					values.push_back(value);
-				}
-			}
-			if(values.empty() && !initializer->children.empty()) continue;
-			constant_arrays_[name] = values;
-			constant_arrays_[JoinPath(context, name)] = values;
-		}
-	}
 }
 
 void PA18TemplateExpander::ReplayCachedInstantiation(const TemplateDefinition& definition,

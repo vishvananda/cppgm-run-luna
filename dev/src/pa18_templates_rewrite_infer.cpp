@@ -508,7 +508,8 @@ bool PA18TemplateExpander::InferFunctionParameter(
 		ChildOfKindLocal(parameter->children[1], "parameter-clause") ?
 		FunctionTypeSpelling(parameter) : ParameterTypeSpelling(parameter);
 	const bool pack_parameter = IsFunctionParameterPack(parameter);
-	bool explicit_pack_values = false;
+	const vector<string>* explicit_pack_values = 0;
+	string explicit_pack_name;
 	if(pack_parameter && inferred_packs) for(size_t template_parameter = 0;
 		template_parameter < definition.parameters.size(); ++template_parameter) {
 		const TemplateParameter& candidate = definition.parameters[template_parameter];
@@ -520,7 +521,10 @@ bool PA18TemplateExpander::InferFunctionParameter(
 			const bool right = end == pattern.size() || !IsIdentifierCharacter(pattern[end]);
 			if(left && right) {
 				map<string, vector<string> >::const_iterator values = inferred_packs->find(candidate.name);
-				explicit_pack_values = values != inferred_packs->end() && !values->second.empty();
+				if(values != inferred_packs->end()) {
+					explicit_pack_name = candidate.name;
+					explicit_pack_values = &values->second;
+				}
 				break;
 			}
 		}
@@ -550,6 +554,7 @@ bool PA18TemplateExpander::InferFunctionParameter(
 		*argument_index + trailing_fixed ? arguments->children.size() - *argument_index - trailing_fixed : 0;
 	const size_t visits = pack_parameter ? pack_count :
 		(*argument_index < arguments->children.size() ? 1 : 0);
+	if(explicit_pack_values && visits != explicit_pack_values->size()) return false;
 	for(size_t visit = 0; visit < visits; ++visit) {
 		if(*argument_index >= arguments->children.size()) return false;
 		map<string, string> parameter_substitutions = substitutions;
@@ -595,7 +600,20 @@ bool PA18TemplateExpander::InferFunctionParameter(
 				argument->kind == "subscript-expression")) {
 			if(type.empty() || type[type.size() - 1] != '&') type = CanonicalSpelling(type + "&");
 		}
-		if(inferred_argument && !explicit_pack_values &&
+		if(inferred_argument && explicit_pack_values) {
+			// Explicit template arguments own this pack.  Ordinary deduction must
+			// not append the same element a second time, but it still has to prove
+			// that the call argument matches the explicitly selected element.
+			map<string, string> explicit_substitutions = parameter_substitutions;
+			explicit_substitutions[explicit_pack_name] = (*explicit_pack_values)[visit];
+			const string explicit_pattern = NormalizeTypeArgument(ReplaceIdentifiers(
+				pattern, explicit_substitutions));
+			set<string> explicit_parameter_names = parameter_names;
+			explicit_parameter_names.erase(explicit_pack_name);
+			map<string, string> ignored;
+			if(!MatchTypePattern(explicit_pattern, type, explicit_parameter_names,
+				&ignored, context)) return false;
+		} else if(inferred_argument &&
 			!MergeInferredFunctionArgument(definition, pattern, type, signature,
 			parameter_substitutions, context, parameter_names, inferred, inferred_packs,
 			inferred_functions, bound_pack_values)) return false;

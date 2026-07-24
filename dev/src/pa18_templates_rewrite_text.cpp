@@ -691,7 +691,8 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				}
 			if(resolve_member && definition->class_template && close + 2 < raw.size() &&
 				raw.compare(close + 1, 2, "::") == 0) {
-				RecordTemplateArrayValues(*definition, args, context, substitutions);
+				RecordTemplateArrayValues(*definition, args, context, substitutions,
+					active_pack_substitutions_);
 				size_t nested_begin = close + 3;
 				while(nested_begin < raw.size() && IsIdentifierCharacter(raw[nested_begin])) ++nested_begin;
 					const string nested = raw.substr(close + 3, nested_begin - (close + 3));

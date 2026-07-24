@@ -341,9 +341,8 @@ void PA18TemplateExpander::IndexConstantMembers(const CPPGMAstNodePtr& node,
 		const CPPGMAstNodePtr declaration = node->children[child];
 		if(!declaration || declaration->kind != "simple-declaration" ||
 			declaration->children.empty()) continue;
-		const string specifiers = SpellNode(declaration->children[0]);
-		if(specifiers.find("const") == string::npos &&
-			specifiers.find("constexpr") == string::npos) continue;
+		if(!HasDeclarationSpecifier(declaration->children[0], "const") &&
+			!HasDeclarationSpecifier(declaration->children[0], "constexpr")) continue;
 		const CPPGMAstNodePtr list = ChildOfKindLocal(declaration,
 			"init-declarator-list");
 		if(!list) continue;
@@ -363,7 +362,8 @@ void PA18TemplateExpander::IndexConstantMembers(const CPPGMAstNodePtr& node,
 bool HasDeclarationSpecifier(const CPPGMAstNodePtr& node, const string& wanted)
 {
 	if(!node) return false;
-	if((node->kind == "decl-specifier" || node->kind == "specifier") &&
+	if((node->kind == "decl-specifier" || node->kind == "specifier" ||
+		node->kind == "cv-qualifier") &&
 		RemoveMarker(node->value) == wanted) return true;
 	for(size_t child = 0; child < node->children.size(); ++child)
 		if(HasDeclarationSpecifier(node->children[child], wanted)) return true;

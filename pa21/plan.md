@@ -21,9 +21,10 @@ The complete PA21 report is **197/215**, above the turn-start **182/215**
 baseline.  Focused validation passes for the explicit-pack array functional
 cast, static constexpr function-pointer array, and out-of-class member
 template namespace typedef fixtures.  Through PA20 is green at **1635/1635**
-and the PA21 file audit passes with the repository's nine pre-existing
-header-division warnings.  The full current-PA report still exits nonzero
-only because the 18 remaining fixtures are intentionally recorded below.
+and the PA21 file audit passes with ten nonfatal pre-existing warnings (nine
+header-division warnings and one complexity warning).  The full current-PA
+report still exits nonzero only because the 18 remaining fixtures are
+intentionally recorded below.
 
 ### Remaining Work Map
 
@@ -59,6 +60,16 @@ template cv-forwarding and generated `::value` integral materialization; then
 bundle the inline-namespace/template-template and reference-member lookup
 cases if the shared lookup changes remain localized.  Preserve **197/215** as
 the current gate, with through-PA20 and file audit as regression gates.
+
+### Checkpoint Audit Refresh
+
+The post-audit full report remains **197/215** with exactly the 18 failures
+listed above; the three preserved PA21 fixtures and the PA20 pack-expanded
+static-array fixture pass.  The next substantial checkpoint remains the
+specialization/non-type identity group, bundled with the localized
+inline-namespace, template-template, and reference-member lookup work when
+possible.  Keep **197/215**, **1635/1635** through PA20, and a passing file
+audit as the gates.
 
 ## Checkpoint 71 result — 2026-07-24 (197/215)
 

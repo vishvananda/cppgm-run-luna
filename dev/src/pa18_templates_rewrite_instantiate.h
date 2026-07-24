@@ -143,7 +143,8 @@
 		const map<string, string>& substitutions, PA19IntegralValue* result);
 	void RecordTemplateArrayValues(const TemplateDefinition& definition,
 		const vector<string>& arguments, const string& context,
-		const map<string, string>& substitutions);
+		const map<string, string>& substitutions,
+		const map<string, vector<string> >& pack_substitutions);
 	void RecordConstantDeclaration(const CPPGMAstNodePtr& node, const string& context,
 		const map<string, string>& substitutions = map<string, string>());
 	void RecordEnumConstants(const CPPGMAstNodePtr& node, const string& context)
