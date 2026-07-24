@@ -317,6 +317,8 @@ class PA14Lowerer
 	FunctionState* state_;
 	  map<const CPPGMAstNode*, InferCacheEntry> infer_cache_;
 	map<const Type*, vector<TypePtr> > friend_owner_index_;
+	mutable map<const Type*, vector<Binding*> > hidden_friend_binding_index_;
+	mutable bool hidden_friend_binding_index_ready_;
 	void IndexFriendOwners();
 	void IndexCompleteTemplateObjectUses(const CPPGMAstNodePtr& node);
 

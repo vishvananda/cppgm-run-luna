@@ -229,15 +229,35 @@ void PA14Lowerer::AppendAssociatedOperatorBindings(const TypePtr& raw_type,
         if(hidden[i]->kind == BIND_FUNCTION && hidden[i]->hidden_friend &&
            find(result.begin(), result.end(), hidden[i]) == result.end())
           result.push_back(hidden[i]);
-      const string generated_prefix = last_component(name) + "__inst_";
-      for(deque<Binding>::iterator binding = owner_scope->bindings.begin();
-          binding != owner_scope->bindings.end(); ++binding) {
-        if(binding->kind != BIND_FUNCTION || !binding->hidden_friend ||
-           binding->name.compare(0, generated_prefix.size(), generated_prefix) != 0)
-          continue;
-        if(find(result.begin(), result.end(), &*binding) == result.end())
-          result.push_back(&*binding);
+      if(!hidden_friend_binding_index_ready_) {
+        vector<Scope*> pending;
+        if(analyzer_.global_) pending.push_back(analyzer_.global_.get());
+        for(size_t next = 0; next < pending.size(); ++next) {
+          Scope* current = pending[next];
+          for(size_t i = 0; i < current->bindings.size(); ++i) {
+            Binding* binding = &current->bindings[i];
+            const TypePtr friend_owner = type_value(binding->friend_owner);
+            if(binding->kind != BIND_FUNCTION || !binding->hidden_friend ||
+               !friend_owner) continue;
+            hidden_friend_binding_index_[friend_owner.get()].push_back(binding);
+          }
+          for(size_t i = 0; i < current->children.size(); ++i)
+            pending.push_back(current->children[i].get());
+        }
+        hidden_friend_binding_index_ready_ = true;
       }
+      const string generated_prefix = last_component(name) + "__inst_";
+      const TypePtr owner = type_value(type);
+      map<const Type*, vector<Binding*> >::const_iterator indexed =
+        hidden_friend_binding_index_.find(owner.get());
+      if(indexed != hidden_friend_binding_index_.end())
+        for(size_t i = 0; i < indexed->second.size(); ++i) {
+          Binding* binding = indexed->second[i];
+          if(!binding || binding->name.compare(0, generated_prefix.size(),
+              generated_prefix) != 0 || find(result.begin(), result.end(), binding) !=
+              result.end()) continue;
+          result.push_back(binding);
+        }
       AppendAssociatedOperatorBindings(type->direct_base, name, result,
         visited_types, visited_scopes);
     }

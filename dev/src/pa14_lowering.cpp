@@ -362,7 +362,8 @@ PA14Lowerer::PA14Lowerer(const vector<CPPGMAstNodePtr>& trees)
       string_data_(), string_symbols_(), string_order_(), deferred_static_members_(),
       needs_init_helper_(false),
       needs_fini_helper_(false), emitted_vtables_(), external_vtables_(),
-      emitted_rtti_(), state_(), infer_cache_(), friend_owner_index_()
+      emitted_rtti_(), state_(), infer_cache_(), friend_owner_index_(),
+      hidden_friend_binding_index_(), hidden_friend_binding_index_ready_(false)
 {}
 
 string PA14Lowerer::function_key(const string& name, const TypePtr& type)

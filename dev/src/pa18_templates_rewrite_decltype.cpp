@@ -510,8 +510,8 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 			size_t member_separator = nested_close + 1;
 			while(member_separator < raw->size() && isspace(
 				static_cast<unsigned char>((*raw)[member_separator]))) ++member_separator;
-		if(member_separator + 1 < raw->size() &&
-				raw->compare(member_separator, 2, "::") == 0) {
+			if(member_separator + 1 < raw->size() &&
+					raw->compare(member_separator, 2, "::") == 0) {
 				size_t member_begin = member_separator + 2;
 				while(member_begin < raw->size() && isspace(
 					static_cast<unsigned char>((*raw)[member_begin]))) ++member_begin;
@@ -521,7 +521,7 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 				const string nested_member = raw->substr(member_begin,
 					member_end - member_begin);
 					const TemplateDefinition* nested_definition = FindNestedDefinition(
-						*selected_owner, nested_base);
+							*selected_owner, nested_base);
 					if(nested_definition && !nested_member.empty()) {
 					map<string, string> nested_substitutions = substitutions;
 					for(size_t parameter = 0; parameter < selected_owner->parameters.size() &&
@@ -555,22 +555,11 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 							&nested_owner);
 						const string concrete_nested = JoinPath(owner_local_name,
 							nested_local_name);
-						bool static_member = false;
-						if(nested_definition->declaration)
-							for(size_t child = 0; child < nested_definition->declaration->children.size(); ++child) {
-								const CPPGMAstNodePtr declaration = nested_definition->declaration->children[child];
-								if(!declaration || declaration->kind != "simple-declaration" ||
-									declaration->children.empty() ||
-									(SpellNode(declaration->children[0]).find("static") == string::npos &&
-									 SpellNode(declaration->children[0]).find("constexpr") == string::npos)) continue;
-								const CPPGMAstNodePtr list = ChildOfKindLocal(declaration,
-									"init-declarator-list");
-								if(!list) continue;
-								for(size_t item = 0; item < list->children.size(); ++item)
-									if(list->children[item] && !list->children[item]->children.empty() &&
-										LastComponent(FirstIdentifierLocal(list->children[item]->children[0])) ==
-										 nested_member) static_member = true;
-							}
+						const bool static_member =
+							nested_definition->static_members.find(nested_member) !=
+								nested_definition->static_members.end() ||
+							selected_nested->static_members.find(nested_member) !=
+								selected_nested->static_members.end();
 						if(static_member) {
 							raw->replace(begin, nested_close - begin + 1,
 								owner_local_name + "::" + nested_local_name);

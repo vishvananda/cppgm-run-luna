@@ -281,6 +281,44 @@ void PA18TemplateExpander::IndexConstantMembers(const CPPGMAstNodePtr& node,
 	}
 }
 
+namespace {
+
+bool HasDeclarationSpecifier(const CPPGMAstNodePtr& node, const string& wanted)
+{
+	if(!node) return false;
+	if((node->kind == "decl-specifier" || node->kind == "specifier") &&
+		RemoveMarker(node->value) == wanted) return true;
+	for(size_t child = 0; child < node->children.size(); ++child)
+		if(HasDeclarationSpecifier(node->children[child], wanted)) return true;
+	return false;
+}
+
+} // namespace
+
+void PA18TemplateExpander::IndexStaticMembers(const CPPGMAstNodePtr& node,
+	set<string>& members) const
+{
+	if(!node || (node->kind != "class-specifier" &&
+		node->kind != "class-forward-declaration")) return;
+	for(size_t child = 0; child < node->children.size(); ++child) {
+		const CPPGMAstNodePtr declaration = node->children[child];
+		if(!declaration || declaration->kind != "simple-declaration" ||
+			declaration->children.empty() ||
+			(!HasDeclarationSpecifier(declaration->children[0], "static") &&
+			 !HasDeclarationSpecifier(declaration->children[0], "constexpr"))) continue;
+		const CPPGMAstNodePtr list = ChildOfKindLocal(declaration,
+			"init-declarator-list");
+		if(!list) continue;
+		for(size_t item = 0; item < list->children.size(); ++item) {
+			const CPPGMAstNodePtr declarator = list->children[item];
+			if(!declarator || declarator->children.empty()) continue;
+			const string name = LastComponent(FirstIdentifierLocal(
+				declarator->children[0]));
+			if(!name.empty()) members.insert(name);
+		}
+	}
+}
+
 vector<CPPGMAstNodePtr> PA18TemplateExpander::Run(
 	const vector<CPPGMAstNodePtr>& input)
 {

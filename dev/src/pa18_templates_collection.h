@@ -408,7 +408,8 @@ struct TemplateDefinition
 	bool variable_template;
 	bool member_template;
 	bool friend_declaration;
-	TemplateDefinition() : qualified_name(), name(), owner(), lexical_owner(), declaration(), parameters(), partial_specialization(false), explicit_specialization(false), specialization_parameters(), specialization_parameter_details(), specialization_pack_names(), specialization_pattern(), class_template(false), alias_template(false), variable_template(false), member_template(false), friend_declaration(false) {}
+	set<string> static_members;
+	TemplateDefinition() : qualified_name(), name(), owner(), lexical_owner(), declaration(), parameters(), partial_specialization(false), explicit_specialization(false), specialization_parameters(), specialization_parameter_details(), specialization_pack_names(), specialization_pattern(), class_template(false), alias_template(false), variable_template(false), member_template(false), friend_declaration(false), static_members() {}
 };
 struct FunctionSignature
 {
@@ -934,6 +935,7 @@ private:
 			template_pack_names_.insert(item.specialization_pack_names[parameter]);
 		item.class_template = declaration->kind == "class-specifier" ||
 			declaration->kind == "class-forward-declaration";
+		if(item.class_template) IndexStaticMembers(declaration, item.static_members);
 		item.alias_template = declaration->kind == "alias-declaration";
 		item.variable_template = declaration->kind == "simple-declaration" &&
 			DescendantOfKind(declaration, "parameter-clause") == CPPGMAstNodePtr();
@@ -1076,7 +1078,7 @@ private:
 		// is still useful to register its lexical spelling now.
 		Collect(declaration, item.class_template ? JoinPath(item.owner, name) : item.owner);
 	}
-	void IndexConstantMembers(const CPPGMAstNodePtr& node, const string& owner); void IndexUsingDirectiveDefinition(const TemplateDefinition& definition, const string& key);
+	void IndexConstantMembers(const CPPGMAstNodePtr& node, const string& owner); void IndexStaticMembers(const CPPGMAstNodePtr& node, set<string>& members) const; void IndexUsingDirectiveDefinition(const TemplateDefinition& definition, const string& key);
 	void Collect(const CPPGMAstNodePtr& node, const string& context)
 	{
 		if(!node) return;

@@ -1,6 +1,79 @@
 # PA21 checkpoint audit
 
-## Scope Reviewed
+## Checkpoint audit (2026-07-24, latest scope)
+
+### Scope Reviewed
+
+Reviewed the latest `Checkpoint Scope` in `pa21/plan.md`, commit `4b7af81`
+and its predecessor `ab20a8b`, the PA21 contract in `pa21/README.md`,
+`TESTING_AND_REFERENCES.md`, all changed compiler/source-set files, the three
+focused tests for hidden-friend ADL, anonymous-union storage, and out-of-class
+nested member classes, the six planned owner-replay tests, and the complete
+current-PA result in
+`/home/vishvananda/work/.ralph/luna-gpt-5.6-luna-ultra/last-test.log`.
+
+The reviewed checkpoint covers generated hidden-friend association,
+constructor ownership during specialization replay, unnamed aggregate storage,
+enclosing substitutions for nested classes, plain nested template-ids, and
+static nested-member expression preservation.
+
+### Findings
+
+- The checkpoint had compressed `pa18_templates_rewrite.cpp` to the exact
+  1500-line audit limit.  That was a file-audit workaround and obscured the
+  constructor replay implementation; it was a blocker.
+- Nested static-member detection serialized declaration ASTs with repeated
+  `SpellNode(...).find(...)` calls during replay.  This was an avoidable
+  stringly fact and repeated work on a lookup path; it was a blocker.
+- Generated hidden-friend ADL scanned every binding in an owner scope on each
+  operator lookup and did not use the binding's typed `friend_owner` relation
+  to select the candidates.  This duplicated ownership recovery and could
+  admit unrelated generated names; it was a blocker.
+- Constructor replay recovered the source constructor by bare last-component
+  name and searched the global constructor index without checking the source
+  owner.  Same-named constructors in another class could therefore be
+  selected; it was a blocker.
+- No skipped compiler phase, dummy or embedded output, interpreter/VM/trampoline
+  substitute, timeout workaround, reference/host-compiler invocation,
+  source/test-specific acceptance gate, weakened check, or unchecked
+  implementation fragment was found in the reviewed scope.
+
+### Changes Made
+
+- Moved `MaterializeInitializerConstructor` into the dedicated compiled
+  `pa18_templates_rewrite_constructor.cpp` translation unit and registered it
+  in `dev/frontend_source_sets.mk`; `pa18_templates_rewrite.cpp` is now 1432
+  lines rather than being packed to the audit ceiling.
+- Added `TemplateDefinition::static_members`, populated it once from structured
+  declaration-specifier nodes during template collection, and replaced the
+  replay-time AST serialization with typed set membership checks.
+- Added a one-time PA14 hidden-friend binding index keyed by the typed owner
+  `Type*`; generated suffix matching now runs only over that owner’s indexed
+  bindings.
+- Kept the generated-to-source constructor mapping but enforced the qualified
+  source owner, including the compiler’s canonical nested `Node::Node` owner
+  spelling, before selecting a member-template constructor.
+- No tests, references, or acceptance scripts were changed.
+
+### Validation
+
+- Required PA21 report: `make test-report ACTIVE_TEST_REPORT_PAS='pa21'` —
+  **176/215 passing**, unchanged from the audit turn-start baseline; the
+  complete non-passing set is refreshed in `pa21/plan.md`.
+- Focused checkpoint tests — **3/3 passed**:
+  `spec/300-hidden-friend-template-operator-adl.t`,
+  `general/300-anonymous-union-storage-constructor-noop.t`, and
+  `spec/300-member-class-template-out-of-class.t`.
+- Required prior-through command for `n=21`, `make test-report-through-pa20` —
+  **1635/1635 passed**.
+- Required file audit, `perl scripts/cppgm_file_audit.pl --stage pa21 --paths
+  dev/src` — passed with the existing ten warnings and no fatal finding.
+- `git diff --check` and the no-debug/source-set checks passed; the audit
+  changes are ready to commit with a clean worktree handoff.
+
+## Superseded audit (earlier checkpoint)
+
+### Scope Reviewed
 
 Reviewed the latest Checkpoint Scope and complete failure map in
 `pa21/plan.md`, the PA21 contract in `pa21/README.md`,
@@ -17,7 +90,7 @@ focused set is the nine tests listed in the current Checkpoint Scope.  The
 review also covered the PA11 semantic model, PA14 access and lowering paths,
 PA18 collection/replay, and the complete current-PA failure map.
 
-## Findings
+### Findings
 
 - The landed replay used a synthetic `friend_owner_only` declaration with an
   empty parameter clause.  PA11 and PA14 explicitly skipped that node, then
@@ -55,7 +128,7 @@ PA18 collection/replay, and the complete current-PA failure map.
   fatal size, source-set, hidden-fragment, or unchecked-path finding; its ten
   existing division/complexity results are warnings only.
 
-## Changes Made
+### Changes Made
 
 - Removed `friend_owner_only`, its synthetic declaration builder, PA11/PA14
   skip paths, and untyped `friend_names`/generated-symbol matching.
@@ -69,7 +142,7 @@ PA18 collection/replay, and the complete current-PA failure map.
 - Refreshed `pa21/plan.md` with the complete 62-test failure map and the next
   inherited/using member-template owner-replay checkpoint.
 
-## Validation
+### Validation
 
 - The nine-test focused run: **7/9** relaxed reference comparisons passed; all
   nine compile/status checks passed.  The two non-passing comparisons are the
