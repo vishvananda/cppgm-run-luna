@@ -1,6 +1,89 @@
 # PA21 checkpoint audit
 
-## Checkpoint audit (2026-07-24, latest scope)
+## Checkpoint 62 audit — 2026-07-24
+
+### Scope Reviewed
+
+Reviewed the latest Checkpoint 62 Scope, Result, Remaining Work Map, and Next
+Checkpoint in `pa21/plan.md`; `pa21/README.md`; `TESTING_AND_REFERENCES.md`;
+the current `HEAD` (`0e88087`) and recent PA21 commits `6f71b3c`, `4b7af81`,
+`ab20a8b`, `bc9f345`, and `08e28c8`; the complete PA11/PA18 source diff and
+`dev/frontend_source_sets.mk`; the nine owner/pack/operator probes; and the
+full primary log at
+`/home/vishvananda/work/.ralph/luna-gpt-5.6-luna-ultra/last-test.log`.
+
+The review covered deferred using resolution, typed owner propagation through
+qualified calls and member-template addresses, nested specialization replay,
+static/local member classification, generated declaration ownership, bound
+pack hints, and the resulting LowIR path.  It also checked that the normal
+preprocessing, parsing, PA11, PA14, PA18, and LowIR stages remain in the
+pipeline.
+
+### Findings
+
+- `pa18_templates_rewrite.cpp` and `pa11_semantics_analyzer.cpp` were each at
+  the exact 1500-line source-audit ceiling.  The inclusive limit hid packed
+  responsibilities and was a file-audit bypass risk, so it was a checkpoint
+  blocker.
+- Replay and emission repeatedly recovered static-member status by serializing
+  declaration ASTs and searching for the string `static`.  That was stringly
+  semantic state and repeated work on lookup, generation, and object-member
+  evaluation paths.  It also missed static declarations wrapped in a member
+  template, which made the out-of-class generated-name path depend on a later
+  recovery.
+- The active concrete owner was carried as only a name.  Nested replay then
+  re-derived its definition and arguments from short-name maps, duplicating
+  ownership recovery and making partial-specialization selection fragile.
+- Member-call pack hints walked the enclosing parameters a second time after
+  the same bound-pack information had already been computed.  This was
+  avoidable hot-path work.
+- No skipped compiler phase, dummy or embedded output, interpreter/VM/trampoline
+  substitute, reference or host-compiler invocation, timeout workaround,
+  fallback-success path, source/test-specific acceptance gate, weakened check,
+  hidden implementation fragment, or unchecked source-set path was found.
+
+### Changes Made
+
+- Moved the deferred using-declaration implementation into
+  `pa11_semantics_analyzer_using.cpp` and unary expression lowering into
+  `pa18_templates_rewrite_expressions.cpp`, registering both translation units
+  in `dev/frontend_source_sets.mk`.  The implementation is now in cohesive
+  checked source files below the audit ceiling.
+- Added structured `TemplateDefinition::static_member` metadata and indexed
+  static members by class during collection.  Member-template declarations,
+  generated class aliases, and concrete-owner paths use the same typed index;
+  emission, replay, and source-object evaluation no longer serialize ASTs to
+  recover static status.  Generated static-member facts are indexed once and
+  reused for each registered path.
+- Replaced the string-only active owner with `ConcreteOwnerContext`, carrying
+  the selected definition and template arguments alongside its presentation
+  name.  Qualified-call, address, nested-replay, and exception-restoration
+  paths now set and restore that context as one value.
+- Reused the already computed bound-pack map when constructing instantiation
+  hints, removing the duplicate enclosing-parameter walk.
+- No tests, reference fixtures, or acceptance scripts were changed.
+
+### Validation
+
+- `make -C dev cppgm++` — passed.
+- Required current-PA check,
+  `make test-report ACTIVE_TEST_REPORT_PAS='pa21'` — **179/215 passed**, equal
+  to the turn-start/checkpoint baseline; the complete 36-case failure set is
+  recorded in `pa21/plan.md` and drives the next group.
+- Required prior-through command for `n=21` — **1635/1635 passed** through
+  PA20.
+- Required file audit,
+  `perl scripts/cppgm_file_audit.pl --stage pa21 --paths dev/src` — passed
+  with nine warnings and no fatal finding.
+- `git diff --check` passed.  The focused nine-probe run remains 1/9 because
+  eight probes are part of the documented remaining owner/replay set; no
+  checkpoint regression below the 179/215 baseline was introduced.
+- The refreshed plan selects the 13-case generated owner/member replay and
+  LowIR-body-ownership group next, with the 15/5/3 smaller groups bundled
+  afterward.  No checkpoint-level architecture, performance, shortcut, or
+  audit blocker remains.
+
+## Superseded audit (checkpoint 61)
 
 ### Scope Reviewed
 

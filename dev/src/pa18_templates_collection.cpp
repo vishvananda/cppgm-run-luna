@@ -360,8 +360,6 @@ void PA18TemplateExpander::IndexConstantMembers(const CPPGMAstNodePtr& node,
 	}
 }
 
-namespace {
-
 bool HasDeclarationSpecifier(const CPPGMAstNodePtr& node, const string& wanted)
 {
 	if(!node) return false;
@@ -372,7 +370,33 @@ bool HasDeclarationSpecifier(const CPPGMAstNodePtr& node, const string& wanted)
 	return false;
 }
 
-} // namespace
+bool PA18TemplateExpander::HasStaticMember(const TemplateDefinition* definition,
+	const string& owner, const string& name) const
+{
+	if(name.empty()) return false;
+	if(definition && definition->static_members.find(name) !=
+		definition->static_members.end()) return true;
+	map<string, set<string> >::const_iterator indexed =
+		static_members_by_class_.find(owner);
+	return indexed != static_members_by_class_.end() &&
+		indexed->second.find(name) != indexed->second.end();
+}
+
+void PA18TemplateExpander::SetActiveConcreteOwner(const string& owner,
+	const string& context)
+{
+	active_concrete_owner_ = ConcreteOwnerContext();
+	if(owner.empty()) return;
+	active_concrete_owner_.name = owner;
+	map<string, string>::const_iterator base = specialization_bases_.find(
+		LastComponent(owner));
+	map<string, vector<string> >::const_iterator arguments =
+		specialization_arguments_.find(LastComponent(owner));
+	if(base != specialization_bases_.end())
+		active_concrete_owner_.definition = FindDefinition(base->second, context);
+	if(arguments != specialization_arguments_.end())
+		active_concrete_owner_.arguments = arguments->second;
+}
 
 void PA18TemplateExpander::IndexStaticMembers(const CPPGMAstNodePtr& node,
 	set<string>& members) const
@@ -381,7 +405,20 @@ void PA18TemplateExpander::IndexStaticMembers(const CPPGMAstNodePtr& node,
 		node->kind != "class-forward-declaration")) return;
 	for(size_t child = 0; child < node->children.size(); ++child) {
 		const CPPGMAstNodePtr declaration = node->children[child];
-		if(!declaration || declaration->kind != "simple-declaration" ||
+		if(!declaration) continue;
+		if(declaration->kind == "template-declaration" && declaration->children.size() > 1) {
+			CPPGMAstNodePtr templated = declaration->children[1];
+			while(templated && templated->kind == "template-declaration" &&
+				templated->children.size() > 1)
+				templated = templated->children[1];
+			if(templated && !templated->children.empty() &&
+				HasDeclarationSpecifier(templated->children[0], "static")) {
+				const string name = LastComponent(DeclarationName(templated));
+				if(!name.empty()) members.insert(name);
+			}
+			continue;
+		}
+		if(declaration->kind != "simple-declaration" ||
 			declaration->children.empty() ||
 			(!HasDeclarationSpecifier(declaration->children[0], "static") &&
 			 !HasDeclarationSpecifier(declaration->children[0], "constexpr"))) continue;

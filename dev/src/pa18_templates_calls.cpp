@@ -707,26 +707,14 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 				specialization_arguments_.end();
 		const string* requested_owner_pointer = concrete_owner ? &requested_owner : 0;
 		map<string, vector<string> > instantiation_pack_hints = inferred_pack_values;
-		if(parent) {
-			size_t parent_argument = 0;
-			for(size_t parameter = 0; parameter < parent->parameters.size(); ++parameter) {
-				const TemplateParameter& parent_parameter = parent->parameters[parameter];
-				if(parent_parameter.pack) {
-					size_t trailing_fixed = 0;
-					for(size_t later = parameter + 1; later < parent->parameters.size(); ++later)
-						if(!parent->parameters[later].pack) ++trailing_fixed;
-					const size_t available = parent_arguments.size() > parent_argument ?
-						parent_arguments.size() - parent_argument : 0;
-					const size_t count = available > trailing_fixed ? available - trailing_fixed : 0;
-					vector<string>& values = instantiation_pack_hints[parent_parameter.name];
-					for(size_t element = 0; element < count; ++element)
-						values.push_back(parent_arguments[parent_argument++]);
-				} else if(parent_argument < parent_arguments.size()) ++parent_argument;
-			}
-		}
+		for(map<string, vector<string> >::const_iterator bound = bound_pack_values.begin();
+			bound != bound_pack_values.end(); ++bound)
+			instantiation_pack_hints[bound->first].insert(
+				instantiation_pack_hints[bound->first].end(), bound->second.begin(),
+				bound->second.end());
 		string generated_name;
-		const string previous_concrete_owner = active_concrete_owner_;
-		if(requested_owner_pointer) active_concrete_owner_ = requested_owner;
+		const ConcreteOwnerContext previous_concrete_owner = active_concrete_owner_;
+		if(requested_owner_pointer) SetActiveConcreteOwner(requested_owner, context);
 		try {
 		generated_name = Instantiate(definition, member_arguments, context,
 			explicit_instantiation,
@@ -772,8 +760,7 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 				result_substitutions, 0), context));
 			call->inferred_type = result_type;
 		}
-		const bool static_member = definition.declaration && !definition.declaration->children.empty() &&
-			SpellNode(definition.declaration->children[0]).find("static") != string::npos;
+	const bool static_member = definition.static_member;
 		const bool generated_operator = member_name.compare(0, 8, "operator") == 0;
 		const bool ordinary_class_member = !definition.owner.empty() &&
 			definition.owner.find('<') == string::npos &&

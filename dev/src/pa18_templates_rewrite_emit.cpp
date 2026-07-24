@@ -33,28 +33,11 @@ void PA18TemplateExpander::CheckExplicitSpecializationOrder(
 
 namespace {
 
-bool HasStaticMemberDeclaration(const CPPGMAstNodePtr& node, const string& name)
-{
-	if(!node || name.empty()) return false;
-	if(node->kind == "simple-declaration" && !node->children.empty() &&
-		SpellNode(node->children[0]).find("static") != string::npos) {
-		const CPPGMAstNodePtr list = ChildOfKindLocal(node, "init-declarator-list");
-		if(list) for(size_t item = 0; item < list->children.size(); ++item) {
-			const CPPGMAstNodePtr entry = list->children[item];
-			if(!entry || entry->children.empty()) continue;
-			if(LastComponent(FirstIdentifierLocal(entry->children[0])) == name) return true;
-		}
-	}
-	for(size_t child = 0; child < node->children.size(); ++child)
-		if(HasStaticMemberDeclaration(node->children[child], name)) return true;
-	return false;
-}
-
 void MarkStaticGeneratedFunction(const CPPGMAstNodePtr& node)
 {
 	if(!node || node->kind != "function-definition" || node->children.empty() ||
 		!node->children[0]) return;
-	if(SpellNode(node->children[0]).find("static") != string::npos) return;
+	if(HasDeclarationSpecifier(node->children[0], "static")) return;
 	node->children[0]->children.insert(node->children[0]->children.begin(),
 		CPPGMAstNodePtr(new CPPGMAstNode("decl-specifier", "KW_STATIC:static")));
 }
@@ -162,13 +145,18 @@ void PA18TemplateExpander::RegisterGeneratedTypeEntity(
 	if(!definition.class_template) return;
 	const string generated_path = JoinPath(definition.owner, local_name);
 	class_declarations_[generated_path] = generated;
+	set<string> generated_static_members;
+	IndexStaticMembers(generated, generated_static_members);
+	static_members_by_class_[generated_path] = generated_static_members;
 	const string lexical_path = JoinPath(generated_owner, local_name);
 	class_declarations_[lexical_path] = generated;
+	static_members_by_class_[lexical_path] = generated_static_members;
 	class_contexts_.insert(generated_path);
 	RegisterGeneratedConstants(generated, generated_path);
 	if(!concrete_owner.empty()) {
 		const string concrete_path = JoinPath(concrete_owner, local_name);
 		class_declarations_[concrete_path] = generated;
+		static_members_by_class_[concrete_path] = generated_static_members;
 		class_contexts_.insert(concrete_path);
 		RegisterGeneratedConstants(generated, concrete_path);
 	}
@@ -195,9 +183,7 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 {
 	const string generated_owner = definition.lexical_owner.empty() ?
 		definition.owner : definition.lexical_owner;
-	const bool static_member = definition.declaration &&
-		!definition.declaration->children.empty() &&
-		SpellNode(definition.declaration->children[0]).find("static") != string::npos;
+	const bool static_member = definition.static_member;
 	const bool flattened_static_member = static_member &&
 		definition.owner.find("::") == string::npos && !requested_owner.empty();
 	const bool free_generated_member = definition.friend_declaration;
@@ -288,8 +274,8 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 	}
 	if(member_definition)
 		RestoreGeneratedMemberParameterNames(definition, member_owner_definition, generated);
-	if(member_definition && !definition.class_template && member_owner_definition &&
-		HasStaticMemberDeclaration(member_owner_definition->declaration,
+	if(member_definition && !definition.class_template &&
+		HasStaticMember(member_owner_definition, member_owner_name,
 			LastComponent(definition.name)))
 		MarkStaticGeneratedFunction(generated);
 	MarkGeneratedNode(generated, definition.qualified_name, metadata_args,
@@ -484,7 +470,8 @@ string PA18TemplateExpander::Instantiate(const TemplateDefinition& definition,
 		map<string, string>();
 	const map<string, FunctionSignature> function_substitutions = function_hints ?
 		*function_hints : map<string, FunctionSignature>();
-	string concrete_owner = requested_owner ? *requested_owner : active_concrete_owner_;
+	string concrete_owner = requested_owner ? *requested_owner :
+		active_concrete_owner_.name;
 	if(!ConcreteOwnerMatches(definition, concrete_owner)) concrete_owner.clear();
 	// A template-template argument can name a member alias on a concrete
 	// specialization (for example `quote_X_::fn`).  Recover the outer class's

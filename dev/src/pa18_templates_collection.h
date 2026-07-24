@@ -149,6 +149,7 @@ inline CPPGMAstNodePtr DescendantOfKind(const CPPGMAstNodePtr& node, const strin
 	return CPPGMAstNodePtr();
 }
 bool HasFriendSpecifier(const CPPGMAstNodePtr& node);
+bool HasDeclarationSpecifier(const CPPGMAstNodePtr& node, const string& wanted);
 inline CPPGMAstNodePtr CloneNode(const CPPGMAstNodePtr& node)
 {
 	if(!node) return CPPGMAstNodePtr();
@@ -408,8 +409,16 @@ struct TemplateDefinition
 	bool variable_template;
 	bool member_template;
 	bool friend_declaration;
+	bool static_member;
 	set<string> static_members;
-	TemplateDefinition() : qualified_name(), name(), owner(), lexical_owner(), declaration(), parameters(), partial_specialization(false), explicit_specialization(false), specialization_parameters(), specialization_parameter_details(), specialization_pack_names(), specialization_pattern(), class_template(false), alias_template(false), variable_template(false), member_template(false), friend_declaration(false), static_members() {}
+	TemplateDefinition() : qualified_name(), name(), owner(), lexical_owner(), declaration(), parameters(), partial_specialization(false), explicit_specialization(false), specialization_parameters(), specialization_parameter_details(), specialization_pack_names(), specialization_pattern(), class_template(false), alias_template(false), variable_template(false), member_template(false), friend_declaration(false), static_member(false), static_members() {}
+};
+struct ConcreteOwnerContext
+{
+	string name;
+	const TemplateDefinition* definition;
+	vector<string> arguments;
+	ConcreteOwnerContext() : name(), definition(0), arguments() {}
 };
 struct FunctionSignature
 {
@@ -466,7 +475,7 @@ private:
 	set<string> class_contexts_;
 	set<string> function_contexts_;
 	map<string, string> function_owners_;
-	map<string, string> local_class_names_; map<string, CPPGMAstNodePtr> class_declarations_; set<string> using_member_template_names_;
+	map<string, string> local_class_names_; map<string, CPPGMAstNodePtr> class_declarations_; map<string, set<string> > static_members_by_class_; set<string> using_member_template_names_;
 	map<string, vector<string> > constant_member_owners_;
 	set<string> named_type_contexts_;
 	map<string, string> variable_types_;
@@ -481,7 +490,7 @@ private:
 	string active_instantiation_name_;
 	// Propagate the concrete enclosing specialization through nested RewriteText
 	// calls without smuggling it through the ordinary identifier substitutions.
-	string active_concrete_owner_;
+	ConcreteOwnerContext active_concrete_owner_;
 	// A template parameter pack is a collection of typed substitutions.  Keep
 	// the collection separate from the scalar substitution map so an expanded
 	// declaration or call can consume every element without losing the first
@@ -516,6 +525,7 @@ private:
 		set<string>* active) const;
 	string QualifyTypeArgument(string spelling, const string& context,
 		const string& template_owner = string()) const;
+	void SetActiveConcreteOwner(const string& owner, const string& context);
 	string NormalizeElaboratedSpelling(string raw, const string& context) const;
 	string DeclaratorSuffix(const CPPGMAstNodePtr& declarator) const;
 	string ReturnDeclaratorSuffix(const CPPGMAstNodePtr& declarator) const;
@@ -533,7 +543,7 @@ private:
 	string GeneratedOwner(const TemplateDefinition& definition) const;
 	bool HasReplayContext(const map<string, string>& substitutions) const
 	{
-		return !substitutions.empty() || !active_concrete_owner_.empty();
+		return !substitutions.empty() || !active_concrete_owner_.name.empty();
 	}
 	bool PreserveInlineGeneratedOrder(const vector<CPPGMAstNodePtr>& generated_classes,
 		const string& owner) const;
@@ -861,6 +871,8 @@ private:
 	item.qualified_name = JoinPath(item.owner, name);
 	item.declaration = declaration;
 	item.friend_declaration = declaration && !declaration->children.empty() && HasFriendSpecifier(declaration->children[0]);
+	item.static_member = declaration && !declaration->children.empty() &&
+		HasDeclarationSpecifier(declaration->children[0], "static");
 		item.parameters = Parameters(node->children[0]);
 		for(size_t parameter = 0; parameter < item.parameters.size(); ++parameter)
 			if(!item.parameters[parameter].name.empty()) {
@@ -1016,6 +1028,7 @@ private:
 		Collect(declaration, item.class_template ? JoinPath(item.owner, name) : item.owner);
 	}
 	void IndexConstantMembers(const CPPGMAstNodePtr& node, const string& owner); void IndexStaticMembers(const CPPGMAstNodePtr& node, set<string>& members) const; void IndexUsingDirectiveDefinition(const TemplateDefinition& definition, const string& key);
+	bool HasStaticMember(const TemplateDefinition* definition, const string& owner, const string& name) const;
 	void Collect(const CPPGMAstNodePtr& node, const string& context)
 	{
 		if(!node) return;
@@ -1096,9 +1109,11 @@ private:
 			const string class_name = LastComponent(node->value);
 			next_context = JoinPath(context, class_name);
 			class_declarations_[next_context] = node;
+			IndexStaticMembers(node, static_members_by_class_[next_context]);
 			IndexConstantMembers(node, next_context);
 			if(LastComponent(context) == class_name) {
 				class_declarations_[context] = node;
+				IndexStaticMembers(node, static_members_by_class_[context]);
 				IndexConstantMembers(node, context);
 			}
 			if(function_contexts_.find(context) != function_contexts_.end()) {

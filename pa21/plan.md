@@ -1735,30 +1735,66 @@ when raw arguments have already been consumed.
 
 ### Result
 
-The PA21 report is **179/215**, up from the turn-start **176/215** baseline.
-The nine focused owner/pack/operator fixtures pass, through-PA20 is green at
-**1635/1635**, and the PA21 file audit passes with the ten pre-existing
-warnings. The qualified-member implementation was split into a registered
-source unit to keep the per-file audit limits clean.
+The PA21 report is **179/215**, preserving the audit turn-start baseline of
+179/215.  The nine focused owner/pack/operator probes are **1/9**; their eight
+remaining failures are represented in the complete map below.  Through-PA20
+is green at **1635/1635**, and the PA21 file audit passes with nine warnings
+and no fatal finding.  The qualified-member and semantic-using implementations
+are registered as cohesive source units rather than being packed into files at
+the source-size ceiling.
 
 ### Remaining Work Map
 
-The remaining 36 cases fall into two shared behavior groups:
+The complete current-PA failure set is **36 cases**, grouped by the next
+semantic owner:
 
-- **Dependent deduction, conversion, partial-specialization, and diagnostic
-  paths (25):** cv/reference binding and conversion, pack/cast deduction,
-  function-pointer and template-template deduction, explicit-specialization
-  timing, inline-namespace lookup, non-type defaults, and malformed
-  specialization diagnostics.
-- **Generated owner/body and LowIR emission (11):** hidden-friend/static and
-  friend access, qualified/member-template body ownership, namespace-versus
-  class ownership, static/local storage, member-template ABI naming, and the
-  nested-owner LowIR sanity failure.
+- **Generated owner/member replay and LowIR body ownership (13):**
+  `general/300-crtp-static-cast-reference-before-constructor-template`,
+  `general/300-dependent-hidden-friend-static-member-definition`,
+  `general/300-explicit-member-template-id-shares-ordinary-overload`,
+  `general/300-explicit-type-arg-decltype-member-access`,
+  `general/300-friend-existing-template-private-ctor-access`,
+  `general/300-local-qualified-argument-replay`,
+  `general/300-member-class-explicit-specialization-owner-lookup`,
+  `general/300-namespace-function-template-hides-outer-callable-object`,
+  `general/300-nested-class-template-current-owner-lookup`,
+  `general/300-parenthesized-qualified-template-functional-call`,
+  `general/300-qualified-friend-member-template-access`,
+  `spec/300-member-operator-template-active-owner`, and
+  `spec/300-member-operator-template-in-class-template`.
+- **Specialization identity, alias, conversion, and pack deduction (15):**
+  `general/100-top-cv-pointer-does-not-match-unqualified-pointer-partial`,
+  `general/200-reference-alias-top-cv-return-binding`,
+  `general/300-function-pack-template-id-deduction-decltype`,
+  `general/300-function-signature-partial-specialization-functor-assignment`,
+  `general/300-variable-template-forwarding-partial-top-cv`,
+  `general/400-alias-pack-nontype-expression-fast-path`,
+  `general/400-forward-primary-partial-switch-value`,
+  `general/400-inline-namespace-template-template-argument`,
+  `general/400-member-template-nontype-shadowed-global-replay`,
+  `general/400-partial-specialization-conversion-operator-pointer-binding`,
+  `general/400-partial-specialization-redecl-member-template-empty-pack`,
+  `general/400-reference-member-depth-pack-sum`,
+  `general/400-reference-member-lookup-in-progress-base-typedef`,
+  `spec/100-inline-namespace-qualified-template-id-pack-expansion`, and
+  `spec/300-defaulted-type-arg-specialization-nontype-value`.
+  The first case also exposes the known comparator internal failure.
+- **Dependent initialization, casts, and function-address lowering (5):**
+  `general/100-rvalue-reference-binds-converted-temporary`,
+  `general/300-array-functional-cast-pack-call`,
+  `general/300-constexpr-static-fn-template-address-pack`,
+  `general/300-single-pack-cast-target`, and
+  `general/300-static-constexpr-function-template-pointer-array`.
+- **Explicit-specialization/instantiation diagnostics (3):**
+  `general/300-extern-template-builtin-operator-function-declaration-bad`,
+  `general/300-template-instantiation-use-location-explicit-specialization`,
+  and `spec/300-explicit-specialized-ctor-template-header-bad`.
 
 ### Next Checkpoint
 
-Address the 11-case generated owner/body group first, beginning with typed
-generated declaration ownership and final LowIR body/storage ordering. Retain
-the nine focused fixtures, the 1635/1635 through-PA20 gate, the full PA21
-report, and the file audit as regression gates while the 25-case deduction and
-diagnostic group is handled afterward.
+Address the 13-case generated owner/member replay and LowIR group first,
+beginning with the nested-owner sanity failure and typed generated declaration
+body ownership.  Retain the nine focused probes, the **1635/1635** through-PA20
+gate, the **179/215** full PA21 baseline, and the file audit as regression gates;
+the 15-case identity/pack group, five initialization/address cases, and three
+diagnostics can then be bundled into the following smaller checkpoints.

@@ -63,8 +63,8 @@ bool PA18TemplateExpander::TransformQualifiedMemberTemplateCall(
 	member->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("identifier",
 		raw.substr(member_begin, member_close - member_begin + 1))));
 	result->children.insert(result->children.begin(), member);
-	const string previous_owner = active_concrete_owner_;
-	active_concrete_owner_ = owner;
+	const ConcreteOwnerContext previous_owner = active_concrete_owner_;
+	SetActiveConcreteOwner(owner, context);
 	bool instantiated = false;
 	try {
 		instantiated = InstantiateMemberCall(result, member,

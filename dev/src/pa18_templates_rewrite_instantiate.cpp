@@ -5,27 +5,6 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
-namespace {
-
-bool HasStaticMemberDeclaration(const CPPGMAstNodePtr& node, const string& name)
-{
-	if(!node || name.empty()) return false;
-	if(node->kind == "simple-declaration" && !node->children.empty() &&
-		SpellNode(node->children[0]).find("static") != string::npos) {
-		const CPPGMAstNodePtr list = ChildOfKindLocal(node, "init-declarator-list");
-		if(list) for(size_t item = 0; item < list->children.size(); ++item) {
-			const CPPGMAstNodePtr entry = list->children[item];
-			if(!entry || entry->children.empty()) continue;
-			if(LastComponent(FirstIdentifierLocal(entry->children[0])) == name) return true;
-		}
-	}
-	for(size_t child = 0; child < node->children.size(); ++child)
-		if(HasStaticMemberDeclaration(node->children[child], name)) return true;
-	return false;
-}
-
-} // namespace
-
 CPPGMAstNodePtr PA18TemplateExpander::TransformInstantiatedNode(
 	const TemplateDefinition& definition, const string& context,
 	const map<string, string>& substitutions,
@@ -1070,14 +1049,15 @@ bool PA18TemplateExpander::EvaluateSourceObjectMember(
 	for(size_t child = 0; child < declaration->children.size(); ++child) {
 		const CPPGMAstNodePtr field = declaration->children[child];
 		if(!field || field->kind != "simple-declaration" || field->children.empty()) continue;
-		if(SpellNode(field->children[0]).find("static") != string::npos) continue;
 		const CPPGMAstNodePtr list = ChildOfKindLocal(field, "init-declarator-list");
 		if(!list) continue;
 		for(size_t item = 0; item < list->children.size(); ++item) {
 			const CPPGMAstNodePtr declarator = list->children[item];
 			if(!declarator || declarator->children.empty()) continue;
-			if(LastComponent(FirstIdentifierLocal(declarator->children[0])) ==
-				raw.substr(member_begin)) {
+			const string field_name = LastComponent(FirstIdentifierLocal(
+				declarator->children[0]));
+			if(HasStaticMember(0, return_type, field_name)) continue;
+			if(field_name == raw.substr(member_begin)) {
 				if(member >= expression->children.size()) return false;
 				return EvaluateIntegralText(ConstantExpressionSpelling(
 					expression->children[member]), context, substitutions, result);

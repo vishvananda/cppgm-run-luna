@@ -1076,8 +1076,7 @@
 		const map<string, string>& substitutions, const string& context,
 		const string& concrete_owner, bool explicit_instantiation = false)
 	{
-		const bool static_member = definition.declaration && !definition.declaration->children.empty() &&
-			SpellNode(definition.declaration->children[0]).find("static") != string::npos;
+		const bool static_member = definition.static_member;
 		if(definition.friend_declaration) return definition.name;
 		if(static_member && definition.owner.find("::") == string::npos &&
 			!concrete_owner.empty()) return TypeSuffix(PrefixComponent(definition.qualified_name)) +

@@ -303,32 +303,25 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			// partial specialization), so ordinary name lookup is intentionally not
 			// sufficient here.  Select the nested definition through the typed owner
 			// specialization before materializing its own arguments.
-			if(!definition && !active_concrete_owner_.empty()) {
-				map<string, string>::const_iterator owner_base = specialization_bases_.find(
-					LastComponent(active_concrete_owner_));
-				map<string, vector<string> >::const_iterator owner_arguments =
-					specialization_arguments_.find(LastComponent(active_concrete_owner_));
-				if(owner_base != specialization_bases_.end() &&
-					owner_arguments != specialization_arguments_.end()) {
-					const TemplateDefinition* owner_definition = FindDefinition(
-						owner_base->second, context);
-					if(owner_definition && owner_definition->class_template) {
-						const TemplateDefinition* selected_owner = SelectClassTemplateDefinition(
-							owner_definition, owner_arguments->second, context);
-						if(selected_owner) {
-							const TemplateDefinition* nested = FindNestedDefinition(*selected_owner,
-								LastComponent(base));
-							if(nested) {
-								definition = nested;
-								active_nested_parent = selected_owner;
-								active_nested_parent_arguments = owner_arguments->second;
-							}
+			if(!definition && !active_concrete_owner_.name.empty()) {
+				const TemplateDefinition* owner_definition =
+					active_concrete_owner_.definition;
+				if(owner_definition && owner_definition->class_template) {
+					const TemplateDefinition* selected_owner = SelectClassTemplateDefinition(
+						owner_definition, active_concrete_owner_.arguments, context);
+					if(selected_owner) {
+						const TemplateDefinition* nested = FindNestedDefinition(*selected_owner,
+							LastComponent(base));
+						if(nested) {
+							definition = nested;
+							active_nested_parent = selected_owner;
+							active_nested_parent_arguments = active_concrete_owner_.arguments;
 						}
 					}
 				}
 			}
 			if(!definition) continue;
-				vector<string> raw_template_args = SplitTemplateArguments(arguments_text);
+			vector<string> raw_template_args = SplitTemplateArguments(arguments_text);
 				// A pack expansion inside a template-id can leave a synthetic
 				// trailing empty component (`F<T, Pack...>` with an empty pack).
 				// Remove that artifact at the point where the expansion is consumed;
@@ -667,7 +660,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 							active_nested_parent_arguments[parameter];
 				if(!active_nested_parent->name.empty())
 					instantiation_substitutions[active_nested_parent->name] =
-						active_concrete_owner_;
+						active_concrete_owner_.name;
 			}
 				string concrete_owner_for_instantiation;
 			const size_t base_separator = base.rfind("::");
@@ -717,11 +710,11 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 						concrete_owner_for_instantiation = concrete_owner;
 				}
 			}
-			const string previous_concrete_owner = active_concrete_owner_;
+			const ConcreteOwnerContext previous_concrete_owner = active_concrete_owner_;
 			if(!concrete_owner_for_instantiation.empty())
-				active_concrete_owner_ = concrete_owner_for_instantiation;
-			const string* requested_owner = active_concrete_owner_.empty() ? 0 :
-				&active_concrete_owner_;
+				SetActiveConcreteOwner(concrete_owner_for_instantiation, context);
+			const string* requested_owner = active_concrete_owner_.name.empty() ? 0 :
+				&active_concrete_owner_.name;
 			string local_name;
 			try {
 				local_name = Instantiate(*definition, args, context, false, 0,
