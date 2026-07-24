@@ -1,6 +1,7 @@
 #include "pa18_templates_collection.h"
 #include "pa18_templates_rewrite.h"
 
+
 using namespace std;
 
 namespace pa18_templates_internal {
@@ -345,7 +346,9 @@ bool PA18TemplateExpander::InferArgument(const CPPGMAstNodePtr& expression,
 					ReturnDeclaratorSuffix(signature->declarator);
 				*result = CanonicalSpelling(ResolveAlias(ReplaceIdentifiers(
 					return_type, substitutions), context));
-				if(!result->empty()) return true;
+				if(!result->empty()) {
+					return true;
+				}
 			}
 				const string fallback = ResolveAlias(expression->children[0]->value, context);
 				if(!IsKnownTypeSpelling(fallback, context)) return false;
@@ -435,7 +438,10 @@ bool PA18TemplateExpander::MergeInferredFunctionArgument(
 		if(lvalue && match_pattern.find("const") == string::npos) return false;
 		if(rvalue) {
 			const string target = CanonicalSpelling(match_pattern.substr(0, match_pattern.size() - 2));
-			if(!IsBuiltinArithmeticType(type) ||
+			string actual_type = CanonicalSpelling(type);
+			while(!actual_type.empty() && actual_type[actual_type.size() - 1] == '&')
+				actual_type = CanonicalSpelling(actual_type.substr(0, actual_type.size() - 1));
+			if(!IsBuiltinArithmeticType(actual_type) ||
 				!IsBuiltinArithmeticType(ReplaceIdentifiers(target, *inferred))) return false;
 		}
 		for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter)
@@ -502,6 +508,24 @@ bool PA18TemplateExpander::InferFunctionParameter(
 		ChildOfKindLocal(parameter->children[1], "parameter-clause") ?
 		FunctionTypeSpelling(parameter) : ParameterTypeSpelling(parameter);
 	const bool pack_parameter = IsFunctionParameterPack(parameter);
+	bool explicit_pack_values = false;
+	if(pack_parameter && inferred_packs) for(size_t template_parameter = 0;
+		template_parameter < definition.parameters.size(); ++template_parameter) {
+		const TemplateParameter& candidate = definition.parameters[template_parameter];
+		if(!candidate.pack || candidate.name.empty()) continue;
+		for(size_t position = pattern.find(candidate.name); position != string::npos;
+			position = pattern.find(candidate.name, position + candidate.name.size())) {
+			const bool left = position == 0 || !IsIdentifierCharacter(pattern[position - 1]);
+			const size_t end = position + candidate.name.size();
+			const bool right = end == pattern.size() || !IsIdentifierCharacter(pattern[end]);
+			if(left && right) {
+				map<string, vector<string> >::const_iterator values = inferred_packs->find(candidate.name);
+				explicit_pack_values = values != inferred_packs->end() && !values->second.empty();
+				break;
+			}
+		}
+		if(explicit_pack_values) break;
+	}
 	vector<string> bound_pack_names;
 	if(pack_parameter && bound_pack_values) for(map<string, vector<string> >::const_iterator
 		bound = bound_pack_values->begin(); bound != bound_pack_values->end(); ++bound) {
@@ -571,7 +595,8 @@ bool PA18TemplateExpander::InferFunctionParameter(
 				argument->kind == "subscript-expression")) {
 			if(type.empty() || type[type.size() - 1] != '&') type = CanonicalSpelling(type + "&");
 		}
-		if(inferred_argument && !MergeInferredFunctionArgument(definition, pattern, type, signature,
+		if(inferred_argument && !explicit_pack_values &&
+			!MergeInferredFunctionArgument(definition, pattern, type, signature,
 			parameter_substitutions, context, parameter_names, inferred, inferred_packs,
 			inferred_functions, bound_pack_values)) return false;
 		++*argument_index;
@@ -658,12 +683,32 @@ bool PA18TemplateExpander::InferFunctionArguments(const TemplateDefinition& defi
 	vector<CPPGMAstNodePtr> deferred_arguments;
 	for(size_t i = 0; i < definition.parameters.size(); ++i) {
 		if(!definition.parameters[i].name.empty()) parameter_names.insert(definition.parameters[i].name);
-		if(explicit_prefix && i < explicit_prefix->size() && !definition.parameters[i].pack &&
-			!definition.parameters[i].name.empty()) inferred[definition.parameters[i].name] = (*explicit_prefix)[i];
 	}
 	if(bound_pack_values) for(map<string, vector<string> >::const_iterator bound =
 		bound_pack_values->begin(); bound != bound_pack_values->end(); ++bound)
 		parameter_names.erase(bound->first);
+	size_t explicit_index = 0;
+	bool explicit_pack_consumed = false;
+	if(explicit_prefix) for(size_t parameter = 0;
+		parameter < definition.parameters.size(); ++parameter) {
+		const TemplateParameter& template_parameter = definition.parameters[parameter];
+		if(template_parameter.pack) {
+			bool pack_precedes_fixed = false;
+			for(size_t later = parameter + 1; later < definition.parameters.size(); ++later)
+				if(!definition.parameters[later].pack) {
+					pack_precedes_fixed = true;
+					break;
+				}
+			if(pack_precedes_fixed || explicit_index < explicit_prefix->size()) {
+				vector<string>& values = inferred_packs[template_parameter.name];
+				while(explicit_index < explicit_prefix->size())
+					values.push_back((*explicit_prefix)[explicit_index++]);
+				if(pack_precedes_fixed) explicit_pack_consumed = true;
+			}
+		} else if(!explicit_pack_consumed && explicit_index < explicit_prefix->size() &&
+			!template_parameter.name.empty())
+			inferred[template_parameter.name] = (*explicit_prefix)[explicit_index++];
+	}
 	size_t argument_index = 0;
 	for(size_t i = 0; i < parameters->children.size(); ++i) {
 		const bool parameter_ok = InferFunctionParameter(definition, parameters->children[i], parameters, i, arguments, &argument_index,

@@ -1,6 +1,7 @@
 #include <functional>
 #include "pa18_templates_collection.h"
 #include "pa18_templates_rewrite.h"
+
 using namespace std;
 
 namespace pa18_templates_internal {
@@ -238,6 +239,48 @@ vector<const TemplateDefinition*> PA18TemplateExpander::MemberDefinitions(
 	return result;
 }
 
+void PA18TemplateExpander::RecordConstantDeclaration(
+	const CPPGMAstNodePtr& node, const string& context,
+	const map<string, string>& substitutions)
+{
+	if(!node || node->kind != "simple-declaration" || node->children.empty()) return;
+	RecordConstantArrayDeclaration(node, context, substitutions);
+	const string specifiers = SpellNode(node->children[0]);
+	if(specifiers.find("const") == string::npos && specifiers.find("constexpr") == string::npos) return;
+	const string base_type = NodeTypeSpelling(node->children[0]);
+	const string resolved_base_type = ResolveAlias(ReplaceIdentifiers(base_type, substitutions), context);
+	if(!PA19Type(resolved_base_type).integral) return;
+	const CPPGMAstNodePtr list = ChildOfKindLocal(node, "init-declarator-list");
+	if(!list) return;
+	for(size_t i = 0; i < list->children.size(); ++i) {
+		const CPPGMAstNodePtr item = list->children[i];
+		if(!item || item->children.size() < 2 || !item->children[0]) continue;
+		if(!DeclaratorArraySuffix(item->children[0]).empty()) continue;
+		const string name = FirstIdentifierLocal(item->children[0]);
+		const CPPGMAstNodePtr initializer = item->children[1];
+		if(name.empty() || !initializer || initializer->children.empty()) continue;
+		PA19IntegralValue value;
+		const string expression_text = ConstantExpressionSpelling(initializer->children[0]);
+		// Leave dependent primary-template initializers for replay in their scope.
+		if(!HasReplayContext(substitutions) && expression_text.find("decltype(") != string::npos)
+			continue;
+		if(!EvaluateIntegralText(expression_text, context, substitutions, &value)) continue;
+		if((expression_text.find("sizeof") != string::npos || expression_text.find("alignof") != string::npos) &&
+			initializer->kind == "initializer" && initializer->children.size() == 1)
+			initializer->children[0] = CPPGMAstNodePtr(new CPPGMAstNode("literal",
+				TemplateIntegralValueSpelling(value)));
+		const string qualified = JoinPath(
+			active_instantiation_name_.empty() ? context : active_instantiation_name_, name);
+		constant_values_[qualified] = value;
+		if(constant_values_.find(name) == constant_values_.end()) constant_values_[name] = value;
+		const PA19IntegralType type = PA19Type(resolved_base_type);
+		if(type.integral) {
+			constant_type_sizes_[qualified] = type.bits <= 8 ? 1 : type.bits <= 16 ? 2 : type.bits <= 32 ? 4 : 8;
+			constant_type_alignments_[qualified] = constant_type_sizes_[qualified];
+		}
+	}
+}
+
 void PA18TemplateExpander::RecordConstantArrayDeclaration(
 	const CPPGMAstNodePtr& node, const string& context,
 	const map<string, string>& substitutions)
@@ -273,12 +316,28 @@ void PA18TemplateExpander::RecordConstantArrayDeclaration(
 			}
 			values.push_back(value);
 		}
-		if(values.empty() && !initializer->children.empty()) continue;
-		const string qualified = JoinPath(context, name);
-		constant_arrays_[qualified] = values;
-		if(constant_arrays_.find(name) == constant_arrays_.end())
-			constant_arrays_[name] = values;
-	}
+			if(values.empty() && !initializer->children.empty()) continue;
+			const string qualified = JoinPath(context, name);
+			constant_arrays_[qualified] = values;
+			if(constant_arrays_.find(name) == constant_arrays_.end())
+				constant_arrays_[name] = values;
+			const PA19IntegralType type = PA19Type(element_type);
+			const size_t element_size = type.integral ? (type.bits <= 8 ? 1 :
+				type.bits <= 16 ? 2 : type.bits <= 32 ? 4 : 8) :
+				EstimateTypeSize(element_type, context);
+			if(element_size) {
+				constant_type_sizes_[qualified] = values.size() * element_size;
+				constant_type_alignments_[qualified] = element_size > 8 ? 8 : element_size;
+				constant_type_sizes_[qualified + "[0]"] = element_size;
+				constant_type_alignments_[qualified + "[0]"] = element_size > 8 ? 8 : element_size;
+				if(constant_type_sizes_.find(name) == constant_type_sizes_.end()) {
+					constant_type_sizes_[name] = values.size() * element_size;
+					constant_type_alignments_[name] = element_size > 8 ? 8 : element_size;
+					constant_type_sizes_[name + "[0]"] = element_size;
+					constant_type_alignments_[name + "[0]"] = element_size > 8 ? 8 : element_size;
+				}
+			}
+		}
 }
 
 const vector<PA19IntegralValue>* PA18TemplateExpander::FindConstantArray(
@@ -733,7 +792,7 @@ bool PA18TemplateExpander::EvaluateIntegralTextSpecialForms(const string& raw,
 		if(FunctionCallResultType(operand, context, substitutions, &call_type)) {
 			string resolved = CanonicalSpelling(RemoveMarker(RewriteText(
 				call_type, context, substitutions, 0)));
-			resolved = ResolveAlias(resolved, context);
+		resolved = ResolveAlias(resolved, context);
 			const size_t size = EstimateTypeSize(resolved, context);
 			if(size) {
 				*result = PA19IntegralValue::Unsigned(
@@ -861,8 +920,9 @@ bool PA18TemplateExpander::EvaluateIntegralTextKnownValues(const string& raw,
 		}
 	}
 	const bool qualified_value_expression = raw.find("::value") != string::npos;
-	if(!qualified_value_expression || constant_values_.find(raw) != constant_values_.end())
+	if(!qualified_value_expression || constant_values_.find(raw) != constant_values_.end()) {
 		if(parser.Evaluate(raw, result)) return true;
+	}
 	return false;
 }
 
@@ -928,11 +988,13 @@ bool PA18TemplateExpander::EvaluateIntegralText(string raw, const string& contex
 	// treating the surrounding source context as unresolved.
 	if(EvaluateActivePackSize(raw, result)) return true;
 	if(!PrepareIntegralText(&raw, context, substitutions) &&
-		active_pack_substitutions_.empty() && active_pack_identifier_substitutions_.empty())
+		active_pack_substitutions_.empty() && active_pack_identifier_substitutions_.empty()) {
 		return false;
+	}
 	NormalizeIntegralText(&raw, substitutions);
 	if(EvaluateIntegralTextSpecialForms(raw, context, substitutions, result)) return true;
-	if(EvaluateIntegralTextKnownValues(raw, context, substitutions, result)) return true;
+	const bool known_value = EvaluateIntegralTextKnownValues(raw, context, substitutions, result);
+	if(known_value) return true;
 	return EvaluateIntegralTextFallbacks(raw, context, substitutions, result);
 }
 
@@ -1315,11 +1377,22 @@ void PA18TemplateExpander::AddConcreteOwnerSubstitutions(
 		owner_arguments == specialization_arguments_.end()) return;
 	const TemplateDefinition* owner_definition = FindDefinition(owner_base->second, context);
 	if(!owner_definition || !owner_definition->class_template) return;
+	const TemplateDefinition* selected_owner = SelectClassTemplateDefinition(
+		owner_definition, owner_arguments->second, context);
+	if(selected_owner) owner_definition = selected_owner;
 	for(size_t parameter = 0; parameter < owner_definition->parameters.size() &&
 		parameter < owner_arguments->second.size(); ++parameter)
 		if(!owner_definition->parameters[parameter].name.empty())
 			(*substitutions)[owner_definition->parameters[parameter].name] =
 				owner_arguments->second[parameter];
+	if(owner_definition->partial_specialization) {
+		map<string, string> specialized;
+		if(MatchClassSpecializationPattern(*owner_definition, owner_arguments->second,
+			&specialized, context))
+			for(map<string, string>::const_iterator binding = specialized.begin();
+				binding != specialized.end(); ++binding)
+				(*substitutions)[binding->first] = binding->second;
+	}
 }
 
 bool PA18TemplateExpander::ConcreteOwnerMatches(

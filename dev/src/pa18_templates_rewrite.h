@@ -849,7 +849,7 @@ bool MatchTypePattern(string pattern, string actual,
 					active_pack_identifier_substitutions_.find(word) !=
 						active_pack_identifier_substitutions_.end()) return word;
 			}
-			return LastComponent(value);
+			return string();
 		}
 		if(node->kind == "type-name" || node->kind == "decl-specifier" ||
 			node->kind == "type-specifier") {
@@ -863,7 +863,7 @@ bool MatchTypePattern(string pattern, string actual,
 					active_pack_identifier_substitutions_.find(word) !=
 						active_pack_identifier_substitutions_.end()) return word;
 			}
-			return LastComponent(value);
+			return string();
 		}
 		for(size_t i = 0; i < node->children.size(); ++i) {
 			const string found = PackExpansionIdentifier(node->children[i]);

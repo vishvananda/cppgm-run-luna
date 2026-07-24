@@ -879,11 +879,16 @@ void PA14Lowerer::EmitReturn(const CPPGMAstNodePtr& node, Scope* scope)
       return;
     }
     Value value = EmitValue(expression, scope, return_type);
+    const bool preserve_sizeof_type = expression->kind == "sizeof-expression" ||
+      expression->kind == "sizeof-pack-expression" ||
+      expression->kind == "type-trait-expression";
     if(value.known_constant && is_integral_type(value.type) && is_integral_type(return_type) &&
-       type_size(return_type) > type_size(value.type) && !is_unsigned_type(return_type)) {
-      // PA14 permits canonical widened integral immediates.  Signed long
-      // return literals are emitted directly; unsigned aliases retain the
-      // explicit conversion boundary used by the reference LowIR.
+       !preserve_sizeof_type &&
+       (type_size(return_type) <= type_size(value.type) ||
+        (!is_unsigned_type(return_type) && type_size(return_type) > type_size(value.type)))) {
+      // A known integral return value is already folded by the semantic
+      // evaluator; retain it as an immediate across the ordinary integral
+      // conversion boundary.
       EmitLiveDestructors(scope);
       Terminate("return " + low_type(return_type) + " " + integer_text(value.constant));
       return;
@@ -1185,6 +1190,29 @@ void PA14Lowerer::EmitDiscard(const CPPGMAstNodePtr& node, Scope* scope)
     if(node->kind == "call-expression") {
       ExprInfo info = Infer(node, scope);
       TypePtr value_type = expression_value_type(info);
+      TypePtr constructed = !node->children.empty() ?
+        ConstructorObjectType(node->children[0], scope) : TypePtr();
+      if(constructed) {
+        if(constructed->kind == TYPE_ARRAY) {
+          const string slot = new_special_slot("discardarr", low_type(constructed));
+          const string address = new_temp();
+          AddInstruction(address + " = addr $" + slot);
+          const CPPGMAstNodePtr argument_list = node->children.size() > 1 ?
+            node->children[1] : CPPGMAstNodePtr();
+          vector<CPPGMAstNodePtr> arguments = argument_list ?
+            argument_list->children : vector<CPPGMAstNodePtr>();
+          if(node->value == "braced-construction" && arguments.size() == 1 &&
+             arguments[0] && arguments[0]->kind == "braced-init-list")
+            arguments = arguments[0]->children;
+          CPPGMAstNodePtr aggregate(new CPPGMAstNode("braced-init-list"));
+          aggregate->children = arguments;
+          EmitAggregateArrayAt(address, constructed, aggregate, scope,
+            CPPGMAstNodePtr(), -1, true);
+          return;
+        }
+        (void)EmitValue(node, scope);
+        return;
+      }
       if(value_type && value_type->kind == TYPE_CLASS &&
          !type_is_reference(info.type)) {
         const string slot = new_special_slot("discard", low_type(value_type));

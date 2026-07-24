@@ -827,7 +827,7 @@ TypePtr PA14Lowerer::ConstructorObjectType(const CPPGMAstNodePtr& callee,
       if(candidates[i]->kind != BIND_TYPE && candidates[i]->kind != BIND_TYPE_ALIAS)
         continue;
       TypePtr type = type_value(candidates[i]->type);
-      if(type && type->kind == TYPE_CLASS) return type;
+      if(type && (type->kind == TYPE_CLASS || type->kind == TYPE_ARRAY)) return type;
     }
     return TypePtr();
   }
@@ -878,7 +878,8 @@ TypePtr PA14Lowerer::BuiltinCastType(const CPPGMAstNodePtr& callee,
     if(!target.binding || (target.binding->kind != BIND_TYPE &&
                            target.binding->kind != BIND_TYPE_ALIAS)) return TypePtr();
     TypePtr alias = target.binding->type;
-    return alias && type_value(alias) && type_value(alias)->kind != TYPE_CLASS ? alias : TypePtr();
+    return alias && type_value(alias) && type_value(alias)->kind != TYPE_CLASS &&
+      type_value(alias)->kind != TYPE_ARRAY ? alias : TypePtr();
   }
 
 PA14Lowerer::ExprInfo PA14Lowerer::InferUnary(const CPPGMAstNodePtr& node, Scope* scope)

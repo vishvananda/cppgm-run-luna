@@ -725,10 +725,63 @@ void PA18TemplateExpander::ValidateTemplateArgumentKinds(
 		ValidateTemplateArgumentKinds(node->children[i], context, parameters);
 }
 
+bool PA18TemplateExpander::FindLogicalNamespaceAlias(const string& spelling,
+	string* alias_key) const
+{
+	const size_t separator = TopLevelScopeSeparator(spelling);
+	if(!alias_key || separator == string::npos) return false;
+	const string logical_owner = spelling.substr(0, separator);
+	const string logical_name = spelling.substr(separator + 2);
+	map<string, string>::const_iterator match = type_aliases_.end();
+	for(map<string, string>::const_iterator it = type_aliases_.begin();
+		it != type_aliases_.end(); ++it) {
+		if(LastComponent(it->first) != logical_name) continue;
+		const string physical_owner = PrefixComponent(it->first);
+		map<string, string>::const_iterator logical =
+			lexical_namespace_logical_.find(physical_owner);
+		if(logical == lexical_namespace_logical_.end() ||
+			logical->second != logical_owner) continue;
+		if(match != type_aliases_.end()) return false;
+		match = it;
+	}
+	if(match == type_aliases_.end()) return false;
+	*alias_key = match->first;
+	return true;
+}
+
+bool PA18TemplateExpander::IsArrayTypeAlias(const string& alias_name,
+	const string& context) const
+{
+	for(string current = context; ; ) {
+		map<string, string>::const_iterator alias = type_aliases_.find(
+			JoinPath(current, alias_name));
+		if(alias != type_aliases_.end() && alias->second.find('[') != string::npos)
+			return true;
+		if(current.empty()) break;
+		const size_t separator = current.rfind("::");
+		if(separator == string::npos) current.clear();
+		else current.erase(separator);
+	}
+	return false;
+}
+
+bool PA18TemplateExpander::HasPackBeforeFixed(const TemplateDefinition& definition) const
+{
+	for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter)
+		if(definition.parameters[parameter].pack)
+			for(size_t later = parameter + 1; later < definition.parameters.size(); ++later)
+				if(!definition.parameters[later].pack) return true;
+	return false;
+}
+
 string PA18TemplateExpander::ResolveAlias(string spelling, const string& context) const
 {
+	const bool reference_alias_specialization =
+		reference_alias_specializations_.find(LastComponent(spelling)) !=
+		reference_alias_specializations_.end();
 	spelling = CanonicalSpelling(spelling);
 	string cv_prefix;
+	bool resolved_reference_alias = false;
 	if(spelling.compare(0, 6, "const ") == 0) {
 		cv_prefix = "const ";
 		spelling = CanonicalSpelling(spelling.substr(6));
@@ -772,32 +825,12 @@ string PA18TemplateExpander::ResolveAlias(string spelling, const string& context
 				direct = type_aliases_.find(candidates->second[0]);
 		}
 		if(direct == type_aliases_.end()) {
-			// Match a qualified alias through an inline namespace in the same
-			// logical namespace.  The alias remains stored under its physical
-			// owner, while source lookup is allowed to omit the inline component.
-			const size_t raw_separator = TopLevelScopeSeparator(spelling);
-			if(raw_separator != string::npos) {
-				const string logical_owner = spelling.substr(0, raw_separator);
-				const string logical_name = spelling.substr(raw_separator + 2);
-				map<string, string>::const_iterator logical_match = type_aliases_.end();
-				for(map<string, string>::const_iterator it = type_aliases_.begin();
-					it != type_aliases_.end(); ++it) {
-					if(LastComponent(it->first) != logical_name) continue;
-					const string physical_owner = PrefixComponent(it->first);
-					map<string, string>::const_iterator logical =
-						lexical_namespace_logical_.find(physical_owner);
-					if(logical == lexical_namespace_logical_.end() ||
-						logical->second != logical_owner) continue;
-					if(logical_match != type_aliases_.end()) {
-						logical_match = type_aliases_.end();
-						break;
-					}
-					logical_match = it;
-				}
-				if(logical_match != type_aliases_.end()) direct = logical_match;
-			}
+			string logical_alias;
+			if(FindLogicalNamespaceAlias(spelling, &logical_alias))
+				direct = type_aliases_.find(logical_alias);
 		}
 		if(direct != type_aliases_.end()) {
+			resolved_reference_alias = true;
 			string target = QualifyAliasTarget(direct->second, direct->first, class_contexts_);
 			const size_t owner_separator = spelling.rfind("::");
 			if(owner_separator != string::npos) {
@@ -843,6 +876,18 @@ string PA18TemplateExpander::ResolveAlias(string spelling, const string& context
 		}
 		if(member_type.empty()) break;
 		spelling = CanonicalSpelling(member_type);
+	}
+	// Top-level cv applied to an alias whose target is a reference does not
+	// qualify the referred-to object (`const IntRef` is still `int&`).  A cv
+	// written directly on the referred-to type (`const int&`) was peeled before
+	// the reference suffix, so retain it in that case.
+	if(resolved_reference_alias && suffix.empty() &&
+		!spelling.empty() && spelling[spelling.size() - 1] == '&') cv_prefix.clear();
+	if(reference_alias_specialization) {
+		while(spelling.compare(0, 6, "const ") == 0)
+			spelling = CanonicalSpelling(spelling.substr(6));
+		while(spelling.compare(0, 9, "volatile ") == 0)
+			spelling = CanonicalSpelling(spelling.substr(9));
 	}
 	return CanonicalSpelling(cv_prefix + spelling + suffix + array_suffix);
 }

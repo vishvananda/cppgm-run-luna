@@ -158,6 +158,25 @@ void PA18TemplateExpander::RegisterGeneratedTypeEntity(
 	const string& context, bool explicit_instantiation)
 {
 	if(definition.alias_template) {
+		bool reference_argument = false;
+		for(size_t argument = 0; argument < args.size() &&
+			argument < definition.parameters.size(); ++argument)
+			if(definition.parameters[argument].type) {
+				const string resolved = ResolveAlias(args[argument], context);
+				if(!resolved.empty() && resolved[resolved.size() - 1] == '&') {
+					reference_argument = true;
+					break;
+				}
+			}
+		if(reference_argument) {
+			reference_alias_specializations_[local_name] = true;
+			reference_alias_specializations_[JoinPath(definition.owner, local_name)] = true;
+			reference_alias_specializations_[JoinPath(
+			definition.lexical_owner.empty() ? definition.owner : definition.lexical_owner,
+			local_name)] = true;
+		}
+	}
+	if(definition.alias_template) {
 		RegisterGeneratedTypeAlias(generated, generated_owner);
 		set<string> concrete_owners;
 		if(!concrete_owner.empty()) concrete_owners.insert(concrete_owner);
@@ -342,6 +361,8 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 		concrete_owner, substitutions, args, pack_substitutions, context,
 		explicit_instantiation);
 	EnsureDeclarationDependencies(generated, definition.owner, generated_owner);
+	if(definition.class_template)
+		RecordTemplateArrayValues(definition, args, context, substitutions);
 	// Text replay can encounter the same member template-id while resolving a
 	// dependent type and give the detached definition its standalone cache name.
 	// Once the entity is owned by a concrete class, the declaration must retain
@@ -355,8 +376,8 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 			generated->value = concrete_owner + "::" + LastComponent(concrete_owner);
 		if(!explicit_member_definition)
 			RenameGeneratedFunction(generated, special_member ?
-				LastComponent(concrete_owner) : operator_member ? local_name :
-				LastComponent(definition.name));
+				LastComponent(concrete_owner) : definition.member_template ? local_name :
+				operator_member ? local_name : LastComponent(definition.name));
 		if(definition.explicit_specialization && generated->kind == "simple-declaration") {
 			const CPPGMAstNodePtr identifier = DescendantOfKind(generated, "identifier");
 			if(identifier)
@@ -401,6 +422,25 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 	}
 	generated_by_owner_[generated_function_owner].push_back(generated);
 	}
+	// Some declarator suffixes are cloned while a generated class is replayed,
+	// so their bound does not pass through the ordinary child transform.  Finish
+	// those bounds after all generated constants and dependencies are indexed,
+	// before the declaration reaches PA11.
+	std::function<void(const CPPGMAstNodePtr&)> materialize_array_bounds =
+		[&](const CPPGMAstNodePtr& node) {
+			if(!node) return;
+			if(node->kind == "array-suffix" && !node->children.empty() &&
+				node->children[0]) {
+				PA19IntegralValue bound;
+				if(EvaluateIntegralText(ConstantExpressionSpelling(node->children[0]),
+					transform_context, substitutions, &bound))
+					node->children[0] = CPPGMAstNodePtr(new CPPGMAstNode(
+					"literal", IntegralValueSpelling(bound)));
+			}
+			for(size_t child = 0; child < node->children.size(); ++child)
+				materialize_array_bounds(node->children[child]);
+		};
+	materialize_array_bounds(generated);
 	active_specializations_.erase(key);
 	return local_name;
 }

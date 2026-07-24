@@ -284,6 +284,14 @@ size_t PA18TemplateExpander::EstimateTypeSize(string raw, const string& context)
 				string element = CanonicalSpelling(raw.substr(0, array_open));
 				const size_t reference = element.rfind("(&");
 				if(reference != string::npos) element = CanonicalSpelling(element.substr(0, reference));
+				if(count == 0) {
+					const vector<PA19IntegralValue>* values = FindConstantArray(element, context);
+					const size_t array_size = values ? EstimateTypeSize(element, context) : 0;
+					if(values && !values->empty() && array_size &&
+						array_size % values->size() == 0)
+						return array_size / values->size();
+					return 0;
+				}
 				return EstimateTypeSize(element, context) * static_cast<size_t>(count);
 			}
 		}

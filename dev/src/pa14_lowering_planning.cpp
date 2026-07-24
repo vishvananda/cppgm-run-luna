@@ -299,7 +299,7 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
       TypePtr callable = expression_value_type(callee);
       if(callable && callable->kind == TYPE_CLASS)
         return ChooseCall(MakeMemberCall(callee_node, "operator()", argument_nodes), scope);
-      }
+    }
     if(!best.function) throw logic_error("expression is not callable");
     best.direct = false;
     return best;

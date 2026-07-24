@@ -1076,19 +1076,14 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 					if(explicit_definition->parameters[parameter].pack)
 						has_parameter_pack = true;
 					else ++fixed_template_parameters;
-				// Explicit arguments fill a trailing pack only once at least one
-				// element beyond the fixed prefix was written.  With just the
-				// fixed prefix (`construct<T>(args...)`), the function arguments
-				// still deduce the remaining pack.
+				const bool pack_precedes_fixed = HasPackBeforeFixed(*explicit_definition);
 				const bool explicit_pack_elements = has_parameter_pack &&
 					explicit_args.size() > fixed_template_parameters;
-				bool complete = explicit_pack_elements ||
-					(!has_parameter_pack && explicit_args.size() == explicit_definition->parameters.size());
+				bool complete = !pack_precedes_fixed && (explicit_pack_elements ||
+					(!has_parameter_pack && explicit_args.size() == explicit_definition->parameters.size()));
 				if(complete) complete_args = explicit_args;
-					else if(explicit_args.size() < explicit_definition->parameters.size())
-						complete = InferFunctionArguments(*explicit_definition, input,
-							&complete_args, substitutions, context, &explicit_args, 0,
-							&inferred_function_values);
+				else complete = InferFunctionArguments(*explicit_definition, input,
+					&complete_args, substitutions, context, &explicit_args, 0, &inferred_function_values);
 				if(complete) {
 					const string local_name = Instantiate(*explicit_definition, complete_args, context,
 						false, 0, 0, 0, &inferred_function_values);
@@ -1109,7 +1104,12 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 		}
 	}
 	for(size_t i = 0; i < input->children.size(); ++i) {
-		CPPGMAstNodePtr child = TransformNode(input->children[i], context, substitutions);
+		const bool preserve_array_alias = i == 0 && input->value == "braced-construction" && input->children[i] &&
+			input->children[i]->kind == "id-expression" &&
+			substitutions.find(input->children[i]->value) != substitutions.end() &&
+			IsArrayTypeAlias(input->children[i]->value, context);
+		CPPGMAstNodePtr child = preserve_array_alias ? CloneNode(input->children[i]) :
+			TransformNode(input->children[i], context, substitutions);
 		if(child) result->children.push_back(child);
 	}
 	CPPGMAstNodePtr result_callee = result->children.empty() ? CPPGMAstNodePtr() :

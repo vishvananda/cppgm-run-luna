@@ -467,7 +467,12 @@ string PA14Lowerer::TemplateFunctionObjectName(const FunctionRecord& function) c
     terminal = function.base_entry ? "C2" : "C1";
   else if(function.destructor)
     terminal = function.deleting_entry ? "D0" : (function.base_entry ? "D2" : "D1");
-  else terminal = abi_terminal(abi_last_component(function.qualified_name), source->child);
+  else {
+    string member_name = abi_last_component(function.qualified_name);
+    if(function.member_template && !function.template_primary.empty())
+      member_name = abi_last_component(function.template_primary);
+    terminal = abi_terminal(member_name, source->child);
+  }
 
   if(nested) {
     result += "N";

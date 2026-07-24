@@ -375,10 +375,11 @@ public:
 				if (open == string::npos) break;
 				string bound_text = spelling.substr(open + 1,
 					spelling.size() - open - 2);
-				long long bound = -1;
-				if (!bound_text.empty()) {
+				long long bound = -1; if (!bound_text.empty()) {
+					string numeric_bound = bound_text; while (!numeric_bound.empty() && string("uUlL").find(numeric_bound[numeric_bound.size() - 1]) != string::npos)
+						numeric_bound.erase(numeric_bound.size() - 1);
 					char* end = 0;
-					const long long parsed = strtoll(bound_text.c_str(), &end, 10);
+					const long long parsed = strtoll(numeric_bound.c_str(), &end, 0);
 					if (end && *end == '\0') bound = parsed;
 					else {
 						CPPGMAstNodePtr bound_expression(new CPPGMAstNode(
@@ -390,8 +391,7 @@ public:
 						if (bound < 0) break;
 					}
 				}
-				array_bounds.push_back(bound);
-				spelling.erase(open);
+				array_bounds.push_back(bound); spelling.erase(open);
 				continue;
 			}
 			break;

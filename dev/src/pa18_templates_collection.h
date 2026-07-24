@@ -307,7 +307,7 @@ inline string ReplaceIdentifiers(const string& raw, const map<string, string>& s
 }
 string ReplaceIdentifiersPreservingPackSizes(const string& raw,
 	const map<string, string>& substitutions);
-inline string TypeSuffix(string raw)
+inline string TypeSuffix(string raw, bool preserve_trailing_underscores = false)
 {
 	raw = CanonicalSpelling(raw);
 	const bool array_type = raw.find('[') != string::npos;
@@ -326,7 +326,8 @@ inline string TypeSuffix(string raw)
 		else if(ch == '&') result += "_ref";
 		else result += '_';
 	}
-	while(!array_type && result.size() > 1 && result[result.size() - 1] == '_')
+	while(!array_type && !preserve_trailing_underscores && result.size() > 1 &&
+		result[result.size() - 1] == '_')
 		result.erase(result.size() - 1);
 	return result.empty() ? "arg" : result;
 }
@@ -517,6 +518,10 @@ private:
 	map<string, vector<string> > active_pack_substitutions_;
 	map<string, vector<string> > active_pack_identifier_substitutions_;
 	map<string, string> type_aliases_;
+	// Alias-template specializations retain whether a type argument was a
+	// reference alias.  This lets cv applied by the alias body follow the
+	// language rule for top-level cv on a reference typedef.
+	map<string, bool> reference_alias_specializations_;
 	map<string, vector<string> > type_aliases_by_name_;
 	map<string, CPPGMAstNodePtr> function_definitions_;
 	map<string, FunctionSignature> function_signatures_;
@@ -605,6 +610,9 @@ private:
 	CPPGMAstNodePtr TransformCallExpression(const CPPGMAstNodePtr& input,
 		const string& context, const map<string, string>& substitutions);
 	string ResolveAlias(string spelling, const string& context) const;
+	bool FindLogicalNamespaceAlias(const string& spelling, string* alias_key) const;
+	bool IsArrayTypeAlias(const string& alias_name, const string& context) const;
+	bool HasPackBeforeFixed(const TemplateDefinition& definition) const;
 	bool LookupVariableType(const string& name, const string& context,
 		string* result) const;
 	bool ContainsName(const CPPGMAstNodePtr& node, const string& name) const;

@@ -412,6 +412,7 @@ PA14Lowerer::AddressInit PA14Lowerer::StaticAddress(const CPPGMAstNodePtr& expre
       Binding* binding = candidates[0];
       if(binding->kind == BIND_FUNCTION) {
         FunctionRecord* function = RecordForBinding(binding);
+        if(function) function->needed = true;
         result.valid = true;
         result.function = true;
         result.symbol = function ? function->symbol : low_symbol_component(binding->qualified_name);
@@ -542,7 +543,7 @@ string PA14Lowerer::RenderGlobal(GlobalRecord& global)
           CPPGMAstNodePtr item = expression->children[i];
           if(element->kind == TYPE_POINTER) {
             AddressInit address = StaticAddress(item, global.scope);
-            if(address.valid && !address.function) {
+            if(address.valid) {
               string text = "ptr addr @" + address.symbol;
               if(address.addend) text += " + " + integer_text(address.addend);
               items.push_back(GlobalDataItem(text));

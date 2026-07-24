@@ -34,6 +34,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			at = raw.find(token, at + expanded.size());
 		}
 	}
+	raw = CanonicalSpelling(RewriteActivePackSizes(raw));
 		if(raw.compare(0, 8, "operator") == 0) {
 			const string suffix = raw.substr(8);
 			map<string, string>::const_iterator operator_substitution = substitutions.find(suffix);
@@ -421,6 +422,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				continue;
 			}
 				for(size_t i = 0; i < args.size(); ++i) {
+					const string source_argument = args[i];
 				if(i < definition->parameters.size() &&
 					definition->parameters[i].template_template) {
 					string normalized;
@@ -437,6 +439,27 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				// replay it.
 					if(i < definition->parameters.size() &&
 						!definition->parameters[i].type) {
+						const string dependent_expression = CanonicalSpelling(args[i]);
+						const size_t sizeof_pack = dependent_expression.find("sizeof...");
+						if(sizeof_pack != string::npos) {
+							const size_t open = sizeof_pack + 9;
+							const size_t close = dependent_expression.find(')', open);
+							if(open < dependent_expression.size() &&
+								dependent_expression[open] == '(' && close != string::npos) {
+								const string pack_name = CanonicalSpelling(
+									dependent_expression.substr(open + 1, close - open - 1));
+								if(!pack_name.empty() &&
+									active_pack_substitutions_.find(pack_name) ==
+										active_pack_substitutions_.end() &&
+									active_pack_identifier_substitutions_.find(pack_name) ==
+										active_pack_identifier_substitutions_.end() &&
+									template_pack_names_.find(pack_name) !=
+										template_pack_names_.end()) {
+									deferred_pack_argument = true;
+									break;
+								}
+							}
+						}
 						bool unresolved_scope = !HasReplayContext(substitutions);
 						for(map<string,string>::const_iterator scope = substitutions.begin();
 							scope != substitutions.end() && !unresolved_scope; ++scope)
@@ -509,16 +532,43 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 								// spelling (`function_action<I, Ret>`); the concrete
 								// substitution will be installed when the partial
 								// specialization is selected.
-								if(!dependent_name && !args[i].empty() &&
-									(isalpha(static_cast<unsigned char>(args[i][0])) || args[i][0] == '_') &&
-									args[i].find_first_not_of(
-									"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") ==
-									string::npos && args[i] != "true" && args[i] != "false" &&
-									constant_values_.find(args[i]) == constant_values_.end() &&
-									active_integral_substitutions_.find(args[i]) ==
-									active_integral_substitutions_.end())
-									dependent_name = true;
-								if(dependent_name) {
+				if(!dependent_name && !args[i].empty() &&
+					(isalpha(static_cast<unsigned char>(args[i][0])) || args[i][0] == '_') &&
+					args[i].find_first_not_of(
+					"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") ==
+					string::npos && args[i] != "true" && args[i] != "false" &&
+					constant_values_.find(args[i]) == constant_values_.end() &&
+					active_integral_substitutions_.find(args[i]) ==
+					active_integral_substitutions_.end())
+					dependent_name = true;
+				// A constexpr member call in a class-template body is dependent even
+				// when the call's spelling is not itself a template parameter.  Defer
+				// it until the enclosing class arguments are installed; otherwise the
+				// primary body tries to evaluate `enabled()` with no binding for `T`.
+				if(!dependent_name && unresolved_scope) {
+					const size_t call_open = args[i].find('(');
+					if(call_open != string::npos) {
+						const string callee = LastComponent(args[i].substr(0, call_open));
+						for(string current = context; !current.empty() && !dependent_name; ) {
+							const TemplateDefinition* owner = FindDefinition(current, context);
+							if(owner && owner->class_template && owner->declaration)
+								for(size_t child = 0; child < owner->declaration->children.size(); ++child) {
+									const CPPGMAstNodePtr member = owner->declaration->children[child];
+									if(member && member->kind == "function-definition" &&
+										member->children.size() > 1 &&
+										LastComponent(FirstIdentifierLocal(member->children[1])) == callee) {
+										dependent_name = true;
+										break;
+									}
+								}
+							if(dependent_name) break;
+							const size_t separator = current.rfind("::");
+							if(separator == string::npos) current.clear();
+							else current.erase(separator);
+						}
+					}
+				}
+				if(dependent_name) {
 								deferred_pack_argument = true;
 								break;
 							}
@@ -537,8 +587,19 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				args[i] = CollapseReferenceSpelling(ReplaceIdentifiers(args[i], substitutions));
 				args[i] = ResolveAlias(args[i], context);
 				args[i] = NormalizeTypeArgument(RewriteText(args[i], context, substitutions, 0));
-				args[i] = ResolveAlias(args[i], context);
+					args[i] = ResolveAlias(args[i], context);
 					args[i] = QualifyTypeArgument(args[i], context, definition->owner);
+					// Preserve a typedef spelling that denotes a reference while
+					// replaying an alias template.  Substituting its expanded
+					// `int&` spelling into `const T` would incorrectly turn the
+					// source-level `const Alias` into `const int&`; C++ ignores
+					// that top-level cv on the reference alias.
+					if(definition->alias_template && i < definition->parameters.size() &&
+						definition->parameters[i].type &&
+						!source_argument.empty() &&
+						!ResolveAlias(source_argument, context).empty() &&
+						ResolveAlias(source_argument, context).back() == '&')
+						args[i] = source_argument;
 				}
 				if(deferred_pack_argument) {
 					search = close + 1;
@@ -736,8 +797,12 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			const ConcreteOwnerContext previous_concrete_owner = active_concrete_owner_;
 			if(!concrete_owner_for_instantiation.empty())
 				SetActiveConcreteOwner(concrete_owner_for_instantiation, context);
-			const string* requested_owner = active_concrete_owner_.name.empty() ? 0 :
-				&active_concrete_owner_.name;
+			string requested_owner_name = active_concrete_owner_.name;
+			if(requested_owner_name.empty() && definition->member_template &&
+				!active_instantiation_name_.empty())
+				requested_owner_name = active_instantiation_name_;
+			const string* requested_owner = requested_owner_name.empty() ? 0 :
+				&requested_owner_name;
 			string local_name;
 			try {
 				local_name = Instantiate(*definition, args, context, false, 0,
@@ -867,6 +932,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 		if(template_replaced) *template_replaced = true;
 		separator = raw.find("::", replacement_begin + member_type.size());
 	}
+	raw = CollapseReferenceSpelling(raw);
 	if(!resolve_alias || raw.find("::") == string::npos) return raw;
 		// A qualified static integral member is an expression here, not a type
 		// alias.  Keep its registered spelling intact so a dependent non-type

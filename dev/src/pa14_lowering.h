@@ -882,7 +882,8 @@ void EmitAggregateAt(const string& base, const TypePtr& type,
 void EmitAggregateArrayAt(const string& base, const TypePtr& type,
                           const CPPGMAstNodePtr& expression, Scope* scope,
                           const CPPGMAstNodePtr& refresh_node = CPPGMAstNodePtr(),
-                          long long refresh_offset = -1);
+                          long long refresh_offset = -1,
+                          bool direct_elements = false);
 
 void EmitAggregateClassFields(const string& base, const TypePtr& type,
                               const CPPGMAstNodePtr& expression, Scope* scope,

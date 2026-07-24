@@ -229,7 +229,7 @@ string PA18TemplateExpander::RewriteTemplateMemberSpelling(
 		const string bound = CanonicalSpelling(spelling.substr(open + 1, close - open - 1));
 		PA19IntegralValue bound_value;
 		if(!bound.empty() && EvaluateIntegralText(bound, context, local, &bound_value)) {
-			const string replacement = IntegralValueSpelling(bound_value);
+				const string replacement = IntegralValueSpelling(bound_value);
 			spelling.replace(open + 1, close - open - 1, replacement);
 			open += replacement.size() + 2;
 		} else open = spelling.find('[', close + 1);

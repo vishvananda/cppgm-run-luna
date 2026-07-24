@@ -180,6 +180,30 @@
 		return CanonicalSpelling(raw);
 	}
 
+	bool SplitStaticCast(string expression, string* type, string* operand) const
+	{
+		expression = CanonicalSpelling(expression);
+		if(expression.compare(0, 12, "static_cast<") != 0 || !type || !operand)
+			return false;
+		size_t close = string::npos;
+		int depth = 0;
+		for(size_t position = 11; position < expression.size(); ++position) {
+			if(expression[position] == '<') ++depth;
+			else if(expression[position] == '>' && --depth == 0) {
+				close = position;
+				break;
+			}
+		}
+		if(close == string::npos ||
+			close + 2 > expression.size() || expression[close + 1] != '(' ||
+			expression[expression.size() - 1] != ')') {
+			return false;
+		}
+		*type = expression.substr(12, close - 12);
+		*operand = expression.substr(close + 2, expression.size() - close - 3);
+		return true;
+	}
+
 	bool InferFunctionTypeArguments(const TemplateDefinition& definition,
 		const vector<string>& actual_types, vector<string>* result,
 		const map<string, string>& substitutions, const string& context,
@@ -300,7 +324,8 @@
 		vector<string> explicit_arguments;
 		const TemplateDefinition* explicit_definition = 0;
 		const size_t template_open = callee.find('<');
-		if(template_open != string::npos) {
+		const bool callee_is_static_cast = callee.compare(0, 12, "static_cast<") == 0;
+		if(template_open != string::npos && !callee_is_static_cast) {
 			string base_arguments, base;
 			size_t template_close = string::npos, begin = 0;
 			if(!TemplateBase(callee, template_open, &begin, &base) ||
@@ -320,10 +345,32 @@
 		const vector<string> actual_expressions = SplitTemplateArguments(argument_text);
 		for(size_t i = 0; i < actual_expressions.size(); ++i) {
 			if(actual_expressions[i].empty()) continue;
-			const string actual = ExpressionTypeSpelling(actual_expressions[i], function_context,
+			string actual_expression = actual_expressions[i];
+			if(actual_expression.size() >= 3 &&
+				actual_expression.compare(actual_expression.size() - 3, 3, "...") == 0)
+				actual_expression.erase(actual_expression.size() - 3);
+			const string actual = ExpressionTypeSpelling(actual_expression, function_context,
 				substitutions);
 			if(actual.empty()) return false;
 			actual_types.push_back(actual);
+		}
+		string callable_type, callable_operand;
+		if(SplitStaticCast(callee, &callable_type, &callable_operand)) {
+			string object_type = NormalizeTypeArgument(ResolveAlias(
+				ReplaceIdentifiers(callable_type, substitutions), function_context));
+			while(!object_type.empty() && (object_type[object_type.size() - 1] == '&' ||
+				object_type[object_type.size() - 1] == '*')) object_type.erase(object_type.size() - 1);
+			object_type = NormalizeTypeArgument(object_type);
+			const vector<const TemplateDefinition*> call_operators =
+				FindFunctionDefinitions("operator()", object_type);
+			for(size_t candidate = 0; candidate < call_operators.size(); ++candidate) {
+				vector<string> arguments;
+				if(!InferFunctionTypeArguments(*call_operators[candidate], actual_types,
+					&arguments, substitutions, function_context)) continue;
+				*result = FunctionResultType(*call_operators[candidate], arguments,
+					function_context);
+				if(!result->empty()) return true;
+			}
 		}
 		vector<const TemplateDefinition*> candidates;
 		if(explicit_definition) candidates.push_back(explicit_definition);
@@ -512,6 +559,10 @@
 		const map<string, string>& substitutions)
 	{
 		expression = StripTextParentheses(CanonicalSpelling(expression));
+		string cast_type, cast_operand;
+		if(SplitStaticCast(expression, &cast_type, &cast_operand))
+			return NormalizeTypeArgument(ResolveAlias(ReplaceIdentifiers(
+				cast_type, substitutions), context));
 		string comma_tail;
 		if(SplitTopLevelComma(expression, &comma_tail))
 			return ExpressionTypeSpelling(comma_tail, context, substitutions);
@@ -591,6 +642,23 @@
 		}
 		map<string, string>::const_iterator substituted = substitutions.find(expression);
 		if(substituted != substitutions.end()) return substituted->second;
+		// A dependent decltype inside a class can name a static data member
+		// declared earlier in the same class (`decltype(_v)`).  It is not a
+		// local variable, so the ordinary variable table deliberately does not
+		// contain it; query the typed class-member view before falling back to
+		// free-variable lookup.
+		for(string current = context; !current.empty(); ) {
+			if(FindClassDeclaration(current, current)) {
+				string member_type;
+				set<string> active_members;
+				if(FindClassMemberType(current, expression, substitutions, context,
+					&member_type, &active_members, false) && !member_type.empty())
+					return member_type;
+			}
+			const size_t separator = current.rfind("::");
+			if(separator == string::npos) break;
+			current.erase(separator);
+		}
 		string variable_type;
 		if(LookupVariableType(expression, context, &variable_type))
 			return ReplaceIdentifiers(ResolveAlias(variable_type, context), substitutions);

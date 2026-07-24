@@ -1,5 +1,194 @@
 # PA21 checkpoint plan
 
+## Checkpoint 72 result — 2026-07-24 (197/215)
+
+### Checkpoint Scope
+
+Completed the explicit-pack deduction and replay-stability increment around
+the current PA21 boundary.  Function-template deduction now maps an explicit
+prefix correctly when a template parameter pack precedes a fixed parameter,
+while an explicitly supplied function-parameter pack is not duplicated by
+ordinary argument deduction.  Concrete replayed `sizeof`/`alignof` static
+integrals are materialized in the generated declaration, and PA11 accepts
+the standard integer suffixes that can occur in generated array bounds.
+These changes preserve the static function-pointer array, array functional
+cast, and out-of-class namespace-typedef member-template paths while keeping
+the earlier dependent array and static-initialization behavior.
+
+### Validation
+
+The complete PA21 report is **197/215**, above the turn-start **182/215**
+baseline.  Focused validation passes for the explicit-pack array functional
+cast, static constexpr function-pointer array, and out-of-class member
+template namespace typedef fixtures.  Through PA20 is green at **1635/1635**
+and the PA21 file audit passes with the repository's nine pre-existing
+header-division warnings.  The full current-PA report still exits nonzero
+only because the 18 remaining fixtures are intentionally recorded below.
+
+### Remaining Work Map
+
+The current report has 18 failures, grouped by shared behavior:
+
+- **Owner/member replay and generated-call lowering (7):**
+  `general/300-dependent-hidden-friend-static-member-definition`,
+  `general/300-explicit-type-arg-decltype-member-access`,
+  `general/300-friend-existing-template-private-ctor-access`,
+  `general/300-function-pack-template-id-deduction-decltype`,
+  `general/300-local-qualified-argument-replay`,
+  `general/300-namespace-function-template-hides-outer-callable-object`, and
+  `general/300-out-of-class-ctor-using-imported-member-template`.
+- **Specialization, cv, inline-namespace, and non-type identity (10):**
+  `general/100-top-cv-pointer-does-not-match-unqualified-pointer-partial`,
+  `general/300-variable-template-forwarding-partial-top-cv`,
+  `general/400-forward-primary-partial-switch-value`,
+  `general/400-inline-namespace-template-template-argument`,
+  `general/400-member-template-nontype-shadowed-global-replay`,
+  `general/400-partial-specialization-conversion-operator-pointer-binding`,
+  `general/400-partial-specialization-redecl-member-template-empty-pack`,
+  `general/400-reference-member-lookup-in-progress-base-typedef`,
+  `spec/100-inline-namespace-qualified-template-id-pack-expansion`, and
+  `spec/300-defaulted-type-arg-specialization-nontype-value`.
+- **Reference-member pack value lowering (1):**
+  `general/400-reference-member-depth-pack-sum` reaches LowIR but computes
+  the first pack element instead of the full depth sum.
+
+### Next Checkpoint Group
+
+Address the specialization/non-type identity group, beginning with variable
+template cv-forwarding and generated `::value` integral materialization; then
+bundle the inline-namespace/template-template and reference-member lookup
+cases if the shared lookup changes remain localized.  Preserve **197/215** as
+the current gate, with through-PA20 and file audit as regression gates.
+
+## Checkpoint 71 result — 2026-07-24 (197/215)
+
+### Checkpoint Scope
+
+Completed the dependent initialization, address-materialization, and
+non-type-pack replay increment.  Static constexpr function-template
+addresses now keep their generated functions needed and emit function
+pointer array elements; dependent array `sizeof`/subscript constants are
+recorded in typed state; generated member-function names retain the source
+ABI terminal while their local replay identities remain collision-free; and
+per-specialization static locals use the source member ABI name.  Pack
+arguments containing dependent `sizeof...(T)` are deferred until the active
+pack is known, while source constexpr function bodies can expand local typed
+parameter packs.  Integral return folding preserves the explicit conversion
+for `sizeof...` results.  Alias-template substitution also preserves a
+reference typedef so top-level cv is ignored on the reference alias, and
+dependent `decltype` can query a static class member's typed declaration.
+
+### Validation
+
+The clean current-PA report is **197/215**, up from the turn-start
+**182/215** baseline.  Focused validation passes for the static function
+pointer-array, function-template-local-static, dependent array, alias
+`sizeof...`, constexpr pack-fold, function-parameter-pack alias, and
+reference-alias top-cv fixtures.  The depth-pack fixture now reaches LowIR
+comparison with the computed value visible; its remaining mismatch is
+`1` versus the expected `64`.  Temporary tracing was removed and
+`git diff --check` is clean.  Through PA20 and the file audit remain release
+gates for this checkpoint.
+
+### Remaining Work Map
+
+The current report has 18 failures, grouped by shared behavior:
+
+- **Owner/member replay and generated-call lowering (7):**
+  `general/300-dependent-hidden-friend-static-member-definition`,
+  `general/300-explicit-type-arg-decltype-member-access`,
+  `general/300-friend-existing-template-private-ctor-access`,
+  `general/300-function-pack-template-id-deduction-decltype`,
+  `general/300-local-qualified-argument-replay`,
+  `general/300-namespace-function-template-hides-outer-callable-object`, and
+  `general/300-out-of-class-ctor-using-imported-member-template`.
+- **Specialization, cv, inline-namespace, and non-type identity (10):**
+  `general/100-top-cv-pointer-does-not-match-unqualified-pointer-partial`,
+  `general/300-variable-template-forwarding-partial-top-cv`,
+  `general/400-forward-primary-partial-switch-value`,
+  `general/400-inline-namespace-template-template-argument`,
+  `general/400-member-template-nontype-shadowed-global-replay`,
+  `general/400-partial-specialization-conversion-operator-pointer-binding`,
+  `general/400-partial-specialization-redecl-member-template-empty-pack`,
+  `general/400-reference-member-lookup-in-progress-base-typedef`,
+  `spec/100-inline-namespace-qualified-template-id-pack-expansion`, and
+  `spec/300-defaulted-type-arg-specialization-nontype-value`.
+- **Reference-member pack value lowering (1):**
+  `general/400-reference-member-depth-pack-sum` reaches LowIR but computes
+  the first pack element instead of the full depth sum.
+
+### Next Checkpoint Group
+
+Address the specialization/non-type identity group, beginning with variable
+template cv-forwarding and generated `::value` integral materialization; then
+bundle the inline-namespace/template-template and reference-member lookup
+cases if the shared lookup changes remain localized.  Preserve **197/215**
+as the current gate, with through-PA20 and file audit as regression gates.
+
+## Checkpoint 70 result — 2026-07-24 (190/215)
+
+### Checkpoint Scope
+
+Completed the partial-specialization owner-binding slice.  When a member
+template is instantiated through a concrete class partial specialization,
+owner recovery now selects the same partial definition used for the class and
+propagates its pattern bindings (such as `Result` and `Arg`) into the member
+replay.  Dependent unqualified references to sibling member-template
+specializations use the concrete class-scope member binding, while the
+template arguments remain attached as typed instantiation metadata.
+
+### Validation
+
+The focused `general/300-function-signature-partial-specialization-functor-assignment`
+test passes, including LowIR comparison.  The complete PA21 report improved
+from **189/215** to **190/215**, above the turn-start **182/215** baseline.
+Through PA20 remains green at **1635/1635** from the prior checkpoint; the
+required through-report and file audit are rerun before committing this
+checkpoint.
+
+### Remaining Work Map
+
+The current report has 25 failures, grouped by shared behavior:
+
+- **Owner/member replay and generated-call lowering (7):**
+  `general/300-dependent-hidden-friend-static-member-definition`,
+  `general/300-explicit-type-arg-decltype-member-access`,
+  `general/300-friend-existing-template-private-ctor-access`,
+  `general/300-function-pack-template-id-deduction-decltype`,
+  `general/300-local-qualified-argument-replay`,
+  `general/300-namespace-function-template-hides-outer-callable-object`, and
+  `general/300-out-of-class-ctor-using-imported-member-template`.
+- **Specialization, alias, cv, and pack identity (13):**
+  `general/100-top-cv-pointer-does-not-match-unqualified-pointer-partial`,
+  `general/200-reference-alias-top-cv-return-binding`,
+  `general/300-variable-template-forwarding-partial-top-cv`,
+  `general/400-alias-pack-nontype-expression-fast-path`,
+  `general/400-forward-primary-partial-switch-value`,
+  `general/400-inline-namespace-template-template-argument`,
+  `general/400-member-template-nontype-shadowed-global-replay`,
+  `general/400-partial-specialization-conversion-operator-pointer-binding`,
+  `general/400-partial-specialization-redecl-member-template-empty-pack`,
+  `general/400-reference-member-depth-pack-sum`,
+  `general/400-reference-member-lookup-in-progress-base-typedef`,
+  `spec/100-inline-namespace-qualified-template-id-pack-expansion`, and
+  `spec/300-defaulted-type-arg-specialization-nontype-value`.
+- **Dependent initialization, references, and address lowering (5):**
+  `general/100-rvalue-reference-binds-converted-temporary`,
+  `general/300-array-functional-cast-pack-call`,
+  `general/300-constexpr-static-fn-template-address-pack`,
+  `general/300-single-pack-cast-target`, and
+  `general/300-static-constexpr-function-template-pointer-array`.
+
+The top-cv pointer case reaches compiler success but its harness comparator
+still raises an internal undefined-value error.
+
+### Next Checkpoint Group
+
+Bundle the five dependent initialization/reference/address cases around
+converted temporaries and function-template pointer materialization.  Retain
+the **190/215** PA21 report, **1635/1635** through-PA20 gate, and file audit as
+regression gates.
+
 ## Checkpoint 69 result — 2026-07-24 (189/215)
 
 ### Checkpoint Scope

@@ -877,6 +877,22 @@ bool PA18TemplateExpander::TransformPackChild(
 	map<string, string>* local_substitutions,
 	const CPPGMAstNodePtr& result)
 {
+	if(original_child && original_child->kind == "unary-expression" && original_child->children.size() == 1 && original_child->children[0] && original_child->children[0]->kind == "pack-expansion-expression") {
+		const CPPGMAstNodePtr expansion = original_child->children[0];
+		const string pack_name = PackExpansionIdentifier(expansion->children.empty() ? CPPGMAstNodePtr() : expansion->children[0]);
+		map<string, vector<string> >::const_iterator pack = active_pack_substitutions_.find(pack_name);
+		if(pack != active_pack_substitutions_.end())
+			for(size_t element = 0; element < pack->second.size(); ++element) {
+				CPPGMAstNodePtr expanded = CloneNode(original_child);
+				CPPGMAstNodePtr body = expansion->children.empty() ? CPPGMAstNodePtr() : CloneNode(expansion->children[0]);
+				if(!body) continue;
+				RemoveParameterPackMarkers(body); expanded->children[0] = body;
+				map<string, string> one = substitutions; one[pack_name] = pack->second[element];
+				if(CPPGMAstNodePtr child = TransformNode(expanded, child_context, one))
+					result->children.push_back(child);
+			}
+		return true;
+	}
 	if(input->kind == "base-clause" && original_child &&
 		original_child->kind == "base-specifier" &&
 		ChildOfKindLocal(original_child, "pack-expansion")) {
@@ -1036,8 +1052,8 @@ void PA18TemplateExpander::TransformRegularChildren(const CPPGMAstNodePtr& input
 							"decl-specifier", "TT_IDENTIFIER:" + LastComponent(promoted->second))));
 				}
 				if(child && !drop_function_using && !(input->kind == "compound-statement" && HasReplayContext(substitutions) &&
-					(original_child->kind == "alias-declaration" || (original_child->kind == "simple-declaration" &&
-					SpellNode(original_child->children.empty() ? CPPGMAstNodePtr() : original_child->children[0]).find("typedef") != string::npos)))) result->children.push_back(child);
+					(original_child->kind == "simple-declaration" &&
+					SpellNode(original_child->children.empty() ? CPPGMAstNodePtr() : original_child->children[0]).find("typedef") != string::npos))) result->children.push_back(child);
 				if(original_child && original_child->kind == "alias-declaration" && !original_child->value.empty() &&
 					!original_child->children.empty())
 				{
@@ -1161,7 +1177,7 @@ CPPGMAstNodePtr PA18TemplateExpander::RewriteRegularNodeValue(
 	const map<string, string>& substitutions,
 	const CPPGMAstNodePtr& result, string* promoted_name)
 {
-		bool template_replaced = false;
+	bool template_replaced = false;
 	if(PreserveDependentStaticDeclarator(input, context, substitutions, result,
 		promoted_name)) return CPPGMAstNodePtr();
 	const bool type_spelling = input->kind == "decl-specifier" ||
@@ -1304,6 +1320,10 @@ CPPGMAstNodePtr PA18TemplateExpander::FinishRegularNode(
 		map<string, string> local_substitutions = substitutions;
 		TransformRegularChildren(input, child_context, function_context, substitutions,
 			&local_substitutions, result);
+		if(input->kind == "array-suffix" && !result->children.empty() && result->children[0]) { PA19IntegralValue bound;
+			if(EvaluateIntegralText(ConstantExpressionSpelling(result->children[0]), child_context, local_substitutions, &bound))
+				result->children[0] = CPPGMAstNodePtr(new CPPGMAstNode("literal", IntegralValueSpelling(bound)));
+		}
 		if((input->kind == "parameter-declaration" || input->kind == "type-id") &&
 			HasReplayContext(substitutions))
 			for(map<string, string>::const_iterator substitution = substitutions.begin();

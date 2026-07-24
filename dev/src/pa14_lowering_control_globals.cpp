@@ -87,6 +87,9 @@ void PA14Lowerer::EmitGlobalInitializer(GlobalRecord& global, Scope* scope)
         arguments = global.initializer->children[0]->children;
       else if(expression && expression->kind == "braced-init-list")
         arguments = expression->children;
+      else if(expression && expression->kind == "call-expression" &&
+              expression->children.size() > 1 && expression->children[1])
+        arguments = expression->children[1]->children;
       if(!expression && !HasConstructor(value_type)) return;
       if(!HasDefaultInitializationEffects(value_type) && !HasDestructor(value_type)) return;
       bool declared_constructor = false;

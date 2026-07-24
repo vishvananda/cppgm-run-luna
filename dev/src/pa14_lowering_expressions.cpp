@@ -1142,6 +1142,17 @@ PA14Lowerer::Value PA14Lowerer::EmitValue(const CPPGMAstNodePtr& node, Scope* sc
         if(node->value == "braced-construction" && arguments.size() == 1 &&
            arguments[0] && arguments[0]->kind == "braced-init-list")
           arguments = arguments[0]->children;
+        if(constructor_type->kind == TYPE_ARRAY) {
+          CPPGMAstNodePtr aggregate(new CPPGMAstNode("braced-init-list"));
+          aggregate->children = arguments;
+          EmitAggregateAt(address, constructor_type, aggregate, scope);
+          Value result;
+          result.type = constructor_type;
+          result.operand = address;
+          result.array = true;
+          result.lvalue = true;
+          return result;
+        }
         if(!EmitConstructorAt(constructor_type, address, arguments, scope))
           throw logic_error("no viable functional construction");
         Value result;

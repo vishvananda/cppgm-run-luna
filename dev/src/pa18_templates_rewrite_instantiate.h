@@ -63,10 +63,10 @@
 			return "(" + ConstantExpressionSpelling(node->children[0]) + " ? " +
 				ConstantExpressionSpelling(node->children[1]) + " : " +
 				ConstantExpressionSpelling(node->children[2]) + ")";
-		if((node->kind == "sizeof-expression" || node->kind == "type-trait-expression") &&
-			!node->children.empty())
-			return (node->kind == "sizeof-expression" ? "sizeof(" : "alignof(") +
-				SpellNode(node->children[0]) + ")";
+		if(node->kind == "sizeof-expression" && !node->children.empty())
+			return "sizeof(" + ConstantExpressionSpelling(node->children[0]) + ")";
+		if(node->kind == "type-trait-expression" && !node->children.empty())
+			return "alignof(" + SpellNode(node->children[0]) + ")";
 		if(node->kind == "sizeof-pack-expression" && !node->children.empty())
 			return "sizeof...(" + ConstantExpressionSpelling(node->children[0]) + ")";
 		if(node->kind == "cast-expression" && node->children.size() >= 2)
@@ -145,45 +145,7 @@
 		const vector<string>& arguments, const string& context,
 		const map<string, string>& substitutions);
 	void RecordConstantDeclaration(const CPPGMAstNodePtr& node, const string& context,
-		const map<string, string>& substitutions = map<string, string>())
-	{
-		if(!node || node->kind != "simple-declaration" || node->children.empty()) return;
-		const string specifiers = SpellNode(node->children[0]);
-		if(specifiers.find("const") == string::npos && specifiers.find("constexpr") == string::npos) return;
-		const string base_type = NodeTypeSpelling(node->children[0]);
-		const string resolved_base_type = ResolveAlias(
-			ReplaceIdentifiers(base_type, substitutions), context);
-		if(!PA19Type(resolved_base_type).integral) return;
-		const CPPGMAstNodePtr list = ChildOfKindLocal(node, "init-declarator-list");
-		if(!list) return;
-		for(size_t i = 0; i < list->children.size(); ++i) {
-			const CPPGMAstNodePtr item = list->children[i];
-			if(!item || item->children.size() < 2) continue;
-			const string name = FirstIdentifierLocal(item->children[0]);
-			const CPPGMAstNodePtr initializer = item->children[1];
-			if(name.empty() || !initializer || initializer->children.empty()) continue;
-			PA19IntegralValue value;
-			const string expression_text = ConstantExpressionSpelling(initializer->children[0]);
-			// A primary template's dependent static initializer is indexed before a
-			// concrete specialization has a substitution scope.  Leaving it
-			// deferred avoids treating the member itself as an unqualified constant
-			// operand (`value`) and recursively evaluating its own initializer.
-			if(!HasReplayContext(substitutions) &&
-				expression_text.find("decltype(") != string::npos)
-				continue;
-			if(!EvaluateIntegralText(expression_text, context,
-				substitutions, &value)) continue;
-			const string qualified = JoinPath(
-				active_instantiation_name_.empty() ? context : active_instantiation_name_, name);
-			constant_values_[qualified] = value;
-			if(constant_values_.find(name) == constant_values_.end()) constant_values_[name] = value;
-			const PA19IntegralType type = PA19Type(resolved_base_type);
-			if(type.integral) {
-				constant_type_sizes_[qualified] = type.bits <= 8 ? 1 : type.bits <= 16 ? 2 : type.bits <= 32 ? 4 : 8;
-				constant_type_alignments_[qualified] = constant_type_sizes_[qualified];
-			}
-		}
-	}
+		const map<string, string>& substitutions = map<string, string>());
 	void RecordEnumConstants(const CPPGMAstNodePtr& node, const string& context)
 	{
 		if(!node || node->kind != "enum-specifier") return;
@@ -414,10 +376,17 @@
 			if(!MemberOwnerPattern(member, parent, parent_args, &owner_substitutions)) continue;
 			map<string, vector<string> > pack_substitutions;
 			map<string, PA19IntegralValue> integral_substitutions;
-			for(size_t parameter = 0; parameter < parent.parameters.size() &&
-				parameter < parent_args.size(); ++parameter)
-				if(!parent.parameters[parameter].name.empty())
-					substitutions[parent.parameters[parameter].name] = parent_args[parameter];
+			size_t parent_argument = 0;
+			for(size_t parameter = 0; parameter < parent.parameters.size(); ++parameter) {
+				const TemplateParameter& parent_parameter = parent.parameters[parameter]; if(parent_parameter.pack) {
+					vector<string>& values = pack_substitutions[parent_parameter.name];
+					while(parent_argument < parent_args.size()) values.push_back(parent_args[parent_argument++]);
+					if(!parent_parameter.name.empty() && !values.empty()) substitutions[parent_parameter.name] = values[0];
+				} else if(parent_argument < parent_args.size()) {
+					if(!parent_parameter.name.empty()) substitutions[parent_parameter.name] = parent_args[parent_argument];
+					++parent_argument;
+				}
+			}
 			for(map<string, string>::const_iterator substitution = owner_substitutions.begin();
 				substitution != owner_substitutions.end(); ++substitution)
 				substitutions[substitution->first] = substitution->second;
@@ -962,9 +931,7 @@
 			const TemplateParameter& parameter = definition.parameters[i];
 			if(parameter.pack) {
 				vector<string> values;
-				// A function parameter pack is normally trailing.  Reserve source
-				// arguments for any fixed template parameters that follow it so
-				// the same collector also handles a pack in a partial declaration.
+			// Reserve source arguments for fixed parameters following a pack.
 				size_t trailing_fixed = 0;
 				for(size_t later = i + 1; later < definition.parameters.size(); ++later)
 					if(!definition.parameters[later].pack) ++trailing_fixed;
@@ -1023,9 +990,11 @@
 				continue;
 			}
 			string argument;
+			string source_type_argument;
 			PA19IntegralValue integral_value;
-			if(raw_index < raw_args.size() && !raw_args[raw_index].empty())
-				argument = raw_args[raw_index++];
+			if(raw_index < raw_args.size() && !raw_args[raw_index].empty()) {
+				source_type_argument = argument = raw_args[raw_index++];
+			}
 			else {
 				if(!parameter.name.empty()) {
 					map<string, string>::const_iterator substituted = substitutions->find(parameter.name);
@@ -1063,6 +1032,9 @@
 				if(!parameter.name.empty())
 					(*integral_substitutions)[parameter.name] = integral_value;
 			}
+			if(definition.alias_template && parameter.type && !source_type_argument.empty() &&
+				!ResolveAlias(source_type_argument, context).empty() && ResolveAlias(source_type_argument, context).back() == '&')
+				argument = source_type_argument;
 			if(argument.empty()) throw logic_error("missing template argument");
 			args->push_back(argument);
 			metadata_args->push_back(TemplateArgumentMetadata(parameter, argument,
@@ -1106,13 +1078,12 @@
 						ResolveAlias(ReplaceIdentifiers(definition.parameters[i].non_type_type,
 							substitutions), context), context);
 					const string argument_spelling = enum_argument ? metadata_args[i] : args[i];
-					local_name += TypeSuffix(argument_spelling);
-					// Function types and object types can otherwise collapse to the
-					// same identifier suffix (`const int` vs `const int()`).
-					if(definition.class_template && i < definition.parameters.size() &&
-						definition.parameters[i].type &&
-						argument_spelling.find('(') != string::npos)
-						local_name += "_fn";
+					const bool plain_function_type = definition.class_template &&
+						i < definition.parameters.size() && definition.parameters[i].type &&
+						argument_spelling.find('(') != string::npos &&
+						argument_spelling.find('*') == string::npos &&
+						argument_spelling.find('&') == string::npos;
+					local_name += TypeSuffix(argument_spelling, plain_function_type);
 				if(i + 1 == args.size()) {
 					const bool trailing_pack = !definition.parameters.empty() &&
 						definition.parameters.back().pack;

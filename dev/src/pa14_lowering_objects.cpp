@@ -671,13 +671,17 @@ bool PA14Lowerer::EmitObjectTransferAt(const TypePtr& raw_target,
     const bool template_context = type_value(target)->template_specialization ||
       (scope && scope->owner_type &&
        type_value(scope->owner_type)->template_specialization) ||
+      (state_ && state_->record && state_->record->template_instantiation) ||
       (state_ && state_->record && state_->record->member_owner &&
        state_->record->member_owner->template_specialization);
     if(same_type && source_info.category == "lvalue" && template_context &&
        IsEmptyBaseStorage(target) && IsTrivialValueStorage(target)) {
-      // Even an empty object reference must be evaluated: the reference
-      // parameter itself is stored as an address-valued slot.
-      if(source->kind == "id-expression") (void)EmitAddress(source, scope);
+      // Even an empty object reference must be evaluated.  This matters when
+      // the lvalue is the result of a comma expression whose discarded side
+      // contains an aggregate construction.
+      if(source->kind == "id-expression" ||
+         (source->kind == "binary-expression" && PA12Operator(source->value) == ","))
+        (void)EmitAddress(source, scope);
       return true;
     }
     if(source_type && source_type->kind == TYPE_CLASS &&
@@ -776,7 +780,8 @@ bool PA14Lowerer::EmitObjectTransferAt(const TypePtr& raw_target,
 void PA14Lowerer::EmitAggregateArrayAt(const string& base, const TypePtr& raw_type,
                                         const CPPGMAstNodePtr& expression, Scope* scope,
                                         const CPPGMAstNodePtr& refresh_node,
-                                        long long refresh_offset)
+                                        long long refresh_offset,
+                                        bool direct_elements)
 {
     TypePtr type = type_value(raw_type);
     if(!type || type->kind != TYPE_ARRAY || !expression ||
@@ -784,11 +789,6 @@ void PA14Lowerer::EmitAggregateArrayAt(const string& base, const TypePtr& raw_ty
     const size_t element_count = type->bound >= 0 ?
       static_cast<size_t>(type->bound) : expression->children.size();
     for(size_t i = 0; i < element_count; ++i) {
-      // `base` is the address of the array object.  Form every element
-      // through the array decay operation so nested aggregate members use
-      // the same typed element address as ordinary subscripting.  Reusing
-      // the previous element address would make the second element relative
-      // to the first one (and would lose the array's element type).
       const bool refresh_element = refresh_node && i > 0;
       string array_base = refresh_element ? EmitAddress(refresh_node, scope) : base;
       if(refresh_element && refresh_offset >= 0) {
@@ -797,11 +797,18 @@ void PA14Lowerer::EmitAggregateArrayAt(const string& base, const TypePtr& raw_ty
           integer_text(refresh_offset));
         array_base = refreshed;
       }
-      const string decay = new_temp();
-      AddInstruction(decay + " = unary decay ptr " + array_base);
-      const string element = new_temp();
-      AddInstruction(element + " = index " + low_type(type->child) + " " +
-        decay + ", " + integer_text(static_cast<long long>(i)));
+      string element;
+      if(direct_elements) {
+        element = i == 0 ? array_base : new_temp();
+        if(i > 0) AddInstruction(element + " = index i8 " + array_base + ", " +
+          integer_text(static_cast<long long>(i * type_size(type->child))));
+      } else {
+        const string decay = new_temp();
+        AddInstruction(decay + " = unary decay ptr " + array_base);
+        element = new_temp();
+        AddInstruction(element + " = index " + low_type(type->child) + " " +
+          decay + ", " + integer_text(static_cast<long long>(i)));
+      }
       const CPPGMAstNodePtr child = i < expression->children.size() ?
         expression->children[i] : CPPGMAstNodePtr();
       TypePtr child_type = type_value(type->child);

@@ -12,7 +12,12 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformUnaryExpression(
 	if(!input || input->children.empty()) return CPPGMAstNodePtr();
 	const string operation = RemoveMarker(input->value);
 	if(operation.empty()) return CPPGMAstNodePtr();
-	CPPGMAstNodePtr operand = TransformNode(input->children[0], context, substitutions);
+	const bool preserve_qualified_template_address = operation == "&" &&
+		input->children[0] && input->children[0]->kind == "id-expression" &&
+		input->children[0]->value.find("::") != string::npos &&
+		input->children[0]->value.find('<') != string::npos;
+	CPPGMAstNodePtr operand = preserve_qualified_template_address ?
+		CloneNode(input->children[0]) : TransformNode(input->children[0], context, substitutions);
 	if(!operand) return CPPGMAstNodePtr();
 	// Materialize qualified member-template addresses through owner-aware lookup.
 	if(operation == "&" && operand->kind == "id-expression") {

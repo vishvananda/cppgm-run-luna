@@ -363,9 +363,18 @@ bool PA18TemplateExpander::EvaluateSourceArrayFunction(
 				for(size_t i = 0; i < node->children[1]->children.size(); ++i) {
 					const CPPGMAstNodePtr argument = node->children[1]->children[i];
 					if(argument && argument->kind == "pack-expansion-expression") {
-						const string pack_name = PackExpansionIdentifier(
+						string pack_name = PackExpansionIdentifier(
 							argument->children.empty() ? CPPGMAstNodePtr() :
 							argument->children[0]);
+						// This evaluator binds function-parameter packs in its own
+						// `pack_frames`; the rewriter's active typed-pack map is
+						// intentionally empty while a dependent constexpr body is
+						// inspected.  Recover a direct identifier for that local
+						// frame without weakening template replay's pack matching.
+						if(pack_name.empty() && !argument->children.empty() &&
+							argument->children[0] &&
+							argument->children[0]->kind == "id-expression")
+							pack_name = RemoveMarker(argument->children[0]->value);
 						bool found_pack = false;
 						for(vector<PackFrame>::reverse_iterator frame = pack_frames.rbegin();
 							frame != pack_frames.rend() && !found_pack; ++frame) {
