@@ -1,5 +1,71 @@
 # PA21 checkpoint plan
 
+## Checkpoint 64 result — 2026-07-24 (184/215)
+
+### Checkpoint Scope
+
+Implemented the member-operator owner/replay increment: member operator
+templates are materialized through concrete-owner lookup, generated operator
+declarations retain a typed source-name alias, overloaded binary lowering keeps
+class operands on the selected user-defined operator, unary free operator
+templates and dependent-base deduction are replayed, and specialization
+identity reuse is limited to the generated primary namespace so associated
+namespace lookup remains intact.
+
+### Validation
+
+The current PA report is **184/215**, up from the turn-start **182/215**;
+both member-operator fixtures now pass.  The through-PA20 report is green at
+**1635/1635**, and the PA21 file audit passes with the nine pre-existing
+header-division warnings.
+
+### Remaining Work Map
+
+The current report has 31 failures, grouped by shared behavior:
+
+- **Owner/member replay, lookup, and generated-call lowering (12):**
+  `general/300-crtp-static-cast-reference-before-constructor-template`,
+  `general/300-dependent-hidden-friend-static-member-definition`,
+  `general/300-explicit-member-template-id-shares-ordinary-overload`,
+  `general/300-explicit-type-arg-decltype-member-access`,
+  `general/300-friend-existing-template-private-ctor-access`,
+  `general/300-function-pack-template-id-deduction-decltype`,
+  `general/300-local-qualified-argument-replay`,
+  `general/300-member-class-explicit-specialization-owner-lookup`,
+  `general/300-namespace-function-template-hides-outer-callable-object`,
+  `general/300-nested-class-template-current-owner-lookup`,
+  `general/300-parenthesized-qualified-template-functional-call`, and
+  `general/300-qualified-friend-member-template-access`.
+- **Specialization, alias, cv, and pack identity (14):**
+  `general/100-top-cv-pointer-does-not-match-unqualified-pointer-partial`,
+  `general/200-reference-alias-top-cv-return-binding`,
+  `general/300-function-signature-partial-specialization-functor-assignment`,
+  `general/300-variable-template-forwarding-partial-top-cv`,
+  `general/400-alias-pack-nontype-expression-fast-path`,
+  `general/400-forward-primary-partial-switch-value`,
+  `general/400-inline-namespace-template-template-argument`,
+  `general/400-member-template-nontype-shadowed-global-replay`,
+  `general/400-partial-specialization-conversion-operator-pointer-binding`,
+  `general/400-partial-specialization-redecl-member-template-empty-pack`,
+  `general/400-reference-member-depth-pack-sum`,
+  `general/400-reference-member-lookup-in-progress-base-typedef`,
+  `spec/100-inline-namespace-qualified-template-id-pack-expansion`, and
+  `spec/300-defaulted-type-arg-specialization-nontype-value`.
+- **Dependent initialization, references, and address lowering (5):**
+  `general/100-rvalue-reference-binds-converted-temporary`,
+  `general/300-array-functional-cast-pack-call`,
+  `general/300-constexpr-static-fn-template-address-pack`,
+  `general/300-single-pack-cast-target`, and
+  `general/300-static-constexpr-function-template-pointer-array`.
+
+### Next Checkpoint Group
+
+Continue with the remaining 12-case owner/member group, starting with CRTP
+dependent-base downcasts, explicit member-template overload sets, and nested
+owner replay.  Keep the 184/215 current report, 1635/1635 through-PA20 gate,
+and file audit as regression checks before bundling the 14 identity cases with
+the five initialization/address cases.
+
 ## Checkpoint 63 audit refresh — 2026-07-24 (current baseline 182/215)
 
 ### Remaining Work Map

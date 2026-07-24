@@ -77,7 +77,46 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformUnaryExpression(
 	call->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("argument-list")));
 	const bool instantiated = InstantiateMemberCall(call, member, "operator" + operation,
 		context, substitutions);
-	if(!instantiated) return CPPGMAstNodePtr();
+	if(!instantiated) {
+		// Unary operators are commonly declared as free function templates (for
+		// example iterator::operator* in a CRTP base).  Materialize that
+		// overload as well; PA14 can then perform the ordinary operator lookup on
+		// the preserved unary-expression node.
+		const vector<const TemplateDefinition*> candidates = FindFunctionDefinitions(
+			"operator" + operation, context);
+		for(size_t candidate = 0; candidate < candidates.size(); ++candidate) {
+			CPPGMAstNodePtr free_call(new CPPGMAstNode("call-expression"));
+			free_call->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
+				"id-expression", "operator" + operation)));
+			CPPGMAstNodePtr arguments(new CPPGMAstNode("argument-list"));
+			arguments->children.push_back(operand);
+			free_call->children.push_back(arguments);
+			vector<string> inferred;
+			map<string, vector<string> > inferred_pack_values;
+			map<string, FunctionSignature> inferred_function_values;
+			if(!InferFunctionArguments(*candidates[candidate], free_call, &inferred,
+				substitutions, context, 0, &inferred_pack_values,
+				&inferred_function_values)) {
+				continue;
+			}
+			Instantiate(*candidates[candidate], inferred, context, false,
+				&inferred_pack_values, 0, 0, &inferred_function_values);
+			CPPGMAstNodePtr result(new CPPGMAstNode(input->kind, input->value));
+			result->initializer_form = input->initializer_form;
+			result->template_instantiation = input->template_instantiation;
+			result->explicit_specialization = input->explicit_specialization;
+			result->explicit_instantiation = input->explicit_instantiation;
+			result->extern_instantiation = input->extern_instantiation;
+			result->dependent_base_lookup = input->dependent_base_lookup;
+			result->materialize_object_address = input->materialize_object_address;
+			result->materialize_object_name = input->materialize_object_name;
+			result->source_token_begin = input->source_token_begin;
+			result->source_token_end = input->source_token_end;
+			result->children.push_back(operand);
+			return result;
+		}
+		return CPPGMAstNodePtr();
+	}
 	return call;
 }
 

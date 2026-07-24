@@ -752,6 +752,26 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 			const vector<string> pattern_parts = SplitTemplateArguments(pattern_arguments);
 			vector<string> actual_parts;
 				if(actual_open == string::npos) {
+					// Function-template deduction may bind a reference to a
+					// dependent base of a non-template derived class (the CRTP
+					// `iterator`/`iterator_base<It>` shape).  Recover that typed
+					// base before treating the argument as an unrelated class.
+					const CPPGMAstNodePtr actual_declaration = FindClassDeclaration(actual,
+						context);
+					if(actual_declaration) for(size_t child = 0;
+						child < actual_declaration->children.size(); ++child) {
+						const CPPGMAstNodePtr clause = actual_declaration->children[child];
+						if(!clause || clause->kind != "base-clause") continue;
+						for(size_t base_index = 0; base_index < clause->children.size();
+							++base_index) {
+							const CPPGMAstNodePtr base_specifier = clause->children[base_index];
+							const CPPGMAstNodePtr base_name = ChildOfKindLocal(
+								base_specifier, "base-name");
+							if(!base_name) continue;
+							if(MatchTypePattern(pattern, CanonicalSpelling(base_name->value),
+								parameter_names, inferred, context, class_pattern)) return true;
+						}
+					}
 					const string pattern_base = LastComponent(pattern.substr(0, pattern_open));
 					map<string, vector<string> >::const_iterator specialization =
 						specialization_arguments_.find(LastComponent(actual));

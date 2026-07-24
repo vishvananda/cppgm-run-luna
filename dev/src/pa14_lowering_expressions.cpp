@@ -620,14 +620,13 @@ PA14Lowerer::Value PA14Lowerer::EmitBinary(const CPPGMAstNodePtr& node, Scope* s
     operator_arguments.push_back(node->children[1]);
     if(op == "==" || op == "!=" || op == "not_eq" || op == "<" ||
        op == ">" || op == "<=" || op == ">=") return EmitCompare(node, scope);
+    const TypePtr left_operator_type = expression_value_type(Infer(node->children[0], scope));
+    const TypePtr right_operator_type = expression_value_type(Infer(node->children[1], scope));
+    const bool class_operand = (left_operator_type && left_operator_type->kind == TYPE_CLASS) ||
+      (right_operator_type && right_operator_type->kind == TYPE_CLASS);
     bool mixed_bitwise = false;
-    bool class_operand = false;
     if(op == "&" || op == "bitand" || op == "|" || op == "bitor" ||
        op == "^" || op == "xor") {
-      const TypePtr left_operator_type = expression_value_type(Infer(node->children[0], scope));
-      const TypePtr right_operator_type = expression_value_type(Infer(node->children[1], scope));
-      class_operand = (left_operator_type && left_operator_type->kind == TYPE_CLASS) ||
-        (right_operator_type && right_operator_type->kind == TYPE_CLASS);
       const bool same_enum_operands = left_operator_type && right_operator_type &&
         left_operator_type->kind == TYPE_ENUM && right_operator_type->kind == TYPE_ENUM &&
         PA12SameType(left_operator_type, right_operator_type, true);

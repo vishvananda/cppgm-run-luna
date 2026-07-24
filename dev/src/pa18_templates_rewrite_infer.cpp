@@ -392,7 +392,7 @@ bool PA18TemplateExpander::MergeInferredFunctionArgument(
 	string match_pattern = pattern;
 	map<string, string> pattern_substitutions;
 	bool alias_substitution = false;
-	bool direct_substitution = false;
+	bool dependent_substitution = false;
 	for(map<string, string>::const_iterator substitution = substitutions.begin();
 		substitution != substitutions.end(); ++substitution)
 		if(parameter_names.find(substitution->first) == parameter_names.end()) {
@@ -404,7 +404,11 @@ bool PA18TemplateExpander::MergeInferredFunctionArgument(
 				!IsIdentifierCharacter(pattern[position - 1]);
 			const bool right = position == string::npos || end == pattern.size() ||
 				!IsIdentifierCharacter(pattern[end]);
-			if(position != string::npos && left && right) direct_substitution = true;
+			if(position != string::npos && left && right) {
+				if(!FindDefinition(substitution->first, context) &&
+					class_contexts_.find(substitution->first) == class_contexts_.end())
+					dependent_substitution = true;
+			}
 			if(type_aliases_by_name_.find(substitution->first) != type_aliases_by_name_.end()) {
 				if(position != string::npos && left && right) alias_substitution = true;
 			}
@@ -414,8 +418,7 @@ bool PA18TemplateExpander::MergeInferredFunctionArgument(
 		pattern_substitutions[value->first] = value->second;
 	const bool rewrite_pattern = !pattern_substitutions.empty() &&
 		(alias_substitution || (!inferred->empty() && pattern.find("::") != string::npos) ||
-		(bound_pack_values && !bound_pack_values->empty()) ||
-		(pattern.find('<') == string::npos && direct_substitution));
+		(bound_pack_values && !bound_pack_values->empty()) || dependent_substitution);
 	if(rewrite_pattern) {
 		match_pattern = const_cast<PA18TemplateExpander*>(this)->RewriteText(
 			pattern, context, pattern_substitutions, 0);

@@ -600,6 +600,62 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 	}
 	}
 	const string result = CollapseRepeatedQualifier(CanonicalSpelling(prefix + spelling + suffix));
+	// Template replay can derive the same concrete class through an alias or
+	// through the generated owner name.  Reuse an existing specialization when
+	// its primary and typed template arguments are identical; otherwise PA14
+	// sees two distinct class types and rejects the corresponding conversion.
+	map<string, string>::const_iterator generated = specialization_bases_.find(
+		LastComponent(result));
+	map<string, vector<string> >::const_iterator generated_arguments =
+		specialization_arguments_.find(LastComponent(result));
+	if(generated != specialization_bases_.end() && generated_arguments !=
+		specialization_arguments_.end()) {
+		const string generated_namespace = PrefixComponent(generated->second);
+		const function<string(const string&)> identity =
+			[&](const string& raw_value) {
+				string value = CollapseRepeatedQualifier(CanonicalSpelling(raw_value));
+				const size_t open = value.find('<');
+				if(open != string::npos) {
+					string argument_text;
+					size_t close = string::npos;
+					if(TemplateRange(value, open, &argument_text, &close)) {
+						const vector<string> arguments = SplitTemplateArguments(argument_text);
+						string normalized = LastComponent(value.substr(0, open)) + "<";
+						for(size_t argument = 0; argument < arguments.size(); ++argument) {
+							if(argument) normalized += ",";
+							normalized += identity(arguments[argument]);
+						}
+						return normalized + ">";
+					}
+				}
+				if(value.find("::") != string::npos) {
+					const string owner = PrefixComponent(value);
+					if(owner == generated_namespace) return LastComponent(value);
+				}
+				return value;
+			};
+		const vector<string>& wanted = generated_arguments->second;
+		string best = generated->first;
+		for(map<string, string>::const_iterator candidate = specialization_bases_.begin();
+			candidate != specialization_bases_.end(); ++candidate) {
+			if(candidate->second != generated->second) continue;
+			map<string, vector<string> >::const_iterator candidate_arguments =
+				specialization_arguments_.find(candidate->first);
+			if(candidate_arguments == specialization_arguments_.end() ||
+				candidate_arguments->second.size() != wanted.size()) continue;
+			bool same = true;
+			for(size_t argument = 0; argument < wanted.size(); ++argument)
+				if(identity(candidate_arguments->second[argument]) != identity(wanted[argument])) {
+					same = false;
+					break;
+				}
+			if(same && candidate->first.size() < best.size()) best = candidate->first;
+		}
+		if(best != generated->first) {
+			const string owner = PrefixComponent(result);
+			return owner.empty() ? best : owner + "::" + best;
+		}
+	}
 	return result;
 }
 string PA18TemplateExpander::DeclaratorSuffix(const CPPGMAstNodePtr& declarator) const

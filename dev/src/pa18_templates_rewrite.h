@@ -544,6 +544,20 @@ bool MatchTypePattern(string pattern, string actual,
 				InferArgument(expression->children[1], &right, substitutions, context) &&
 				IsBuiltinLogicalType(left) && IsBuiltinLogicalType(right)) return;
 		}
+		// A binary operator may be a member template.  Feed the left operand
+		// through the normal member-call path so lookup uses the concrete owner
+		// and the right operand is deduced as the member's sole argument.
+		CPPGMAstNodePtr member(new CPPGMAstNode("member-expression", "."));
+		member->children.push_back(expression->children[0]);
+		member->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("identifier",
+			"operator" + operation)));
+		CPPGMAstNodePtr member_call(new CPPGMAstNode("call-expression"));
+		member_call->children.push_back(member);
+		CPPGMAstNodePtr member_arguments(new CPPGMAstNode("argument-list"));
+		member_arguments->children.push_back(expression->children[1]);
+		member_call->children.push_back(member_arguments);
+		if(InstantiateMemberCall(member_call, member, "operator" + operation,
+			context, substitutions)) return;
 		const vector<const TemplateDefinition*> candidates = FindFunctionDefinitions(
 			"operator" + operation, context);
 		if(candidates.empty()) return;

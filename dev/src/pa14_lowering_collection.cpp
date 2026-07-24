@@ -308,6 +308,30 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
         function->function_rvalue_ref_qualified);
     } else record->type = function;
     record->qualified_name = qname;
+	// Materialized member-operator templates retain a generated declarator
+	// spelling (`operator-__inst_...`) for symbol uniqueness.  Overload lookup
+	// still needs the source operator name, so install a typed alias binding to
+	// the same record without changing its emitted qualified symbol.
+	if(record->member_template && is_member && member_owner->owned_scope &&
+		node->template_primary.find("operator") != string::npos) {
+		const string source_member = LastComponent(node->template_primary);
+		if(source_member.compare(0, 8, "operator") == 0 && source_member != LastComponent(raw_name)) {
+			const vector<Binding*> operator_bindings = DirectBindings(
+				member_owner->owned_scope, source_member);
+			bool has_alias = false;
+			for(size_t alias = 0; alias < operator_bindings.size(); ++alias)
+				if(operator_bindings[alias] && operator_bindings[alias]->qualified_name == qname)
+					has_alias = true;
+			if(!has_alias) {
+				Binding alias(BIND_FUNCTION, source_member, function);
+				alias.qualified_name = qname;
+				alias.is_member = true;
+				alias.is_static = is_static;
+				alias.member_owner = member_owner;
+				member_owner->owned_scope->add(alias);
+			}
+		}
+	}
     record->definition = record->definition || definition;
     // A constexpr static member function is available to the semantic
     // constant evaluator without requiring a LowIR body.  Runtime calls and
