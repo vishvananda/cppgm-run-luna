@@ -86,7 +86,6 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformAssignmentExpression(
 		return CPPGMAstNodePtr();
 	return call;
 }
-
 CPPGMAstNodePtr PA18TemplateExpander::TransformUnaryExpression(
 	const CPPGMAstNodePtr& input, const string& context,
 	const map<string, string>& substitutions)
@@ -96,6 +95,60 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformUnaryExpression(
 	if(operation.empty()) return CPPGMAstNodePtr();
 	CPPGMAstNodePtr operand = TransformNode(input->children[0], context, substitutions);
 	if(!operand) return CPPGMAstNodePtr();
+	// Materialize qualified member-template addresses through owner-aware lookup.
+	if(operation == "&" && operand->kind == "id-expression") {
+		const string raw = RemoveMarker(operand->value);
+		const size_t separator = raw.rfind("::");
+		if(separator != string::npos) {
+			size_t member_begin = separator + 2;
+			while(member_begin < raw.size() && isspace(
+				static_cast<unsigned char>(raw[member_begin]))) ++member_begin;
+			if(raw.compare(member_begin, 8, "template") == 0) {
+				member_begin += 8;
+				while(member_begin < raw.size() && isspace(
+					static_cast<unsigned char>(raw[member_begin]))) ++member_begin;
+			}
+			const size_t member_open = raw.find('<', member_begin);
+			if(member_open != string::npos) {
+				string owner = CanonicalSpelling(RewriteText(raw.substr(0, separator),
+					context, substitutions, 0));
+				owner = CanonicalSpelling(ResolveAlias(owner, context));
+				const string member_spelling = raw.substr(member_begin);
+				CPPGMAstNodePtr object(new CPPGMAstNode("id-expression"));
+				object->value = owner;
+				object->inferred_type = owner;
+				CPPGMAstNodePtr synthetic_member(new CPPGMAstNode("member-expression", "."));
+				synthetic_member->children.push_back(object);
+				synthetic_member->children.push_back(CPPGMAstNodePtr(
+					new CPPGMAstNode("identifier", member_spelling)));
+				CPPGMAstNodePtr synthetic_call(new CPPGMAstNode("call-expression"));
+				synthetic_call->children.push_back(synthetic_member);
+				synthetic_call->children.push_back(CPPGMAstNodePtr(
+					new CPPGMAstNode("argument-list")));
+				if(InstantiateMemberCall(synthetic_call, synthetic_member, member_spelling,
+					context, substitutions)) {
+					CPPGMAstNodePtr address(new CPPGMAstNode(input->kind, input->value));
+					address->initializer_form = input->initializer_form;
+					address->template_instantiation = input->template_instantiation;
+					address->explicit_specialization = input->explicit_specialization;
+					address->explicit_instantiation = input->explicit_instantiation;
+					address->extern_instantiation = input->extern_instantiation;
+					address->dependent_base_lookup = input->dependent_base_lookup;
+					address->materialize_object_address = input->materialize_object_address;
+					address->materialize_object_name = input->materialize_object_name;
+					address->source_token_begin = input->source_token_begin;
+					address->source_token_end = input->source_token_end;
+					operand->value = owner + "::" + LastComponent(
+						member_spelling.substr(0, member_open - member_begin));
+					operand->template_instantiation = true;
+					operand->template_primary = synthetic_call->template_primary;
+					operand->template_arguments = synthetic_call->template_arguments;
+					address->children.push_back(operand);
+					return address;
+				}
+			}
+		}
+	}
 	CPPGMAstNodePtr member(new CPPGMAstNode("member-expression", "."));
 	member->children.push_back(operand);
 	member->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("identifier",
@@ -108,7 +161,6 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformUnaryExpression(
 	if(!instantiated) return CPPGMAstNodePtr();
 	return call;
 }
-
 void PA18TemplateExpander::ResolveMemberFunctionArguments(
 	const CPPGMAstNodePtr& result, const string& context,
 	const map<string, string>& substitutions)
@@ -1270,6 +1322,22 @@ CPPGMAstNodePtr PA18TemplateExpander::FinishRegularNode(
 				function_name);
 			if(!function_name.empty() && LastComponent(context) == function_name)
 				function_context = context;
+		}
+	// Seed typed parameter scope before replaying generated member bodies.
+		if(input->kind == "function-definition") {
+			const CPPGMAstNodePtr source_declarator = FunctionDeclarator(input);
+			const CPPGMAstNodePtr source_parameters = DescendantOfKind(
+				source_declarator, "parameter-clause");
+			if(source_parameters) for(size_t parameter = 0;
+				parameter < source_parameters->children.size(); ++parameter) {
+				const CPPGMAstNodePtr parameter_node = source_parameters->children[parameter];
+				if(!parameter_node || parameter_node->kind != "parameter-declaration") continue;
+				const string name = ParameterIdentifier(parameter_node);
+				if(name.empty()) continue;
+				string type = ParameterTypeSpelling(parameter_node);
+				type = CanonicalSpelling(ReplaceIdentifiers(type, substitutions));
+				function_parameter_types_[function_context][name] = type;
+			}
 		}
 		map<string, string> local_substitutions = substitutions;
 		TransformRegularChildren(input, child_context, function_context, substitutions,

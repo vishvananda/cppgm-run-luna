@@ -142,6 +142,10 @@ void Analyzer::Analyze(const CPPGMAstNodePtr& tree)
 {
 	if (!tree || tree->kind != "translation-unit") throw logic_error("invalid translation unit");
 	for (size_t i = 0; i < tree->children.size(); ++i) Process(tree->children[i], global_.get());
+	if (!pending_using_declarations_.empty()) {
+		vector<pair<CPPGMAstNodePtr, Scope*> > pending; pending.swap(pending_using_declarations_); processing_pending_using_declarations_ = true;
+		for (size_t i = 0; i < pending.size(); ++i) ProcessUsingDeclaration(pending[i].first, pending[i].second);
+		processing_pending_using_declarations_ = false; }
 	FinishPendingClassLayouts();
 }
 
@@ -297,7 +301,15 @@ void Analyzer::ProcessUsingDeclaration(const CPPGMAstNodePtr& node, Scope* scope
 			Binding* target = ResolveBinding(scope, target_name);
 			if (target) targets.push_back(target);
 		}
-		if (targets.empty()) throw logic_error("using target is not a declaration");
+		if (targets.empty())
+		{
+			if (!processing_pending_using_declarations_)
+			{
+				pending_using_declarations_.push_back(make_pair(node, scope));
+				return;
+			}
+			throw logic_error("using target is not a declaration");
+		}
 		for (size_t target_index = 0; target_index < targets.size(); ++target_index)
 		{
 			Binding imported = *targets[target_index];

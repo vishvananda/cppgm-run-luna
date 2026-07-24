@@ -1,5 +1,4 @@
 #pragma once
-
 	string NodeTypeSpelling(const CPPGMAstNodePtr& sequence) const
 	{
 		if(!sequence) return string();
@@ -7,7 +6,7 @@
 		for(size_t i = 0; i < sequence->children.size(); ++i) {
 		const CPPGMAstNodePtr child = sequence->children[i];
 		if(!child) continue;
-		const string spelling = RemoveMarker(child->value);
+		string spelling = RemoveMarker(child->value); if(spelling == "friend") continue; if(spelling.compare(0, 7, "friend ") == 0) spelling.erase(0, 7);
 		if(child->kind == "decl-specifier" &&
 			(spelling == "typedef" || spelling == "static" || spelling == "inline" ||
 			 spelling == "constexpr" || spelling == "extern" ||
@@ -977,7 +976,12 @@
 					if(hint != pack_hints->end()) count = hint->second.size();
 				}
 				for(size_t element = 0; element < count; ++element) {
-					string argument = raw_args[raw_index++];
+					string argument = raw_index < raw_args.size() ? raw_args[raw_index++] : string();
+					if(argument.empty() && pack_hints && !parameter.name.empty()) {
+						map<string, vector<string> >::const_iterator hint = pack_hints->find(parameter.name);
+						if(hint != pack_hints->end() && element < hint->second.size()) argument = hint->second[element];
+					}
+					if(argument.empty()) throw logic_error("missing template pack argument");
 					PA19IntegralValue integral_value;
 					if(parameter.template_template) {
 						string normalized;
@@ -1072,6 +1076,12 @@
 		const map<string, string>& substitutions, const string& context,
 		const string& concrete_owner, bool explicit_instantiation = false)
 	{
+		const bool static_member = definition.declaration && !definition.declaration->children.empty() &&
+			SpellNode(definition.declaration->children[0]).find("static") != string::npos;
+		if(definition.friend_declaration) return definition.name;
+		if(static_member && definition.owner.find("::") == string::npos &&
+			!concrete_owner.empty()) return TypeSuffix(PrefixComponent(definition.qualified_name)) +
+			"__" + LastComponent(definition.name);
 		string local_name = definition.name;
 		if(explicit_instantiation && !definition.class_template &&
 			!definition.alias_template && !definition.variable_template)

@@ -106,9 +106,14 @@ void PA18TemplateExpander::RestoreGeneratedMemberParameterNames(
 		FunctionDeclarator(generated), "parameter-clause");
 	const CPPGMAstNodePtr owner_clause = owner_member ? DescendantOfKind(
 		owner_member, "parameter-clause") : CPPGMAstNodePtr();
+	const bool preserve_unnamed_parameters = definition.owner.find("::") != string::npos &&
+		definition.owner.find('<') != string::npos;
 	if(owner_clause && generated_clause && owner_clause->children.size() ==
 		generated_clause->children.size()) for(size_t parameter = 0;
 		parameter < generated_clause->children.size(); ++parameter) {
+		if(!source_clause || !source_clause->children[parameter] ||
+			(ParameterIdentifier(source_clause->children[parameter]).empty() &&
+				preserve_unnamed_parameters)) continue;
 		const string owner_name = ParameterIdentifier(owner_clause->children[parameter]);
 		if(owner_name.empty() || !generated_clause->children[parameter]) continue;
 		if(!ParameterIdentifier(generated_clause->children[parameter]).empty()) continue;
@@ -190,6 +195,14 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 {
 	const string generated_owner = definition.lexical_owner.empty() ?
 		definition.owner : definition.lexical_owner;
+	const bool static_member = definition.declaration &&
+		!definition.declaration->children.empty() &&
+		SpellNode(definition.declaration->children[0]).find("static") != string::npos;
+	const bool flattened_static_member = static_member &&
+		definition.owner.find("::") == string::npos && !requested_owner.empty();
+	const bool free_generated_member = definition.friend_declaration;
+	const string entity_owner = free_generated_member ? PrefixComponent(definition.owner) :
+		generated_owner;
 	string member_owner_name = definition.owner;
 	const size_t member_owner_angle = member_owner_name.find('<');
 	if(member_owner_angle != string::npos) member_owner_name.erase(member_owner_angle);
@@ -201,24 +214,42 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 		((member_owner_definition && member_owner_definition->class_template) ||
 		 class_contexts_.find(member_owner_name) != class_contexts_.end() ||
 		 FindClassDeclaration(member_owner_name, context));
+	const bool ordinary_class_member = member_definition &&
+		member_owner_name.find('<') == string::npos &&
+		FindClassDeclaration(member_owner_name, context) != CPPGMAstNodePtr() &&
+		LastComponent(definition.name).compare(0, 8, "operator") != 0 &&
+		!free_generated_member;
 	string concrete_owner = definition.class_template ?
 		FindConcreteInstantiationOwner(definition, substitutions, context, requested_owner) :
 		((member_definition && ConcreteOwnerMatches(definition, requested_owner)) ||
 		 (definition.alias_template && ConcreteOwnerMatches(definition, requested_owner)) ?
 		 requested_owner : string());
+	if(free_generated_member) concrete_owner.clear();
 	// A generated class can be reached through the lexical function path used
 	// while replaying a functional cast (for example
 	// `make_pair_int::pair_int_`), while PA14 indexes its declarations by the
 	// materialized class identity (`pair_int_`).  Keep the typed specialization
 	// owner canonical before registering generated member declarations.
 	if(!concrete_owner.empty() && specialization_bases_.find(
-		LastComponent(concrete_owner)) != specialization_bases_.end() &&
-		class_contexts_.find(LastComponent(concrete_owner)) != class_contexts_.end())
-		concrete_owner = LastComponent(concrete_owner);
-	else if(!concrete_owner.empty() && specialization_bases_.find(
 		LastComponent(concrete_owner)) != specialization_bases_.end()) {
+		string source_owner = definition.owner;
+		const size_t source_angle = source_owner.find('<');
+		if(source_angle != string::npos) source_owner.erase(source_angle);
+		const string source_namespace = PrefixComponent(PrefixComponent(source_owner));
 		const string generated_namespace = PrefixComponent(generated_owner);
-		for(set<string>::const_iterator candidate = class_contexts_.begin();
+		string matched_context;
+		if(!source_namespace.empty())
+			for(set<string>::const_iterator candidate = class_contexts_.begin();
+				candidate != class_contexts_.end(); ++candidate)
+				if(LastComponent(*candidate) == LastComponent(concrete_owner) &&
+					PrefixComponent(*candidate) == source_namespace) {
+					matched_context = *candidate;
+					break;
+				}
+		if(!matched_context.empty()) concrete_owner = matched_context;
+		else if(class_contexts_.find(LastComponent(concrete_owner)) != class_contexts_.end())
+			concrete_owner = LastComponent(concrete_owner);
+		else for(set<string>::const_iterator candidate = class_contexts_.begin();
 			candidate != class_contexts_.end(); ++candidate)
 			if(LastComponent(*candidate) == LastComponent(concrete_owner) &&
 				(generated_namespace.empty() || PrefixComponent(*candidate) == generated_namespace)) {
@@ -245,6 +276,16 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 	}
 	active_instantiation_name_ = previous_instantiation_name;
 	if(!generated) throw logic_error("unable to instantiate template");
+	if(definition.friend_declaration && !generated->children.empty() &&
+		generated->children[0]) {
+		vector<CPPGMAstNodePtr> specifiers;
+		for(size_t specifier = 0; specifier < generated->children[0]->children.size();
+			++specifier) {
+			const CPPGMAstNodePtr& node = generated->children[0]->children[specifier];
+			if(!node || RemoveMarker(node->value) != "friend") specifiers.push_back(node);
+		}
+		generated->children[0]->children.swap(specifiers);
+	}
 	if(member_definition)
 		RestoreGeneratedMemberParameterNames(definition, member_owner_definition, generated);
 	if(member_definition && !definition.class_template && member_owner_definition &&
@@ -268,7 +309,8 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 		member_definition && !definition.class_template && !explicit_static_data &&
 		member_owner_definition;
 	if(!definition.class_template && !definition.alias_template &&
-		(!member_definition || concrete_owner.empty()) && !generated_special_member)
+		(!member_definition || (concrete_owner.empty() && !ordinary_class_member)) &&
+		!generated_special_member)
 		RenameGeneratedFunction(generated, local_name);
 	if(definition.class_template || definition.alias_template) generated->value = local_name;
 	RegisterGeneratedTypeEntity(definition, generated, generated_owner, local_name,
@@ -320,7 +362,8 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 	else {
 	string generated_function_owner = explicit_static_data ? PrefixComponent(definition.owner) :
 		explicit_member_definition ? GeneratedOwner(*member_owner_definition) :
-		(concrete_owner.empty() ? generated_owner : concrete_owner);
+		flattened_static_member ? definition.owner :
+		(concrete_owner.empty() ? entity_owner : concrete_owner);
 	if(!concrete_owner.empty() && generated_function_owner.find("::") == string::npos &&
 		specialization_bases_.find(LastComponent(concrete_owner)) ==
 			specialization_bases_.end()) {

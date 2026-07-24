@@ -1,5 +1,50 @@
 # PA21 checkpoint plan
 
+## Implementation checkpoint 61 scope (2026-07-24, baseline 176/215)
+
+### Remaining Work Map
+
+The complete baseline failure set is grouped below by shared behavior:
+
+- **Owner-context replay and member lookup (16):** nested/current-owner
+  replay, out-of-class member ownership, friend/member lookup, and generated
+  call lowering (`general/300-crtp-static-cast-reference-before-constructor-template`,
+  `general/300-dependent-hidden-friend-static-member-definition`,
+  `general/300-explicit-member-template-id-shares-ordinary-overload`,
+  `general/300-explicit-type-arg-decltype-member-access`,
+  `general/300-friend-existing-template-private-ctor-access`,
+  `general/300-function-pack-template-id-deduction-decltype`,
+  `general/300-local-qualified-argument-replay`,
+  `general/300-member-class-explicit-specialization-owner-lookup`,
+  `general/300-namespace-function-template-hides-outer-callable-object`,
+  `general/300-nested-class-template-current-owner-lookup`,
+  `general/300-nested-class-template-reference-reset`,
+  `general/300-out-of-class-ctor-using-imported-member-template`,
+  `general/300-parenthesized-qualified-template-functional-call`,
+  `general/300-qualified-friend-member-template-access`,
+  `spec/300-member-operator-template-active-owner`, and
+  `spec/300-member-operator-template-in-class-template`).
+- **Partial-specialization/alias/cv/pack identity (15):** canonical matching,
+  partial ordering, and dependent value identity.
+- **Explicit specialization/instantiation diagnostics (3):** declaration
+  ordering and invalid explicit-specialization forms.
+- **Dependent initialization/address lowering (5):** reference binding,
+  functional casts, and template-function address materialization.
+
+The report also exposes one comparator internal failure for
+`general/100-top-cv-pointer-does-not-match-unqualified-pointer-partial`; it
+is included in the identity group rather than treated as compiler success.
+
+### Checkpoint Scope
+
+Implement the owner-context replay slice as typed compiler behavior: preserve a
+materialized class specialization's owning scope while replaying nested class
+and member-template declarations, restore that owner across nested replay, and
+make member-template/operator lookup use the active concrete owner.  Validate
+the six focused fixtures named above, then run the full PA21 report and the
+through-PA20 gate.  The checkpoint is substantial because it covers both the
+replay registry and the ordinary semantic/lowering member candidate path.
+
 ## Checkpoint audit result (2026-07-24, 176/215)
 
 The latest checkpoint audit preserved the current-PA result at **176/215**,
@@ -1675,3 +1720,45 @@ correct generated declaration/definition registration, static versus automatic
 storage, guarded local-static initialization, special-member classification,
 and final LowIR emission/order. Validation is the six focused fixtures plus
 the 16/16 replay probes, full PA21, through-PA20, and the file audit.
+
+## Checkpoint 62 — owner-aware replay, qualified calls, and bound packs
+
+### Checkpoint Scope
+
+This increment covers the complete owner/replay group: deferred using-declaration
+resolution; direct versus inherited member-template provenance; nested partial
+specialization replay; concrete-owner propagation through qualified member calls
+and member-template addresses; hidden-friend and static-member generated names;
+typed parameter scopes in generated bodies; and enclosing class packs used by
+function parameter packs and aliases. It also keeps template-pack hints safe
+when raw arguments have already been consumed.
+
+### Result
+
+The PA21 report is **179/215**, up from the turn-start **176/215** baseline.
+The nine focused owner/pack/operator fixtures pass, through-PA20 is green at
+**1635/1635**, and the PA21 file audit passes with the ten pre-existing
+warnings. The qualified-member implementation was split into a registered
+source unit to keep the per-file audit limits clean.
+
+### Remaining Work Map
+
+The remaining 36 cases fall into two shared behavior groups:
+
+- **Dependent deduction, conversion, partial-specialization, and diagnostic
+  paths (25):** cv/reference binding and conversion, pack/cast deduction,
+  function-pointer and template-template deduction, explicit-specialization
+  timing, inline-namespace lookup, non-type defaults, and malformed
+  specialization diagnostics.
+- **Generated owner/body and LowIR emission (11):** hidden-friend/static and
+  friend access, qualified/member-template body ownership, namespace-versus
+  class ownership, static/local storage, member-template ABI naming, and the
+  nested-owner LowIR sanity failure.
+
+### Next Checkpoint
+
+Address the 11-case generated owner/body group first, beginning with typed
+generated declaration ownership and final LowIR body/storage ordering. Retain
+the nine focused fixtures, the 1635/1635 through-PA20 gate, the full PA21
+report, and the file audit as regression gates while the 25-case deduction and
+diagnostic group is handled afterward.

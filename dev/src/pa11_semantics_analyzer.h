@@ -15,6 +15,7 @@ public:
 	map<const CPPGMAstNode*, TypePtr> class_types_;
 	map<const CPPGMAstNode*, TypePtr> enum_types_;
 	vector<PendingClassLayout> pending_class_layouts_;
+	vector<pair<CPPGMAstNodePtr, Scope*> > pending_using_declarations_; bool processing_pending_using_declarations_ = false;
 	map<const Binding*, ConstantValue> constant_binding_values_;
 	map<string, vector<Binding*> > constant_template_functions_;
 	vector<map<string, ConstantValue> > constant_frames_;

@@ -504,6 +504,18 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 		}
 		if(owner_matches) candidates.push_back(&definition);
 	}
+	if(parent && parent->partial_specialization) {
+		const string member_scope = JoinPath(parent->qualified_name, parent->name);
+		vector<const TemplateDefinition*> specialized_candidates;
+		for(size_t candidate = 0; candidate < candidates.size(); ++candidate) {
+			const string owner = candidates[candidate]->owner;
+			const size_t angle = owner.find('<');
+			if(angle != string::npos && owner.substr(0, angle) == member_scope)
+				specialized_candidates.push_back(candidates[candidate]);
+		}
+		if(!specialized_candidates.empty()) candidates.swap(specialized_candidates);
+	}
+	const vector<const TemplateDefinition*> direct_member_candidates = candidates;
 	vector<const TemplateDefinition*> inherited_candidates;
 	set<string> inherited_active;
 	map<const TemplateDefinition*, string> inherited_owners;
@@ -511,7 +523,8 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 		context, &inherited_candidates, &inherited_active, &inherited_owners);
 	for(size_t inherited = 0; inherited < inherited_candidates.size(); ++inherited)
 		if(find(candidates.begin(), candidates.end(), inherited_candidates[inherited]) ==
-			candidates.end()) candidates.push_back(inherited_candidates[inherited]);
+			candidates.end() || inherited_owners.find(inherited_candidates[inherited]) !=
+			inherited_owners.end()) candidates.push_back(inherited_candidates[inherited]);
 	// Once the enclosing owner is concrete, overloads that differ only by
 	// renamed owner parameters can deduce the same call shape.  Prefer the
 	// member template with the smaller member parameter contract; this is the
@@ -523,15 +536,20 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 			return false;
 		});
 	if(candidates.empty()) return false;
-
+	map<const TemplateDefinition*, size_t> candidate_occurrences;
 	for(size_t candidate_index = 0; candidate_index < candidates.size();
 		++candidate_index) {
 		const TemplateDefinition& definition = *candidates[candidate_index];
+		const size_t occurrence = candidate_occurrences[&definition]++;
+		const bool direct_member = occurrence == 0 &&
+			find(direct_member_candidates.begin(), direct_member_candidates.end(),
+				&definition) != direct_member_candidates.end();
 		map<string, string> candidate_substitutions = member_substitutions;
 		map<const TemplateDefinition*, string>::const_iterator candidate_owner =
 			inherited_owners.find(&definition);
-		const string concrete_candidate_owner = candidate_owner == inherited_owners.end() ||
-			candidate_owner->second.empty() ? object_type : candidate_owner->second;
+		const string concrete_candidate_owner = !direct_member &&
+			candidate_owner != inherited_owners.end() && !candidate_owner->second.empty() ?
+			candidate_owner->second : object_type;
 		// An inherited member template is deduced against the specialization that
 		// actually declares it, not against the most-derived object.  Recover that
 		// declaring specialization's template arguments before expanding aliases
@@ -540,7 +558,7 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 			LastComponent(concrete_candidate_owner));
 		map<string, vector<string> >::const_iterator inherited_arguments =
 			specialization_arguments_.find(LastComponent(concrete_candidate_owner));
-		if(candidate_owner != inherited_owners.end() &&
+		if(!direct_member && candidate_owner != inherited_owners.end() &&
 			inherited_base != specialization_bases_.end() &&
 			inherited_arguments != specialization_arguments_.end()) {
 			const TemplateDefinition* inherited_definition = FindDefinition(
@@ -616,12 +634,47 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 			// deduction map makes textual substitution turn `iter<Buff, T>` into
 			// `iter_<concrete-args><Buff, T>` before matching the member pattern.
 			deduction_substitutions.erase(parent->name);
+		map<string, vector<string> > bound_pack_values;
+		if(parent) {
+			size_t parent_argument = 0;
+			for(size_t parent_parameter_index = 0;
+				parent_parameter_index < parent->parameters.size(); ++parent_parameter_index) {
+				const TemplateParameter& parent_parameter =
+					parent->parameters[parent_parameter_index];
+				if(parent_parameter.pack) {
+					size_t trailing_fixed = 0;
+					for(size_t later = parent_parameter_index + 1;
+						later < parent->parameters.size(); ++later)
+						if(!parent->parameters[later].pack) ++trailing_fixed;
+					const size_t available = parent_arguments.size() > parent_argument ?
+						parent_arguments.size() - parent_argument : 0;
+					const size_t count = available > trailing_fixed ?
+						available - trailing_fixed : 0;
+					vector<string>& values = bound_pack_values[parent_parameter.name];
+					for(size_t element = 0; element < count; ++element)
+						values.push_back(parent_arguments[parent_argument++]);
+				} else if(parent_argument < parent_arguments.size()) ++parent_argument;
+			}
+		}
 		try {
 			inferred = InferFunctionArguments(definition, call, &member_arguments,
 				deduction_substitutions, context, explicit_prefix, &inferred_pack_values,
-				&inferred_function_values);
+				&inferred_function_values, &bound_pack_values);
 		} catch(const logic_error&) {
 			inferred = false;
+		}
+		// An explicit member-template-id already fixes every template parameter.
+		// Function-pointer expressions can still be intentionally deferred by the
+		// general deduction path (notably an address of an overloaded function),
+		// but that must not prevent the explicit specialization from being
+		// materialized under its concrete member owner.
+		if(!inferred && !explicit_arguments.empty() &&
+			explicit_arguments.size() == definition.parameters.size() &&
+			find_if(definition.parameters.begin(), definition.parameters.end(),
+				[](const TemplateParameter& parameter) { return parameter.pack; }) ==
+				definition.parameters.end()) {
+			member_arguments = explicit_arguments;
+			inferred = true;
 		}
 		if(!inferred) continue;
 		bool dependent_member_arguments = false;
@@ -645,7 +698,8 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 		string requested_owner = object_type;
 		map<const TemplateDefinition*, string>::const_iterator inherited_owner =
 			inherited_owners.find(&definition);
-		if(inherited_owner != inherited_owners.end() && !inherited_owner->second.empty())
+		if(!direct_member && inherited_owner != inherited_owners.end() &&
+			!inherited_owner->second.empty())
 			requested_owner = inherited_owner->second;
 		const bool concrete_owner = specialization_bases_.find(
 			LastComponent(requested_owner)) != specialization_bases_.end() &&
@@ -671,14 +725,18 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 			}
 		}
 		string generated_name;
+		const string previous_concrete_owner = active_concrete_owner_;
+		if(requested_owner_pointer) active_concrete_owner_ = requested_owner;
 		try {
 		generated_name = Instantiate(definition, member_arguments, context,
 			explicit_instantiation,
 				&instantiation_pack_hints, &candidate_substitutions,
 				requested_owner_pointer, &inferred_function_values);
 		} catch(const logic_error&) {
+			active_concrete_owner_ = previous_concrete_owner;
 			continue;
 		}
+		active_concrete_owner_ = previous_concrete_owner;
 		call->template_primary = definition.qualified_name;
 		call->template_arguments = member_arguments;
 		map<string, string> result_substitutions = candidate_substitutions;
@@ -689,8 +747,8 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 					member_arguments[parameter];
 		map<const TemplateDefinition*, string>::const_iterator result_owner =
 			inherited_owners.find(&definition);
-		string result_owner_name = result_owner == inherited_owners.end() ? object_type :
-			result_owner->second;
+		string result_owner_name = !direct_member && result_owner != inherited_owners.end() ?
+			result_owner->second : object_type;
 		map<string, string>::const_iterator result_base = specialization_bases_.find(
 			LastComponent(result_owner_name));
 		map<string, vector<string> >::const_iterator result_arguments =
@@ -717,12 +775,15 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 		const bool static_member = definition.declaration && !definition.declaration->children.empty() &&
 			SpellNode(definition.declaration->children[0]).find("static") != string::npos;
 		const bool generated_operator = member_name.compare(0, 8, "operator") == 0;
-		if(static_member && !member_qualifier.empty()) {
-			const string owner = PrefixComponent(definition.qualified_name);
+		const bool ordinary_class_member = !definition.owner.empty() &&
+			definition.owner.find('<') == string::npos &&
+			FindClassDeclaration(definition.owner, context) != CPPGMAstNodePtr();
+		if(static_member && definition.owner.find("::") == string::npos && concrete_owner) {
 			call->children[0] = CPPGMAstNodePtr(new CPPGMAstNode("id-expression",
-				owner.empty() ? generated_name : owner + "::" + generated_name));
-		} else callee->children[1]->value = concrete_owner && !generated_operator ?
-			member_name : generated_name;
+				definition.owner + "::" + member_name));
+		} else callee->children[1]->value =
+			(ordinary_class_member && !generated_operator) ? member_name :
+			(concrete_owner && !generated_operator ? member_name : generated_name);
 		if(!member_qualifier.empty() && concrete_owner && !static_member) {
 			// Preserve a dependent qualified-base call as a qualified generated
 			// function.  Leaving it as `this->operator=...` redispatches through
@@ -936,6 +997,10 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 		input_callee->children.size() == 1 && input_callee->children[0] &&
 		input_callee->children[0]->kind == "id-expression")
 		input_callee = input_callee->children[0];
+	if(input_callee && input_callee->kind == "id-expression" &&
+		TransformQualifiedMemberTemplateCall(input, input_callee, context,
+			substitutions, result))
+		return result;
 	if(input_callee && input_callee->kind == "id-expression") {
 		const string raw_callee = input_callee->value;
 		string lookup_callee = raw_callee;
@@ -1053,6 +1118,42 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 	// class specialization has already been rewritten at this point, so use
 	// its concrete constructor declaration before ordinary call deduction.
 	ResolveClassConstructorFunctionArguments(result, context);
+	// RewriteText may have already collapsed a qualified class-template-id to
+	// its generated concrete owner while retaining a member-template call as
+	// `Owner_generated::member`.  Recover the typed owner here; otherwise the
+	// ordinary free-function lookup sees only the generated spelling and loses
+	// the selected member specialization (notably a partial class
+	// specialization reached from a recursive member body).
+	if(result_callee && result_callee->kind == "id-expression") {
+		const string qualified = RemoveMarker(result_callee->value);
+		const size_t separator = qualified.rfind("::");
+		if(separator != string::npos) {
+			const string owner = qualified.substr(0, separator);
+			const string member_name = LastComponent(qualified.substr(separator + 2));
+			string qualified_owner = owner;
+			if(!owner.empty()) qualified_owner = CanonicalSpelling(
+				QualifyTypeArgument(owner, context));
+			if(!qualified_owner.empty() && !member_name.empty() &&
+				(specialization_bases_.find(LastComponent(qualified_owner)) !=
+					specialization_bases_.end() || class_contexts_.find(qualified_owner) !=
+					class_contexts_.end())) {
+				CPPGMAstNodePtr object(new CPPGMAstNode("id-expression"));
+				object->inferred_type = qualified_owner;
+				CPPGMAstNodePtr synthetic_member(new CPPGMAstNode("member-expression", "."));
+				synthetic_member->children.push_back(object);
+				synthetic_member->children.push_back(CPPGMAstNodePtr(
+					new CPPGMAstNode("identifier", member_name)));
+				if(InstantiateMemberCall(result, synthetic_member, member_name,
+					context, substitutions)) {
+					result->children[0] = CPPGMAstNodePtr(new CPPGMAstNode(
+						"id-expression", qualified_owner + "::" +
+							synthetic_member->children[1]->value));
+					result->template_instantiation = true;
+					return result;
+				}
+			}
+		}
+	}
 	bool constructor_replayed = false;
 	string constructor_type;
 	if(result_callee && result_callee->kind == "id-expression") {

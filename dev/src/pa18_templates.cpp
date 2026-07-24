@@ -527,6 +527,26 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 	const bool direct_global_class = class_declarations_.find(spelling) !=
 		class_declarations_.end() || named_type_contexts_.find(spelling) !=
 		named_type_contexts_.end();
+	const bool generated_owner_context = specialization_bases_.find(
+		LastComponent(context)) != specialization_bases_.end();
+	bool generated_enclosing_qualified = false;
+	if(generated_owner_context) {
+		map<string, string>::const_iterator generated_base = specialization_bases_.find(
+			LastComponent(context));
+		const string enclosing_owner = generated_base == specialization_bases_.end() ?
+			string() : PrefixComponent(generated_base->second);
+		const string enclosing_candidate = enclosing_owner.empty() ? string() :
+			JoinPath(enclosing_owner, spelling);
+		if(!enclosing_candidate.empty() && (class_contexts_.find(enclosing_candidate) !=
+			class_contexts_.end() || named_type_contexts_.find(enclosing_candidate) !=
+			 named_type_contexts_.end() || class_declarations_.find(enclosing_candidate) !=
+			class_declarations_.end())) {
+			spelling = enclosing_candidate;
+			generated_enclosing_qualified = true;
+		}
+	}
+	if(generated_enclosing_qualified)
+		return CanonicalSpelling(prefix + spelling + suffix);
 	string current = context;
 	for(;;) {
 		map<string, CPPGMAstNodePtr>::const_iterator class_declaration =
@@ -548,7 +568,8 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 		}
 		const string candidate = JoinPath(current, spelling);
 		if(class_contexts_.find(candidate) != class_contexts_.end() ||
-			named_type_contexts_.find(candidate) != named_type_contexts_.end()) {
+			named_type_contexts_.find(candidate) != named_type_contexts_.end() ||
+			(generated_owner_context && FindClassDeclaration(candidate, context))) {
 			const bool candidate_declared = class_declarations_.find(candidate) !=
 				class_declarations_.end();
 			if(direct_global_class && !candidate_declared) {
@@ -1228,17 +1249,20 @@ void PA18TemplateExpander::InjectGenerated(const CPPGMAstNodePtr& node,
 		if(node->kind == "class-specifier" &&
 			found != generated_by_owner_.end() && !found->second.empty()) {
 			vector<CPPGMAstNodePtr> generated_classes;
+			vector<CPPGMAstNodePtr> generated_forwards;
 			vector<CPPGMAstNodePtr> generated_functions;
 			for(size_t i = 0; i < found->second.size(); ++i) {
 				const CPPGMAstNodePtr& generated = found->second[i];
 				if(!generated) continue;
-				if(generated->kind == "class-specifier" ||
-					generated->kind == "class-forward-declaration" ||
+				if(generated->kind == "class-forward-declaration")
+					generated_forwards.push_back(generated);
+				else if(generated->kind == "class-specifier" ||
 					generated->kind == "alias-declaration") generated_classes.push_back(generated);
 				else generated_functions.push_back(generated);
 			}
 			generated_classes = OrderGeneratedClasses(generated_classes);
 			vector<CPPGMAstNodePtr> generated;
+			generated.insert(generated.end(), generated_forwards.begin(), generated_forwards.end());
 			generated.insert(generated.end(), generated_classes.begin(), generated_classes.end());
 			generated.insert(generated.end(), generated_functions.begin(), generated_functions.end());
 			set<string> complete_names;

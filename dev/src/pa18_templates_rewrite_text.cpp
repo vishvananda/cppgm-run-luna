@@ -273,6 +273,8 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 		}
 			const TemplateDefinition* definition = FindDefinition(base, context);
 			string lookup_base = base;
+			const TemplateDefinition* active_nested_parent = 0;
+			vector<string> active_nested_parent_arguments;
 			map<string, string>::const_iterator qualified_alias = substitutions.find(base);
 			if(qualified_alias != substitutions.end() && !qualified_alias->second.empty()) {
 				const TemplateDefinition* substituted_definition = FindDefinition(
@@ -295,6 +297,36 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				}
 			}
 			if(lookup_base != base) definition = FindDefinition(lookup_base, context);
+			// A member-template body is replayed with the concrete enclosing class as
+			// its active owner.  An unqualified nested class template can therefore
+			// have several source definitions with the same short name (one per
+			// partial specialization), so ordinary name lookup is intentionally not
+			// sufficient here.  Select the nested definition through the typed owner
+			// specialization before materializing its own arguments.
+			if(!definition && !active_concrete_owner_.empty()) {
+				map<string, string>::const_iterator owner_base = specialization_bases_.find(
+					LastComponent(active_concrete_owner_));
+				map<string, vector<string> >::const_iterator owner_arguments =
+					specialization_arguments_.find(LastComponent(active_concrete_owner_));
+				if(owner_base != specialization_bases_.end() &&
+					owner_arguments != specialization_arguments_.end()) {
+					const TemplateDefinition* owner_definition = FindDefinition(
+						owner_base->second, context);
+					if(owner_definition && owner_definition->class_template) {
+						const TemplateDefinition* selected_owner = SelectClassTemplateDefinition(
+							owner_definition, owner_arguments->second, context);
+						if(selected_owner) {
+							const TemplateDefinition* nested = FindNestedDefinition(*selected_owner,
+								LastComponent(base));
+							if(nested) {
+								definition = nested;
+								active_nested_parent = selected_owner;
+								active_nested_parent_arguments = owner_arguments->second;
+							}
+						}
+					}
+				}
+			}
 			if(!definition) continue;
 				vector<string> raw_template_args = SplitTemplateArguments(arguments_text);
 				// A pack expansion inside a template-id can leave a synthetic
@@ -627,7 +659,17 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				}
 			}
 			map<string, string> instantiation_substitutions = substitutions;
-			string concrete_owner_for_instantiation;
+			if(active_nested_parent) {
+				for(size_t parameter = 0; parameter < active_nested_parent->parameters.size() &&
+					parameter < active_nested_parent_arguments.size(); ++parameter)
+					if(!active_nested_parent->parameters[parameter].name.empty())
+						instantiation_substitutions[active_nested_parent->parameters[parameter].name] =
+							active_nested_parent_arguments[parameter];
+				if(!active_nested_parent->name.empty())
+					instantiation_substitutions[active_nested_parent->name] =
+						active_concrete_owner_;
+			}
+				string concrete_owner_for_instantiation;
 			const size_t base_separator = base.rfind("::");
 			if(base_separator != string::npos) {
 				const string concrete_owner = base.substr(0, base_separator);

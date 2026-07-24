@@ -400,13 +400,15 @@ bool MatchTypePattern(string pattern, string actual,
 		const map<string, string>& substitutions, const string& context,
 		const vector<string>* explicit_prefix = 0,
 		map<string, vector<string> >* inferred_pack_values = 0,
-		map<string, FunctionSignature>* inferred_function_values = 0) const;
+		map<string, FunctionSignature>* inferred_function_values = 0,
+		const map<string, vector<string> >* bound_pack_values = 0) const;
 	bool MergeInferredFunctionArgument(const TemplateDefinition& definition,
 		const string& pattern, const string& type, const FunctionSignature& signature,
 		const map<string, string>& substitutions, const string& context,
 		const set<string>& parameter_names, map<string, string>* inferred,
 		map<string, vector<string> >* inferred_packs,
-		map<string, FunctionSignature>* inferred_functions) const;
+		map<string, FunctionSignature>* inferred_functions,
+		const map<string, vector<string> >* bound_pack_values = 0) const;
 	bool InferFunctionParameter(const TemplateDefinition& definition,
 		const CPPGMAstNodePtr& parameter, const CPPGMAstNodePtr& parameter_list,
 		size_t parameter_position, const CPPGMAstNodePtr& arguments,
@@ -415,7 +417,8 @@ bool MatchTypePattern(string pattern, string actual,
 		map<string, string>* inferred, map<string, vector<string> >* inferred_packs,
 		vector<string>* deferred_patterns,
 		vector<CPPGMAstNodePtr>* deferred_arguments,
-		map<string, FunctionSignature>* inferred_functions) const;
+		map<string, FunctionSignature>* inferred_functions,
+		const map<string, vector<string> >* bound_pack_values = 0) const;
 	bool CompleteFunctionArguments(const TemplateDefinition& definition,
 		const vector<string>& deferred_patterns,
 		const vector<CPPGMAstNodePtr>& deferred_arguments,

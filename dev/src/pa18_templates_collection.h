@@ -560,6 +560,10 @@ private:
 		const string& context,
 		const map<string, string>& substitutions,
 		bool explicit_instantiation = false);
+	bool TransformQualifiedMemberTemplateCall(const CPPGMAstNodePtr& input,
+		const CPPGMAstNodePtr& input_callee, const string& context,
+		const map<string, string>& substitutions,
+		const CPPGMAstNodePtr& result);
 	CPPGMAstNodePtr TransformSubscriptExpression(const CPPGMAstNodePtr& input, const string& context, const map<string, string>& substitutions);
 	CPPGMAstNodePtr TransformAssignmentExpression(const CPPGMAstNodePtr& input, const string& context, const map<string, string>& substitutions);
 	CPPGMAstNodePtr TransformUnaryExpression(const CPPGMAstNodePtr& input, const string& context, const map<string, string>& substitutions);
@@ -676,74 +680,7 @@ private:
 		return root;
 	}
 	void EnsureForwardClass(const string& spelling, const string& context,
-		const string& owner)
-	{
-		string type = CanonicalSpelling(spelling);
-		while(type.compare(0, 6, "const ") == 0)
-			type = CanonicalSpelling(type.substr(6));
-		while(type.compare(0, 9, "volatile ") == 0)
-			type = CanonicalSpelling(type.substr(9));
-		while(!type.empty() && (type[type.size() - 1] == '*' ||
-			type[type.size() - 1] == '&'))
-			type = CanonicalSpelling(type.substr(0, type.size() - 1));
-		const size_t separator = type.find("::");
-		if(class_contexts_.find(type) == class_contexts_.end())
-			return;
-		if(separator != string::npos && class_declarations_.find(type) !=
-			class_declarations_.end() && class_contexts_.find(type.substr(0, separator)) !=
-			class_contexts_.end()) return;
-	if(class_declarations_.find(type) != class_declarations_.end() &&
-		class_contexts_.find(context) == class_contexts_.end()) {
-			string logical_owner = owner;
-			map<string, string>::const_iterator logical = lexical_namespace_logical_.find(owner);
-			if(logical != lexical_namespace_logical_.end()) logical_owner = logical->second;
-		if(logical_owner == PrefixComponent(type) || owner == PrefixComponent(type)) return;
-	}
-	if(separator == string::npos) {
-			vector<CPPGMAstNodePtr>& forwards = generated_namespace_forwards_[string()];
-			for(size_t i = 0; i < forwards.size(); ++i)
-				if(LastComponent(forwards[i]->value) == LastComponent(type)) return;
-			forwards.push_back(MakeForwardClass(LastComponent(type)));
-			return;
-		}
-		const string top = type.substr(0, separator);
-		if(class_contexts_.find(top) == class_contexts_.end()) {
-			const string owner_name = PrefixComponent(type);
-			vector<CPPGMAstNodePtr>& forwards = generated_namespace_forwards_[owner_name];
-			if(owner != owner_name) early_namespace_forwards_.insert(owner_name);
-			for(size_t i = 0; i < forwards.size(); ++i)
-				if(LastComponent(forwards[i]->value) == LastComponent(type)) return;
-			forwards.push_back(MakeForwardClass(LastComponent(type)));
-			return;
-		}
-		// A dependency which names a nested class of the specialization being
-		// materialized is already supplied by that specialization's class shell.
-		// Building another shell for the top component here would create a
-		// duplicate member class (for example `ptree_int`) beside the real one.
-		if(!context.empty() && top == PrefixComponent(context)) return;
-		if(!generated_forward_classes_.insert(top).second) return;
-		CPPGMAstNodePtr forward = MakeClassShell(top);
-		string remainder = type.substr(separator + 2);
-		CPPGMAstNodePtr current = forward;
-		while(!remainder.empty()) {
-			const size_t next = remainder.find("::");
-			const string part = remainder.substr(0, next);
-			if(part.empty()) break;
-			CPPGMAstNodePtr nested = next == string::npos ? MakeForwardClass(part) :
-				CPPGMAstNodePtr(new CPPGMAstNode("class-specifier", part));
-			if(next != string::npos)
-				nested->children.push_back(CPPGMAstNodePtr(
-					new CPPGMAstNode("class-key", "KW_STRUCT:struct")));
-			current->children.push_back(nested);
-			current = nested;
-			if(next == string::npos) break;
-			remainder.erase(0, next + 2);
-		}
-		if(class_contexts_.find(context) != class_contexts_.end() && context != owner)
-			generated_before_class_[context].push_back(forward);
-		else
-			generated_by_owner_[owner].push_back(forward);
-	}
+		const string& owner);
 	void EnsureTypeDependency(const string& spelling, const string& context,
 		const string& owner)
 	{
