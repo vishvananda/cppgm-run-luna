@@ -58,10 +58,8 @@ void PA18TemplateExpander::CheckExplicitSpecializationOrder(
 	const TemplateDefinition* primary = FindDefinition(base, context);
 	if(!primary || !primary->class_template) return;
 	const vector<string> arguments = SplitTemplateArguments(argument_text);
-	string specialization_key = primary->qualified_name;
-	for(size_t argument = 0; argument < arguments.size(); ++argument)
-		specialization_key += "|" + NormalizeTypeArgument(
-			CanonicalSpelling(arguments[argument]));
+	const ClassSpecializationIdentity specialization_key =
+		MakeClassSpecializationIdentity(*primary, arguments, context);
 	if(instantiated_class_specializations_.find(specialization_key) !=
 		instantiated_class_specializations_.end())
 		throw logic_error("explicit specialization after instantiation");

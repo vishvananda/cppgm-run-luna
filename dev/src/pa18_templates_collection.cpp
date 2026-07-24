@@ -398,6 +398,21 @@ void PA18TemplateExpander::SetActiveConcreteOwner(const string& owner,
 		active_concrete_owner_.arguments = arguments->second;
 }
 
+ClassSpecializationIdentity PA18TemplateExpander::MakeClassSpecializationIdentity(
+	const TemplateDefinition& definition, const vector<string>& arguments,
+	const string& context) const
+{
+	const TemplateDefinition* primary = FindDefinition(definition.qualified_name,
+		context);
+	if(!primary || !primary->class_template) primary = &definition;
+	vector<string> canonical_arguments;
+	canonical_arguments.reserve(arguments.size());
+	for(size_t argument = 0; argument < arguments.size(); ++argument)
+		canonical_arguments.push_back(NormalizeTypeArgument(
+			CanonicalSpelling(arguments[argument])));
+	return ClassSpecializationIdentity(primary, canonical_arguments);
+}
+
 void PA18TemplateExpander::IndexStaticMembers(const CPPGMAstNodePtr& node,
 	set<string>& members) const
 {

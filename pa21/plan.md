@@ -1,5 +1,60 @@
 # PA21 checkpoint plan
 
+## Checkpoint 63 audit refresh — 2026-07-24 (current baseline 182/215)
+
+### Remaining Work Map
+
+The fresh `make test-report ACTIVE_TEST_REPORT_PAS='pa21'` result has 33
+failures.  This is the complete current-PA set after the three scoped
+specialization/instantiation diagnostics passed:
+
+- **Owner/member replay, lookup, and generated-call lowering (14):**
+  `general/300-crtp-static-cast-reference-before-constructor-template`,
+  `general/300-dependent-hidden-friend-static-member-definition`,
+  `general/300-explicit-member-template-id-shares-ordinary-overload`,
+  `general/300-explicit-type-arg-decltype-member-access`,
+  `general/300-friend-existing-template-private-ctor-access`,
+  `general/300-function-pack-template-id-deduction-decltype`,
+  `general/300-local-qualified-argument-replay`,
+  `general/300-member-class-explicit-specialization-owner-lookup`,
+  `general/300-namespace-function-template-hides-outer-callable-object`,
+  `general/300-nested-class-template-current-owner-lookup`,
+  `general/300-parenthesized-qualified-template-functional-call`,
+  `general/300-qualified-friend-member-template-access`,
+  `spec/300-member-operator-template-active-owner`, and
+  `spec/300-member-operator-template-in-class-template`.
+- **Specialization, alias, cv, and pack identity (14):**
+  `general/100-top-cv-pointer-does-not-match-unqualified-pointer-partial`
+  (comparator internal undefined canonical value),
+  `general/200-reference-alias-top-cv-return-binding`,
+  `general/300-function-signature-partial-specialization-functor-assignment`,
+  `general/300-variable-template-forwarding-partial-top-cv`,
+  `general/400-alias-pack-nontype-expression-fast-path`,
+  `general/400-forward-primary-partial-switch-value`,
+  `general/400-inline-namespace-template-template-argument`,
+  `general/400-member-template-nontype-shadowed-global-replay`,
+  `general/400-partial-specialization-conversion-operator-pointer-binding`,
+  `general/400-partial-specialization-redecl-member-template-empty-pack`,
+  `general/400-reference-member-depth-pack-sum`,
+  `general/400-reference-member-lookup-in-progress-base-typedef`,
+  `spec/100-inline-namespace-qualified-template-id-pack-expansion`, and
+  `spec/300-defaulted-type-arg-specialization-nontype-value`.
+- **Dependent initialization, references, and address lowering (5):**
+  `general/100-rvalue-reference-binds-converted-temporary`,
+  `general/300-array-functional-cast-pack-call`,
+  `general/300-constexpr-static-fn-template-address-pack`,
+  `general/300-single-pack-cast-target`, and
+  `general/300-static-constexpr-function-template-pointer-array`.
+
+### Next Substantial Checkpoint Group
+
+Take the 14-case owner/member replay group next, starting with the two
+member-operator fixtures, explicit member-template overload lookup, and
+concrete nested-owner replay.  After that substantial group, bundle the
+five dependent-initialization/address cases with the 14-case specialization,
+alias, cv, and pack-identity group rather than leaving the small dependent
+tail as a standalone checkpoint.
+
 ## Implementation checkpoint 63 scope (2026-07-24, baseline 179/215)
 
 ### Remaining Work Map

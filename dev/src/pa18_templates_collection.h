@@ -3,6 +3,7 @@
 #include "pa19_constants.h"
 #include <algorithm>
 #include <cctype>
+#include <functional>
 #include <map>
 #include <set>
 #include <sstream>
@@ -413,6 +414,24 @@ struct TemplateDefinition
 	set<string> static_members;
 	TemplateDefinition() : qualified_name(), name(), owner(), lexical_owner(), declaration(), parameters(), partial_specialization(false), explicit_specialization(false), specialization_parameters(), specialization_parameter_details(), specialization_pack_names(), specialization_pattern(), class_template(false), alias_template(false), variable_template(false), member_template(false), friend_declaration(false), static_member(false), static_members() {}
 };
+// A materialized class specialization is identified by the canonical template
+// entity and its ordered arguments.  Keep the entity pointer separate from
+// presentation spellings so source-order checks do not reconstruct identity
+// from a delimiter-packed generated-name string.
+struct ClassSpecializationIdentity
+{
+	const TemplateDefinition* primary;
+	vector<string> arguments;
+	ClassSpecializationIdentity(const TemplateDefinition* primary_definition = 0,
+		const vector<string>& specialization_arguments = vector<string>())
+		: primary(primary_definition), arguments(specialization_arguments) {}
+	bool operator<(const ClassSpecializationIdentity& other) const
+	{
+		if(primary != other.primary)
+			return less<const TemplateDefinition*>()(primary, other.primary);
+		return arguments < other.arguments;
+	}
+};
 struct ConcreteOwnerContext
 {
 	string name;
@@ -509,8 +528,8 @@ private:
 	// Class specializations are subject to source-order rules: once a concrete
 	// specialization has been materialized, a later explicit specialization of
 	// that same primary is ill-formed.  Keep this semantic fact independently of
-	// the generated-name cache, whose keys also contain declaration identities.
-	set<string> instantiated_class_specializations_;
+	// the generated-name cache and keyed by the canonical template entity.
+	set<ClassSpecializationIdentity> instantiated_class_specializations_;
 	map<string, TemplateDefinition> explicit_function_specializations_;
 	map<const CPPGMAstNode*, vector<string> > explicit_function_arguments_;
 	set<string> extern_instantiation_keys_;
@@ -525,6 +544,9 @@ private:
 		set<string>* active) const;
 	string QualifyTypeArgument(string spelling, const string& context,
 		const string& template_owner = string()) const;
+	ClassSpecializationIdentity MakeClassSpecializationIdentity(
+		const TemplateDefinition& definition, const vector<string>& arguments,
+		const string& context) const;
 	void SetActiveConcreteOwner(const string& owner, const string& context);
 	string NormalizeElaboratedSpelling(string raw, const string& context) const;
 	string DeclaratorSuffix(const CPPGMAstNodePtr& declarator) const;

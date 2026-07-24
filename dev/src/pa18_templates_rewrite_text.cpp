@@ -730,11 +730,8 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			// a later explicit specialization.
 			if(resolve_member && definition->class_template && close + 2 < raw.size() &&
 				raw.compare(close + 1, 2, "::") == 0) {
-				string specialization_key = definition->qualified_name;
-				for(size_t argument = 0; argument < args.size(); ++argument)
-					specialization_key += "|" + NormalizeTypeArgument(
-						CanonicalSpelling(args[argument]));
-				instantiated_class_specializations_.insert(specialization_key);
+				instantiated_class_specializations_.insert(
+					MakeClassSpecializationIdentity(*definition, args, context));
 			}
 			string replacement = local_name;
 			const string qualifier = PrefixComponent(lookup_base);

@@ -1,5 +1,86 @@
 # PA21 checkpoint audit
 
+## Checkpoint 63 audit — 2026-07-24
+
+### Scope Reviewed
+
+Reviewed the latest Checkpoint 63 Scope, Result, Remaining Work Map, and next
+group in `pa21/plan.md`; `pa21/README.md`; `TESTING_AND_REFERENCES.md`; the
+recent commits `e0849ed`, `5ddf6bc`, `0e88087`, `6f71b3c`, and their PA21
+predecessors; every changed PA18 source file and
+`dev/frontend_source_sets.mk`; the scoped explicit-specialization and
+explicit-instantiation tests; and the complete primary log at
+`/home/vishvananda/work/.ralph/luna-gpt-5.6-luna-ultra/last-test.log`.
+
+The review followed the specialization registry through declaration
+collection, replay and lookup, explicit materialization, ordinary AST
+transformation, and LowIR emission.  It also checked the normal preprocessing,
+parsing, PA11 semantic, PA14 lowering, PA18 template, and final LowIR stages,
+including extern-template and constructor paths.
+
+### Findings
+
+- Class-specialization instantiation history was keyed by concatenated
+  qualified-name and argument strings in both replay and explicit-specialization
+  checking.  That duplicated ownership recovery and made a delimiter-packed
+  string carry an entity fact that belongs in the template registry.
+- Explicit-instantiation validation ran before candidate/entity lookup and
+  could reject valid member or conversion operators.  More importantly,
+  `TransformNode` could fall through to ordinary transformation when explicit
+  materialization returned false, allowing an invalid declaration to succeed
+  (and silently dropping an invalid extern declaration).
+- The fallback needed for a fully explicit extern template-id was initially
+  too broad: matching only argument counts could select the first overload
+  rather than the declaration denoted by the source.  This was an architectural
+  correctness blocker, not a test-specific exception.
+- Moving the operator helpers and the using-directive implementation exposed
+  two source-audit limits (`pa18_templates_calls.cpp` and
+  `pa18_templates_rewrite.h`).  Leaving either packed or relying on an
+  unchecked fragment would have been a file-audit bypass.
+- No skipped compiler phase, dummy or embedded output, interpreter/VM/trampoline
+  substitute, host/reference-binary invocation, timeout workaround,
+  source/test-specific acceptance gate, weakened check, emitted-text reparse,
+  or new avoidable full-suite/hot-path scan was found after these issues were
+  corrected.
+
+### Changes Made
+
+- Added `ClassSpecializationIdentity`, keyed by the canonical primary
+  `TemplateDefinition*` and canonical argument vector, and used it for both
+  specialization-order checking and recorded class instantiation history.
+  This keeps ownership and identity typed at the registry boundary.
+- Moved builtin-operator validation after entity lookup, distinguished
+  non-member operators from valid member/conversion operators, and used the
+  existing typed class/entity lookup for operand validation.
+- Made explicit and extern instantiation handling terminal in `TransformNode`:
+  invalid targets now fail, valid extern declarations suppress materialization,
+  and class-template constructors validate and materialize through their typed
+  owner.  The explicit-argument fallback now requires complete non-pack
+  bindings and an exact substituted parameter-type match for the selected
+  candidate.
+- Moved builtin operator inference to the new checked
+  `pa18_templates_calls_operator.cpp`, registered it in
+  `dev/frontend_source_sets.mk`, and moved `RecordUsingDirective` out of the
+  header.  The resulting files remain below the audit size limits.
+- No tests, reference fixtures, or acceptance scripts were changed.
+
+### Validation
+
+- `make -C dev cppgm++` — passed after the source split.
+- The six focused extern-template and specialization-order fixtures — **6/6
+  passed**.
+- `make test-report ACTIVE_TEST_REPORT_PAS='pa21'` — **182/215 passed**;
+  the complete 33-case failure set is refreshed in `pa21/plan.md`, and the
+  current result is at the turn-start baseline.
+- Required prior-through command for `n=21` — **1635/1635 passed** through
+  PA20.
+- `perl scripts/cppgm_file_audit.pl --stage pa21 --paths dev/src` — passed
+  with nine pre-existing header-division warnings and no fatal finding.
+- `git diff --check` — passed.  The checkpoint-level shortcut, fallback,
+  ownership, performance, and file-audit blockers found in this review are
+  fixed; the remaining current-PA failures are the planned next semantic
+  groups, not regressions from this checkpoint.
+
 ## Checkpoint 62 audit — 2026-07-24
 
 ### Scope Reviewed

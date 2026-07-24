@@ -915,6 +915,45 @@ bool PA18TemplateExpander::TransformPackChild(
 	}
 	return false;
 }
+
+void PA18TemplateExpander::RecordUsingDirective(const CPPGMAstNodePtr& original_child,
+	map<string, string>* local_substitutions)
+{
+	const CPPGMAstNodePtr target = ChildOfKindLocal(original_child, "target");
+	if(!target || target->value.empty()) return;
+	const string prefix = target->value + "::";
+	for(set<string>::const_iterator type = class_contexts_.lower_bound(prefix);
+		type != class_contexts_.end() &&
+			type->compare(0, prefix.size(), prefix) == 0; ++type) {
+		const string relative = type->substr(prefix.size());
+		const size_t separator = relative.find("::");
+		const string visible = relative.substr(0, separator);
+		if(!visible.empty() && local_substitutions->find(visible) == local_substitutions->end())
+			(*local_substitutions)[visible] = target->value + "::" + visible;
+	}
+	map<string, vector<pair<string, string> > >::const_iterator indexed =
+		using_directive_exports_.find(target->value);
+	if(indexed == using_directive_exports_.end()) return;
+	for(size_t index = 0; index < indexed->second.size(); ++index) {
+		const string& visible = indexed->second[index].first;
+		const string qualified_prefix = target->value + "::" + visible;
+		map<string, TemplateDefinition>::const_iterator definition = definitions_.find(
+			indexed->second[index].second);
+		if(definition == definitions_.end()) continue;
+		// A using-directive contributes function overloads to lookup, but it
+		// must not become a scalar identifier substitution.  Rewriting every
+		// occurrence of a local object named `next` to `std::next`, for
+		// example, confuses a value binding with the imported function entity.
+		// Function lookup already consults the indexed definition set.
+		if(!definition->second.class_template &&
+			!definition->second.alias_template &&
+			!definition->second.variable_template) continue;
+		if(definition->second.qualified_name != qualified_prefix) continue;
+		if(local_substitutions->find(visible) == local_substitutions->end())
+			(*local_substitutions)[visible] = qualified_prefix;
+	}
+}
+
 void PA18TemplateExpander::TransformRegularChildren(const CPPGMAstNodePtr& input,
 	const string& child_context, const string& function_context,
 	const map<string, string>& substitutions,
