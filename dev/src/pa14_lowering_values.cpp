@@ -1,5 +1,6 @@
 #include "pa14_lowering.h"
 
+#include <functional>
 #include <map>
 #include <string>
 #include <vector>
@@ -7,6 +8,46 @@
 using namespace std;
 
 namespace cppgm_pa14_lowering {
+
+string PA14Lowerer::AdjustDerivedAddress(const string& base,
+                                         const TypePtr& raw_derived,
+                                         const TypePtr& raw_base)
+{
+    TypePtr derived = type_value(raw_derived);
+    TypePtr base_type = type_value(raw_base);
+    if(!derived || !base_type || PA12SameType(derived, base_type, true)) return base;
+    if(derived->kind != TYPE_CLASS || base_type->kind != TYPE_CLASS ||
+       !IsDerivedFrom(derived, base_type))
+      throw logic_error("class reference cast is not a base downcast");
+    vector<size_t> path;
+    set<const Type*> visited;
+    function<bool(const TypePtr&)> find_base = [&](const TypePtr& current) {
+      if(!current || !visited.insert(current.get()).second) return false;
+      if(PA12SameType(current, base_type, true)) return true;
+      if(!current->direct_bases.empty()) {
+        for(size_t i = 0; i < current->direct_bases.size(); ++i) {
+          const size_t offset = i < current->direct_base_offsets.size() ?
+            current->direct_base_offsets[i] : (i == 0 ? current->direct_base_offset : 0);
+          path.push_back(offset);
+          if(find_base(type_value(current->direct_bases[i]))) return true;
+          path.pop_back();
+        }
+      } else if(current->direct_base) {
+        path.push_back(current->direct_base_offset);
+        if(find_base(type_value(current->direct_base))) return true;
+        path.pop_back();
+      }
+      return false;
+    };
+    if(!find_base(derived)) throw logic_error("class reference cast is not a base downcast");
+    size_t offset = 0;
+    for(size_t i = 0; i < path.size(); ++i) offset += path[i];
+    if(offset == 0) return base;
+    const string adjusted = new_temp();
+    AddInstruction(adjusted + " = index i8 " + base + ", -" +
+      integer_text(static_cast<long long>(offset)));
+    return adjusted;
+  }
 
 PA14Lowerer::Value PA14Lowerer::EmitIdentifier(const CPPGMAstNodePtr& node, Scope* scope,
                        const TypePtr& expected)

@@ -1171,9 +1171,10 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 		if(constructor_type.find("::") == string::npos) {
 			for(string current = context; ; ) {
 				const string candidate = JoinPath(current, constructor_type);
-				if((class_contexts_.find(candidate) != class_contexts_.end() ||
-					FindClassDeclaration(candidate, context)) &&
-					LastComponent(candidate) == LastComponent(constructor_type)) {
+				// FindClassDeclaration's short-name fallback can misidentify
+				// `begin::iterator` as global `iterator`; replay needs an exact owner.
+				if(class_contexts_.find(candidate) != class_contexts_.end() ||
+					class_declarations_.find(candidate) != class_declarations_.end()) {
 					constructor_type = candidate;
 					break;
 				}

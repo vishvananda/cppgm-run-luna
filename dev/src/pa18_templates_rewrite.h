@@ -21,7 +21,8 @@ bool MatchTypePattern(string pattern, string actual,
 		map<string, string>* inferred, const string& context, bool class_pattern) const;
 	bool SplitDirectFunctionType(const string& raw, string* result, vector<string>* parameters, string* qualifiers) const;
 	int MatchObjectCvPattern(const string& pattern, const string& actual, const set<string>& parameter_names,
-			map<string, string>* inferred, const string& context) const;
+				map<string, string>* inferred, const string& context,
+				bool class_pattern = false) const;
 	bool MatchTrailingTypePack(const vector<string>& pattern_parts, const vector<string>& actual_parts,
 		const set<string>& parameter_names, map<string, string>* inferred, const string& context, bool class_pattern) const;
 	bool IsTemplatePackName(const TemplateDefinition& definition, const string& name) const;

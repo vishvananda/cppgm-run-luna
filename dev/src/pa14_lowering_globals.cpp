@@ -287,8 +287,7 @@ bool PA14Lowerer::FoldInteger(const CPPGMAstNodePtr& node, Scope* scope,
     if(node->kind == "id-expression") {
       const bool decltype_form = node->value.compare(0, 9, "decltype(") == 0;
       Binding* qualified_member = ResolveDecltypeStaticMember(node->value, scope);
-      vector<Binding*> candidates = qualified_member ?
-        vector<Binding*>(1, qualified_member) : Lookup(node->value, scope);
+      vector<Binding*> candidates = qualified_member ? vector<Binding*>(1, qualified_member) : Lookup(node->value, scope);
       if(qualified_member && decltype_form) return false;
       if(candidates.size() != 1 || !candidates[0]->has_value) return false;
       if(type) *type = candidates[0]->type;
@@ -1160,14 +1159,14 @@ string PA14Lowerer::EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
       TypePtr target = analyzer_.TypeFromTypeId(node->children[0], scope);
       if(type_is_reference(target)) {
         TypePtr target_value = type_value(target);
-        ExprInfo source_info = Infer(node->children[1], scope);
-        TypePtr source_value = expression_value_type(source_info);
+        ExprInfo source_info = Infer(node->children[1], scope); TypePtr source_value = expression_value_type(source_info);
         if(target_value && target_value->kind == TYPE_CLASS && source_value &&
-           source_value->kind == TYPE_CLASS &&
-           !PA12SameType(target_value, source_value, true)) {
+           source_value->kind == TYPE_CLASS && !PA12SameType(target_value, source_value, true)) {
           if(IsDerivedFrom(source_value, target_value))
-            return AdjustBaseAddress(EmitAddress(node->children[1], scope),
-                                     source_value, target_value);
+            return AdjustBaseAddress(EmitAddress(node->children[1], scope), source_value, target_value);
+          if(IsDerivedFrom(target_value, source_value))
+            return AdjustDerivedAddress(EmitAddress(node->children[1], scope), target_value,
+                                        source_value);
           const string slot = new_special_slot("tmpobj", low_type(target_value));
           const string address = new_temp();
           AddInstruction(address + " = addr $" + slot);

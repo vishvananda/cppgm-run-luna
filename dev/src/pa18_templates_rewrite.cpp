@@ -437,7 +437,7 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 	actual = separate_compact_cv(actual);
 	pattern = CanonicalSpelling(pattern);
 	const int object_cv_match = MatchObjectCvPattern(pattern, actual,
-		parameter_names, inferred, context);
+		parameter_names, inferred, context, class_pattern);
 	if(object_cv_match >= 0) return object_cv_match != 0;
 	const size_t pattern_array_open = pattern.rfind('[');
 	const size_t actual_array_open = actual.rfind('[');

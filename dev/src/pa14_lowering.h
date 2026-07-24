@@ -768,6 +768,9 @@ string AdjustBaseAddress(const string& base, const TypePtr& derived,
                          const TypePtr& target,
                          bool project_base_path = false);
 
+string AdjustDerivedAddress(const string& base, const TypePtr& derived,
+                            const TypePtr& base_type);
+
 Value EmitIdentifier(const CPPGMAstNodePtr& node, Scope* scope,
                      const TypePtr& expected);
 

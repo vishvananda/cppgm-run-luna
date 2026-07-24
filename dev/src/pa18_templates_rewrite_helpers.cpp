@@ -5,7 +5,7 @@ namespace pa18_templates_internal {
 
 int PA18TemplateExpander::MatchObjectCvPattern(const string& pattern,
 	const string& actual, const set<string>& parameter_names,
-	map<string, string>* inferred, const string& context) const
+	map<string, string>* inferred, const string& context, bool class_pattern) const
 {
 	string function_result, function_qualifiers;
 	vector<string> function_parameters;
@@ -70,7 +70,12 @@ int PA18TemplateExpander::MatchObjectCvPattern(const string& pattern,
 	}
 	if(!pattern_mask || parameter_names.find(pattern_base) == parameter_names.end() ||
 		pattern_base.find('*') != string::npos || pattern_base.find('&') != string::npos) return -1;
-	if((pattern_mask & actual_mask) != pattern_mask) return 0;
+	// Top-level cv on a reference pattern qualifies the referred-to object;
+	// it does not require the argument spelling to repeat that cv.  In
+	// particular, `const T&` binds an ordinary lvalue of type `T` and still
+	// deduces `T` from the unqualified object type.
+	if((pattern_mask & actual_mask) != pattern_mask &&
+		(!pattern_lvalue_reference || class_pattern)) return 0;
 	const int remaining_cv = actual_mask & ~pattern_mask;
 	string bound = actual_base;
 	if(remaining_cv & 2) bound = "volatile " + bound;
