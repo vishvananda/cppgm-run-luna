@@ -561,10 +561,9 @@
 			if(!nested_parameters[i].name.empty() &&
 				(nested_parameters[i].type || !nested_parameters[i].non_type_type.empty()))
 				substitutions[nested_parameters[i].name] = parent_args[i];
-		if(!nested)
-			for(size_t i = 0; i < parent.parameters.size() && i < parent_args.size(); ++i)
-				if(!parent.parameters[i].name.empty())
-					substitutions[parent.parameters[i].name] = parent_args[i];
+		for(size_t i = 0; i < parent.parameters.size() && i < parent_args.size(); ++i)
+			if(!parent.parameters[i].name.empty())
+				substitutions[parent.parameters[i].name] = parent_args[i];
 		substitutions[parent.name] = parent_local_name;
 		const vector<const TemplateDefinition*> candidates = NestedDefinitions(parent);
 		for(size_t i = 0; i < candidates.size(); ++i) {

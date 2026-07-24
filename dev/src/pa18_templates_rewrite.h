@@ -727,6 +727,10 @@ bool MatchTypePattern(string pattern, string actual,
 				!HasReplayContext(substitutions)) ||
 			(original_child->kind != "class-specifier" &&
 				original_child->kind != "class-forward-declaration")) return false;
+		// An unnamed aggregate is a data member of the enclosing class, not an
+		// optional nested type.  Keep it in a specialization so its storage and
+		// injected member bindings survive template replay.
+		if(original_child->value.empty() || original_child->value == "<unnamed>") return false;
 		const string nested_name = LastComponent(original_child->value);
 		const string class_key = JoinPath(child_context, LastComponent(input->value));
 		map<string, set<string> >::const_iterator requested = requested_nested_classes_.find(class_key);

@@ -1,6 +1,90 @@
 # PA21 checkpoint plan
 
-## Current turn checkpoint result (2026-07-23, final checkpoint)
+## Current turn checkpoint result (2026-07-23, 176/215)
+
+The fresh required report, `make test-report ACTIVE_TEST_REPORT_PAS='pa21'`,
+is **176/215 passing** with **39 residual fixture failures plus one comparator
+internal failure**, up from the turn-start baseline of **153/215**.  The
+prior-PA gate remains clean at **1635/1635 through PA20**.  The PA21 file audit
+passes with warnings only.
+
+### Remaining Work Map
+
+- **Owner replay, member/friend lookup, and generated-call lowering:**
+  `general/300-crtp-static-cast-reference-before-constructor-template`,
+  `general/300-dependent-hidden-friend-static-member-definition`,
+  `general/300-explicit-member-template-id-shares-ordinary-overload`,
+  `general/300-explicit-type-arg-decltype-member-access`,
+  `general/300-friend-existing-template-private-ctor-access`,
+  `general/300-function-pack-template-id-deduction-decltype`,
+  `general/300-local-qualified-argument-replay`,
+  `general/300-member-class-explicit-specialization-owner-lookup`,
+  `general/300-namespace-function-template-hides-outer-callable-object`,
+  `general/300-nested-class-template-current-owner-lookup`,
+  `general/300-nested-class-template-reference-reset`,
+  `general/300-out-of-class-ctor-using-imported-member-template`,
+  `general/300-parenthesized-qualified-template-functional-call`,
+  `general/300-qualified-friend-member-template-access`,
+  `spec/300-member-operator-template-active-owner`, and
+  `spec/300-member-operator-template-in-class-template`.
+  The generated-call cases in this group are LowIR-only diffs; the others
+  still fail during semantic/template replay.
+
+- **Partial-specialization, alias, cv, and pack identity:**
+  `general/100-top-cv-pointer-does-not-match-unqualified-pointer-partial`
+  (the comparator reports an undefined canonical value),
+  `general/200-reference-alias-top-cv-return-binding`,
+  `general/300-function-signature-partial-specialization-functor-assignment`,
+  `general/300-nested-member-partial-specialization-apply-scope`,
+  `general/300-variable-template-forwarding-partial-top-cv`,
+  `general/400-alias-pack-nontype-expression-fast-path`,
+  `general/400-forward-primary-partial-switch-value`,
+  `general/400-inline-namespace-template-template-argument`,
+  `general/400-member-template-nontype-shadowed-global-replay`,
+  `general/400-partial-specialization-conversion-operator-pointer-binding`,
+  `general/400-partial-specialization-redecl-member-template-empty-pack`,
+  `general/400-reference-member-depth-pack-sum`,
+  `general/400-reference-member-lookup-in-progress-base-typedef`,
+  `spec/100-inline-namespace-qualified-template-id-pack-expansion`, and
+  `spec/300-defaulted-type-arg-specialization-nontype-value`.
+
+- **Explicit specialization/instantiation diagnostics:**
+  `general/300-extern-template-builtin-operator-function-declaration-bad`,
+  `general/300-template-instantiation-use-location-explicit-specialization`,
+  and `spec/300-explicit-specialized-ctor-template-header-bad`.
+
+- **Dependent initialization, references, and address lowering:**
+  `general/100-rvalue-reference-binds-converted-temporary`,
+  `general/300-array-functional-cast-pack-call`,
+  `general/300-constexpr-static-fn-template-address-pack`,
+  `general/300-single-pack-cast-target`, and
+  `general/300-static-constexpr-function-template-pointer-array`.
+
+### Checkpoint Scope and Result
+
+This checkpoint completes one coherent generated-entity replay slice.  Hidden
+friend operator bindings whose materialized names carry the `__inst_` suffix
+are now reachable through associated-namespace lookup.  Initializer
+constructor materialization maps generated class names back to source
+constructor definitions, so member-template constructors participate in
+overload selection.  Unnamed aggregate children are retained during template
+replay, preserving anonymous-union storage.  Enclosing substitutions, plain
+`Owner<T>::Nested<U>` syntax, concrete owner registration, and static-member
+expression preservation now cover out-of-class nested class templates.
+
+The focused hidden-friend ADL, anonymous-union constructor, and nested
+member-class checks pass.  The required report is **176/215**, the through
+report is **1635/1635**, and the file audit passes with warnings only.
+
+The next checkpoint group is the remaining PA18 owner-context replay slice:
+`general/300-nested-class-template-current-owner-lookup`,
+`general/300-nested-class-template-reference-reset`,
+`general/300-nested-member-partial-specialization-apply-scope`,
+`general/300-out-of-class-ctor-using-imported-member-template`,
+`spec/300-member-operator-template-active-owner`, and
+`spec/300-member-operator-template-in-class-template`.
+
+## Superseded checkpoint result (2026-07-23, 173/215)
 
 The fresh required report, `make test-report ACTIVE_TEST_REPORT_PAS='pa21'`,
 is **173/215 passing** with **42 failures**, up from the turn-start baseline

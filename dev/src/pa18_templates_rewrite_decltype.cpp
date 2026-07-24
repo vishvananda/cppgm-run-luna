@@ -429,11 +429,14 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 	const bool has_nested_template = raw->compare(nested_qualifier_start, 8,
 		"template") == 0 && (nested_qualifier_start + 8 == raw->size() ||
 		!IsIdentifierCharacter((*raw)[nested_qualifier_start + 8]));
-	if(nested_name.empty() && !has_nested_template)
+	const bool has_plain_nested_template = concrete_member_end < raw->size() &&
+		(*raw)[concrete_member_end] == '<';
+	const bool nested_template_id = has_nested_template || has_plain_nested_template;
+	if(nested_name.empty() && !nested_template_id)
 		nested_name = nested_member;
 	const TemplateDefinition* owner_definition = FindDefinition(owner_base, context);
 	if(!owner_definition || !owner_definition->class_template ||
-		(!has_nested_template && nested_name.empty()) || nested_member.empty()) return false;
+		(!nested_template_id && nested_name.empty()) || nested_member.empty()) return false;
 	vector<string> owner_arguments = SplitTemplateArguments(owner_arguments_text);
 	for(size_t owner_argument = 0; owner_argument < owner_arguments.size(); ++owner_argument) {
 		owner_arguments[owner_argument] = NormalizeTypeArgument(RewriteText(
@@ -478,7 +481,7 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 	size_t nested_qualifier = close + 1;
 	while(nested_qualifier < raw->size() && isspace(
 		static_cast<unsigned char>((*raw)[nested_qualifier]))) ++nested_qualifier;
-	if(has_nested_template && nested_qualifier + 1 < raw->size() &&
+	if(nested_template_id && nested_qualifier + 1 < raw->size() &&
 		raw->compare(nested_qualifier, 2, "::") == 0) {
 		size_t nested_start = nested_qualifier + 2;
 		while(nested_start < raw->size() && isspace(
@@ -495,14 +498,19 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 		string nested_base;
 		string nested_arguments_text;
 		size_t nested_close = string::npos;
-		if(nested_open != string::npos &&
-			TemplateBase(*raw, nested_open, &nested_begin, &nested_base) &&
-			nested_begin == nested_start && TemplateRange(*raw, nested_open,
-			&nested_arguments_text, &nested_close)) {
+		const bool nested_base_found = nested_open != string::npos &&
+			TemplateBase(*raw, nested_open, &nested_begin, &nested_base);
+		const bool nested_range_found = nested_base_found && TemplateRange(*raw, nested_open,
+			&nested_arguments_text, &nested_close);
+		if(nested_base_found && nested_begin != nested_start) {
+			nested_base = raw->substr(nested_start, nested_open - nested_start);
+			nested_begin = nested_start;
+		}
+		if(nested_base_found && nested_begin == nested_start && nested_range_found) {
 			size_t member_separator = nested_close + 1;
 			while(member_separator < raw->size() && isspace(
 				static_cast<unsigned char>((*raw)[member_separator]))) ++member_separator;
-			if(member_separator + 1 < raw->size() &&
+		if(member_separator + 1 < raw->size() &&
 				raw->compare(member_separator, 2, "::") == 0) {
 				size_t member_begin = member_separator + 2;
 				while(member_begin < raw->size() && isspace(
@@ -541,15 +549,40 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 					const TemplateDefinition* selected_nested = SelectClassTemplateDefinition(
 						nested_definition, nested_arguments, context);
 					if(selected_nested) {
+						const string nested_owner = owner_local_name;
 						const string nested_local_name = Instantiate(*selected_nested,
-							nested_arguments, context, false, 0, &nested_substitutions);
-						const string concrete_nested = JoinPath(selected_nested->owner,
+							nested_arguments, context, false, 0, &nested_substitutions,
+							&nested_owner);
+						const string concrete_nested = JoinPath(owner_local_name,
 							nested_local_name);
+						bool static_member = false;
+						if(nested_definition->declaration)
+							for(size_t child = 0; child < nested_definition->declaration->children.size(); ++child) {
+								const CPPGMAstNodePtr declaration = nested_definition->declaration->children[child];
+								if(!declaration || declaration->kind != "simple-declaration" ||
+									declaration->children.empty() ||
+									(SpellNode(declaration->children[0]).find("static") == string::npos &&
+									 SpellNode(declaration->children[0]).find("constexpr") == string::npos)) continue;
+								const CPPGMAstNodePtr list = ChildOfKindLocal(declaration,
+									"init-declarator-list");
+								if(!list) continue;
+								for(size_t item = 0; item < list->children.size(); ++item)
+									if(list->children[item] && !list->children[item]->children.empty() &&
+										LastComponent(FirstIdentifierLocal(list->children[item]->children[0])) ==
+										 nested_member) static_member = true;
+							}
+						if(static_member) {
+							raw->replace(begin, nested_close - begin + 1,
+								owner_local_name + "::" + nested_local_name);
+							if(template_replaced) *template_replaced = true;
+							if(search) *search = begin + owner_local_name.size() + 2 + nested_local_name.size();
+							return true;
+						}
 						string concrete_member;
 						set<string> nested_active;
 						const bool concrete_found = FindClassMemberType(concrete_nested, nested_member,
 							nested_substitutions, context, &concrete_member, &nested_active,
-							true) && !concrete_member.empty();
+							false) && !concrete_member.empty();
 						if(concrete_found) {
 							const string member_context = selected_nested->qualified_name.empty() ?
 								context : selected_nested->qualified_name;

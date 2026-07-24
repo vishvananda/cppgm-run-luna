@@ -229,6 +229,15 @@ void PA14Lowerer::AppendAssociatedOperatorBindings(const TypePtr& raw_type,
         if(hidden[i]->kind == BIND_FUNCTION && hidden[i]->hidden_friend &&
            find(result.begin(), result.end(), hidden[i]) == result.end())
           result.push_back(hidden[i]);
+      const string generated_prefix = last_component(name) + "__inst_";
+      for(deque<Binding>::iterator binding = owner_scope->bindings.begin();
+          binding != owner_scope->bindings.end(); ++binding) {
+        if(binding->kind != BIND_FUNCTION || !binding->hidden_friend ||
+           binding->name.compare(0, generated_prefix.size(), generated_prefix) != 0)
+          continue;
+        if(find(result.begin(), result.end(), &*binding) == result.end())
+          result.push_back(&*binding);
+      }
       AppendAssociatedOperatorBindings(type->direct_base, name, result,
         visited_types, visited_scopes);
     }

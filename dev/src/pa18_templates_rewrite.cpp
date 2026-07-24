@@ -147,17 +147,18 @@ void PA18TemplateExpander::MaterializeInitializerConstructor(
 		substitutions, 0), context));
 	if(target.empty() || !FindClassDeclaration(target, context)) return;
 	const string constructor_name = LastComponent(target);
-	map<string, vector<string> >::const_iterator indexed_constructors =
-		definitions_by_name_.find(constructor_name);
+	string source_constructor_name = constructor_name;
+	map<string, string>::const_iterator generated_base = specialization_bases_.find(constructor_name);
+	if(generated_base != specialization_bases_.end()) source_constructor_name = LastComponent(generated_base->second);
+	map<string, vector<string> >::const_iterator indexed_constructors = definitions_by_name_.find(source_constructor_name);
 	bool has_member_template_constructor = false;
 	if(indexed_constructors != definitions_by_name_.end())
 		for(size_t candidate = 0; candidate < indexed_constructors->second.size(); ++candidate) {
-			map<string, TemplateDefinition>::const_iterator found = definitions_.find(
-				indexed_constructors->second[candidate]);
+			map<string, TemplateDefinition>::const_iterator found = definitions_.find(indexed_constructors->second[candidate]);
 			if(found == definitions_.end()) continue;
 			const TemplateDefinition& definition = found->second;
 			if(!definition.class_template && !definition.alias_template &&
-				definition.member_template && LastComponent(definition.name) == constructor_name) {
+				 definition.member_template && LastComponent(definition.name) == source_constructor_name) {
 				has_member_template_constructor = true;
 				break;
 			}
@@ -167,14 +168,13 @@ void PA18TemplateExpander::MaterializeInitializerConstructor(
 	object->inferred_type = target;
 	CPPGMAstNodePtr member(new CPPGMAstNode("member-expression", "."));
 	member->children.push_back(object);
-	member->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("identifier",
-		LastComponent(target))));
+	member->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("identifier", source_constructor_name)));
 	CPPGMAstNodePtr call(new CPPGMAstNode("call-expression"));
 	call->children.push_back(member);
 	CPPGMAstNodePtr argument_list(new CPPGMAstNode("argument-list"));
 	argument_list->children = arguments;
 	call->children.push_back(argument_list);
-	InstantiateMemberCall(call, member, LastComponent(target), context, substitutions);
+	InstantiateMemberCall(call, member, source_constructor_name, context, substitutions);
 }
 
 void PA18TemplateExpander::ResolveMemberFunctionArguments(
