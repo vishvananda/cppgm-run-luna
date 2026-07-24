@@ -520,10 +520,18 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 					++member_end;
 				const string nested_member = raw->substr(member_begin,
 					member_end - member_begin);
-					const TemplateDefinition* nested_definition = FindNestedDefinition(
-							*selected_owner, nested_base);
-					if(nested_definition && !nested_member.empty()) {
+				const TemplateDefinition* nested_definition = FindNestedDefinition(
+						*selected_owner, nested_base);
+				if(nested_definition && !nested_member.empty()) {
 					map<string, string> nested_substitutions = substitutions;
+					// The nested definition is collected under the source owner
+					// (`cases::cases<Char, Gram>`), while this replay starts from its
+					// generated owner (`cases_char_type__grammar_char_type_`).  Carry
+					// the owner specialization's typed bindings explicitly; otherwise
+					// inherited members such as `case_<sequence_tag>::proto_grammar`
+					// are transformed with the source spelling `Gram` still present.
+					AddConcreteOwnerSubstitutions(owner_local_name, context,
+						&nested_substitutions);
 					for(size_t parameter = 0; parameter < selected_owner->parameters.size() &&
 						parameter < owner_arguments.size(); ++parameter)
 						if(!selected_owner->parameters[parameter].name.empty())
@@ -669,7 +677,8 @@ string PA18TemplateExpander::TemplateMemberType(const TemplateDefinition& defini
 		if(found != local.end()) result = found->second;
 		else FindInheritedTemplateMemberType(definition, member, context, local, &result);
 	}
-	return FinishTemplateMemberType(active_key, previous_packs, result);
+	const string finished = FinishTemplateMemberType(active_key, previous_packs, result);
+	return finished;
 }
 
 } // namespace pa18_templates_internal

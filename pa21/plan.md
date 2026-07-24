@@ -1,5 +1,95 @@
 # PA21 checkpoint plan
 
+## Checkpoint 73 scope — 2026-07-24 (before implementation)
+
+### Remaining Work Map
+
+The freshly rerun PA21 report is **197/215**, with the complete current
+failure set grouped by shared behavior:
+
+- **Generated owner/member replay and LowIR body comparison (6):**
+  `general/300-dependent-hidden-friend-static-member-definition`,
+  `general/300-explicit-type-arg-decltype-member-access`,
+  `general/300-friend-existing-template-private-ctor-access`,
+  `general/300-namespace-function-template-hides-outer-callable-object`,
+  `general/400-reference-member-depth-pack-sum`, and the top-cv pointer case
+  whose compiler succeeds but whose relaxed comparator raises an undefined
+  value while comparing generated metadata.
+- **Function/member dependent replay and lookup (3):**
+  `general/300-function-pack-template-id-deduction-decltype`,
+  `general/300-local-qualified-argument-replay`, and
+  `general/300-out-of-class-ctor-using-imported-member-template`.
+- **Specialization identity, non-type values, cv, and template-template
+  lookup (8):**
+  `general/300-variable-template-forwarding-partial-top-cv`,
+  `general/400-forward-primary-partial-switch-value`,
+  `general/400-inline-namespace-template-template-argument`,
+  `general/400-member-template-nontype-shadowed-global-replay`,
+  `general/400-partial-specialization-conversion-operator-pointer-binding`,
+  `general/400-partial-specialization-redecl-member-template-empty-pack`,
+  `general/400-reference-member-lookup-in-progress-base-typedef`, and
+  `spec/100-inline-namespace-qualified-template-id-pack-expansion`.
+- **Defaulted non-type specialization materialization (1):**
+  `spec/300-defaulted-type-arg-specialization-nontype-value`.
+
+### Checkpoint Scope
+
+Complete the typed non-type/specialization-value slice covering variable
+template partial-specialization forwarding through top-level cv, class partial
+selection and dependent integral `::value` normalization, recursive reference
+member pack sums, and defaulted non-type arguments used by specialization
+selection.  The scope includes deterministic canonical keys and constant-value
+registration, so it is validated by the four focused specialization/value
+fixtures plus the existing PA21 report, through-PA20 report, and file audit.
+The owner/member replay, dependent lookup, template-template/inline-namespace,
+conversion-operator, and empty-pack redeclaration groups remain explicitly
+tracked for the next checkpoints.
+
+## Checkpoint 73 result — 2026-07-24 (198/215)
+
+The selected typed specialization/value scope is complete for this turn.  The
+four checkpoint fixtures pass, and the full PA21 report improved from the
+197/215 baseline to **198/215**.  The implementation now preserves
+materialized nested owners and their typed bindings during member replay,
+prefers complete out-of-class nested definitions over forward shells, handles
+non-literal array bounds in typed sizeof results, resolves function-call
+sizeof operands without forcing incomplete template-arity probes, qualifies
+generated names found through using-declarations, and separates compact
+top-level cv qualifiers before partial deduction.
+
+### Remaining Work Map
+
+The current 17 failures are grouped by shared behavior:
+
+- **LowIR metadata/comparator and generated body emission (5):**
+  general/100-top-cv-pointer-does-not-match-unqualified-pointer-partial,
+  general/300-dependent-hidden-friend-static-member-definition,
+  general/300-explicit-type-arg-decltype-member-access,
+  general/300-friend-existing-template-private-ctor-access, and
+  general/300-namespace-function-template-hides-outer-callable-object.
+- **Dependent function/member replay and active-owner lookup (4):**
+  general/300-function-pack-template-id-deduction-decltype,
+  general/300-local-qualified-argument-replay,
+  general/300-out-of-class-ctor-using-imported-member-template, and
+  spec/300-member-operator-template-active-owner.
+- **Alias, conditional-base, specialization identity, and pack/namespace
+  lookup (8):**
+  general/400-alias-rebind-partial-specialization-shadow,
+  general/400-bool-or-dependent-member-type-conditional-base,
+  general/400-inline-namespace-template-template-argument,
+  general/400-member-template-nontype-shadowed-global-replay,
+  general/400-partial-specialization-conversion-operator-pointer-binding,
+  general/400-partial-specialization-redecl-member-template-empty-pack,
+  general/400-reference-member-lookup-in-progress-base-typedef, and
+  spec/100-inline-namespace-qualified-template-id-pack-expansion.
+
+### Next Checkpoint Group
+
+Start with the four dependent function/member replay cases.  Trace their
+shared typed owner and function-signature state through deduction, out-of-
+class definition replay, and active-owner restoration; validate the four
+fixtures, the full PA21 report, the through-PA20 report, and the file audit.
+
 ## Checkpoint 72 result — 2026-07-24 (197/215)
 
 ### Checkpoint Scope

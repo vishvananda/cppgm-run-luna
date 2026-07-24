@@ -1,6 +1,5 @@
 #include "pa18_templates_collection.h"
 #include "pa18_templates_rewrite.h"
-
 using namespace std;
 
 namespace pa18_templates_internal {
@@ -56,6 +55,28 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			const string resolved_owner = ResolveAlias(owner, context);
 			if(!resolved_owner.empty() && resolved_owner != owner)
 				raw = resolved_owner + "::" + member;
+		}
+	}
+	// A dependent nested class-template-id is scanned from the inside out by
+	// the ordinary template loop (`case_<Tag>` before its `Cases::` owner).
+	// Materialize the concrete owner first when a substitution gives us its
+	// template-id, so the nested specialization inherits the owner's bindings.
+	if(resolve_member) for(map<string, string>::const_iterator current = substitutions.begin();
+		current != substitutions.end(); ++current) {
+		if(current->first.empty() || current->second.find('<') == string::npos) continue;
+		const string marker = current->first + "::template";
+		for(size_t at = raw.find(marker); at != string::npos; at = raw.find(marker, at + current->second.size())) {
+			if(at > 0 && IsIdentifierCharacter(raw[at - 1])) continue;
+			raw.replace(at, current->first.size(), current->second);
+			const size_t owner_open = raw.find('<', at);
+			if(owner_open == string::npos) break;
+			string owner_base;
+			size_t owner_begin = 0, owner_close = string::npos;
+			string owner_arguments;
+			if(!TemplateBase(raw, owner_open, &owner_begin, &owner_base) ||
+				!TemplateRange(raw, owner_open, &owner_arguments, &owner_close)) break;
+			if(RewriteConcreteNestedMember(&raw, owner_begin, owner_close, owner_base,
+				context, substitutions, template_replaced, 0)) break;
 		}
 	}
 	if(resolve_member) for(map<string, string>::const_iterator current = substitutions.begin();
@@ -697,7 +718,12 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				while(nested_begin < raw.size() && IsIdentifierCharacter(raw[nested_begin])) ++nested_begin;
 					const string nested = raw.substr(close + 3, nested_begin - (close + 3));
 					if(!nested.empty()) {
-						const string member_type = TemplateMemberType(*definition, args, nested, context);
+						string member_type;
+						set<string> member_active;
+						const string template_owner = raw.substr(begin, close - begin + 1);
+						if(!FindClassMemberType(template_owner, nested, substitutions, context,
+							&member_type, &member_active, true) || member_type.empty())
+							member_type = TemplateMemberType(*definition, args, nested, context);
 						if(!member_type.empty() && member_type.find('[') == string::npos) {
 						// The template base can begin after a dependent
 						// `Owner::template` qualifier.  The resolved member type
@@ -822,9 +848,21 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				instantiated_class_specializations_.insert(
 					MakeClassSpecializationIdentity(*definition, args, context));
 			}
-			string replacement = local_name;
-			const string qualifier = PrefixComponent(lookup_base);
-			if(!qualifier.empty()) replacement = qualifier + "::" + local_name;
+		string replacement = local_name;
+		const string qualifier = PrefixComponent(lookup_base);
+		// A template found through a using-declaration may be spelled without
+		// its declaring namespace (int_ in boost::mpl::aux).  The generated
+		// specialization lives in that namespace, so retain the typed owner in
+		// the replacement.  Unnamed namespaces already carry their physical
+		// identity in the generated name and must not be qualified again.
+		string generated_qualifier = qualifier;
+		if(generated_qualifier.empty() && !definition->owner.empty() &&
+			definition->owner.find("<unnamed>") == string::npos &&
+			class_contexts_.find(definition->owner) == class_contexts_.end())
+			generated_qualifier = definition->owner;
+		if(!generated_qualifier.empty())
+			replacement = generated_qualifier + "::" + local_name;
+		if(!qualifier.empty()) replacement = qualifier + "::" + local_name;
 			if(definition->alias_template) {
 				// Alias-template instantiation is a type substitution, not a new
 				// nominal type.  Keep the generated alias declaration registered for
@@ -880,21 +918,50 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 	// an earlier member substitution (`list2<...>::child0` -> `expr_X::member`).
 	// Resolve those typed member aliases in a second pass so a chain such as
 	// `Args::child0::proto_grammar` is reduced from the inside out.
-	if(resolve_member) for(size_t separator = raw.find("::"); separator != string::npos; ) {
+	const auto next_scope_separator = [this](const string& text, size_t start) {
+		int angle = 0;
+		for(size_t position = 0; position + 1 < text.size(); ++position) {
+			if(text[position] == '<' && IsTemplateAngleOpen(text, position)) ++angle;
+			else if(text[position] == '>' && angle > 0 && IsTemplateAngleClose(text, position)) --angle;
+			if(position >= start && angle == 0 && text.compare(position, 2, "::") == 0)
+				return position;
+		}
+		return string::npos;
+	};
+	if(resolve_member) for(size_t separator = next_scope_separator(raw, 0);
+		separator != string::npos; ) {
 		size_t member_begin = separator + 2;
 		while(member_begin < raw.size() && isspace(static_cast<unsigned char>(raw[member_begin])))
 			++member_begin;
 		if(member_begin >= raw.size() || !IsIdentifierCharacter(raw[member_begin])) {
-			separator = raw.find("::", separator + 2);
+			separator = next_scope_separator(raw, separator + 2);
 			continue;
 		}
 		size_t member_end = member_begin + 1;
 		while(member_end < raw.size() && IsIdentifierCharacter(raw[member_end])) ++member_end;
-		size_t owner_begin = separator;
-		while(owner_begin > 0 && isspace(static_cast<unsigned char>(raw[owner_begin - 1]))) --owner_begin;
-		while(owner_begin > 0 && IsIdentifierCharacter(raw[owner_begin - 1])) --owner_begin;
-		if(owner_begin == separator) {
-			separator = raw.find("::", member_end);
+		size_t owner_end = separator;
+		while(owner_end > 0 && isspace(static_cast<unsigned char>(raw[owner_end - 1]))) --owner_end;
+		while(owner_end > 0 && (raw[owner_end - 1] == '&' || raw[owner_end - 1] == '*')) --owner_end;
+		while(owner_end > 0 && isspace(static_cast<unsigned char>(raw[owner_end - 1]))) --owner_end;
+		size_t owner_begin = owner_end;
+		if(owner_begin > 0 && raw[owner_begin - 1] == '>') {
+			int nested_angle = 0;
+			while(owner_begin > 0) {
+				const char ch = raw[owner_begin - 1];
+				if(ch == '>') ++nested_angle;
+				else if(ch == '<' && nested_angle > 0) {
+					--nested_angle;
+					if(nested_angle == 0) {
+						--owner_begin;
+						break;
+					}
+				}
+				--owner_begin;
+			}
+			while(owner_begin > 0 && IsIdentifierCharacter(raw[owner_begin - 1])) --owner_begin;
+		} else while(owner_begin > 0 && IsIdentifierCharacter(raw[owner_begin - 1])) --owner_begin;
+		if(owner_begin == owner_end) {
+			separator = next_scope_separator(raw, member_end);
 			continue;
 		}
 		// The backwards scan above finds the generated class component, but a
@@ -909,17 +976,29 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			owner_begin = component_begin;
 		}
 		const string owner = raw.substr(owner_begin, separator - owner_begin);
-		const bool known_owner = specialization_bases_.find(LastComponent(owner)) !=
-			specialization_bases_.end();
+		// Member types produced by a reference-valued alias retain the object's
+		// cv/ref spelling (`const generated_type&::member`).  The lookup helper
+		// removes those qualifiers itself, so use the same normalized owner key
+		// when deciding whether this is a materialized class that should be
+		// replayed.
+		string owner_key = CanonicalSpelling(owner);
+		while(!owner_key.empty() && (owner_key[owner_key.size() - 1] == '&' ||
+			owner_key[owner_key.size() - 1] == '*')) owner_key.erase(owner_key.size() - 1);
+		while(owner_key.compare(0, 6, "const ") == 0)
+			owner_key = CanonicalSpelling(owner_key.substr(6));
+		while(owner_key.compare(0, 9, "volatile ") == 0)
+			owner_key = CanonicalSpelling(owner_key.substr(9));
+		const bool known_owner = specialization_bases_.find(LastComponent(owner_key)) !=
+			specialization_bases_.end() || owner.find('<') != string::npos;
 		if(!known_owner) {
-			separator = raw.find("::", member_end);
+			separator = next_scope_separator(raw, member_end);
 			continue;
 		}
 		string member_type;
 		set<string> member_active;
 		if(!FindClassMemberType(owner, raw.substr(member_begin, member_end - member_begin),
 			substitutions, context, &member_type, &member_active, true) || member_type.empty()) {
-			separator = raw.find("::", member_end);
+			separator = next_scope_separator(raw, member_end);
 			continue;
 		}
 		size_t replacement_begin = owner_begin;
@@ -931,7 +1010,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 		raw.replace(replacement_begin, member_end - replacement_begin,
 			NormalizeTypeArgument(member_type));
 		if(template_replaced) *template_replaced = true;
-		separator = raw.find("::", replacement_begin + member_type.size());
+		separator = next_scope_separator(raw, replacement_begin + member_type.size());
 	}
 	raw = CollapseReferenceSpelling(raw);
 	if(!resolve_alias || raw.find("::") == string::npos) return raw;
@@ -939,7 +1018,8 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 		// alias.  Keep its registered spelling intact so a dependent non-type
 		// default can be evaluated by the typed constant table.
 		if(constant_values_.find(raw) != constant_values_.end()) return raw;
-		return ResolveAlias(raw, context);
+		const string result = ResolveAlias(raw, context);
+		return result;
 	}
 
 } // namespace pa18_templates_internal

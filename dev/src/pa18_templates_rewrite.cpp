@@ -425,10 +425,9 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 				if(end < spelling.size() && IsIdentifierCharacter(spelling[end])) continue;
 				size_t next = end;
 				while(next < spelling.size() && isspace(static_cast<unsigned char>(spelling[next]))) ++next;
-				if(next == spelling.size() || spelling[next] == '&' || spelling[next] == '*') {
-					spelling.insert(at, " ");
-					at += 1;
-				}
+				// Separate compact dependent names from following cv qualifiers.
+			spelling.insert(at, " ");
+			at += 1;
 			}
 		}
 		return CanonicalSpelling(spelling);

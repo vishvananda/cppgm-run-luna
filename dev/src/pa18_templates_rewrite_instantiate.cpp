@@ -251,7 +251,7 @@ vector<const TemplateDefinition*> PA18TemplateExpander::MemberDefinitions(
 	return result;
 }
 
-void PA18TemplateExpander::RecordConstantDeclaration(
+	void PA18TemplateExpander::RecordConstantDeclaration(
 	const CPPGMAstNodePtr& node, const string& context,
 	const map<string, string>& substitutions)
 {
@@ -798,6 +798,48 @@ bool PA18TemplateExpander::EvaluateIntegralTextSpecialForms(const string& raw,
 			RewriteText(raw, context, substitutions, 0)));
 		if(rewritten != raw && EvaluateIntegralText(rewritten, context,
 			substitutions, result)) return true;
+	}
+	string expanded_size = raw;
+	bool expanded_size_any = false;
+	for(size_t search = expanded_size.find("sizeof("); search != string::npos; ) {
+		const size_t open = search + 6;
+		int depth = 0;
+		size_t close = string::npos;
+		for(size_t position = open; position < expanded_size.size(); ++position) {
+			if(expanded_size[position] == '(') ++depth;
+			else if(expanded_size[position] == ')' && --depth == 0) {
+				close = position;
+				break;
+			}
+		}
+		if(close == string::npos) break;
+		const string operand = expanded_size.substr(open + 1, close - open - 1);
+		string call_type;
+		if(operand.find("**") != string::npos) {
+			search = expanded_size.find("sizeof(", close + 1);
+			continue;
+		}
+		if(FunctionCallResultType(operand, context, substitutions, &call_type)) {
+			call_type = CanonicalSpelling(RemoveMarker(RewriteText(
+				call_type, context, substitutions, 0)));
+			call_type = ResolveAlias(call_type, context);
+			const size_t size = EstimateTypeSize(call_type, context);
+			if(size) {
+				const string replacement = IntegralValueSpelling(
+					PA19IntegralValue::Unsigned(static_cast<unsigned long long>(size),
+						"unsigned long", 64));
+				expanded_size.replace(search, close - search + 1, replacement);
+				expanded_size_any = true;
+				search += replacement.size();
+				continue;
+			}
+		}
+		search = expanded_size.find("sizeof(", close + 1);
+	}
+	if(expanded_size_any && expanded_size != raw) {
+		PA19ConstantExpressionParser expanded_parser(constant_values_, substitutions,
+			constant_type_sizes_, constant_type_alignments_, type_aliases_);
+		if(expanded_parser.Evaluate(expanded_size, result)) return true;
 	}
 	if(raw.compare(0, 7, "sizeof(") == 0 && !raw.empty() && raw[raw.size() - 1] == ')') {
 		const string operand = raw.substr(7, raw.size() - 8);

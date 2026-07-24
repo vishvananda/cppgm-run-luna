@@ -278,8 +278,18 @@ size_t PA18TemplateExpander::EstimateTypeSize(string raw, const string& context)
 	if(array_open != string::npos) {
 		const size_t array_close = raw.find(']', array_open);
 		if(array_close != string::npos) {
-			const long count = strtol(raw.substr(array_open + 1,
-				array_close - array_open - 1).c_str(), 0, 10);
+			const string bound_text = CanonicalSpelling(raw.substr(array_open + 1,
+				array_close - array_open - 1));
+			char* bound_end = 0;
+			long count = strtol(bound_text.c_str(), &bound_end, 10);
+			if(!bound_end || *bound_end != '\0') {
+				PA19ConstantExpressionParser parser(constant_values_,
+					map<string, string>(), constant_type_sizes_,
+					constant_type_alignments_, type_aliases_);
+				PA19IntegralValue bound;
+				if(!parser.Evaluate(bound_text, &bound)) return 0;
+				count = PA19Signed(bound);
+			}
 			if(count >= 0) {
 				string element = CanonicalSpelling(raw.substr(0, array_open));
 				const size_t reference = element.rfind("(&");

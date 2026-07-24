@@ -296,18 +296,21 @@
 	const TemplateDefinition* FindNestedDefinition(const TemplateDefinition& parent,
 		const string& nested_name) const
 	{
+		const TemplateDefinition* fallback = 0;
 		for(map<string, TemplateDefinition>::const_iterator it = definitions_.begin();
 			it != definitions_.end(); ++it) {
 			const TemplateDefinition& candidate = it->second;
 			if(!candidate.class_template || candidate.name != nested_name) continue;
 			const size_t angle = candidate.owner.find('<');
-			if(angle == string::npos) continue;
-			const string owner_prefix = candidate.owner.substr(0, angle);
+			const string owner_prefix = angle == string::npos ? candidate.owner :
+				candidate.owner.substr(0, angle);
 			if(owner_prefix != parent.qualified_name && owner_prefix !=
 				JoinPath(parent.qualified_name, parent.qualified_name)) continue;
-			return &candidate;
+			if(!fallback) fallback = &candidate;
+			if(candidate.declaration && candidate.declaration->kind == "class-specifier" &&
+				candidate.declaration->children.size() > 1) return &candidate;
 		}
-		return 0;
+		return fallback;
 	}
 	vector<const TemplateDefinition*> NestedDefinitions(
 		const TemplateDefinition& parent) const
@@ -804,8 +807,32 @@
 			if(declaration && declaration->kind == "class-forward-declaration") {
 				map<string, string>::const_iterator generated = specialization_bases_.find(
 					LastComponent(spelling));
-				const TemplateDefinition* primary = generated == specialization_bases_.end() ?
-					0 : FindDefinition(generated->second, context);
+				if(generated == specialization_bases_.end()) {
+					// A source forward declaration is sufficient for a typedef that
+					// merely names the parameter (basic_expr<Tag, ...>), but not for
+					// an alias that reads a member from it (tag_of<T>::type).
+					// Keep the former materializable while deferring the latter until
+					// the enclosing dependent replay supplies a complete type.
+					if(argument < definition.parameters.size() &&
+						!definition.parameters[argument].name.empty()) {
+						const string marker = definition.parameters[argument].name + "::";
+						for(size_t child = 0; child < definition.declaration->children.size(); ++child) {
+							const CPPGMAstNodePtr member = definition.declaration->children[child];
+							if(!member || (member->kind != "alias-declaration" &&
+								(member->kind != "simple-declaration" || member->children.empty() ||
+									SpellNode(member->children[0]).find("typedef") == string::npos)))
+								continue;
+							string compact;
+							const string spelling_text = SpellNode(member);
+							for(size_t character = 0; character < spelling_text.size(); ++character)
+								if(!isspace(static_cast<unsigned char>(spelling_text[character])))
+									compact += spelling_text[character];
+							if(compact.find(marker) != string::npos) return true;
+						}
+					}
+					continue;
+				}
+				const TemplateDefinition* primary = FindDefinition(generated->second, context);
 				const bool complete_primary = primary && primary->declaration &&
 					primary->declaration->kind == "class-specifier" &&
 					primary->declaration->children.size() > 1;
