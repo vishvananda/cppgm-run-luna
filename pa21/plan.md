@@ -1,5 +1,65 @@
 # PA21 checkpoint plan
 
+## Checkpoint 67 result — 2026-07-24 (187/215)
+
+### Checkpoint Scope
+
+Completed the next owner/member replay slice: class scopes now predeclare
+nested class types before processing injected member-class specializations, and
+member calls on a typed reference cast preserve the selected base subobject
+address instead of copying the most-derived value into a temporary.
+
+### Validation
+
+The current PA report is **187/215**, above the checkpoint-66 result of
+**185/215** and the turn-start baseline of **182/215**.  The focused member
+class explicit-specialization owner-lookup and nested-class current-owner
+fixtures both pass.  The through-PA20 report and PA21 file audit are green:
+**1635/1635** through PA20, with the nine pre-existing header-division
+warnings from the audit.
+
+### Remaining Work Map
+
+The current report has 28 failures, grouped by shared behavior:
+
+- **Owner/member replay, lookup, and generated-call lowering (9):**
+  `general/300-dependent-hidden-friend-static-member-definition`,
+  `general/300-explicit-type-arg-decltype-member-access`,
+  `general/300-friend-existing-template-private-ctor-access`,
+  `general/300-function-pack-template-id-deduction-decltype`,
+  `general/300-local-qualified-argument-replay`,
+  `general/300-namespace-function-template-hides-outer-callable-object`,
+  `general/300-out-of-class-ctor-using-imported-member-template`,
+  `general/300-parenthesized-qualified-template-functional-call`, and
+  `general/300-qualified-friend-member-template-access`.
+- **Specialization, alias, cv, and pack identity (14):**
+  `general/100-top-cv-pointer-does-not-match-unqualified-pointer-partial`,
+  `general/200-reference-alias-top-cv-return-binding`,
+  `general/300-function-signature-partial-specialization-functor-assignment`,
+  `general/300-variable-template-forwarding-partial-top-cv`,
+  `general/400-alias-pack-nontype-expression-fast-path`,
+  `general/400-forward-primary-partial-switch-value`,
+  `general/400-inline-namespace-template-template-argument`,
+  `general/400-member-template-nontype-shadowed-global-replay`,
+  `general/400-partial-specialization-conversion-operator-pointer-binding`,
+  `general/400-partial-specialization-redecl-member-template-empty-pack`,
+  `general/400-reference-member-depth-pack-sum`,
+  `general/400-reference-member-lookup-in-progress-base-typedef`,
+  `spec/100-inline-namespace-qualified-template-id-pack-expansion`, and
+  `spec/300-defaulted-type-arg-specialization-nontype-value`.
+- **Dependent initialization, references, and address lowering (5):**
+  `general/100-rvalue-reference-binds-converted-temporary`,
+  `general/300-array-functional-cast-pack-call`,
+  `general/300-constexpr-static-fn-template-address-pack`,
+  `general/300-single-pack-cast-target`, and
+  `general/300-static-constexpr-function-template-pointer-array`.
+
+### Next Checkpoint Group
+
+Continue with the remaining owner/member cases, starting with generated
+parameter identity and friend-template materialization.  Keep the 187/215
+current report, through-PA20 report, and file audit as regression gates.
+
 ## Checkpoint 66 result — 2026-07-24 (185/215)
 
 ### Checkpoint Scope

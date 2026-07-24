@@ -314,11 +314,20 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
       if(object_type && object_type->kind == TYPE_POINTER) {
         object_operand = EmitValue(choice.object, scope).operand;
         object_type = type_value(object_type->child);
-      } else if(object_info.category == "lvalue" ||
-                (choice.object->kind == "keyword-literal" &&
-                 PA12Operator(choice.object->value) == "this")) {
-        object_operand = EmitAddress(choice.object, scope);
-      } else if(choice.object->kind == "call-expression" &&
+	      } else if(object_info.category == "lvalue" ||
+	                (choice.object->kind == "keyword-literal" &&
+	                 PA12Operator(choice.object->value) == "this")) {
+	        object_operand = EmitAddress(choice.object, scope);
+	      } else if(choice.object->kind == "cast-expression" &&
+	                choice.object->children.size() > 1 && object_type &&
+	                object_type->kind == TYPE_CLASS &&
+	                type_is_reference(analyzer_.TypeFromTypeId(
+	                  choice.object->children[0], scope))) {
+	        // A reference cast denotes the selected subobject; materializing its
+	        // class value here would copy the most-derived object and lose the
+	        // typed base projection used by a subsequent member call.
+	        object_operand = EmitAddress(choice.object, scope);
+	      } else if(choice.object->kind == "call-expression" &&
                 !choice.object->children.empty() &&
                 ConstructorObjectType(choice.object->children[0], scope)) {
         object_operand = EmitTemporaryObjectAddress(choice.object, scope, "tmpobj");

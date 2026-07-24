@@ -1273,6 +1273,33 @@ void Analyzer::RecordClassMembers(const CPPGMAstNodePtr& node, const TypePtr& ty
 	(void)scope;
 }
 
+void Analyzer::PredeclareMaterializedNestedClasses(const CPPGMAstNodePtr& node,
+	Scope* class_scope)
+{
+	bool has_materialized_member = node->template_instantiation ||
+		node->explicit_specialization;
+	if (!has_materialized_member)
+		for (size_t i = 0; i < node->children.size(); ++i)
+			if (node->children[i] && (node->children[i]->template_instantiation ||
+				node->children[i]->explicit_specialization)) {
+				has_materialized_member = true;
+				break;
+			}
+	if (!has_materialized_member) return;
+	for (size_t i = 0; i < node->children.size(); ++i) {
+		const CPPGMAstNodePtr child = node->children[i];
+		if (!child || (child->kind != "class-specifier" &&
+			child->kind != "class-forward-declaration")) continue;
+		const string nested_name = LastComponent(child->value);
+		if (nested_name.empty() || class_scope->local(nested_name)) continue;
+		TypePtr nested(new Type(TYPE_CLASS, nested_name));
+		nested->tag = ClassKey(child);
+		if (!class_scope->qualified_prefix.empty())
+			nested->name = class_scope->qualified_prefix + "::" + nested_name;
+		AddTypeBinding(class_scope, nested_name, nested);
+	}
+}
+
 TypePtr Analyzer::ProcessClass(const CPPGMAstNodePtr& node, Scope* scope)
 {
 	map<const CPPGMAstNode*, TypePtr>::const_iterator cached = class_types_.find(node.get());
@@ -1344,6 +1371,8 @@ TypePtr Analyzer::ProcessClass(const CPPGMAstNodePtr& node, Scope* scope)
 	type->polymorphic = false;
 	type->has_vpointer = false;
 	Scope* class_scope = ClassScope(type, owner, name);
+	// Seed complete typed lookup for injected member-class specializations.
+	PredeclareMaterializedNestedClasses(node, class_scope);
 	for (size_t i = 0; i < node->children.size(); ++i)
 	{
 		const CPPGMAstNodePtr child = node->children[i];

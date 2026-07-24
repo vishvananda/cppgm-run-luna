@@ -884,7 +884,7 @@ public:
 	void RecordClassDeclaration(const CPPGMAstNodePtr& child, const TypePtr& type,
 		Scope* class_scope, const string& access)
 	;
-	TypePtr ProcessClass(const CPPGMAstNodePtr& node, Scope* scope);
+	TypePtr ProcessClass(const CPPGMAstNodePtr& node, Scope* scope); void PredeclareMaterializedNestedClasses(const CPPGMAstNodePtr& node, Scope* class_scope);
 	TypePtr ProcessForwardClass(const CPPGMAstNodePtr& node, Scope* scope);
 	TypePtr ProcessEnum(const CPPGMAstNodePtr& node, Scope* scope)
 	{
