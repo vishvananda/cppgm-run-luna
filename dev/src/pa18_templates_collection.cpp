@@ -121,8 +121,8 @@ bool LooksLikeRelationalLessThan(const string& raw, size_t position)
 	return angle != 0;
 }
 
-string QualifyAliasTarget(const string& target, const string& alias,
-	const set<string>& class_contexts)
+string PA18TemplateExpander::QualifyAliasTarget(const string& target,
+	const string& alias) const
 {
 	const string owner = PrefixComponent(alias);
 	// Qualified names in an alias declaration are still relative to the alias's
@@ -130,9 +130,11 @@ string QualifyAliasTarget(const string& target, const string& alias,
 	// `detail::has_description<T>`, which denotes `traits::detail::...`, not a
 	// global `detail::...`.  Qualify only when the typed owner contains that
 	// entity so ordinary globally qualified-looking spellings remain unchanged.
-	return !owner.empty() && !target.empty() && target[0] != ':' &&
-		class_contexts.find(JoinPath(owner, target.substr(0, target.find('<')))) !=
-		class_contexts.end() ? JoinPath(owner, target) : target;
+	if(owner.empty() || target.empty() || target[0] == ':') return target;
+	const string qualified_target = JoinPath(owner, target.substr(0, target.find('<')));
+	const bool typed_target = definitions_.find(qualified_target) != definitions_.end() ||
+		class_declarations_.find(qualified_target) != class_declarations_.end();
+	return typed_target ? JoinPath(owner, target) : target;
 }
 
 bool HasFriendSpecifier(const CPPGMAstNodePtr& node)
@@ -173,6 +175,30 @@ void PA18TemplateExpander::IndexUsingDirectiveDefinition(
 string PA18TemplateExpander::GeneratedOwner(const TemplateDefinition& definition) const
 {
 	return definition.lexical_owner.empty() ? definition.owner : definition.lexical_owner;
+}
+
+void PA18TemplateExpander::ResolveUsingDeclarationTargets()
+{
+	using_declaration_targets_.clear();
+	for(map<string, vector<string> >::const_iterator scope =
+		pending_using_declarations_.begin();
+		scope != pending_using_declarations_.end(); ++scope) {
+		vector<const TemplateDefinition*>& targets =
+			using_declaration_targets_[scope->first];
+		for(size_t index = 0; index < scope->second.size(); ++index) {
+			string target_name = scope->second[index];
+			while(!target_name.empty() && target_name[0] == ':') target_name.erase(0, 1);
+			map<string, TemplateDefinition>::const_iterator definition =
+				definitions_.find(target_name);
+			if(definition == definitions_.end() ||
+				(!definition->second.class_template &&
+				 !definition->second.alias_template &&
+				 !definition->second.variable_template)) continue;
+			if(find(targets.begin(), targets.end(), &definition->second) == targets.end())
+				targets.push_back(&definition->second);
+		}
+	}
+	pending_using_declarations_.clear();
 }
 
 bool PA18TemplateExpander::PreserveInlineGeneratedOrder(
@@ -590,6 +616,7 @@ vector<CPPGMAstNodePtr> PA18TemplateExpander::Run(
 	for(size_t i = 0; i < input.size(); ++i)
 		CollectLexical(input[i], string(), string());
 	for(size_t i = 0; i < input.size(); ++i) Collect(input[i], string());
+	ResolveUsingDeclarationTargets();
 	for(size_t i = 0; i < input.size(); ++i)
 		ValidateTemplateArgumentKinds(input[i], string(), map<string, bool>());
 	vector<CPPGMAstNodePtr> result;
@@ -1007,7 +1034,7 @@ string PA18TemplateExpander::ResolveAlias(string spelling, const string& context
 		}
 		if(direct != type_aliases_.end()) {
 			resolved_reference_alias = true;
-			string target = QualifyAliasTarget(direct->second, direct->first, class_contexts_);
+			string target = QualifyAliasTarget(direct->second, direct->first);
 			const size_t owner_separator = spelling.rfind("::");
 			if(owner_separator != string::npos) {
 				const string owner = spelling.substr(0, owner_separator);

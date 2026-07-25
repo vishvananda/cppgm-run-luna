@@ -382,8 +382,6 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 				if(!rewritten_pattern.empty()) pattern = rewritten_pattern;
 			} catch(const PA18SubstitutionFailure&) {
 				return false;
-			} catch(const logic_error&) {
-				return false;
 			}
 		}
 		// A dependent non-type default can be the result of an unevaluated
@@ -460,8 +458,6 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 			const_cast<PA18TemplateExpander*>(this)->RewriteText(
 				substituted_pattern, context, local, 0);
 		} catch(const PA18SubstitutionFailure&) {
-			return false;
-		} catch(const logic_error&) {
 			return false;
 		}
 	}

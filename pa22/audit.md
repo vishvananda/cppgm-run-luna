@@ -240,3 +240,79 @@ class references, placement-new results, and concrete member-owner routing.
 - Required file audit — **passed**:
   `perl scripts/cppgm_file_audit.pl --stage pa22 --paths dev/src`, with only
   the ten pre-existing warnings.  `git diff --check` also passes.
+
+## Checkpoint 76 Audit — Checkpoint 75 implementation
+
+### Scope Reviewed
+
+Reviewed the latest Checkpoint 75 scope and result in [plan.md](plan.md), the
+PA22 contract in [README.md](README.md), commits `ce27caa`, `ac7e9cc`,
+`0223a90`, `2739cc9`, `fede37f`, `a19082c`, and `a0f870`, the complete active
+report at `/home/vishvananda/work/.ralph/luna-gpt-5.6-luna-ultra/last-test.log`,
+and the changed PA18/PA14 implementation.  The review covered the new
+dependent-alias and using-declaration lookup, alias-owner qualification,
+variadic class-temporary lowering, partial-specialization replay, candidate
+failure ownership, hot-path lookup work, file limits, and PA1–PA21
+preservation.
+
+### Findings
+
+- The landed checkpoint added broad `logic_error` catches around partial
+  specialization and nested-member matching.  Those catches converted hard
+  semantic failures into candidate rejection and could create fallback success.
+  They were removed from the checkpoint paths.  Genuine substitution mismatch
+  at template-template argument formation now uses
+  `PA18SubstitutionFailure`; unrelated `logic_error` failures propagate.
+- Explicit-using lookup stored qualified target spellings and repeatedly
+  reconstructed declaration identity from strings.  The source spelling is
+  now only a collection-time input: after all declarations are collected, it
+  resolves once into a non-owning index of `TemplateDefinition` pointers.
+  `definitions_` remains the sole owner, and lookup compares typed declaration
+  names without duplicating AST or declaration ownership.
+- Alias qualification used a short-name/class-context fallback that could
+  qualify an unrelated declaration.  It now qualifies only when the exact
+  owner-qualified declaration is present in the typed definition or class
+  declaration indexes.  The PA19 static-constexpr regression exposed by the
+  first version was fixed before validation was accepted.
+- The typed import index is built once per collection and the hot lookup path
+  walks only enclosing scopes and their bounded imported candidates.  No
+  full-suite walk, repeated emitted-LowIR parse, avoidable timeout cap, or
+  quadratic fallback was introduced.
+- No compiler phase is skipped.  There is no dummy output, embedded payload,
+  interpreter/VM/trampoline substitute, source- or test-specific acceptance
+  gate, timeout workaround, weakened check, or unchecked implementation
+  fragment.  The final file audit remains within the PA22 limits; its ten
+  warnings are the same pre-existing header-division/complexity warnings.
+
+### Changes Made
+
+- Removed all six checkpoint-added broad `logic_error` candidate catches and
+  retained only the typed substitution-failure boundary.
+- Classified template-template argument mismatch as
+  `PA18SubstitutionFailure` so candidate dropping is explicit and hard errors
+  are not hidden.
+- Replaced `using_declaration_exports_` string recovery with the post-collection
+  `using_declaration_targets_` typed, non-owning declaration index.
+- Made alias-owner qualification use exact typed declaration indexes, avoiding
+  short-name recovery while preserving the existing namespace-relative alias
+  rule.
+- Kept all changes in the checked source set; no tests or reference fixtures
+  were changed.
+
+### Validation
+
+- Required prior-through check — **passed**:
+  `n=22; if [ "$n" -le 1 ]; then echo '===== ALL TESTS PASSED SUCCESSFULLY! (0/0) ====='; else make test-report-through-pa$((n - 1)); fi`
+  reported **1850/1850** through PA21.
+- Required active report — **passed for preservation**:
+  `make test-report ACTIVE_TEST_REPORT_PAS='pa22'` remained at
+  **110/250**, matching the checkpoint baseline after the landed increment,
+  with no timeout.  The complete 140-fixture residual is recorded in the
+  refreshed plan map.
+- Required file audit — **passed**:
+  `perl scripts/cppgm_file_audit.pl --stage pa22 --paths dev/src`, with only
+  the ten pre-existing warnings.
+- Regression check — **passed**:
+  `make -C pa19 check TEST=tests/general/100-static-constexpr-member-call-initializer.t`.
+- `make build` and `git diff --check` pass.  The final commit will be checked
+  for an empty `git status --short`.

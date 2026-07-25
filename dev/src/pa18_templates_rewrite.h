@@ -103,8 +103,6 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 					matching_arguments, 0, context);
 			} catch(const PA18SubstitutionFailure&) {
 				matches = false;
-			} catch(const logic_error&) {
-				matches = false;
 			}
 			if(matches)
 				matched.push_back(candidates[i]);

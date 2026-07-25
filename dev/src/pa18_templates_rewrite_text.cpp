@@ -332,8 +332,6 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 									&partial_bindings, context);
 							} catch(const PA18SubstitutionFailure&) {
 								matched_partial = false;
-							} catch(const logic_error&) {
-								matched_partial = false;
 							}
 							if(matched_partial) {
 								for(map<string, string>::const_iterator binding = partial_bindings.begin();
@@ -599,7 +597,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 					string normalized;
 					if(!CompatibleTemplateTemplateArgument(definition->parameters[i], args[i],
 						context, substitutions, &normalized))
-						throw logic_error("template-template argument does not match");
+						throw PA18SubstitutionFailure("template-template argument does not match");
 					args[i] = normalized;
 					continue;
 				}
@@ -850,7 +848,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 						string normalized;
 						if(!CompatibleTemplateTemplateArgument(definition->parameters[i], argument,
 							context, default_substitutions, &normalized))
-						throw logic_error("template-template argument does not match");
+						throw PA18SubstitutionFailure("template-template argument does not match");
 						argument = normalized;
 					}
 					argument = QualifyTypeArgument(argument, context, definition->owner);
@@ -917,8 +915,6 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 							&raw, begin, close, base, context, substitutions, template_replaced, &search);
 					} catch(const PA18SubstitutionFailure&) {
 						nested_rewritten = false;
-					} catch(const logic_error&) {
-						nested_rewritten = false;
 					}
 					if(nested_rewritten) continue;
 				}
@@ -930,8 +926,6 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 							&raw, begin, close, context, substitutions, definition, args,
 							template_replaced, &search);
 					} catch(const PA18SubstitutionFailure&) {
-						resolved_template_member = false;
-					} catch(const logic_error&) {
 						resolved_template_member = false;
 					}
 				}
