@@ -282,6 +282,15 @@ string NormalizeTypeArgument(string raw)
 		if(qualifier > 0 && raw[qualifier - 1] == '*') raw.insert(qualifier, " ");
 		else raw = "volatile " + raw.substr(0, qualifier);
 	}
+	// Substituting an array type into a trailing reference declarator can leave
+	// the reference on the element side (`char&[N]`).  Preserve the declarator
+	// shape used by the parser (`char(&)[N]`) before this spelling becomes a
+	// specialization key or a generated declaration type.
+	for(size_t reference = raw.find("&["); reference != string::npos;
+		reference = raw.find("&[", reference + 1)) {
+		if(reference == 0 || raw[reference - 1] == '(') continue;
+		raw.replace(reference, 2, "(&)[");
+	}
 	return CanonicalSpelling(raw);
 }
 
@@ -726,13 +735,14 @@ void PA18TemplateExpander::ValidateTemplateNode(const CPPGMAstNodePtr& node,
 	if(node->kind == "id-expression" && in_function) {
 		const bool member_name = parent && parent->kind == "member-expression" &&
 			child_index == 1;
+		const bool builtin_value_initialization = parent &&
+			parent->kind == "call-expression" && child_index == 0 &&
+			ValidationBuiltinTypeName(node->value);
 		if(!member_name && node->value.find("::") == string::npos &&
 			node->value.find('<') == string::npos &&
-		!ValidationDependentName(node->value, parameters) &&
-		(!ValidationBuiltinTypeName(node->value) ||
-			(parent && parent->kind == "call-expression" && child_index == 0)) &&
+			!ValidationDependentName(node->value, parameters) &&
+			!builtin_value_initialization &&
 			known_names.find(node->value) == known_names.end() &&
-			!(parent && parent->kind == "call-expression" && child_index == 0) &&
 			node->value.compare(0, 8, "operator") != 0 &&
 			node->value.compare(0, 10, "__builtin_") != 0)
 			throw logic_error("unknown nondependent template name: " + node->value);

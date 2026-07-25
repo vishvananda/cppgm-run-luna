@@ -431,9 +431,9 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 	pattern = separate_compact_cv(pattern);
 	actual = separate_compact_cv(actual);
 	pattern = CanonicalSpelling(pattern);
-	const int direct_class_parameter = MatchDirectClassTypeParameter(pattern, actual,
+	const int direct_type_parameter = MatchDirectTypeParameter(pattern, actual,
 		parameter_names, inferred, context, class_pattern);
-	if(direct_class_parameter >= 0) return direct_class_parameter != 0;
+	if(direct_type_parameter >= 0) return direct_type_parameter != 0;
 	const int reference_array = MatchReferenceArrayPattern(pattern, actual,
 		parameter_names, inferred);
 	if(reference_array >= 0) return reference_array != 0;

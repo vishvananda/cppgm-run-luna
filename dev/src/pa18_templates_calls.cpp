@@ -1415,6 +1415,23 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 				const string local_name = Instantiate(*selected_definition, inferred, context, false,
 					&inferred_pack_values, 0, requested_owner, &inferred_function_values,
 					&forwarding_pack_values);
+				// Preserve a typed return for associated-namespace templates so a
+				// later dependent operator lookup consumes the selected type directly.
+				if(!selected_definition->owner.empty() && selected_definition->declaration &&
+					!selected_definition->declaration->children.empty()) {
+					map<string, string> return_substitutions = substitutions;
+					for(size_t parameter = 0; parameter < selected_definition->parameters.size() &&
+						parameter < inferred.size(); ++parameter)
+						if(!selected_definition->parameters[parameter].name.empty())
+							return_substitutions[selected_definition->parameters[parameter].name] =
+								inferred[parameter];
+					string return_type = NodeTypeSpelling(
+						selected_definition->declaration->children[0]);
+					return_type += ReturnDeclaratorSuffix(
+						FunctionDeclarator(selected_definition->declaration));
+					result->inferred_type = CanonicalSpelling(ResolveAlias(RewriteText(
+						return_type, context, return_substitutions, 0), context));
+				}
 				result->template_primary = definition->qualified_name;
 				result->template_arguments = inferred;
 				const string qualifier = concrete_member_owner ? requested_owner_name :

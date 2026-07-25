@@ -9,6 +9,24 @@ using namespace std;
 
 namespace cppgm_pa14_lowering {
 
+namespace {
+
+bool PA14CvCompatible(const TypePtr& source, const TypePtr& target)
+{
+    if(!source || !target || source->kind != target->kind) return false;
+    if(source->is_const && !target->is_const) return false;
+    if(source->is_volatile && !target->is_volatile) return false;
+    if(source->kind == TYPE_ARRAY)
+        return source->bound == target->bound &&
+            PA14CvCompatible(source->child, target->child);
+    if(source->kind == TYPE_POINTER || source->kind == TYPE_LVALUE_REFERENCE ||
+       source->kind == TYPE_RVALUE_REFERENCE)
+        return PA14CvCompatible(source->child, target->child);
+    return true;
+}
+
+} // namespace
+
 string PA14Lowerer::AdjustDerivedAddress(const string& base,
                                          const TypePtr& raw_derived,
                                          const TypePtr& raw_base)
@@ -969,6 +987,14 @@ int PA14Lowerer::ConversionRank(const ExprInfo& source, const TypePtr& target) c
     if(target->kind == TYPE_LVALUE_REFERENCE || target->kind == TYPE_RVALUE_REFERENCE) {
       if(target->kind == TYPE_LVALUE_REFERENCE) {
         if(source.category == "lvalue") {
+          // A reference to an array carries cv qualification on the element
+          // type, not on the array wrapper.  Keep that typed conversion rule
+          // visible here so string literals and other array lvalues can bind
+          // to `T const&` without being decayed to a pointer first.
+          if(source_value->kind == TYPE_ARRAY && target_value->kind == TYPE_ARRAY &&
+             PA12SameType(source_value, target_value, true) &&
+             PA14CvCompatible(source_value, target_value))
+            return PA12SameType(source_value, target_value, false) ? 0 : 1;
           if(!target_value->is_const && source_value->is_const) return -1;
           if(PA12SameType(source_value, target_value, true)) return 0;
           if(IsDerivedFrom(source_value, target_value))

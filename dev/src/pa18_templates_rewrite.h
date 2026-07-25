@@ -22,9 +22,9 @@ bool MatchTypePattern(string pattern, string actual,
 	bool PreserveEvaluatedDecltype(const CPPGMAstNodePtr& input,
 		const map<string, string>& substitutions,
 		const CPPGMAstNodePtr& result) const;
-		int MatchDirectClassTypeParameter(const string& pattern, const string& actual,
-		const set<string>& parameter_names, map<string, string>* inferred,
-		const string& context, bool class_pattern) const;
+		int MatchDirectTypeParameter(const string& pattern, const string& actual,
+			const set<string>& parameter_names, map<string, string>* inferred,
+			const string& context, bool class_pattern) const;
 	int MatchReferenceArrayPattern(const string& pattern, const string& actual,
 		const set<string>& parameter_names, map<string, string>* inferred) const;
 	int MatchGeneratedBaseTypePattern(const string& pattern, const string& actual,
@@ -169,6 +169,17 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 	bool InferArgument(const CPPGMAstNodePtr& expression, string* result,
 		const map<string, string>& substitutions, const string& context,
 		FunctionSignature* function_signature = 0) const;
+	bool InferMemberArgument(const CPPGMAstNodePtr& expression, string* result,
+		const map<string, string>& substitutions, const string& context) const;
+	bool InferIdentifierArgument(const CPPGMAstNodePtr& expression, string* result,
+		const map<string, string>& substitutions, const string& context,
+		FunctionSignature* function_signature = 0) const;
+	bool InferCallArgument(const CPPGMAstNodePtr& expression, string* result,
+		const map<string, string>& substitutions, const string& context) const;
+	bool InferCallMemberArgument(const CPPGMAstNodePtr& expression, string* result,
+		const map<string, string>& substitutions, const string& context) const;
+	bool InferCallIdentifierArgument(const CPPGMAstNodePtr& expression, string* result,
+		const map<string, string>& substitutions, const string& context) const;
 	bool InferCallableObjectCall(const CPPGMAstNodePtr& call,
 		const string& object_type, const map<string, string>& substitutions,
 		const string& context, string* result) const;
@@ -401,8 +412,54 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 		member_call->children.push_back(member_arguments);
 		if(InstantiateMemberCall(member_call, member, "operator" + operation,
 			context, substitutions)) return;
-		const vector<const TemplateDefinition*> candidates = FindFunctionDefinitions(
+		vector<const TemplateDefinition*> candidates = FindFunctionDefinitions(
 			"operator" + operation, context);
+		// Operator-template discovery also has to follow argument-dependent lookup.
+		// The lexical lookup above can return a visible global overload and stop
+		// before reaching a same-named template in an operand's namespace.  Recover
+		// each class operand's typed owner and append only that associated namespace;
+		// do not fall back to unrelated same-named functions.
+		set<const TemplateDefinition*> known_candidates(candidates.begin(), candidates.end());
+		for(size_t operand = 0; operand < expression->children.size() && operand < 2; ++operand) {
+			string operand_type;
+			if(!InferArgument(expression->children[operand], &operand_type,
+				substitutions, context)) continue;
+			operand_type = NormalizeTypeArgument(ResolveAlias(operand_type, context));
+			while(operand_type.compare(0, 6, "const ") == 0)
+				operand_type = NormalizeTypeArgument(operand_type.substr(6));
+			while(operand_type.compare(0, 9, "volatile ") == 0)
+				operand_type = NormalizeTypeArgument(operand_type.substr(9));
+			while(!operand_type.empty() && (operand_type[operand_type.size() - 1] == '&' ||
+				operand_type[operand_type.size() - 1] == '*'))
+				operand_type = NormalizeTypeArgument(operand_type.substr(0, operand_type.size() - 1));
+			while(!operand_type.empty() && operand_type[operand_type.size() - 1] == ']') {
+				const size_t open = operand_type.rfind('[');
+				if(open == string::npos) break;
+				operand_type = NormalizeTypeArgument(operand_type.substr(0, open));
+			}
+			const CPPGMAstNodePtr declaration = FindClassDeclaration(operand_type, context);
+		if(!declaration) continue;
+		const string owner = !PrefixComponent(operand_type).empty() ?
+			PrefixComponent(operand_type) : PrefixComponent(declaration->value);
+			if(owner.empty()) continue;
+			const vector<const TemplateDefinition*> associated = FindFunctionDefinitions(
+				JoinPath(owner, "operator" + operation), context);
+			for(size_t candidate = 0; candidate < associated.size(); ++candidate)
+				if(known_candidates.insert(associated[candidate]).second)
+					candidates.push_back(associated[candidate]);
+			const map<string, vector<string> >::const_iterator indexed =
+				definitions_by_name_.find("operator" + operation);
+			if(indexed != definitions_by_name_.end()) for(size_t candidate = 0;
+				candidate < indexed->second.size(); ++candidate) {
+				map<string, TemplateDefinition>::const_iterator found = definitions_.find(
+					indexed->second[candidate]);
+				if(found == definitions_.end() || found->second.class_template ||
+					(found->second.owner != owner &&
+						PrefixComponent(found->second.qualified_name) != owner)) continue;
+				if(known_candidates.insert(&found->second).second)
+					candidates.push_back(&found->second);
+			}
+		}
 		if(candidates.empty()) return;
 		CPPGMAstNodePtr call(new CPPGMAstNode("call-expression"));
 		call->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(

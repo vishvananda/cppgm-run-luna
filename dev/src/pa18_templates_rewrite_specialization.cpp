@@ -5,11 +5,12 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
-int PA18TemplateExpander::MatchDirectClassTypeParameter(const string& pattern,
+int PA18TemplateExpander::MatchDirectTypeParameter(const string& pattern,
 	const string& actual, const set<string>& parameter_names,
 	map<string, string>* inferred, const string& context, bool class_pattern) const
 {
-	if(!class_pattern || parameter_names.find(pattern) == parameter_names.end()) return -1;
+	if(parameter_names.find(pattern) == parameter_names.end() ||
+		(!class_pattern && pattern.find('<') != string::npos)) return -1;
 	map<string, string>::const_iterator prior = inferred->find(pattern);
 	if(prior != inferred->end() && CanonicalSpelling(ResolveAlias(
 		prior->second, context)) != CanonicalSpelling(ResolveAlias(actual, context))) return 0;
