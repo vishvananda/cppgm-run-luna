@@ -1180,8 +1180,8 @@ CPPGMAstNodePtr PA18TemplateExpander::RewriteRegularNodeValue(
 	if(input->kind == "literal" && input->value.size() >= 2 &&
 		input->value[0] == '"' && input->value[input->value.size() - 1] == '"')
 		result->value = input->value;
-	else result->value = RewriteText(input->value, context, substitutions,
-			&template_replaced, !type_spelling, true);
+	else result->value = RewriteText(input->value, context, substitutions, &template_replaced,
+		!type_spelling, true, defer_type_only_class_definitions_ != 0);
 	if(PreserveEvaluatedDecltype(input, substitutions, result)) return result;
 	if((input->kind == "special-member-definition" ||
 		input->kind == "special-member-declaration") &&
@@ -1196,8 +1196,8 @@ CPPGMAstNodePtr PA18TemplateExpander::RewriteRegularNodeValue(
 		// Keep the concrete generated alias as the AST type and reserve the
 		// expanded spelling for typed expression queries such as sizeof.
 		bool preserved_template = false;
-		const string preserved = RewriteText(input->value, context, substitutions,
-			&preserved_template, false, false);
+			const string preserved = RewriteText(input->value, context, substitutions,
+				&preserved_template, false, false, defer_type_only_class_definitions_ != 0);
 		if(!preserved.empty()) result->value = preserved;
 	}
 		// Non-type template substitutions are semantic values, not names.  Keep
@@ -1218,7 +1218,8 @@ CPPGMAstNodePtr PA18TemplateExpander::RewriteRegularNodeValue(
 		}
 		if((type_spelling || input->kind == "id-expression") &&
 			result->value.find('<') != string::npos)
-			result->value = RewriteText(result->value, context, substitutions, &template_replaced);
+			result->value = RewriteText(result->value, context, substitutions, &template_replaced,
+				true, true, defer_type_only_class_definitions_ != 0);
 		if(input->kind == "target") {
 			const string raw_target = RemoveMarker(input->value);
 			const size_t separator = raw_target.rfind("::");
@@ -1246,7 +1247,8 @@ CPPGMAstNodePtr PA18TemplateExpander::RewriteRegularNodeValue(
 			if(!HasReplayContext(substitutions) && input->value.find('<') == string::npos)
 				resolved = qualified;
 			if(resolved.find('<') != string::npos)
-				resolved = RewriteText(resolved, context, substitutions, 0);
+					resolved = RewriteText(resolved, context, substitutions, 0, true, true,
+						defer_type_only_class_definitions_ != 0);
 			if(resolved.find('(') != string::npos && resolved.find(')') != string::npos)
 				resolved = qualified;
 			if(resolved != qualified) qualified = resolved;
@@ -1278,7 +1280,8 @@ CPPGMAstNodePtr PA18TemplateExpander::RewriteRegularNodeValue(
 CPPGMAstNodePtr PA18TemplateExpander::FinishRegularNode(
 	const CPPGMAstNodePtr& input, const string& context,
 	const map<string, string>& substitutions,
-	const CPPGMAstNodePtr& result, const string& promoted_local_class)
+	const CPPGMAstNodePtr& result, const string& promoted_local_class,
+	bool defer_type_only_classes)
 {
 		string child_context = context;
 		if(input->kind == "class-specifier" || input->kind == "class-forward-declaration")
@@ -1317,8 +1320,8 @@ CPPGMAstNodePtr PA18TemplateExpander::FinishRegularNode(
 			}
 		}
 		map<string, string> local_substitutions = substitutions;
-		TransformRegularChildren(input, child_context, function_context, substitutions,
-			&local_substitutions, result);
+		struct TypeOnlyScope { size_t& depth; const size_t saved; TypeOnlyScope(size_t& d, bool active) : depth(d), saved(d) { if(active) ++depth; } ~TypeOnlyScope() { depth = saved; } } type_only_scope(defer_type_only_class_definitions_, defer_type_only_classes);
+		TransformRegularChildren(input, child_context, function_context, substitutions, &local_substitutions, result);
 		if(input->kind == "array-suffix" && !result->children.empty() && result->children[0]) { PA19IntegralValue bound;
 			if(EvaluateIntegralText(ConstantExpressionSpelling(result->children[0]), child_context, local_substitutions, &bound))
 				result->children[0] = CPPGMAstNodePtr(new CPPGMAstNode("literal", IntegralValueSpelling(bound)));
@@ -1491,8 +1494,7 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformRegularNode(
 	CPPGMAstNodePtr rewritten = RewriteRegularNodeValue(
 		input, context, substitutions, result, &promoted_local_class);
 	if(rewritten) return rewritten;
-	return FinishRegularNode(input, context, substitutions, result,
-		promoted_local_class);
+	const bool defer_type_only_classes = input->kind == "alias-declaration" || (input->kind == "simple-declaration" && !input->children.empty() && SpellNode(input->children[0]).find("typedef") != string::npos);
+	return FinishRegularNode(input, context, substitutions, result, promoted_local_class, defer_type_only_classes);
 }
-
 } // namespace pa18_templates_internal

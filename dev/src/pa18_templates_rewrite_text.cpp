@@ -6,7 +6,7 @@ namespace pa18_templates_internal {
 
 string PA18TemplateExpander::RewriteText(string raw, const string& context,
 	const map<string, string>& substitutions, bool* template_replaced,
-	bool resolve_alias, bool resolve_member)
+	bool resolve_alias, bool resolve_member, bool defer_class_definition)
 {
 	if(template_replaced) *template_replaced = false;
 	raw = NormalizeElaboratedSpelling(raw, context);
@@ -759,8 +759,11 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 					// boundary itself.  In particular, `void_t<Op<T>>` must reject
 					// the partial specialization when `Op<T>` is invalid; turning
 					// the failed operand into `void` would incorrectly select it.
+					const bool defer_nested_class_argument = defer_class_definition ||
+						(i < definition->parameters.size() && definition->parameters[i].type &&
+							source_argument != substituted_source_argument);
 					args[i] = NormalizeTypeArgument(RewriteText(args[i], context,
-						substitutions, 0));
+						substitutions, 0, true, true, defer_nested_class_argument));
 				args[i] = CollapseReferenceSpelling(ReplaceIdentifiers(args[i], substitutions));
 				// Keep a typedef spelling for a pointer to a function type while
 				// selecting a class partial specialization.  Expanding
@@ -789,7 +792,8 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 					function_pointer_alias = function_pointer_alias_spelling(substituted_source_argument);
 				if(!function_pointer_alias.empty()) args[i] = function_pointer_alias;
 				else args[i] = ResolveAlias(args[i], context);
-				args[i] = NormalizeTypeArgument(RewriteText(args[i], context, substitutions, 0));
+				args[i] = NormalizeTypeArgument(RewriteText(args[i], context,
+					substitutions, 0, true, true, defer_nested_class_argument));
 					if(function_pointer_alias.empty()) args[i] = ResolveAlias(args[i], context);
 					else args[i] = function_pointer_alias;
 					args[i] = QualifyTypeArgument(args[i], context, definition->owner);
@@ -1002,9 +1006,10 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				&requested_owner_name;
 				string local_name;
 					try {
-						local_name = Instantiate(*definition, args, context, false,
-							inferred_nested_parent_packs.empty() ? 0 : &inferred_nested_parent_packs,
-							&instantiation_substitutions, requested_owner);
+							local_name = Instantiate(*definition, args, context, false,
+								inferred_nested_parent_packs.empty() ? 0 : &inferred_nested_parent_packs,
+								&instantiation_substitutions, requested_owner, 0, 0,
+								defer_class_definition);
 				} catch(...) {
 				active_concrete_owner_ = previous_concrete_owner;
 				throw;

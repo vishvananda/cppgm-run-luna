@@ -544,8 +544,7 @@ private:
 	set<string> extern_instantiation_keys_;
 	map<string, CPPGMAstNodePtr> extern_instantiation_declarations_;
 	map<string, set<string> > requested_nested_classes_;
-	set<string> materialized_nested_classes_, materialized_member_definitions_;
-	set<string> active_template_member_types_;
+	set<string> materialized_nested_classes_, materialized_member_definitions_, deferred_class_instantiations_; size_t defer_type_only_class_definitions_ = 0; set<string> active_template_member_types_;
 	mutable set<string> active_member_type_lookups_, active_function_results_;
 	struct ActiveFunctionResultScope { PA18TemplateExpander* owner; string key; ActiveFunctionResultScope(PA18TemplateExpander* value, const string& name) : owner(value), key(name) {} ~ActiveFunctionResultScope() { owner->active_function_results_.erase(key); } };
 	map<string, FunctionSignature> active_function_substitutions_;
@@ -588,6 +587,7 @@ private:
 	CPPGMAstNodePtr FunctionDeclarator(const CPPGMAstNodePtr& declaration) const;
 	bool IsBuiltinArithmeticType(string raw) const; bool IsKnownTypeSpelling(string raw, const string& context) const;
 	bool HasUnavailableGeneratedMemberType(string raw, const string& context, const map<string, string>& substitutions) const; bool GeneratedNodeHasUnavailableMemberType(const CPPGMAstNodePtr& node, const string& context, const map<string, string>& substitutions) const;
+	bool HasDeferredDependentClassMember(const TemplateDefinition& definition, const string& context, const map<string, string>& substitutions) const;
 	bool HasUnresolvedTemplateParameter(string raw, const string& context, const map<string, string>& substitutions) const;
 	string CommonBuiltinArithmeticType(const string& left, const string& right) const;
 	bool InferOperatorResult(const string& operation, const string& left, const string& right, const string& context, string* result) const;
@@ -1190,8 +1190,8 @@ private:
 		const string& owner, set<string>* dependencies) const;
 	bool DeclaresSourceType(const CPPGMAstNodePtr& node, const set<string>& names) const;
 	void InsertDeferredGenerated(const CPPGMAstNodePtr& node);
-	bool MentionsGeneratedType(const CPPGMAstNodePtr& node,
-		const string& type_name) const;
+	bool MentionsGeneratedType(const CPPGMAstNodePtr& node, const string& type_name) const;
+	bool MentionsGeneratedTypeOutsideFunctionBodies(const CPPGMAstNodePtr& node, const string& type_name) const;
 	bool MentionsGeneratedClass(const CPPGMAstNodePtr& node,
 		const vector<CPPGMAstNodePtr>& generated) const;
 	bool MentionsGeneratedLayoutClass(const CPPGMAstNodePtr& node,

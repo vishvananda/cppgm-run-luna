@@ -571,7 +571,8 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 	}
 	string RewriteText(string raw, const string& context,
 		const map<string, string>& substitutions, bool* template_replaced,
-		bool resolve_alias = true, bool resolve_member = true);
+		bool resolve_alias = true, bool resolve_member = true,
+		bool defer_class_definition = false);
 	bool RewriteConcreteNestedMember(string* raw, size_t begin, size_t close,
 		const string& base, const string& context,
 		const map<string, string>& substitutions, bool* template_replaced,
@@ -679,6 +680,9 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 		// optional nested type.  Keep it in a specialization so its storage and
 		// injected member bindings survive template replay.
 		if(original_child->value.empty() || original_child->value == "<unnamed>") return false;
+		// An out-of-class nested definition is anchored by its forward declaration;
+		// retain that typed lookup anchor even when no in-class sibling mentions it.
+		if(original_child->kind == "class-forward-declaration") return false;
 		const string nested_name = LastComponent(original_child->value);
 		const string class_key = JoinPath(child_context, LastComponent(input->value));
 		map<string, set<string> >::const_iterator requested = requested_nested_classes_.find(class_key);
@@ -686,10 +690,29 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 			requested = requested_nested_classes_.find(LastComponent(input->value));
 		if(requested != requested_nested_classes_.end() &&
 			requested->second.find(nested_name) != requested->second.end()) return false;
+		const function<bool(const CPPGMAstNodePtr&)> has_unavailable_dependent_type =
+			[&](const CPPGMAstNodePtr& node) {
+				if(!node) return false;
+				if((node->kind == "decl-specifier" || node->kind == "type-name" ||
+					node->kind == "type-specifier" || node->kind == "decltype-specifier") &&
+					node->value.find("::") != string::npos &&
+					HasUnavailableGeneratedMemberType(CanonicalSpelling(
+						ReplaceIdentifiersPreservingPackSizes(RemoveMarker(node->value), substitutions)),
+						child_context, substitutions)) return true;
+				for(size_t child = 0; child < node->children.size(); ++child)
+					if(has_unavailable_dependent_type(node->children[child])) return true;
+				return false;
+			};
 		for(size_t sibling = 0; sibling < input->children.size(); ++sibling)
 			if(sibling != index && input->children[sibling] &&
 				input->children[sibling]->kind != "class-key" &&
-				ContainsName(input->children[sibling], nested_name)) return false;
+				ContainsName(input->children[sibling], nested_name) &&
+				!has_unavailable_dependent_type(original_child)) return false;
+		for(size_t sibling = 0; sibling < input->children.size(); ++sibling)
+			if(sibling != index && input->children[sibling] &&
+				input->children[sibling]->kind != "class-key" &&
+				MentionsGeneratedTypeOutsideFunctionBodies(input->children[sibling],
+					nested_name)) return false;
 		bool has_sibling = false;
 		for(size_t sibling = 0; sibling < input->children.size(); ++sibling)
 			if(sibling != index && input->children[sibling] &&
@@ -1005,7 +1028,8 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 		const CPPGMAstNodePtr& result, string* promoted_name);
 	CPPGMAstNodePtr FinishRegularNode(const CPPGMAstNodePtr& input,
 		const string& context, const map<string, string>& substitutions,
-		const CPPGMAstNodePtr& result, const string& promoted_local_class);
+		const CPPGMAstNodePtr& result, const string& promoted_local_class,
+		bool defer_type_only_classes = false);
 	bool TransformExplicitSpecialization(const CPPGMAstNodePtr& input,
 		const string& context, const map<string, string>& substitutions);
 	void CheckExplicitSpecializationOrder(const CPPGMAstNodePtr& input,

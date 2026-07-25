@@ -292,6 +292,65 @@ bool PA18TemplateExpander::HasUnavailableGeneratedMemberType(string raw,
 	return true;
 }
 
+bool PA18TemplateExpander::MentionsGeneratedTypeOutsideFunctionBodies(
+	const CPPGMAstNodePtr& node, const string& type_name) const
+{
+	if(!node || type_name.empty() || node->kind == "compound-statement" ||
+		node->kind == "function-definition" || node->kind == "special-member-definition" ||
+		node->kind == "special-member-declaration") return false;
+	const string wanted = LastComponent(CanonicalSpelling(RemoveMarker(type_name)));
+	if((node->kind == "class-specifier" || node->kind == "class-forward-declaration") &&
+		LastComponent(CanonicalSpelling(RemoveMarker(node->value))) == wanted) return false;
+	const string spelling = CanonicalSpelling(RemoveMarker(node->value));
+	if(!spelling.empty()) {
+		const size_t angle = spelling.find('<');
+		const string bare = angle == string::npos ? spelling : spelling.substr(0, angle);
+		if(bare == type_name || bare == wanted || bare.compare(0, wanted.size() + 2,
+			wanted + "::") == 0 || bare.find("::" + wanted + "::") != string::npos ||
+			(bare.size() > wanted.size() + 2 && bare.compare(bare.size() - wanted.size() - 2,
+			wanted.size() + 2, "::" + wanted) == 0)) return true;
+		for(size_t position = spelling.find(wanted); position != string::npos;
+			position = spelling.find(wanted, position + wanted.size())) {
+			const bool left = position == 0 || !IsIdentifierCharacter(spelling[position - 1]);
+			const size_t end = position + wanted.size();
+			if(left && (end == spelling.size() || !IsIdentifierCharacter(spelling[end]))) return true;
+		}
+	}
+	for(size_t child = 0; child < node->children.size(); ++child)
+		if(MentionsGeneratedTypeOutsideFunctionBodies(node->children[child], type_name)) return true;
+	return false;
+}
+
+bool PA18TemplateExpander::HasDeferredDependentClassMember(
+	const TemplateDefinition& definition, const string& context,
+	const map<string, string>& substitutions) const
+{
+	if(!definition.declaration) return false;
+	const function<bool(const CPPGMAstNodePtr&)> scan =
+		[&](const CPPGMAstNodePtr& node) {
+			if(!node || node->kind == "function-definition" ||
+				node->kind == "special-member-definition" ||
+				node->kind == "special-member-declaration" ||
+				node->kind == "compound-statement") return false;
+			if(node->kind == "decl-specifier" || node->kind == "type-name" ||
+				node->kind == "type-specifier" || node->kind == "decltype-specifier" ||
+				node->kind == "base-name") {
+				string raw = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(
+					RemoveMarker(node->value), substitutions));
+				if(raw.compare(0, 8, "typename") == 0 &&
+					(raw.size() == 8 || isspace(static_cast<unsigned char>(raw[8])))) {
+					raw = CanonicalSpelling(raw.substr(8));
+				}
+				if(HasUnavailableGeneratedMemberType(raw, context, substitutions))
+					return true;
+			}
+			for(size_t child = 0; child < node->children.size(); ++child)
+				if(scan(node->children[child])) return true;
+			return false;
+		};
+	return scan(definition.declaration);
+}
+
 bool PA18TemplateExpander::GeneratedNodeHasUnavailableMemberType(
 	const CPPGMAstNodePtr& node, const string& context,
 	const map<string, string>& substitutions) const
@@ -466,6 +525,8 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 	const string previous_instantiation_name = active_instantiation_name_;
 	const string enclosing_instantiation_name = active_instantiation_name_;
 	active_instantiation_name_ = definition.class_template ? local_name : string();
+	const size_t previous_type_only_depth = defer_type_only_class_definitions_;
+	defer_type_only_class_definitions_ = 0;
 	CPPGMAstNodePtr generated;
 	const string transform_context = concrete_owner.empty() ? definition.owner :
 		concrete_owner;
@@ -475,12 +536,15 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 			function_substitutions);
 	} catch(const PA18SubstitutionFailure&) {
 		active_instantiation_name_ = previous_instantiation_name;
+		defer_type_only_class_definitions_ = previous_type_only_depth;
 		throw;
 	} catch(...) {
 		active_instantiation_name_ = previous_instantiation_name;
+		defer_type_only_class_definitions_ = previous_type_only_depth;
 		throw;
 	}
 	active_instantiation_name_ = previous_instantiation_name;
+	defer_type_only_class_definitions_ = previous_type_only_depth;
 	if(!generated) throw logic_error("unable to instantiate template");
 	if(!definition.class_template && GeneratedNodeHasUnavailableMemberType(
 		generated, transform_context, substitutions)) {
@@ -706,10 +770,16 @@ string PA18TemplateExpander::MaterializeInstantiation(const TemplateDefinition& 
 	const map<string, PA19IntegralValue>& integral_substitutions,
 	const map<string, vector<string> >& pack_substitutions, const string& context,
 	bool explicit_instantiation, const string& key, const string& concrete_owner,
-	const map<string, FunctionSignature>& function_substitutions)
+	const map<string, FunctionSignature>& function_substitutions,
+	bool defer_class_definition)
 {
 	map<string, string>::const_iterator cached = specializations_.find(key);
-	if(cached != specializations_.end()) {
+	if(cached != specializations_.end() && definition.class_template &&
+		!defer_class_definition && deferred_class_instantiations_.find(key) !=
+			deferred_class_instantiations_.end()) {
+		specializations_.erase(cached);
+		deferred_class_instantiations_.erase(key);
+	} else if(cached != specializations_.end()) {
 		map<string, CPPGMAstNodePtr>::const_iterator extern_declaration =
 			extern_instantiation_declarations_.find(key);
 		if(explicit_instantiation && extern_declaration !=
@@ -735,6 +805,19 @@ string PA18TemplateExpander::MaterializeInstantiation(const TemplateDefinition& 
 	RegisterGeneratedSpecialization(definition, metadata_args, local_name);
 	if(definition.class_template) substitutions[definition.name] = local_name;
 	specializations_[key] = local_name;
+	if(defer_class_definition && definition.class_template &&
+		HasDeferredDependentClassMember(definition, context, substitutions)) {
+		const string generated_owner = definition.lexical_owner.empty() ?
+			definition.owner : definition.lexical_owner;
+		const string generated_path = JoinPath(definition.owner, local_name);
+		const string lexical_path = JoinPath(generated_owner, local_name);
+		class_contexts_.insert(generated_path);
+		class_contexts_.insert(lexical_path);
+		class_declarations_[generated_path] = MakeForwardClass(local_name);
+		class_declarations_[lexical_path] = class_declarations_[generated_path];
+		deferred_class_instantiations_.insert(key);
+		return local_name;
+	}
 	if(DeferIncompleteAliasClass(definition, args, context)) {
 		const string generated_owner = definition.lexical_owner.empty() ?
 			definition.owner : definition.lexical_owner;
@@ -744,6 +827,7 @@ string PA18TemplateExpander::MaterializeInstantiation(const TemplateDefinition& 
 		class_contexts_.insert(lexical_path);
 		class_declarations_[generated_path] = MakeForwardClass(local_name);
 		class_declarations_[lexical_path] = class_declarations_[generated_path];
+		deferred_class_instantiations_.insert(key);
 		return local_name;
 	}
 	if(!active_specializations_.insert(key).second) return local_name;
@@ -771,7 +855,8 @@ string PA18TemplateExpander::Instantiate(const TemplateDefinition& definition,
 	const map<string, vector<string> >* pack_hints,
 	const map<string, string>* outer_substitutions, const string* requested_owner,
 	const map<string, FunctionSignature>* function_hints,
-	const map<string, vector<string> >* forwarding_pack_hints)
+	const map<string, vector<string> >* forwarding_pack_hints,
+	bool defer_class_definition)
 {
 	if(definition.parameters.empty()) throw logic_error("template has no type parameters");
 	vector<string> args, metadata_args;
@@ -846,7 +931,7 @@ string PA18TemplateExpander::Instantiate(const TemplateDefinition& definition,
 			function_substitutions);
 	return MaterializeInstantiation(definition, args, metadata_args, substitutions,
 		integral_substitutions, pack_substitutions, context, explicit_instantiation, key,
-		concrete_owner, function_substitutions);
+		concrete_owner, function_substitutions, defer_class_definition);
 }
 
 

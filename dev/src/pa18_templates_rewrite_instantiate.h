@@ -560,7 +560,8 @@
 		const vector<const TemplateDefinition*> candidates = NestedDefinitions(parent);
 		for(size_t i = 0; i < candidates.size(); ++i) {
 			if(candidates[i]->name == nested_name || !nested ||
-				!MentionsGeneratedType(nested_declaration, candidates[i]->name)) continue;
+				!MentionsGeneratedTypeOutsideFunctionBodies(nested_declaration,
+					candidates[i]->name)) continue;
 			InstantiateNestedClass(parent, parent_args, parent_local_name,
 				candidates[i]->name, context);
 		}
@@ -630,8 +631,19 @@
 		if(short_name != requested_nested_classes_.end())
 			requested.insert(short_name->second.begin(), short_name->second.end());
 		const vector<const TemplateDefinition*> candidates = NestedDefinitions(parent);
-		for(size_t i = 0; i < candidates.size(); ++i)
+		for(size_t i = 0; i < candidates.size(); ++i) {
 			class_contexts_.insert(parent_local_name + "::" + candidates[i]->name);
+			if(!parent.declaration || !candidates[i]->declaration ||
+				candidates[i]->declaration->kind != "class-specifier") continue;
+			for(size_t child = 0; child < parent.declaration->children.size(); ++child) {
+				const CPPGMAstNodePtr declaration = parent.declaration->children[child];
+				if(declaration && declaration->kind == "class-forward-declaration" &&
+					LastComponent(declaration->value) == candidates[i]->name) {
+					requested.insert(candidates[i]->name);
+					break;
+				}
+			}
+		}
 		for(set<string>::const_iterator it = requested.begin(); it != requested.end(); ++it)
 			InstantiateNestedClass(parent, parent_args, parent_local_name, *it, context);
 	}
@@ -1078,7 +1090,8 @@
 		const map<string, string>* outer_substitutions = 0,
 		const string* concrete_owner = 0,
 		const map<string, FunctionSignature>* function_hints = 0,
-		const map<string, vector<string> >* forwarding_pack_hints = 0);
+		const map<string, vector<string> >* forwarding_pack_hints = 0,
+		bool defer_class_definition = false);
 	string MaterializeExternInstantiation(const TemplateDefinition& definition,
 		const vector<string>& args, const vector<string>& metadata_args,
 		map<string, string> substitutions,
@@ -1095,7 +1108,8 @@
 		const string& context, bool explicit_instantiation, const string& key,
 		const string& concrete_owner,
 		const map<string, FunctionSignature>& function_substitutions =
-			map<string, FunctionSignature>());
+			map<string, FunctionSignature>(),
+		bool defer_class_definition = false);
 	void ReplayCachedInstantiation(const TemplateDefinition& definition,
 		const vector<string>& args, const string& cached, const string& context,
 		bool explicit_instantiation,

@@ -1625,3 +1625,52 @@ and spec/400), including the deferred nested-class/typedef cases.  Extend the
 typed candidate state through qualified lookup, no-eager class materialization,
 constructor viability, and out-of-class owner replay, then rerun the focused
 group, full PA22 report, through-PA21 report, and source audit.
+
+## Checkpoint 78 scope — 2026-07-25 (before implementation)
+
+The complete current-PA report before this increment was **114/250**, with
+**136** failures and no timeout.  The residual map was refreshed before
+implementation: general/100 **14**, general/200 **13**, general/300 **33**,
+general/400 **15**, general/500 **25**, spec/100 **6**, spec/200 **12**,
+spec/300 **11**, spec/400 **2**, and spec/500 **9**.
+
+Selected checkpoint scope: typed lazy class materialization.  A class template
+used only as a typedef/type argument must not eagerly instantiate its body;
+nested classes referenced only from function bodies must remain lazy; and a
+later qualified member use must promote the cached forward state to a complete
+class.  This covers the shared behavior behind
+`general/300-class-template-id-argument-no-eager-complete`,
+`general/300-lazy-nested-member-class-instantiation`, and
+`spec/300-typedef-class-template-does-not-instantiate`, with the dependent
+type-argument replay cases in the focused substitution group as regression
+coverage.
+
+## Checkpoint 78 result — 2026-07-25
+
+The scope is complete at **117/250**, up three tests from the 114/250
+checkpoint baseline, with no newly failing PA22 tests.  The three direct fixes
+are the no-eager class-template-id argument case, lazy nested member-class
+materialization, and typedef-only class-template use.  The implementation
+keeps deferred class state and promotion state in typed template-expander
+collections, suppresses only function-body references when deciding whether a
+nested class is needed, and preserves dependent type arguments until their
+concrete owner is known.  The focused validation for this scope passes **8/8**.
+The earlier PA1–PA21 report passes **1850/1850**, and the PA22 source audit
+passes.  The final required PA22 report remains **117/250** with no new
+failures relative to the 114/250 checkpoint baseline.
+
+### Remaining Work Map
+
+- **Call deduction, arrays, defaults, and packs:** 14 general/100 failures.
+- **Partial ordering and overload ranking:** 13 general/200 and 12 spec/200.
+- **Dependent substitution, SFINAE, lookup, and owner replay:** 30
+  general/300, 11 spec/300, and 2 spec/400.
+- **Alias, constructor/conversion, owner, and typed NTTP behavior:** 15
+  general/400, 25 general/500, and 9 spec/500.
+- **Array/non-deduced/defaulted edges:** 6 spec/100.
+
+The next checkpoint group is the remaining out-of-class member-template
+SFINAE and concrete-owner replay cases, bundled with the closely related
+constructor-owner cases when they share the same qualified lookup path.  The
+required validation boundary remains the focused group, full PA22 report,
+through-PA21 report, and PA22 source audit.
