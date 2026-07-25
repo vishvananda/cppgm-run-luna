@@ -2924,3 +2924,69 @@ within file and function limits.
 ### Next Checkpoint Group
 
 PA21 is complete; hand off to PA22.
+
+## Architecture Review — 2026-07-25
+
+The integrated PA21 implementation follows the staged compiler architecture
+required by the assignment:
+
+- `pa18_templates_collection.h/.cpp` owns the template-entity model.  A
+  `TemplateDefinition` records primary, partial, alias, variable, member,
+  friend, template-template, static-member, and explicit-instantiation facts.
+  `ClassSpecializationIdentity` provides the canonical primary-plus-argument
+  identity used for selection history and replay caching.
+- `SelectClassTemplateDefinition` is the shared selection boundary used by
+  text replay, member/type lookup, `decltype`, and typed value evaluation.
+  `ConcreteOwnerContext` carries the selected definition and arguments while
+  nested transformations run, so current-specialization and owner bindings
+  are restored as semantic state rather than recovered from generated names.
+- The PA18 rewrite units perform argument resolution, deduction within the
+  PA21-supported surface, partial-pattern matching, nested/member/friend replay,
+  explicit/extern materialization, and generated declaration registration.
+  `RegisterGeneratedTypeEntity`, `generated_by_owner_`, and
+  `RecordFunctionSignature` connect replayed entities to the ordinary PA14
+  lowering model.  PA19 `PA19IntegralValue` values remain the constant-evaluation
+  representation for non-type arguments, array bounds, and specialization
+  values.
+- PA11 supplies typed scopes, class members, friend access, and bindings.
+  PA14 consumes those facts through `FunctionRecord`, `member_owner`,
+  `static_member`, `friend_owner`, and the friend-owner indexes.  Its driver
+  still runs the normal analysis, collection, symbol, global, function,
+  initializer, declaration, and LowIR stages; template replay only adds
+  demand-driven entities to that path.
+- Aggregate/reference lowering in `pa14_lowering_objects.cpp` preserves
+  source evaluation order and object addresses.  Per-walk aggregate value
+  caching is cleared after use, and member/function emission uses bounded
+  fixed-point passes over `needed`/`emitted` records so generated dependencies
+  are not dropped or duplicated.
+
+The source split is also part of the architecture: the added PA11, PA14, and
+PA18 translation units are listed in `dev/frontend_source_sets.mk` and are
+compiled by the normal frontend target.  The final stage audit found no
+implementation-fragment includes, unchecked source path, reference/host-tool
+dependency, output shortcut, or test-specific compiler branch.  The file
+audit's ten warning-only findings are inherited shared-header division and
+one nesting warning; there is no fatal size, function, duplication, or source
+set violation.
+
+## Final Architecture Review — 2026-07-25
+
+The final implementation satisfies the PA21 handoff boundary.  Class partial
+specialization selection is deterministic and shared across replay and lookup;
+alias and variable templates, template-template parameters, member templates,
+friend templates, current-specialization identity, and explicit/extern
+instantiation ownership all enter the same template graph.  Selected member,
+friend, constructor, static-storage, and conversion-operator entities lower
+through ordinary PA14/LowIR records rather than a parallel emitter.
+
+The completion checkpoint was reviewed as an integrated change, not only as
+eight isolated fixture fixes.  The owner context, generated declaration maps,
+typed function signatures, static/friend indexes, aggregate demand state, and
+LowIR emission order form one ownership chain from source declaration to
+generated body.  The implementation preserves earlier PAs, as shown by the
+clean through-PA21 report, while leaving function-template deduction,
+substitution, and SFINAE completion to the explicitly planned PA22 boundary.
+
+Final decision: PA21 is architecturally complete and ready for the PA22
+handoff.  The final audit and validation evidence are recorded in
+`pa21/audit.md`; no required compiler-source work remains for this stage.

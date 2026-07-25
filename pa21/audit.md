@@ -1,5 +1,92 @@
 # PA21 checkpoint audit
 
+## Final stage audit — 2026-07-25
+
+### Audit Plan
+
+Reviewed the PA21 contract in `pa21/README.md`, the testing and reference
+rules in `TESTING_AND_REFERENCES.md`, the complete checkpoint history and
+failure maps in `pa21/plan.md`, and the final Checkpoint 81 result.  The
+checkpoint that closed the PA21 report is committed as `ecfbc4f`
+(`Complete PA21 template replay lowering`), on top of the replay and typed
+specialization work in `2b7eb35`, `23bb633`, `36ac0d6`, `ff52aee`,
+`d51bb76`, `1185297`, `8a9fa9a`, `33d18b2`, `cbb6caf`, and `50f43b7`.
+
+The review traced the integrated implementation from the normal preprocessing
+and AST boundary through PA11 semantic analysis, PA18 template collection and
+replay, PA19 typed constant evaluation, PA14 object/function lowering, and
+LowIR emission.  It specifically checked:
+
+- the eight fixtures that formed the Checkpoint 80/81 completion scope;
+- class-primary/partial identity, typed template arguments, template-template
+  parameters, aliases, variable templates, member/friend declarations, and
+  explicit/extern instantiation ownership;
+- `ConcreteOwnerContext`, generated declaration ownership, transformed
+  function signatures, static-member facts, friend-owner indexes, and the
+  PA14 demand/emission frontier;
+- aggregate, reference, constructor, conversion-operator, static-storage,
+  and generated-body lowering, including evaluation and dependency order;
+- `dev/frontend_source_sets.mk`, all PA21-touched source files, source-size
+  and function limits, shortcut smells, external-tool use, and source/test
+  boundary violations.
+
+### Findings
+
+- Checkpoint 81 closes the complete remaining PA21 failure set.  The seven
+  generated owner/body cases now materialize the selected member, friend, and
+  constructor declarations at their owning scope.  The conversion-operator
+  case binds the selected partial specialization's compile-time function type
+  without leaving stale global declarations.
+- The template graph is represented by typed `TemplateDefinition` records and
+  canonical `ClassSpecializationIdentity` keys.  `SelectClassTemplateDefinition`
+  is reused by replay, dependent lookup, `decltype`, and value evaluation, so
+  partial-specialization selection is not duplicated as unrelated source-text
+  matching.
+- Replay carries `ConcreteOwnerContext` with the selected definition and
+  arguments, and restores it across nested transformations.  Generated
+  declarations are registered through `RegisterGeneratedTypeEntity`,
+  `generated_by_owner_`, and typed function-signature records.  Static members
+  and friend access are indexed once and consumed by PA14 rather than
+  rediscovered by serializing generated declarations.
+- The PA14 path remains the ordinary compiler path: analysis and collection,
+  symbol finalization, globals, demand-driven ordinary/member/friend emission,
+  dynamic initializers, declarations, and final LowIR writing.  Aggregate
+  precomputation is scoped to one aggregate walk and cleared after use, while
+  constructor/member dependencies are closed by fixed-point passes.  The
+  nested-reference emission frontier is classified from `FunctionRecord`,
+  `Type`, and class-member metadata; it contains no fixture names, expected
+  LowIR, or source-file branches.
+- The final source organization is auditable.  The PA21-added translation
+  units are registered in `dev/frontend_source_sets.mk`; no source file is
+  included as an implementation fragment, and no compiler phase is skipped.
+  The file audit reports no fatal issue.  It retains ten nonfatal warnings:
+  nine pre-existing shared-header body-division warnings and one nesting
+  warning for `EvaluateUnqualifiedConstantMember`; these are documented
+  structural warnings, not unchecked or hidden implementation paths.
+- No reference binary, host compiler, process execution API, embedded
+  interpreter, timeout workaround, hardcoded fixture result, weakened test
+  gate, or expected-output reader is present in the reviewed compiler source.
+  No tests, reference fixtures, or acceptance scripts were changed.
+
+### Changes Made
+
+The final review found no remaining correctness, ownership, performance, or
+shortcut blocker requiring another compiler-source change.  The cohesive
+implementation from Checkpoint 81 is retained as committed in `ecfbc4f`.
+This final audit records the source-level review and validation evidence; the
+companion architecture sections below are added to `pa21/plan.md`.
+
+### Validation
+
+- Focused Checkpoint 81 completion fixtures — **8/8 passed**.
+- `make -C dev cppgm++` — passed.
+- `perl scripts/cppgm_file_audit.pl --stage pa21 --paths dev/src` — passed
+  with ten nonfatal warnings and no fatal finding.
+- `make test-report-through-pa21` — **1850/1850 tests passed** across all
+  **21/21 stages**; the complete primary log is
+  `/home/vishvananda/work/.ralph/luna-gpt-5.6-luna-ultra/last-test.log`.
+- `git diff --check` — passed, and the final committed worktree is clean.
+
 ## Checkpoint 72 audit — 2026-07-24
 
 ### Scope Reviewed
