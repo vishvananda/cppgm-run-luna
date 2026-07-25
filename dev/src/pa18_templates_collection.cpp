@@ -106,6 +106,41 @@ bool LooksLikeRelationalLessThan(const string& raw, size_t position)
 		if(raw[i] == '(') ++enclosing_parentheses;
 		else if(raw[i] == ')' && enclosing_parentheses > 0) --enclosing_parentheses;
 	}
+	if(enclosing_parentheses == 0) {
+		const bool spaced_before = position > 0 &&
+			isspace(static_cast<unsigned char>(raw[position - 1]));
+		const bool spaced_after = position + 1 < raw.size() &&
+			isspace(static_cast<unsigned char>(raw[position + 1]));
+		size_t next = position + 1;
+		while(next < raw.size() && isspace(static_cast<unsigned char>(raw[next]))) ++next;
+		const bool equality = next < raw.size() && raw[next] == '=';
+		string right_word;
+		if(next < raw.size() && (isalpha(static_cast<unsigned char>(raw[next])) || raw[next] == '_')) {
+			size_t end = next + 1;
+			while(end < raw.size() && IsIdentifierCharacter(raw[end])) ++end;
+			right_word = raw.substr(next, end - next);
+		}
+		size_t left_end = position;
+		while(left_end > 0 && isspace(static_cast<unsigned char>(raw[left_end - 1]))) --left_end;
+		const bool left_is_closed = left_end > 0 && raw[left_end - 1] == ')';
+		size_t left_begin = left_end;
+		while(left_begin > 0 && IsIdentifierCharacter(raw[left_begin - 1])) --left_begin;
+		const string left_word = raw.substr(left_begin, left_end - left_begin);
+		const bool parameter_like = left_word.size() == 1 &&
+			isupper(static_cast<unsigned char>(left_word[0]));
+		const bool size_word = right_word == "sizeof" || right_word == "alignof" ||
+			right_word == "__alignof" || right_word == "decltype";
+		if(parameter_like && next < raw.size() &&
+			(isdigit(static_cast<unsigned char>(raw[next])) || raw[next] == '.')) {
+			for(size_t scan = next; scan < raw.size(); ++scan) {
+				if(raw[scan] == '+' || raw[scan] == '-' || raw[scan] == '*' ||
+					raw[scan] == '/' || raw[scan] == '%') return true;
+				if(raw[scan] == ',' || raw[scan] == '>') break;
+			}
+		}
+		if(equality || (spaced_before && spaced_after && size_word &&
+			(left_is_closed || parameter_like))) return true;
+	}
 	if(enclosing_parentheses == 0) return false;
 	int nested_parentheses = 0, angle = 1;
 	for(size_t i = position + 1; i < raw.size(); ++i) {

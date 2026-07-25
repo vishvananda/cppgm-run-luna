@@ -332,6 +332,7 @@ inline bool IsTemplateAngleOpen(const string& raw, size_t position)
 {
 	if(position >= raw.size() || raw[position] != '<') return false;
 	if(position + 1 < raw.size() && raw[position + 1] == '<') return false;
+	if(position + 1 < raw.size() && raw[position + 1] == '=') return false;
 	size_t previous = position;
 	while(previous > 0 && isspace(static_cast<unsigned char>(raw[previous - 1]))) --previous;
 	if(previous == 0) return true;

@@ -317,6 +317,10 @@
 	string FunctionLookupContext(const string& context) const;
 	const TemplateDefinition* FindExplicitFunctionTemplate(const string& base,
 		const string& context) const;
+	bool ResolveCallableTemporaryCallResult(const string& callee, const string& function_context, const string& context,
+		const map<string, string>& substitutions, const vector<string>& actual_types, string* result);
+	bool ResolveConstructedCallResult(const string& callee, const string& context,
+		const map<string, string>& substitutions, const vector<string>& actual_types, string* result);
 	bool FunctionCallResultType(string expression, const string& context,
 		const map<string, string>& substitutions, string* result)
 	{
@@ -409,6 +413,7 @@
 			if(actual.empty()) return false;
 			actual_types.push_back(actual);
 		}
+		if(callee[callee.size() - 1] == ')' && ResolveCallableTemporaryCallResult(callee, function_context, context, substitutions, actual_types, result)) return true;
 		string callable_type, callable_operand;
 		if(SplitStaticCast(callee, &callable_type, &callable_operand)) {
 			string function_result;
@@ -488,6 +493,7 @@
 			*result = selected_result;
 			return true;
 		}
+		if(ResolveConstructedCallResult(callee, context, substitutions, actual_types, result)) return true;
 		if(!explicit_definition) {
 			for(map<string, vector<FunctionSignature> >::const_iterator overload =
 				function_overloads_.begin(); overload != function_overloads_.end(); ++overload) {
@@ -541,7 +547,6 @@
 		}
 		return false;
 	}
-
 	string FunctionTemplateIdType(string expression, const string& context,
 		const map<string, string>& substitutions)
 	{
@@ -586,7 +591,6 @@
 		result += ')';
 		return CanonicalSpelling(result);
 	}
-
 	string BinaryExpressionType(string expression, const string& context,
 		const map<string, string>& substitutions)
 	{
@@ -658,7 +662,6 @@
 		}
 		return string();
 	}
-
 	bool IsDefaultConstructibleType(string raw, const string& context) const
 	{
 		raw = NormalizeTypeArgument(ResolveAlias(ReplaceIdentifiers(raw, map<string, string>()),
@@ -697,7 +700,6 @@
 		}
 		return !declared_constructor;
 	}
-
 	string ResolveDecltypeTypeName(string raw, const string& context,
 		const map<string, string>& substitutions) const
 	{
@@ -725,7 +727,6 @@
 		}
 		return raw;
 	}
-
 	string FunctionArgumentObjectType(string raw, const string& context) const
 	{
 		// A dependent call result can retain the source template-id spelling while
@@ -753,7 +754,6 @@
 			raw = CanonicalSpelling(raw.substr(0, raw.size() - 1));
 		return raw;
 	}
-
 	bool FunctionArgumentViable(const string& parameter, const string& actual,
 		const string& context) const
 	{
@@ -778,7 +778,6 @@
 			FindClassDeclaration(received, context)) return false;
 		return true;
 	}
-
 	bool FunctionArgumentsViable(const TemplateDefinition& definition,
 		const vector<string>& arguments, const vector<string>& actual_types,
 		const string& context)
@@ -953,6 +952,7 @@
 			if(member_call != string::npos) member_name.erase(member_call);
 			const size_t member_template = member_name.find('<');
 			if(member_template != string::npos) member_name.erase(member_template);
+			if(!member_name.empty() && member_name[0] == '~' && IsKnownTypeSpelling(left, context)) return "void";
 			if(FindClassMemberType(left, member_name, substitutions, context,
 				&member_type, &active)) {
 				return member_type;

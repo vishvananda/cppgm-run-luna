@@ -1408,3 +1408,220 @@ fixtures into the next dependent-lookup/owner-routing checkpoint (46 total).
 Start with the pure exit-status cases, then the two LowIR conversion/NTTP
 cases; after that, take the general/spec 200 partial-ordering band.  Preserve
 the same PA1–PA21 and file-audit validation boundary.
+
+## Checkpoint 77 scope — 2026-07-25 (before implementation)
+
+### Baseline and complete residual
+
+The required current-PA report is **110/250** with **140** failures and no
+timeout.  PA1–PA21 pass.  The complete current failure set, grouped by the
+shared compiler behavior that owns the first observable failure, is:
+
+- **Call deduction, arrays, defaults, and packs (14):**
+  `general/100-dependent-remove-reference-transform-forwarding`,
+  `general/100-empty-pack-static-assert-trait-expansion`,
+  `general/100-explicit-template-id-user-conversion-deduction`,
+  `general/100-forwarding-reference-preserves-top-const-function-pointer`,
+  `general/100-forwarding-reference-qualified-enumerator`,
+  `general/100-function-parameter-empty-middle-pack-alias`,
+  `general/100-function-template-elaborated-top-cv-deduction`,
+  `general/100-function-template-fixed-over-trailing-pack-fallback`,
+  `general/100-function-template-template-defaulted-argument-deduction`,
+  `general/100-function-template-variadic-template-template-deduction`,
+  `general/100-local-class-declval-explicit-template-id`,
+  `general/100-qualified-alias-template-member-deduction`,
+  `general/100-template-deduction-rejects-value-base-argument`,
+  `general/100-type-pack-element-result-selects-copy-ctor`.
+
+- **Function-template partial ordering and overload ranking (13):**
+  `general/200-ambiguous-cv-pointer-partial-ordering-bad`,
+  `general/200-class-template-partial-order-placeholder-argument`,
+  `general/200-constructor-template-rvalue-beats-const-ref`,
+  `general/200-empty-index-sequence-overload-order`,
+  `general/200-function-pointer-vs-const-ref-partial-order`,
+  `general/200-function-template-partial-order-class-template-cv`,
+  `general/200-function-template-partial-order-const-pointer`,
+  `general/200-function-template-trailing-pack-partial-order`,
+  `general/200-inherited-constructor-template-forwarding`,
+  `general/200-partial-order-synthetic-virtual-member-emission`,
+  `general/200-partial-ordering-pointer-vs-value`,
+  `general/200-partial-ordering-ref-vs-const-ref`,
+  `general/200-range-array-reference-mutable-begin`.
+
+- **Dependent substitution, SFINAE, and deferred instantiation (46):**
+  `general/300-abstract-array-parameter-sfinae`,
+  `general/300-alias-bool-explicit-pack-call-dependent-tag`,
+  `general/300-alias-sfinae-inherited-member-value`,
+  `general/300-base-qualified-template-value-arg-syntax`,
+  `general/300-boost-enable-if-type-condition-static-keyword-overload`,
+  `general/300-class-template-id-argument-no-eager-complete`,
+  `general/300-constructor-template-keeps-ctor-refinement-viable`,
+  `general/300-defaulted-sfinae-ctor-candidate-drop`,
+  `general/300-dependent-enable-if-return-less-equal`,
+  `general/300-dependent-enable-if-return-nontype-less-pack`,
+  `general/300-destructor-template-id-sfinae`,
+  `general/300-empty-pack-unknown-bound-array-lowir`,
+  `general/300-explicit-template-call-transitive-base-deduction`,
+  `general/300-function-template-nested-alias-explicit-call`,
+  `general/300-hidden-friend-dependent-return-specialization-scope`,
+  `general/300-inherited-variable-template-enable-if-return`,
+  `general/300-internal-remove-cvref-alias-sfinae`,
+  `general/300-lazy-nested-member-class-instantiation`,
+  `general/300-local-alias-explicit-template-pack-decltype`,
+  `general/300-out-of-class-partial-owner-ctor-using-alias`,
+  `general/300-pack-expanded-enable-if-member-value`,
+  `general/300-qualified-alias-nontype-pack-function-deduction`,
+  `general/300-qualified-alias-sfinae-function-pointer-deduction-key`,
+  `general/300-qualified-rebind-detected-type-arg`,
+  `general/300-recursive-streamable-sfinae-guard`,
+  `general/300-single-element-detector-idiom-sfinae-false`,
+  `general/300-static-member-template-function-pointer-nttp`,
+  `general/300-structured-enable-if-sizeof-pack-value`,
+  `general/300-unevaluated-sizeof-call-surrogates`,
+  `general/300-using-declaration-imports-member-template-sfinae-shadow`,
+  `general/300-using-directive-overloaded-function-template-arg`,
+  `general/300-using-member-template-implicit-object-cv-overload`,
+  `general/300-variable-template-detected-idiom-direct-arg`,
+  `spec/300-constructor-forwarding-lvalue-beats-const-ref`,
+  `spec/300-constructor-template-const-ref-conversion`,
+  `spec/300-conversion-function-template-owner-result-copy-init`,
+  `spec/300-cross-specialization-converting-ctor-operator-template`,
+  `spec/300-current-specialization-constructor-template-canonical-owner`,
+  `spec/300-current-specialization-constructor-template-owner`,
+  `spec/300-out-of-class-sfinae-member-template-alias-body`,
+  `spec/300-out-of-class-sfinae-member-template-body`,
+  `spec/300-qualified-member-function-value-fallback-sfinae`,
+  `spec/300-template-id-direct-parameter-same-name-deduction`,
+  `spec/300-typedef-class-template-does-not-instantiate`,
+  `spec/400-dependent-decltype-member-template-conversion-operator`,
+  `spec/400-nontype-reference-argument`.
+
+- **Alias/template-template/constructor/conversion/owner and typed NTTP
+  propagation (49):**
+  `general/400-alias-template-function-argument-cv`,
+  `general/400-bad-constructor-template-parameter-shadowing-target-aware`,
+  `general/400-constructor-template-pack-before-defaulted-nontype`,
+  `general/400-conversion-function-template-prefers-nontemplate`,
+  `general/400-defaulted-pointer-nontype-cstyle-null`,
+  `general/400-enum-nttp-cstyle-cast-default-rebind`,
+  `general/400-function-assignment-invocable-and-helper`,
+  `general/400-member-alias-template-template-partial-deduction-owner`,
+  `general/400-object-pointer-nttp-address`,
+  `general/400-object-pointer-nttp-rebound-member-template`,
+  `general/400-pack-expansion-size-mismatch-sfinae`,
+  `general/400-partial-specialization-inherited-constructor-template`,
+  `general/400-static-data-nttp-pack-sizeof-bound`,
+  `general/400-template-template-alias-default-arity-sfinae`,
+  `general/400-unnamed-nontype-pack-static-enable-if-default`,
+  `general/500-adl-alias-return-operator-template`,
+  `general/500-adl-explicit-function-template-id`,
+  `general/500-alias-pack-enable-if-constexpr-constructor`,
+  `general/500-alias-rebind-forwarding-nondependent-param`,
+  `general/500-alias-template-template-defaulted-sfinae-canonical-args`,
+  `general/500-async-initiate-dependent-return-sfinae`,
+  `general/500-bool-alias-function-template-result-metadata`,
+  `general/500-boost-mp11-conditional-alias-reference-set`,
+  `general/500-constructor-pack-default-rewritten-pointer`,
+  `general/500-constructor-sfinae-member-template-value`,
+  `general/500-current-specialization-nontype-default-dependent`,
+  `general/500-defaulted-nontype-qualified-alias-value`,
+  `general/500-defaulted-pack-bool-short-circuit-sfinae`,
+  `general/500-dependent-result-sizeof-sfinae-base`,
+  `general/500-explicit-pack-deduced-pack-member-result`,
+  `general/500-index-sequence-alias-constructor-deduction`,
+  `general/500-inherited-constructor-template-member-alias-pack`,
+  `general/500-member-template-dependent-owner-defaulted-sfinae`,
+  `general/500-member-template-enable-if-redeclaration-overload`,
+  `general/500-member-template-retained-dependent-param-candidate-drop`,
+  `general/500-owner-enum-nontype-result-sfinae`,
+  `general/500-partial-specialization-cv-qualifier-subset`,
+  `general/500-short-circuit-alias-member-sfinae`,
+  `general/500-sizeof-void-sfinae-fallback`,
+  `general/500-weak-ptr-shared-ptr-template-ctor`,
+  `spec/500-conversion-function-template-reference-conditional-auto-ref`,
+  `spec/500-conversion-function-template-same-name-target`,
+  `spec/500-defaulted-rebind-constructor-deduction`,
+  `spec/500-function-result-template-id-shadowed-argument`,
+  `spec/500-hidden-friend-query-free-decltype-noexcept`,
+  `spec/500-template-template-conversion-operator-reference-target`,
+  `spec/500-template-template-piecewise-partial-ordering`,
+  `spec/500-type-pack-qualified-static-member-expansion`,
+  `spec/500-unqualified-member-template-local-alias-deduction`.
+
+- **Array/non-deduced and defaulted ordering edge cases (18):**
+  `spec/100-constructor-template-braced-array-bound-deduction`,
+  `spec/100-explicit-specialization-dependent-param-typedef`,
+  `spec/100-explicit-template-argument-overload-rejects-short-candidate`,
+  `spec/100-function-template-array-bound-braced-empty-argument`,
+  `spec/100-function-template-array-bound-only-deduction`,
+  `spec/100-function-template-array-parameter-string-literal`,
+  `spec/200-array-reference-cv-partial-ordering`,
+  `spec/200-constructor-template-qualified-nested-id-partial-ordering`,
+  `spec/200-defaulted-class-template-argument-prefix-deduction`,
+  `spec/200-dependent-specialized-default-arg-deduction`,
+  `spec/200-function-template-class-template-param-partial-order`,
+  `spec/200-function-template-fixed-parameter-default-tail-partial-order`,
+  `spec/200-function-template-partial-order-const-pointer`,
+  `spec/200-member-operator-fixed-tag-default-partial-order`,
+  `spec/200-member-template-explicit-pack-forward-call`,
+  `spec/200-member-template-nontype-param-shadows-inherited-value-sum`,
+  `spec/200-nondeduced-qualified-member-type-allows-conversion`,
+  `spec/200-overload-set-address-nondeduced-bad`.
+
+### Checkpoint Scope
+
+Complete the typed dependent-candidate path for **no-eager instantiation and
+dependent return/SFINAE probes**: class-template arguments used only as
+unevaluated or inherited base facts must remain lazy; dependent aliases,
+`enable_if` return/default parameters, `decltype`/destructor probes, and
+qualified member-template calls must convert failed substitution into a
+discarded candidate; successful replay must retain the concrete owner and
+result type.  The focused scope is the no-eager/dependent-return subset of
+the 46-fixture dependent group: `general/300-class-template-id-argument-no-
+eager-complete`, `general/300-dependent-enable-if-return-less-equal`,
+`general/300-dependent-enable-if-return-nontype-less-pack`,
+`general/300-destructor-template-id-sfinae`,
+`general/300-lazy-nested-member-class-instantiation`,
+`general/300-unevaluated-sizeof-call-surrogates`,
+`spec/300-decltype-call-substitution-failure-partial-specialization` when
+exposed by the same path, `spec/300-typedef-class-template-does-not-
+instantiate`, and the related typed LowIR cases.  This is a real semantic
+boundary, not a fixture-specific exception: the same candidate state must be
+used for ordinary calls and member/constructor replay.
+
+Validation for this checkpoint is the focused group, the full PA22 report,
+the through-PA21 report, and the PA22 source audit.  The remaining call and
+partial-ordering band, alias/owner/NTTP band, and unrelated conversion cases
+remain explicit follow-up groups; the next group is the rest of dependent
+SFINAE/lookup, bundled with any newly exposed owner-routing cases.
+
+## Checkpoint 77 final result — 2026-07-25
+
+The safe increment completed at **114/250**, up from the turn-start baseline
+of **110/250**; the residual is **136** failures.  The through-PA21 report is
+clean (**1850/1850**) and the PA22 source audit passes.  The increment covers
+dependent relational `<`/`<=` parsing and constant evaluation, typed rejection
+of unavailable explicit function results, temporary-callable and constructed
+call result typing, destructor decltype typing, and physical ownership for
+inline-namespace template arguments.  The focused probes for dependent
+`enable_if` return comparisons, unevaluated call/constructor sizeof, destructor
+SFINAE, and decltype substitution now pass; nested no-eager class/typedef
+materialization remains follow-up work.
+
+### Remaining Work Map (final)
+
+- **Call deduction/arrays/defaults/packs:** 14 general/100 failures.
+- **Partial ordering and overload ranking:** 13 general/200 plus 12 spec/200.
+- **Dependent substitution/SFINAE/lookup:** 29 general/300, 11 spec/300,
+  and 2 spec/400.
+- **Alias/owner/typed NTTP and late conversion behavior:** 15 general/400,
+  25 general/500, and 9 spec/500.
+- **Array/non-deduced/defaulted edges:** 6 spec/100 failures.
+
+### Next Checkpoint Group (final)
+
+Take the 42 dependent substitution/lookup cases (general/300 plus spec/300
+and spec/400), including the deferred nested-class/typedef cases.  Extend the
+typed candidate state through qualified lookup, no-eager class materialization,
+constructor viability, and out-of-class owner replay, then rerun the focused
+group, full PA22 report, through-PA21 report, and source audit.

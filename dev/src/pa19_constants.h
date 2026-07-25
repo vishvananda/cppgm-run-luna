@@ -431,14 +431,14 @@ private:
 				std::isdigit(static_cast<unsigned char>(text_[position_])))) ++position_;
 			Skip();
 			if(!cast_keyword && position_ < text_.size() && text_[position_] == '<') {
+				const size_t angle_start = position_;
 				int depth = 0;
 				do {
 					if(text_[position_] == '<') ++depth;
 					else if(text_[position_] == '>') --depth;
 					++position_;
 				} while(position_ < text_.size() && depth > 0);
-				if(depth != 0) { position_ = start; return std::string(); }
-				Skip();
+				if(depth != 0) { position_ = angle_start; break; }
 			}
 			if(position_ + 1 < text_.size() && text_[position_] == ':' && text_[position_ + 1] == ':') {
 				position_ += 2; Skip();

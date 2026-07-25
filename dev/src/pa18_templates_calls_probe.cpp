@@ -33,7 +33,12 @@ bool PA18TemplateExpander::ValidateExplicitFunctionCandidate(
 			if(!detail.name.empty()) bindings[detail.name] = (*arguments)[parameter];
 		}
 		try {
-			return !FunctionResultType(definition, *arguments, context, &substitutions).empty();
+			const string result = FunctionResultType(definition, *arguments, context, &substitutions);
+			string probe = result;
+			while(!probe.empty() && (probe[probe.size() - 1] == '*' || probe[probe.size() - 1] == '&')) probe.erase(probe.size() - 1);
+			while(probe.size() > 6 && probe.compare(probe.size() - 6, 6, " const") == 0) probe.erase(probe.size() - 6);
+			if(HasUnavailableGeneratedMemberType(probe, context, substitutions)) return false;
+			return !result.empty();
 		} catch(const PA18SubstitutionFailure&) { return false; }
 	} catch(const PA18SubstitutionFailure&) {
 		return false;

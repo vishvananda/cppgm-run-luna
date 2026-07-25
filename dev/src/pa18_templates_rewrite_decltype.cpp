@@ -75,6 +75,103 @@ const TemplateDefinition* PA18TemplateExpander::FindExplicitFunctionTemplate(
 	return visible.empty() ? 0 : visible[0];
 }
 
+bool PA18TemplateExpander::ResolveCallableTemporaryCallResult(
+	const string& callee, const string& function_context, const string& context,
+	const map<string, string>& substitutions, const vector<string>& actual_types,
+	string* result)
+{
+	if(!result) return false;
+	string object_type;
+	if(!FunctionCallResultType(callee, function_context, substitutions, &object_type))
+		return false;
+	string normalized_object = NormalizeTypeArgument(ResolveAlias(
+		ReplaceIdentifiers(object_type, substitutions), context));
+	while(!normalized_object.empty() &&
+		(normalized_object[normalized_object.size() - 1] == '&' ||
+		 normalized_object[normalized_object.size() - 1] == '*'))
+		normalized_object.erase(normalized_object.size() - 1);
+	normalized_object = CanonicalSpelling(normalized_object);
+	const CPPGMAstNodePtr declaration = FindClassDeclaration(normalized_object, context);
+	if(!declaration) return false;
+	for(size_t member = 0; member < declaration->children.size(); ++member) {
+		const CPPGMAstNodePtr candidate = declaration->children[member];
+		if(!candidate || (candidate->kind != "special-member-declaration" &&
+			candidate->kind != "special-member-definition")) continue;
+		const string name = RemoveMarker(candidate->value);
+		if(name.compare(0, 8, "operator") != 0) continue;
+		string target = CanonicalSpelling(name.substr(8));
+		if(target.empty() || target[0] == '(' || target[0] == '[') continue;
+		target = CanonicalSpelling(ResolveAlias(
+			ReplaceIdentifiers(target, substitutions), normalized_object));
+		string return_type, qualifiers;
+		vector<string> parameters;
+		bool function_type = SplitFunctionPointerType(target, &return_type, &parameters);
+		if(!function_type) function_type = SplitDirectFunctionType(target, &return_type,
+			&parameters, &qualifiers);
+		if(!function_type || parameters.size() != actual_types.size()) continue;
+		bool viable = true;
+		for(size_t argument = 0; argument < parameters.size(); ++argument)
+			if(!FunctionArgumentViable(parameters[argument], actual_types[argument],
+				context)) { viable = false; break; }
+		if(!viable) continue;
+		*result = NormalizeTypeArgument(ResolveAlias(
+			ReplaceIdentifiers(return_type, substitutions), normalized_object));
+		return !result->empty();
+	}
+	return false;
+}
+
+bool PA18TemplateExpander::ResolveConstructedCallResult(
+	const string& callee, const string& context,
+	const map<string, string>& substitutions, const vector<string>& actual_types,
+	string* result)
+{
+	if(!result || callee.find('.') != string::npos || callee.find("->") != string::npos)
+		return false;
+	const string constructed = ResolveDecltypeTypeName(callee, context, substitutions);
+	if(!IsKnownTypeSpelling(constructed, context)) return false;
+	bool viable = actual_types.empty() && IsDefaultConstructibleType(constructed, context);
+	const CPPGMAstNodePtr declaration = FindClassDeclaration(constructed, context);
+	if(declaration) for(size_t member = 0;
+		member < declaration->children.size() && !viable; ++member) {
+		const CPPGMAstNodePtr candidate = declaration->children[member];
+		if(!candidate || (candidate->kind != "special-member-declaration" &&
+			candidate->kind != "special-member-definition") ||
+			LastComponent(RemoveMarker(candidate->value)) != LastComponent(constructed)) continue;
+		const CPPGMAstNodePtr clause = DescendantOfKind(
+			FunctionDeclarator(candidate), "parameter-clause");
+		if(!clause) continue;
+		size_t fixed = 0, required = 0;
+		bool ellipsis = false;
+		for(size_t parameter = 0; parameter < clause->children.size(); ++parameter) {
+			const CPPGMAstNodePtr item = clause->children[parameter];
+			if(!item) continue;
+			if(item->kind == "ellipsis") { ellipsis = true; break; }
+			if(item->kind != "parameter-declaration") continue;
+			++fixed;
+			if(!ChildOfKindLocal(item, "default-argument")) ++required;
+		}
+		if(actual_types.size() < required || (!ellipsis && actual_types.size() > fixed))
+			continue;
+		viable = ellipsis;
+		if(!viable) {
+			size_t argument = 0;
+			for(size_t parameter = 0;
+				parameter < clause->children.size() && argument < actual_types.size();
+				++parameter) {
+				const CPPGMAstNodePtr item = clause->children[parameter];
+				if(!item || item->kind != "parameter-declaration") continue;
+				if(!FunctionArgumentViable(ParameterTypeSpelling(item),
+					actual_types[argument++], context)) { viable = false; break; }
+				viable = true;
+			}
+		}
+	}
+	if(!viable) return false;
+	*result = NormalizeTypeArgument(constructed);
+	return !result->empty();
+}
+
 string CollapseRepeatedQualifier(string raw)
 {
 	for(size_t position = 0; position < raw.size();) {

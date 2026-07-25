@@ -1027,13 +1027,20 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 		// the replacement.  Unnamed namespaces already carry their physical
 		// identity in the generated name and must not be qualified again.
 		string generated_qualifier = qualifier;
+		const string physical_owner = definition->lexical_owner.empty() ?
+			definition->owner : definition->lexical_owner;
+		map<string, string>::const_iterator inline_owner =
+			lexical_namespace_logical_.find(physical_owner);
+		if(!qualifier.empty() && inline_owner != lexical_namespace_logical_.end() &&
+			inline_owner->second == qualifier)
+			generated_qualifier = physical_owner;
 		if(generated_qualifier.empty() && !definition->owner.empty() &&
 			definition->owner.find("<unnamed>") == string::npos &&
 			class_contexts_.find(definition->owner) == class_contexts_.end())
 			generated_qualifier = definition->owner;
-		if(!generated_qualifier.empty())
+		if(!generated_qualifier.empty()) {
 			replacement = generated_qualifier + "::" + local_name;
-		if(!qualifier.empty()) replacement = qualifier + "::" + local_name;
+		}
 			if(definition->alias_template) {
 				// Alias-template instantiation is a type substitution, not a new
 				// nominal type.  Keep the generated alias declaration registered for
