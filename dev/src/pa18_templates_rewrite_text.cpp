@@ -49,7 +49,11 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				const string prefix = CanonicalSpelling(raw.substr(begin, at - begin));
 				if(IsKnownTypeSpelling(ReplaceIdentifiers(prefix, substitutions), context)) {
 					raw.insert(at, " ");
-					at = original_end + 1;
+					// The insertion shifts the end of the current word by one
+					// character.  Continue searching after that shifted end;
+					// treating it as the next match lets the loop index past the
+					// end of a spelling such as `Alias<T const>`.
+					at = raw.find(word, original_end + 1);
 					continue;
 				}
 			}
@@ -318,25 +322,35 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				if(current_primary) {
 					map<string, vector<TemplateDefinition> >::const_iterator partials =
 						class_specializations_.find(current_primary->qualified_name);
-					if(partials != class_specializations_.end())
+					if(partials != class_specializations_.end()) {
 						for(size_t partial = 0; partial < partials->second.size(); ++partial) {
 							map<string, string> partial_bindings;
-							const bool matched_partial = MatchClassSpecializationPattern(
-								partials->second[partial], current_key->second,
-								&partial_bindings, context);
-							if(matched_partial)
+							bool matched_partial = false;
+							try {
+								matched_partial = MatchClassSpecializationPattern(
+									partials->second[partial], current_key->second,
+									&partial_bindings, context);
+							} catch(const PA18SubstitutionFailure&) {
+								matched_partial = false;
+							} catch(const logic_error&) {
+								matched_partial = false;
+							}
+							if(matched_partial) {
 								for(map<string, string>::const_iterator binding = partial_bindings.begin();
 									binding != partial_bindings.end(); ++binding)
 									current_bindings[binding->first] = binding->second;
-							if(matched_partial)
-									for(size_t pack = 0; pack < partials->second[partial].specialization_pack_names.size(); ++pack) {
-										const string& pack_name = partials->second[partial].specialization_pack_names[pack];
-										map<string, string>::const_iterator binding = partial_bindings.find(pack_name);
-										if(binding != partial_bindings.end() && !binding->second.empty())
-											current_packs[pack_name] = SplitTemplateArguments(binding->second);
-										else current_packs[pack_name] = vector<string>();
-									}
+							}
+							if(matched_partial) {
+								for(size_t pack = 0; pack < partials->second[partial].specialization_pack_names.size(); ++pack) {
+									const string& pack_name = partials->second[partial].specialization_pack_names[pack];
+									map<string, string>::const_iterator binding = partial_bindings.find(pack_name);
+									if(binding != partial_bindings.end() && !binding->second.empty())
+										current_packs[pack_name] = SplitTemplateArguments(binding->second);
+									else current_packs[pack_name] = vector<string>();
+								}
+							}
 						}
+					}
 				}
 				 same_current_specialization = true;
 				for(size_t argument = 0; argument < current_arguments.size(); ++argument) {
@@ -743,7 +757,12 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 						}
 						continue;
 				}
-				args[i] = NormalizeTypeArgument(RewriteText(args[i], context, substitutions, 0));
+					// Failure while forming an alias argument is the substitution
+					// boundary itself.  In particular, `void_t<Op<T>>` must reject
+					// the partial specialization when `Op<T>` is invalid; turning
+					// the failed operand into `void` would incorrectly select it.
+					args[i] = NormalizeTypeArgument(RewriteText(args[i], context,
+						substitutions, 0));
 				args[i] = CollapseReferenceSpelling(ReplaceIdentifiers(args[i], substitutions));
 				// Keep a typedef spelling for a pointer to a function type while
 				// selecting a class partial specialization.  Expanding
@@ -892,14 +911,31 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				if((resolve_member || dependent_nested_member) && definition->class_template &&
 					inferred_nested_owner.empty() &&
 					close + 2 < raw.size() && raw.compare(close + 1, 2, "::") == 0) {
-					const bool nested_rewritten = RewriteConcreteNestedMember(
-						&raw, begin, close, base, context, substitutions, template_replaced, &search);
+					bool nested_rewritten = false;
+					try {
+						nested_rewritten = RewriteConcreteNestedMember(
+							&raw, begin, close, base, context, substitutions, template_replaced, &search);
+					} catch(const PA18SubstitutionFailure&) {
+						nested_rewritten = false;
+					} catch(const logic_error&) {
+						nested_rewritten = false;
+					}
 					if(nested_rewritten) continue;
 				}
-			if(resolve_member && definition->class_template && inferred_nested_owner.empty() &&
-				close + 2 < raw.size() && raw.compare(close + 1, 2, "::") == 0 &&
-				RewriteResolvedTemplateMember(&raw, begin, close, context, substitutions,
-					definition, args, template_replaced, &search)) continue;
+				bool resolved_template_member = false;
+				if(resolve_member && definition->class_template && inferred_nested_owner.empty() &&
+					close + 2 < raw.size() && raw.compare(close + 1, 2, "::") == 0) {
+					try {
+						resolved_template_member = RewriteResolvedTemplateMember(
+							&raw, begin, close, context, substitutions, definition, args,
+							template_replaced, &search);
+					} catch(const PA18SubstitutionFailure&) {
+						resolved_template_member = false;
+					} catch(const logic_error&) {
+						resolved_template_member = false;
+					}
+				}
+				if(resolved_template_member) continue;
 			map<string, string> instantiation_substitutions = substitutions;
 			if(active_nested_parent) {
 				for(size_t parameter = 0; parameter < active_nested_parent->parameters.size() &&

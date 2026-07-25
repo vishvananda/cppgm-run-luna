@@ -1167,13 +1167,13 @@
 			return CPPGMAstNodePtr();
 		const CPPGMAstNodePtr type_id = ChildOfKindLocal(input, "type-id");
 		if(!type_id || input->children[1] == type_id) return CPPGMAstNodePtr();
-		const string raw_type = SpellNode(type_id);
-		const size_t open = raw_type.find('<');
+		if(DescendantOfKind(type_id, "parameter-clause")) return CPPGMAstNodePtr();
+		const string raw_type = SpellNode(type_id); const size_t open = raw_type.find('<');
 		if(open == string::npos) return CPPGMAstNodePtr();
-		string argument_text, base;
-		size_t close = string::npos, begin = 0;
+		string argument_text, base; size_t close = string::npos, begin = 0;
 		if(!TemplateBase(raw_type, open, &begin, &base) ||
 			!TemplateRange(raw_type, open, &argument_text, &close)) return CPPGMAstNodePtr();
+		if(close + 1 != raw_type.size()) return CPPGMAstNodePtr();
 		const TemplateDefinition* definition = FindDefinition(base, context);
 		if(!definition || definition->class_template) return CPPGMAstNodePtr();
 		vector<string> arguments = SplitTemplateArguments(argument_text);
@@ -1183,8 +1183,8 @@
 			arguments[i] = NormalizeTypeArgument(ReplaceIdentifiers(arguments[i], substitutions));
 		}
 		if(arguments.size() != definition->parameters.size()) return CPPGMAstNodePtr();
-		const string local_name = Instantiate(*definition, arguments, context);
-		const string qualifier = PrefixComponent(base);
+		const string local_name = Instantiate(*definition, arguments, context); string qualifier = PrefixComponent(base);
+		if(qualifier.empty() && !definition->owner.empty() && definition->owner.find("<unnamed>") == string::npos && class_contexts_.find(definition->owner) == class_contexts_.end()) qualifier = definition->owner;
 		CPPGMAstNodePtr result(new CPPGMAstNode("call-expression"));
 		result->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("id-expression",
 			qualifier.empty() ? local_name : qualifier + "::" + local_name)));

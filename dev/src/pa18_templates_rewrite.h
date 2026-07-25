@@ -97,8 +97,15 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 		}
 		vector<const TemplateDefinition*> matched;
 		for(size_t i = 0; i < candidates.size(); ++i) {
-			const bool matches = MatchClassSpecializationPattern(*candidates[i],
-				matching_arguments, 0, context);
+			bool matches = false;
+			try {
+				matches = MatchClassSpecializationPattern(*candidates[i],
+					matching_arguments, 0, context);
+			} catch(const PA18SubstitutionFailure&) {
+				matches = false;
+			} catch(const logic_error&) {
+				matches = false;
+			}
 			if(matches)
 				matched.push_back(candidates[i]);
 		}

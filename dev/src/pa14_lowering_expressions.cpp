@@ -555,9 +555,11 @@ PA14Lowerer::Value PA14Lowerer::EmitCompare(const CPPGMAstNodePtr& node, Scope* 
       EmitValue(node->children[0], scope, left_expected);
     Value right = right_bit_field ? EmitValue(node->children[1], scope) :
       EmitValue(node->children[1], scope, right_expected);
-    if(left.known_constant &&
-       is_integral_type(left.type) &&
-       is_integral_type(common) &&
+	if(left.known_constant &&
+	   (is_integral_type(left.type) ||
+	    (type_value(left.type) && type_value(left.type)->kind == TYPE_FUNDAMENTAL &&
+	     type_value(left.type)->name == "bool")) &&
+	   is_integral_type(common) &&
        type_size(common) > type_size(left.type) && !is_unsigned_type(common)) {
       left.type = common;
       left.operand = integer_text(left.constant);

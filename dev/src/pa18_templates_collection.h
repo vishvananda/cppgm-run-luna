@@ -471,7 +471,7 @@ private:
 		const string& inherited_context,
 		const map<string, bool>& inherited_parameters) const;
 	map<string, TemplateDefinition> definitions_;
-	map<string, vector<string> > definitions_by_name_;
+	map<string, vector<string> > definitions_by_name_, using_declaration_exports_;
 	map<string, vector<pair<string, string> > > using_directive_exports_;
 	set<string> template_pack_names_, template_parameter_names_;
 	map<string, vector<TemplateDefinition> > class_specializations_;
@@ -1080,7 +1080,7 @@ private:
 	void Collect(const CPPGMAstNodePtr& node, const string& context)
 	{
 		if(!node) return;
-		if(node->kind == "using-declaration" && class_contexts_.find(context) != class_contexts_.end()) { const CPPGMAstNodePtr target = ChildOfKindLocal(node, "target"); if(target) using_member_template_names_.insert(LastComponent(target->value)); }
+		if(node->kind == "using-declaration") { const CPPGMAstNodePtr target = ChildOfKindLocal(node, "target"); if(target) { const string target_name = RemoveMarker(target->value); if(!target_name.empty() && target_name.find("::") != string::npos) using_declaration_exports_[context].push_back(target_name); if(class_contexts_.find(context) != class_contexts_.end()) using_member_template_names_.insert(LastComponent(target_name)); } }
 		if(node->kind == "translation-unit") {
 			for(size_t i = 0; i < node->children.size(); ++i) Collect(node->children[i], context);
 			return;

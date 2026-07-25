@@ -183,6 +183,39 @@
 			if(separator == string::npos) break;
 			current.erase(separator);
 		}
+		// An explicit using-declaration is an unambiguous typed import even when
+		// other definitions share the same short name.  Search the current scope
+		// and its enclosing scopes before applying the conservative short-name
+		// fallback below.  Function-template imports remain on the ordinary call
+		// lookup path; this table is only a type/alias lookup aid.
+		for(string current = context; ; ) {
+			map<string, vector<string> >::const_iterator imports =
+				using_declaration_exports_.find(current);
+			if(imports != using_declaration_exports_.end()) {
+				const TemplateDefinition* imported = 0;
+				for(size_t index = 0; index < imports->second.size(); ++index) {
+					if(LastComponent(imports->second[index]) != LastComponent(raw_name)) continue;
+					string imported_name = imports->second[index];
+					while(!imported_name.empty() && imported_name[0] == ':') imported_name.erase(0, 1);
+					map<string, TemplateDefinition>::const_iterator imported_definition =
+						definitions_.find(imported_name);
+					const TemplateDefinition* candidate = imported_definition == definitions_.end() ?
+						0 : &imported_definition->second;
+					if(!candidate || (!candidate->class_template &&
+						!candidate->alias_template && !candidate->variable_template)) continue;
+					if(imported && imported != candidate) {
+						imported = 0;
+						break;
+					}
+					imported = candidate;
+				}
+				if(imported) return imported;
+			}
+			if(current.empty()) break;
+			const size_t separator = current.rfind("::");
+			if(separator == string::npos) current.clear();
+			else current.erase(separator);
+		}
 		map<string, vector<string> >::const_iterator by_name = definitions_by_name_.find(LastComponent(raw_name));
 		if(by_name != definitions_by_name_.end() && by_name->second.size() == 1) {
 			map<string, TemplateDefinition>::const_iterator found = definitions_.find(by_name->second[0]);

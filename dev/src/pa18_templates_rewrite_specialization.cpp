@@ -254,6 +254,43 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 			definition.specialization_pattern[pattern_index]);
 		set<string> active_aliases;
 		pattern = ExpandAliasPattern(pattern, context, &active_aliases);
+		// A dependent qualified type is a substitution point.  RewriteText has
+		// deliberately permissive fallbacks for source declarations, but those
+		// fallbacks must not turn `typename T::missing` into a successful `void`
+		// pattern while selecting a class partial specialization.  Check the
+		// concrete owner before rewriting the enclosing alias (for example
+		// `void_t<typename T::iterator_category>`).
+		for(set<string>::const_iterator parameter = parameter_names.begin();
+			parameter != parameter_names.end(); ++parameter) {
+			if(parameter->empty()) continue;
+			const string marker = *parameter + "::";
+			for(size_t occurrence = pattern.find(marker); occurrence != string::npos;
+				occurrence = pattern.find(marker, occurrence + marker.size())) {
+				const size_t owner_end = occurrence + parameter->size();
+				if(occurrence > 0 && IsIdentifierCharacter(pattern[occurrence - 1])) continue;
+				map<string,string>::const_iterator binding = local.find(*parameter);
+				if(binding == local.end() || binding->second.empty()) continue;
+				size_t member_begin = owner_end + 2;
+				while(member_begin < pattern.size() &&
+					isspace(static_cast<unsigned char>(pattern[member_begin]))) ++member_begin;
+				if(pattern.compare(member_begin, 8, "template") == 0 &&
+					(member_begin + 8 == pattern.size() ||
+					 !IsIdentifierCharacter(pattern[member_begin + 8]))) {
+					member_begin += 8;
+					while(member_begin < pattern.size() &&
+						isspace(static_cast<unsigned char>(pattern[member_begin]))) ++member_begin;
+				}
+				const size_t member_end = member_begin;
+				while(member_begin < pattern.size() &&
+					IsIdentifierCharacter(pattern[member_begin])) ++member_begin;
+				if(member_begin == member_end) continue;
+				const string member = pattern.substr(member_end, member_begin - member_end);
+				string member_type;
+				set<string> active_members;
+				if(!FindClassMemberType(binding->second, member, local, context,
+					&member_type, &active_members)) return false;
+			}
+		}
 		const bool pack = IsTopLevelPackPattern(pattern);
 		if(pack && pattern_index + 1 == definition.specialization_pattern.size()) {
 			const string pack_pattern = CanonicalSpelling(pattern.substr(0,
@@ -345,6 +382,8 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 				if(!rewritten_pattern.empty()) pattern = rewritten_pattern;
 			} catch(const PA18SubstitutionFailure&) {
 				return false;
+			} catch(const logic_error&) {
+				return false;
 			}
 		}
 		// A dependent non-type default can be the result of an unevaluated
@@ -421,6 +460,8 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 			const_cast<PA18TemplateExpander*>(this)->RewriteText(
 				substituted_pattern, context, local, 0);
 		} catch(const PA18SubstitutionFailure&) {
+			return false;
+		} catch(const logic_error&) {
 			return false;
 		}
 	}

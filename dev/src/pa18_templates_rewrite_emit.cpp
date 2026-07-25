@@ -266,7 +266,21 @@ bool PA18TemplateExpander::HasUnavailableGeneratedMemberType(string raw,
 	if(separator == string::npos) return false;
 	const string owner = raw.substr(0, separator);
 	const string member = raw.substr(separator + 2);
-	if(specialization_bases_.find(LastComponent(owner)) == specialization_bases_.end()) return false;
+	// Only a qualified member of a known type can be a dependent member probe.
+	// Namespace-qualified ordinary types such as `regex_constants::enum_value`
+	// must remain on the normal function-template path.
+	if(!IsKnownTypeSpelling(owner, context)) return false;
+	// A generated alias may expose a qualified member that is neither a
+	// materialized specialization nor a source class member.  Treat that as
+	// substitution failure before RegisterGeneratedTypeEntity publishes the
+	// failed alias.  This is the SFINAE boundary for probes such as
+	// `typename E1::missing`; leaving the node registered would make PA11
+	// diagnose the discarded candidate as a top-level unknown type.
+	const TemplateDefinition* complete_type = FindDefinition(raw, context);
+	if((complete_type && (complete_type->class_template ||
+		complete_type->alias_template || complete_type->variable_template)) ||
+		type_aliases_.find(raw) != type_aliases_.end() ||
+		FindClassDeclaration(raw, context)) return false;
 	const string nested_entity = JoinPath(owner, member);
 	if(class_contexts_.find(nested_entity) != class_contexts_.end() ||
 		class_declarations_.find(nested_entity) != class_declarations_.end()) return false;
@@ -733,9 +747,23 @@ string PA18TemplateExpander::MaterializeInstantiation(const TemplateDefinition& 
 		return local_name;
 	}
 	if(!active_specializations_.insert(key).second) return local_name;
-	return EmitInstantiation(definition, args, metadata_args, substitutions,
-		integral_substitutions, pack_substitutions, context, explicit_instantiation,
-		key, local_name, concrete_owner, function_substitutions);
+	try {
+		return EmitInstantiation(definition, args, metadata_args, substitutions,
+			integral_substitutions, pack_substitutions, context, explicit_instantiation,
+			key, local_name, concrete_owner, function_substitutions);
+	} catch(const PA18SubstitutionFailure&) {
+		active_specializations_.erase(key);
+		map<string, string>::iterator cached_result = specializations_.find(key);
+		if(cached_result != specializations_.end() && cached_result->second == local_name)
+			specializations_.erase(cached_result);
+		throw;
+	} catch(...) {
+		active_specializations_.erase(key);
+		map<string, string>::iterator cached_result = specializations_.find(key);
+		if(cached_result != specializations_.end() && cached_result->second == local_name)
+			specializations_.erase(cached_result);
+		throw;
+	}
 }
 
 string PA18TemplateExpander::Instantiate(const TemplateDefinition& definition,

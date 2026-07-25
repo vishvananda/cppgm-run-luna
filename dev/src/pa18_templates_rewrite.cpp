@@ -1176,7 +1176,11 @@ CPPGMAstNodePtr PA18TemplateExpander::RewriteRegularNodeValue(
 		promoted_name)) return CPPGMAstNodePtr();
 	const bool type_spelling = input->kind == "decl-specifier" ||
 		input->kind == "type-name" || input->kind == "type-specifier";
-	result->value = RewriteText(input->value, context, substitutions,
+	// Preserve macro string spelling during template replay.
+	if(input->kind == "literal" && input->value.size() >= 2 &&
+		input->value[0] == '"' && input->value[input->value.size() - 1] == '"')
+		result->value = input->value;
+	else result->value = RewriteText(input->value, context, substitutions,
 			&template_replaced, !type_spelling, true);
 	if(PreserveEvaluatedDecltype(input, substitutions, result)) return result;
 	if((input->kind == "special-member-definition" ||

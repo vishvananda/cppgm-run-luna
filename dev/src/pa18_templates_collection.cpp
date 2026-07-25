@@ -125,9 +125,14 @@ string QualifyAliasTarget(const string& target, const string& alias,
 	const set<string>& class_contexts)
 {
 	const string owner = PrefixComponent(alias);
-	return !owner.empty() && target.find("::") == string::npos &&
-		class_contexts.find(JoinPath(owner, target)) != class_contexts.end() ?
-		JoinPath(owner, target) : target;
+	// Qualified names in an alias declaration are still relative to the alias's
+	// namespace.  For example, `traits::has_description` may target
+	// `detail::has_description<T>`, which denotes `traits::detail::...`, not a
+	// global `detail::...`.  Qualify only when the typed owner contains that
+	// entity so ordinary globally qualified-looking spellings remain unchanged.
+	return !owner.empty() && !target.empty() && target[0] != ':' &&
+		class_contexts.find(JoinPath(owner, target.substr(0, target.find('<')))) !=
+		class_contexts.end() ? JoinPath(owner, target) : target;
 }
 
 bool HasFriendSpecifier(const CPPGMAstNodePtr& node)

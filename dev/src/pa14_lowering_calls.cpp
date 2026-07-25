@@ -382,6 +382,18 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
     }
     for(size_t i = 0; i < all_arguments.size(); ++i) {
       TypePtr target = i < choice.function->parameters.size() ? choice.function->parameters[i] : TypePtr();
+      // An untyped variadic argument that is a direct class construction still
+      // has an object ABI.  Materialize the temporary and pass its address;
+      // loading it as a value loses the constructor call and disagrees with
+      // the representation used by the corresponding class parameter path.
+      if(!target && all_arguments[i] && all_arguments[i]->kind == "call-expression" &&
+         !all_arguments[i]->children.empty()) {
+        TypePtr temporary_type = ConstructorObjectType(all_arguments[i]->children[0], scope);
+        if(temporary_type && temporary_type->kind == TYPE_CLASS) {
+          operands.push_back(EmitTemporaryObjectAddress(all_arguments[i], scope, "arg"));
+          continue;
+        }
+      }
       if(target && type_is_reference(target)) {
         operands.push_back(EmitReferenceArgument(all_arguments[i], scope, target));
         continue;

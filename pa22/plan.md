@@ -1159,3 +1159,80 @@ Bundle `general/300` (34), `spec/300` (13), and the small related `spec/400`
 and conversion/NTTP probes.  Start with the pure exit-status failures and
 `spec/300-expression-sfinae-decltype`; then take the general/spec 200 ordering
 band.
+
+## Checkpoint 75 scope — 2026-07-25 (before implementation)
+
+### Remaining Work Map
+
+The live PA22 report is **107/250**, with **143** failures and no timeout;
+PA1–PA21 pass.  The complete failure set is the refreshed fixture inventory
+above, grouped by shared behavior as follows: basic deduction/defaults
+(`general/100`, 14), partial ordering and constructor fallback
+(`general/200`, 13), dependent substitution/lookup (`general/300`, 34),
+alias/owner/NTTP interactions (`general/400`, 15; `general/500`, 25),
+array/non-deduced deduction (`spec/100`, 6), ordering and overload
+participation (`spec/200`, 12), dependent conversion/lookup/SFINAE
+(`spec/300`, 13), and the remaining dependent conversion/NTTP and
+template-template cases (`spec/400`, 2; `spec/500`, 9).
+
+### Checkpoint Scope
+
+Complete the shared dependent-expression candidate path for the next
+substantial group: preserve SFINAE state while resolving dependent aliases,
+qualified member/owner lookup, defaulted `enable_if` and detected-idiom
+arguments, and unevaluated `decltype`/conversion probes.  Ensure discarded
+candidates do not materialize bodies or constructors, while viable concrete
+results retain typed aliases and owner identity for LowIR.  Validate with the
+pure exit-status cases in `general/300`, `spec/300`, and `spec/400`, the
+isolated `spec/300-expression-sfinae-decltype` LowIR case, all PA22 tests,
+through-PA21, and the file audit.  The remaining general/spec 100/200
+deduction and ordering bands plus later general/spec 400/500 owner/NTTP cases
+are explicit follow-up work if this scope does not finish the PA.
+
+## Checkpoint 75 result — 2026-07-25
+
+The implementation increment raised PA22 from **107/250** to **110/250**.
+The authoritative current-PA report has no timeout; PA1–PA21 pass **1850/1850**
+and the PA22 file audit passes.
+
+Completed in this increment: dependent alias probes now reject failed member
+substitutions without caching invalid generated entities; explicit using imports
+can resolve direct class/alias definitions without perturbing function-template
+lookup; qualified alias targets retain their typed owner; function-pointer
+`decltype` casts are not mistaken for alias casts; macro string spellings are
+preserved; variadic direct class temporaries use the address-passing ABI; and
+constant-bool comparisons retain the expected LowIR conversion shape.  Focused
+dependent-expression checks pass except for the qualified-cv specialization
+identity LowIR case.
+
+### Remaining Work Map
+
+The live residual is **140/250 failures**, grouped by shared behavior:
+
+- `general/100` **14** — basic deduction/default and pack cases (12 exit-status,
+  2 LowIR).
+- `general/200` **13** — partial ordering and constructor fallback (7 exit,
+  6 LowIR).
+- `general/300` **33** — dependent lookup, alias/member SFINAE, detected idioms,
+  and lazy instantiation (28 exit, 5 LowIR).
+- `general/400` **15** and `general/500` **25** — owner routing, NTTP,
+  redeclaration, ADL, and later alias/constructor interactions.
+- `spec/100` **6** and `spec/200` **12** — array/non-deduced deduction and
+  ordering/overload participation.
+- `spec/300` **11** and `spec/400` **2** — dependent conversion/member probes,
+  constructor ownership, and NTTP reference handling.
+- `spec/500` **9** — conversion operators, template-template ordering, and
+  qualified pack expansion.
+
+The closest residuals to this checkpoint are
+`general/300-using-declaration-imports-member-template-sfinae-shadow`, the
+qualified-alias-cv specialization identity LowIR case, and the remaining
+dependent `enable_if`/member-body probes.
+
+### Next Checkpoint Group
+
+Start with the remaining `general/300` dependent candidate group, specifically
+using-declaration member-template SFINAE, defaulted `enable_if`, lazy nested
+class/variable-template probes, and qualified rebind cases; then bundle the
+`spec/300` dependent constructor/conversion probes.  Keep the current PA1–PA21
+gate and file audit as the validation boundary.
