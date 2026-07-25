@@ -400,7 +400,7 @@ bool PA18TemplateExpander::InferIdentifierArgument(const CPPGMAstNodePtr& expres
 			else current.erase(separator);
 		}
 		*result = ReplaceIdentifiers(ResolveAlias(promoted_type, context), substitutions);
-		return true;
+		return !result->empty();
 	}
 	const FunctionSignature* signature = FindFunctionSignature(expression->value, context);
 	if(signature) {

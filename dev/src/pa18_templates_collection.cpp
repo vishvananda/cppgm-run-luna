@@ -647,6 +647,7 @@ void PA18TemplateExpander::IndexStaticMembers(const CPPGMAstNodePtr& node,
 vector<CPPGMAstNodePtr> PA18TemplateExpander::Run(
 	const vector<CPPGMAstNodePtr>& input)
 {
+	active_static_member_ = false;
 	ValidateTemplateDiagnostics(input);
 	for(size_t i = 0; i < input.size(); ++i)
 		CollectLexical(input[i], string(), string());
@@ -776,8 +777,10 @@ void PA18TemplateExpander::ValidateTemplateNode(const CPPGMAstNodePtr& node,
 		const string dependent_qualifier = PrefixComponent(raw_type);
 		const string dependent_base = LastComponent(StripTemplateArgumentsForValidation(
 			dependent_qualifier));
+		const string current_base = LastComponent(StripTemplateArgumentsForValidation(
+			current_class));
 		const bool current_specialization = !current_class.empty() &&
-			dependent_base == current_class;
+			dependent_base == current_base;
 		if(!has_typename && !sibling_typename && !current_specialization &&
 			!dependent_qualifier.empty() &&
 			ValidationDependentName(dependent_qualifier, parameters)) {

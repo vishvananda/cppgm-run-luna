@@ -832,8 +832,23 @@ TypePtr PA14Lowerer::ConstructorObjectType(const CPPGMAstNodePtr& callee,
       TypePtr type = type_value(candidates[i]->type);
       if(type && (type->kind == TYPE_CLASS || type->kind == TYPE_ARRAY)) return type;
     }
+    // A generated specialization may install its constructor binding under
+    // the same spelling as the class while the type binding is still
+    // represented by the enclosing member owner.  Recover the typed class
+    // fact from the active function instead of treating a class-valued
+    // construction as an ordinary member call (which would invent `this` in
+    // a static member body).
+    if(state_ && state_->record) {
+      TypePtr owner = type_value(state_->record->member_owner);
+      if(owner && owner->kind == TYPE_CLASS &&
+         LastComponent(owner->name) == effective->value) return owner;
+      TypePtr function = function_target_type(state_->record->source_type);
+      if(function && function->child && function->child->kind == TYPE_CLASS &&
+         LastComponent(function->child->name) == effective->value)
+        return function->child;
+    }
     return TypePtr();
-  }
+}
 
 TypePtr PA14Lowerer::BuiltinCastType(const CPPGMAstNodePtr& callee,
                                       Scope* scope) const

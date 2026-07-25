@@ -1674,3 +1674,65 @@ SFINAE and concrete-owner replay cases, bundled with the closely related
 constructor-owner cases when they share the same qualified lookup path.  The
 required validation boundary remains the focused group, full PA22 report,
 through-PA21 report, and PA22 source audit.
+
+## Checkpoint 79 scope — 2026-07-25 (before implementation)
+
+The complete current-PA report was refreshed at **117/250**, leaving **133**
+failures.  The grouped Remaining Work Map is: call deduction/arrays/defaults/
+packs **14** general/100; partial ordering and overload ranking **13**
+general/200 plus **12** spec/200; dependent substitution/SFINAE/lookup/owner
+replay **30** general/300, **11** spec/300, and **2** spec/400; alias,
+constructor/conversion, owner, and typed NTTP behavior **15** general/400,
+**25** general/500, and **9** spec/500; and array/non-deduced/defaulted edges
+**6** spec/100.
+
+Selected scope: route out-of-class member-template declarations and
+constructor definitions through the concrete enclosing specialization while
+preserving substitution failure as candidate rejection.  The focused fixtures
+are `spec/300-out-of-class-sfinae-member-template-body`,
+`spec/300-out-of-class-sfinae-member-template-alias-body`,
+`general/300-out-of-class-partial-owner-ctor-using-alias`,
+`spec/300-current-specialization-constructor-template-owner`, and
+`spec/300-current-specialization-constructor-template-canonical-owner`.
+The shared behavior is typed owner identity and member-body replay, including
+the correct `this`/nested-alias context; it is not a test-specific diagnostic
+change.  Validation for this checkpoint covers these five tests, the full
+PA22 report, through-PA21, and the source audit.
+
+## Checkpoint 79 result — 2026-07-25
+
+The selected owner-replay scope is complete.  The final PA22 report is
+**123/250**, up six from the 117/250 checkpoint baseline, with no newly
+failing PA22 fixture names.  The fixed fixtures are the two out-of-class
+SFINAE member-template bodies, the partial-owner constructor using an alias,
+both current-specialization constructor-owner cases, and the member-template
+enable-if redeclaration overload case.  The focused five-fixture check passes
+**5/5**; through-PA21 passes **1850/1850**; and the PA22 source audit passes
+with the same 10 pre-existing warnings.
+
+The increment keeps in-class defaults in a typed inference copy for matching
+out-of-class definitions, searches declarations across filtered owner
+candidate sets, preserves current-specialization owner spelling, and ranks
+member candidates by structural parameter specialization before the existing
+template-parameter-count tie-breaker.  Static member replay also retains the
+absence of an implicit `this`, while generated parameter side tables rewrite
+only types containing active substitution identifiers.  These changes cover
+the shared owner, overload, and body-replay behavior rather than individual
+diagnostics.
+
+### Remaining Work Map
+
+- **Call deduction, arrays, defaults, and packs:** 14 general/100 failures.
+- **Partial ordering and overload ranking:** 13 general/200 and 12 spec/200.
+- **Dependent substitution, SFINAE, lookup, and owner replay:** 29
+  general/300, 7 spec/300, and 2 spec/400.
+- **Alias, constructor/conversion, owner, and typed NTTP behavior:** 15
+  general/400, 24 general/500, and 9 spec/500.
+- **Array/non-deduced/defaulted edges:** 6 spec/100.
+
+The next checkpoint group is the remaining dependent lookup/SFINAE band,
+bundled with qualified member calls and defaulted enable-if candidates that
+share the same typed substitution state.  After that, take the remaining
+function-template partial-ordering cases.  Each checkpoint continues to use
+the focused group, full PA22 report, through-PA21 report, and source audit as
+its validation boundary.

@@ -463,21 +463,15 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 		if(find(candidates.begin(), candidates.end(), inherited_candidates[inherited]) ==
 			candidates.end() || inherited_owners.find(inherited_candidates[inherited]) !=
 			inherited_owners.end()) candidates.push_back(inherited_candidates[inherited]);
-	// Once the enclosing owner is concrete, overloads that differ only by
-	// renamed owner parameters can deduce the same call shape.  Prefer the
-	// member template with the smaller member parameter contract; this is the
-	// common partial-ordering result for `g<T,S>(T,S)` versus `g<T>(T,T)`.
-	stable_sort(candidates.begin(), candidates.end(),
-		[](const TemplateDefinition* left, const TemplateDefinition* right) {
-			if(left->parameters.size() != right->parameters.size())
-				return left->parameters.size() < right->parameters.size();
-			return false;
-		});
-	if(candidates.empty()) return false;
+	stable_sort(candidates.begin(), candidates.end(), [this](const TemplateDefinition* left,
+		const TemplateDefinition* right) { const int left_score = MemberTemplatePatternScore(left);
+		const int right_score = MemberTemplatePatternScore(right); if(left_score != right_score) { return left_score > right_score; } if(left->parameters.size() != right->parameters.size()) { return left->parameters.size() < right->parameters.size(); } return false; }); if(candidates.empty()) return false;
 	map<const TemplateDefinition*, size_t> candidate_occurrences;
 	for(size_t candidate_index = 0; candidate_index < candidates.size();
 		++candidate_index) {
 		const TemplateDefinition& definition = *candidates[candidate_index];
+		TemplateDefinition inference_definition = definition;
+		RestoreMemberTemplateDefaults(member_name, definition, &inference_definition);
 		const size_t occurrence = candidate_occurrences[&definition]++;
 		const bool direct_member = occurrence == 0 &&
 			find(direct_member_candidates.begin(), direct_member_candidates.end(),
@@ -618,7 +612,7 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 		}
 	map<string, vector<string> > forwarding_pack_values;
 	try {
-		inferred = InferFunctionArguments(definition, call, &member_arguments,
+		inferred = InferFunctionArguments(inference_definition, call, &member_arguments,
 				deduction_substitutions, context, explicit_prefix, &inferred_pack_values,
 				&inferred_function_values, &bound_pack_values, &forwarding_pack_values);
 		} catch(const logic_error&) {
@@ -944,8 +938,10 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 			if(TemplateBase(raw_member_id, member_id_open, &member_id_begin, &member_id_base) &&
 				TemplateRange(raw_member_id, member_id_open, &member_id_arguments, &member_id_close)) {
 			const vector<const TemplateDefinition*> member_candidates = FindFunctionDefinitions(LastComponent(member_id_base), context);
-			bool member_context = function_owners_.find(context) != function_owners_.end();
-			for(string current = context; !member_context && !current.empty(); ) {
+			bool member_context = !active_static_member_ &&
+				function_owners_.find(context) != function_owners_.end();
+			for(string current = context; !active_static_member_ &&
+				!member_context && !current.empty(); ) {
 				if(class_contexts_.find(current) != class_contexts_.end()) {
 					member_context = true;
 					break;
@@ -1323,9 +1319,11 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 	if(result_callee && result_callee->kind == "id-expression" &&
 		result_callee->value.find("::") == string::npos) {
 		map<string, string>::const_iterator function_owner = function_owners_.find(context);
-		bool member_function_context = function_owner != function_owners_.end() &&
+		bool member_function_context = !active_static_member_ &&
+			function_owner != function_owners_.end() &&
 			!function_owner->second.empty();
-		if(!member_function_context) for(string current = context; !current.empty(); ) {
+		if(!active_static_member_ && !member_function_context)
+			for(string current = context; !current.empty(); ) {
 			const TemplateDefinition* current_definition = FindDefinition(current, context);
 			if(class_contexts_.find(current) != class_contexts_.end() ||
 				(current_definition && current_definition->class_template)) {

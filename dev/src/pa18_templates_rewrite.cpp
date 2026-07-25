@@ -1314,8 +1314,8 @@ CPPGMAstNodePtr PA18TemplateExpander::FinishRegularNode(
 				if(!parameter_node || parameter_node->kind != "parameter-declaration") continue;
 				const string name = ParameterIdentifier(parameter_node);
 				if(name.empty()) continue;
-				string type = ParameterTypeSpelling(parameter_node);
-				type = CanonicalSpelling(ReplaceIdentifiers(type, substitutions));
+				string type = ParameterTypeSpelling(parameter_node); const string rewritten_type = ContainsSubstitutionIdentifier(type, substitutions) ? RewriteText(type, context, substitutions, 0, true, true) : string();
+				if(!rewritten_type.empty()) type = rewritten_type; else type = CanonicalSpelling(ReplaceIdentifiers(type, substitutions));
 				function_parameter_types_[function_context][name] = type;
 			}
 		}

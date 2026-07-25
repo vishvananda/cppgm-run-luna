@@ -524,7 +524,9 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 	}
 	const string previous_instantiation_name = active_instantiation_name_;
 	const string enclosing_instantiation_name = active_instantiation_name_;
+	const bool previous_static_member = active_static_member_;
 	active_instantiation_name_ = definition.class_template ? local_name : string();
+	active_static_member_ = member_definition && definition.static_member;
 	const size_t previous_type_only_depth = defer_type_only_class_definitions_;
 	defer_type_only_class_definitions_ = 0;
 	CPPGMAstNodePtr generated;
@@ -536,14 +538,17 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 			function_substitutions);
 	} catch(const PA18SubstitutionFailure&) {
 		active_instantiation_name_ = previous_instantiation_name;
+		active_static_member_ = previous_static_member;
 		defer_type_only_class_definitions_ = previous_type_only_depth;
 		throw;
 	} catch(...) {
 		active_instantiation_name_ = previous_instantiation_name;
+		active_static_member_ = previous_static_member;
 		defer_type_only_class_definitions_ = previous_type_only_depth;
 		throw;
 	}
 	active_instantiation_name_ = previous_instantiation_name;
+	active_static_member_ = previous_static_member;
 	defer_type_only_class_definitions_ = previous_type_only_depth;
 	if(!generated) throw logic_error("unable to instantiate template");
 	if(!definition.class_template && GeneratedNodeHasUnavailableMemberType(

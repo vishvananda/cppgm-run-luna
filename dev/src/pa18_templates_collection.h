@@ -504,7 +504,7 @@ private:
 	// materialized class is being transformed.  Keep the concrete owner in
 	// typed state so an unqualified static member such as `_v` resolves to the
 	// current specialization rather than a previous specialization's fallback.
-	string active_instantiation_name_;
+	string active_instantiation_name_; bool active_static_member_;
 	// Propagate the concrete enclosing specialization through nested RewriteText
 	// calls without smuggling it through the ordinary identifier substitutions.
 	ConcreteOwnerContext active_concrete_owner_;
@@ -608,7 +608,7 @@ private:
 		const CPPGMAstNodePtr& callee, const string& original_member,
 		const string& context,
 		const map<string, string>& substitutions,
-		bool explicit_instantiation = false);
+		bool explicit_instantiation = false); int MemberTemplatePatternScore(const TemplateDefinition* candidate) const; void RestoreMemberTemplateDefaults(const string& member_name, const TemplateDefinition& definition, TemplateDefinition* result) const; bool ContainsSubstitutionIdentifier(const string& text, const map<string, string>& substitutions) const;
 	bool TransformQualifiedMemberTemplateCall(const CPPGMAstNodePtr& input,
 		const CPPGMAstNodePtr& input_callee, const string& context,
 		const map<string, string>& substitutions,
