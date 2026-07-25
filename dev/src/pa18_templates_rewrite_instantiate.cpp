@@ -1,11 +1,8 @@
 #include <functional>
 #include "pa18_templates_collection.h"
 #include "pa18_templates_rewrite.h"
-
 using namespace std;
-
 namespace pa18_templates_internal {
-
 bool ContainsSizeOrAlignExpression(const CPPGMAstNodePtr& node)
 {
 	if(!node) return false;
@@ -17,7 +14,6 @@ bool ContainsSizeOrAlignExpression(const CPPGMAstNodePtr& node)
 		if(ContainsSizeOrAlignExpression(node->children[child])) return true;
 	return false;
 }
-
 CPPGMAstNodePtr PA18TemplateExpander::TransformInstantiatedNode(
 	const TemplateDefinition& definition, const string& context,
 	const map<string, string>& substitutions,
@@ -27,8 +23,7 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformInstantiatedNode(
 {
 	const map<string, PA19IntegralValue> previous = active_integral_substitutions_;
 	const map<string, vector<string> > previous_packs = active_pack_substitutions_;
-	const map<string, vector<string> > previous_pack_identifiers =
-		active_pack_identifier_substitutions_;
+	const map<string, vector<string> > previous_pack_identifiers = active_pack_identifier_substitutions_, previous_function_packs = active_function_pack_substitutions_;
 	const map<string, FunctionSignature> previous_functions = active_function_substitutions_;
 	active_integral_substitutions_ = integral_substitutions;
 	active_function_substitutions_ = function_substitutions;
@@ -52,22 +47,33 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformInstantiatedNode(
 			active_pack_substitutions_.end())
 			active_pack_substitutions_[definition.specialization_pack_names[pack]] = vector<string>();
 	active_pack_identifier_substitutions_.clear();
+	active_function_pack_substitutions_.clear(); const CPPGMAstNodePtr function_parameters = DescendantOfKind(FunctionDeclarator(definition.declaration), "parameter-clause");
+	if(function_parameters) for(size_t parameter = 0; parameter < function_parameters->children.size(); ++parameter) {
+		const CPPGMAstNodePtr parameter_node = function_parameters->children[parameter];
+		if(!parameter_node || parameter_node->kind != "parameter-declaration" || !IsFunctionParameterPack(parameter_node)) continue;
+		const string identifier = ParameterIdentifier(parameter_node);
+		if(identifier.empty()) continue;
+		const string pack_name = PackExpansionIdentifier(parameter_node);
+		map<string, vector<string> >::const_iterator values = active_pack_substitutions_.find(pack_name);
+		if(values != active_pack_substitutions_.end())
+			active_function_pack_substitutions_[identifier] = values->second;
+		else active_function_pack_substitutions_[identifier] = vector<string>();
+	}
 	try {
 		CPPGMAstNodePtr result = TransformNode(definition.declaration, context, substitutions);
 		active_integral_substitutions_ = previous;
 		active_pack_substitutions_ = previous_packs;
-		active_pack_identifier_substitutions_ = previous_pack_identifiers;
+		active_pack_identifier_substitutions_ = previous_pack_identifiers; active_function_pack_substitutions_ = previous_function_packs;
 		active_function_substitutions_ = previous_functions;
 		return result;
 	} catch(...) {
 		active_integral_substitutions_ = previous;
 		active_pack_substitutions_ = previous_packs;
-		active_pack_identifier_substitutions_ = previous_pack_identifiers;
+		active_pack_identifier_substitutions_ = previous_pack_identifiers; active_function_pack_substitutions_ = previous_function_packs;
 		active_function_substitutions_ = previous_functions;
 		throw;
 	}
 }
-
 bool PA18TemplateExpander::MemberOwnerPattern(const TemplateDefinition& candidate,
 	const TemplateDefinition& parent, const vector<string>& parent_args,
 	map<string, string>* inferred) const
@@ -155,7 +161,6 @@ bool PA18TemplateExpander::MemberOwnerPattern(const TemplateDefinition& candidat
 	if(inferred) *inferred = local;
 	return true;
 }
-
 string PA18TemplateExpander::MemberSignatureKey(const TemplateDefinition& candidate) const
 {
 	string result = LastComponent(candidate.name);
@@ -174,7 +179,6 @@ string PA18TemplateExpander::MemberSignatureKey(const TemplateDefinition& candid
 			ParameterTypeSpelling(clause->children[i]), template_parameter_names));
 	return result;
 }
-
 vector<const TemplateDefinition*> PA18TemplateExpander::MemberDefinitions(
 	const TemplateDefinition& parent, const vector<string>& parent_args) const
 {
@@ -250,7 +254,6 @@ vector<const TemplateDefinition*> PA18TemplateExpander::MemberDefinitions(
 	}
 	return result;
 }
-
 	void PA18TemplateExpander::RecordConstantDeclaration(
 	const CPPGMAstNodePtr& node, const string& context,
 	const map<string, string>& substitutions)
@@ -294,7 +297,6 @@ vector<const TemplateDefinition*> PA18TemplateExpander::MemberDefinitions(
 		}
 	}
 }
-
 void PA18TemplateExpander::RecordConstantArrayDeclaration(
 	const CPPGMAstNodePtr& node, const string& context,
 	const map<string, string>& substitutions)
@@ -349,10 +351,9 @@ void PA18TemplateExpander::RecordConstantArrayDeclaration(
 					constant_type_sizes_[name + "[0]"] = element_size;
 					constant_type_alignments_[name + "[0]"] = element_size > 8 ? 8 : element_size;
 				}
-			}
 		}
+	}
 }
-
 const vector<PA19IntegralValue>* PA18TemplateExpander::FindConstantArray(
 	const string& raw, const string& context) const
 {
@@ -375,7 +376,6 @@ const vector<PA19IntegralValue>* PA18TemplateExpander::FindConstantArray(
 	}
 	return 0;
 }
-
 string PA18TemplateExpander::NormalizeIntegralExpression(string raw) const
 {
 	raw = CanonicalSpelling(raw);

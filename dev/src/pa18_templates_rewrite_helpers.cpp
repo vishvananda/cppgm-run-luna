@@ -21,6 +21,23 @@ bool PA18TemplateExpander::FunctionOwnerCompatible(const string& pattern,
 		(actual.find("(&") != string::npos && pattern.find("(*") != string::npos);
 }
 
+bool PA18TemplateExpander::MatchNestedFunctionPointerPattern(
+	const string& pattern, const string& actual, const set<string>& parameter_names,
+	map<string, string>* inferred, const string& context, bool class_pattern) const
+{
+	string result;
+	vector<string> parameters;
+	if(!SplitFunctionPointerType(actual, &result, &parameters)) return false;
+	string direct = result + "(";
+	for(size_t parameter = 0; parameter < parameters.size(); ++parameter) {
+		if(parameter) direct += ',';
+		direct += parameters[parameter];
+	}
+	direct += ')';
+	return MatchTypePattern(pattern.substr(0, pattern.size() - 1),
+		CanonicalSpelling(direct), parameter_names, inferred, context, class_pattern);
+}
+
 bool PA18TemplateExpander::PreserveEvaluatedDecltype(
 	const CPPGMAstNodePtr& input, const map<string, string>& substitutions,
 	const CPPGMAstNodePtr& result) const

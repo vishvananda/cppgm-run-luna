@@ -319,6 +319,7 @@
 		const string& context) const;
 	bool ResolveCallableTemporaryCallResult(const string& callee, const string& function_context, const string& context,
 		const map<string, string>& substitutions, const vector<string>& actual_types, string* result);
+	bool ResolveCallableVariableCallResult(const string& callee, const string& function_context, const string& context, const map<string, string>& substitutions, const vector<string>& actual_types, string* result);
 	bool ResolveConstructedCallResult(const string& callee, const string& context,
 		const map<string, string>& substitutions, const vector<string>& actual_types, string* result);
 	bool FunctionCallResultType(string expression, const string& context,
@@ -395,6 +396,18 @@
 						}
 					}
 					if(pack_values) break;
+				}
+				if(!pack_values) for(map<string, vector<string> >::const_iterator pack =
+					active_function_pack_substitutions_.begin();
+					pack != active_function_pack_substitutions_.end(); ++pack) {
+					const size_t at = actual_expression.find(pack->first);
+					if(at == string::npos || (at != 0 &&
+						IsIdentifierCharacter(actual_expression[at - 1])) ||
+						(at + pack->first.size() < actual_expression.size() &&
+						 IsIdentifierCharacter(actual_expression[at + pack->first.size()]))) continue;
+					pack_name = pack->first;
+					pack_values = &pack->second;
+					break;
 				}
 				if(pack_values) {
 					for(size_t element = 0; element < pack_values->size(); ++element) {
@@ -525,25 +538,8 @@
 					ReturnDeclaratorSuffix(signature->declarator);
 				return !result->empty();
 			}
-			// A call through a local callable object is resolved from its
-			// materialized class's operator(), not from free-function lookup.
-			// This is needed for decltype(factory()) inside an instantiated
-			// function body.
-			string variable_type;
-			if(LookupVariableType(callee, context, &variable_type)) {
-				const string object_type = NormalizeTypeArgument(ResolveAlias(
-					ReplaceIdentifiers(variable_type, substitutions), context));
-				const CPPGMAstNodePtr declaration = FindClassDeclaration(object_type, context);
-				if(declaration) for(size_t member = 0; member < declaration->children.size(); ++member) {
-					const CPPGMAstNodePtr candidate = declaration->children[member];
-					if(!candidate || candidate->kind != "function-definition" ||
-						candidate->children.size() < 2 ||
-						LastComponent(FirstIdentifierLocal(candidate->children[1])) != "operator()") continue;
-					*result = NormalizeTypeArgument(RewriteText(
-						NodeTypeSpelling(candidate->children[0]), context, substitutions, 0));
-					return !result->empty();
-				}
-			}
+			if(ResolveCallableVariableCallResult(callee, function_context, context,
+				substitutions, actual_types, result)) return true;
 		}
 		return false;
 	}

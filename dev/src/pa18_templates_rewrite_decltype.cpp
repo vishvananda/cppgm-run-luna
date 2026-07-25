@@ -121,6 +121,51 @@ bool PA18TemplateExpander::ResolveCallableTemporaryCallResult(
 	return false;
 }
 
+bool PA18TemplateExpander::ResolveCallableVariableCallResult(
+	const string& callee, const string& function_context, const string& context,
+	const map<string, string>& substitutions, const vector<string>& actual_types,
+	string* result)
+{
+	if(!result) return false;
+	string variable_type;
+	if(!LookupVariableType(callee, context, &variable_type)) return false;
+	string callable_type = NormalizeTypeArgument(ResolveAlias(
+		ReplaceIdentifiers(variable_type, substitutions), context));
+	while(!callable_type.empty() && (callable_type[callable_type.size() - 1] == '&' ||
+		callable_type[callable_type.size() - 1] == '*') &&
+		callable_type.find("(*") != string::npos) callable_type.erase(callable_type.size() - 1);
+	string callable_result;
+	vector<string> callable_parameters;
+	bool function_pointer = SplitFunctionPointerType(callable_type,
+		&callable_result, &callable_parameters);
+	string callable_qualifiers;
+	if(!function_pointer) function_pointer = SplitDirectFunctionType(callable_type,
+		&callable_result, &callable_parameters, &callable_qualifiers);
+	if(function_pointer && callable_parameters.size() == actual_types.size()) {
+		bool viable = true;
+		for(size_t argument = 0; argument < actual_types.size(); ++argument)
+			if(!FunctionArgumentViable(RewriteText(callable_parameters[argument],
+				function_context, substitutions, 0), actual_types[argument],
+				function_context)) { viable = false; break; }
+		if(viable) {
+			*result = NormalizeTypeArgument(ResolveAlias(
+				ReplaceIdentifiers(callable_result, substitutions), function_context));
+			return !result->empty();
+		}
+	}
+	const CPPGMAstNodePtr declaration = FindClassDeclaration(callable_type, context);
+	if(declaration) for(size_t member = 0; member < declaration->children.size(); ++member) {
+		const CPPGMAstNodePtr candidate = declaration->children[member];
+		if(!candidate || candidate->kind != "function-definition" ||
+			candidate->children.size() < 2 ||
+			LastComponent(FirstIdentifierLocal(candidate->children[1])) != "operator()") continue;
+		*result = NormalizeTypeArgument(RewriteText(
+			NodeTypeSpelling(candidate->children[0]), context, substitutions, 0));
+		return !result->empty();
+	}
+	return false;
+}
+
 bool PA18TemplateExpander::ResolveConstructedCallResult(
 	const string& callee, const string& context,
 	const map<string, string>& substitutions, const vector<string>& actual_types,

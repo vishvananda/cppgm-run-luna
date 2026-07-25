@@ -16,6 +16,9 @@ bool MatchClassSpecializationPattern(const TemplateDefinition& definition,
 	const string& context) const;
 bool MatchTypePattern(string pattern, string actual,
 		const set<string>& parameter_names, map<string, string>* inferred, const string& context, bool class_pattern = false) const;
+	bool MatchNestedFunctionPointerPattern(const string& pattern, const string& actual,
+		const set<string>& parameter_names, map<string, string>* inferred,
+		const string& context, bool class_pattern) const;
 	string ArrayPatternElement(const string& raw) const;
 	bool FunctionOwnerCompatible(const string& pattern, const string& actual,
 		bool class_pattern) const;

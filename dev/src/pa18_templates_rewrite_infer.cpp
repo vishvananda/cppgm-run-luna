@@ -59,6 +59,39 @@ bool ReferenceParameterPattern(const string& pattern)
 		pattern.find("(&") != string::npos || pattern.find("(& ") != string::npos;
 }
 
+bool IsLvalueTemplateArgument(const CPPGMAstNodePtr& expression)
+{
+	if(!expression) return false;
+	if(expression->kind == "id-expression" || expression->kind == "member-expression" ||
+		expression->kind == "subscript-expression" || expression->kind == "keyword-literal")
+		return true;
+	if(expression->kind == "parenthesized-expression" && !expression->children.empty())
+		return IsLvalueTemplateArgument(expression->children[0]);
+	if(expression->kind == "unary-expression" && !expression->children.empty())
+		return RemoveMarker(expression->value) == "*" ||
+			RemoveMarker(expression->value) == "++" ||
+			RemoveMarker(expression->value) == "--";
+	if(expression->kind == "binary-expression" && expression->children.size() >= 2 &&
+		RemoveMarker(expression->value) == ",")
+		return IsLvalueTemplateArgument(expression->children[1]);
+	if(expression->kind == "conditional-expression" && expression->children.size() >= 3)
+		return IsLvalueTemplateArgument(expression->children[1]) &&
+			IsLvalueTemplateArgument(expression->children[2]);
+	return false;
+}
+
+bool ConstReferenceParameterPattern(const string& pattern)
+{
+	for(size_t position = pattern.find("const"); position != string::npos;
+		position = pattern.find("const", position + 5)) {
+		const bool left = position == 0 || !IsIdentifierCharacter(pattern[position - 1]);
+		const size_t end = position + 5;
+		const bool right = end == pattern.size() || !IsIdentifierCharacter(pattern[end]);
+		if(left && right) return true;
+	}
+	return false;
+}
+
 } // namespace
 
 bool PA18TemplateExpander::IsKnownTypeSpelling(string raw, const string& context) const
@@ -620,7 +653,16 @@ bool PA18TemplateExpander::InferArgument(const CPPGMAstNodePtr& expression,
 			InferBinaryArgument(expression, result, substitutions, context)) return true;
 		if(expression->kind == "unary-expression" && !expression->children.empty()) {
 			const string op = RemoveMarker(expression->value);
-			if(op == "&" && InferArgument(expression->children[0], result, substitutions, context)) {
+			if(op == "&") {
+				FunctionSignature child_signature;
+				if(!InferArgument(expression->children[0], result, substitutions, context,
+					&child_signature)) return false;
+				// InferIdentifierArgument already models a named function as its
+				// decayed function-pointer type.  Taking its address preserves that
+				// pointer; appending another `*` would incorrectly form a pointer to
+				// the function pointer and lose the function type during deduction.
+				if(child_signature.result_specifiers && child_signature.parameters)
+					return true;
 				*result = CanonicalSpelling(*result + "*");
 				return true;
 			}
@@ -821,6 +863,10 @@ bool PA18TemplateExpander::InferFunctionParameter(
 		FunctionSignature signature;
 		bool inferred_argument = InferArgument(argument, &type, parameter_substitutions,
 			context, &signature);
+		if(!pack_parameter && !pattern.empty() && pattern[pattern.size() - 1] == '&' &&
+			(pattern.size() < 2 || pattern[pattern.size() - 2] != '&') &&
+			!ConstReferenceParameterPattern(pattern) && !IsLvalueTemplateArgument(argument) &&
+			(!inferred_argument || type.empty() || type[type.size() - 1] != '&')) return false;
 		// String literals are arrays, not pointers, when the parameter preserves
 		// the reference.  Keep that typed fact for deduction; the ordinary
 		// non-reference path retains the pointer spelling returned by

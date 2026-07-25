@@ -1813,3 +1813,72 @@ the return-object/default-constructor LowIR repair only where it is the same
 selected-candidate lowering path.  Then resume the dependent SFINAE/qualified
 lookup band.  The next validation boundary remains the focused ranking group,
 the full PA22 report, through-PA21, and the PA22 source audit.
+
+## Checkpoint 81 scope — 2026-07-25 (before implementation)
+
+The refreshed current-PA report remains **129/250**, with **121** failures:
+general/100 **14**, general/200 **8**, general/300 **26**, general/400 **15**,
+general/500 **24**, spec/100 **6**, spec/200 **11**, spec/300 **6**,
+spec/400 **2**, and spec/500 **9**.  The complete names are captured by the
+current report; the grouped map above remains the planning partition.
+
+Selected scope: complete the shared function/reference type path at the
+boundary between PA18 deduction and PA14 lowering, and preserve typed
+construction of aggregate return objects from instantiated function
+templates.  The focused fixtures are
+`general/200-function-pointer-vs-const-ref-partial-order`,
+`general/200-function-template-trailing-pack-partial-order`,
+`general/200-partial-ordering-ref-vs-const-ref`,
+`spec/200-function-template-class-template-param-partial-order`, and
+`spec/200-function-template-fixed-parameter-default-tail-partial-order`.
+The first three must retain function/reference structure through deduction,
+candidate ranking, and generated function types; the last two exercise the
+same indirect-result construction path after the correct candidate is chosen.
+The implementation must use typed function signatures, substitution state,
+and constructor records, not fixture-specific symbol or result selection.
+
+Validation for this checkpoint covers the focused group, the full PA22
+report, the through-PA21 report, and the PA22 source audit.
+
+## Checkpoint 81 result — 2026-07-25
+
+The selected scope is complete.  The final PA22 report is **134/250**, up
+five from the refreshed 129/250 checkpoint baseline and above the reported
+turn-start baseline; the five focused fixtures pass and no new PA22 failure
+names were introduced.  The increment preserves direct and outer reference
+layers around function types, gives ABI spelling a typed direct-function path,
+keeps function-parameter pack arguments available during unevaluated call
+lookup, and ranks viable call candidates using value category, cv, fixedness,
+and existing partial ordering.  It also keeps overload identities distinct,
+limits function-body context replay to the correct declarator/trailing-return
+nodes, and materializes aggregate return construction and sizeof addresses
+only for the corresponding typed array/scalar cases.
+
+The six earlier-PA regressions exposed during the checkpoint are repaired:
+the two PA15 class-sizeof cases, two PA18 lookup/context cases, and two PA21
+function-type/partial-specialization cases.  Through-PA21 passes **1850/1850**.
+The PA22 source file audit passes with warnings only.
+
+### Remaining Work Map
+
+- **Call deduction and argument normalization:** 14 general/100 failures.
+- **Remaining partial ordering and overload ranking:** 5 general/200 and
+  9 spec/200 failures.
+- **Dependent substitution, SFINAE, lookup, and owner replay:** 26
+  general/300, 6 spec/300, and 2 spec/400 failures.
+- **Alias, constructor/conversion, owner, and typed NTTP behavior:** 15
+  general/400, 24 general/500, and 9 spec/500 failures.
+- **Array/non-deduced/defaulted edges:** 6 spec/100 failures.
+
+The residual report has **116** failures and no newly introduced names when
+compared with the pre-checkpoint failure set; the five focused names are the
+only names removed.
+
+### Next Checkpoint Group
+
+Take the remaining 14 partial-ordering/overload-ranking cases, starting with
+the general/200 call-viability and synthetic-member cases, then the spec/200
+defaulted, array-reference, qualified, and member-template ordering cases.
+Keep candidate rejection and source-order lookup typed while extending the
+same ranking path.  Validate with the focused group, full PA22 report,
+through-PA21, and the PA22 source audit.

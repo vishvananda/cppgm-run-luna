@@ -195,7 +195,6 @@ bool PA18TemplateExpander::SplitDirectFunctionType(const string& raw,
 	}
 	return false;
 }
-
 	bool PA18TemplateExpander::ClassPartialMoreSpecialized(const TemplateDefinition& lhs,
 		const TemplateDefinition& rhs, const string& context) const
 	{
@@ -339,7 +338,6 @@ bool PA18TemplateExpander::SplitDirectFunctionType(const string& raw,
 			!MatchOrderingPatternList(lhs_ordered.specialization_pattern,
 				rhs_ordered.specialization_pattern, lhs_names, &lhs_inferred);
 	}
-
 bool PA18TemplateExpander::IsTemplatePackName(const TemplateDefinition& definition,
 	const string& name) const
 {
@@ -538,6 +536,7 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 		(*inferred)[pattern] = actual;
 		return true;
 	}
+	if(!class_pattern && !direct_pattern_function && !direct_actual_function && pattern.size() > 1 && pattern[pattern.size() - 1] == '*' && pattern.find(")(") == string::npos && MatchNestedFunctionPointerPattern(pattern, actual, parameter_names, inferred, context, class_pattern)) return true;
 	if(direct_actual_function && !actual_function_converted) return false;
 	const auto trailing_cv_kind = [](const string& spelling) {
 		if(spelling.size() >= 9 && spelling.compare(spelling.size() - 8, 8,
@@ -1009,7 +1008,8 @@ void PA18TemplateExpander::TransformRegularChildren(const CPPGMAstNodePtr& input
 						target->value, child_context, *local_substitutions, 0, false);
 				continue;
 			}
-			const bool function_child_context = input->kind == "function-definition" && original_child && original_child->kind == "compound-statement";
+			const bool declarator_with_trailing_return = input->kind == "function-definition" && original_child && original_child->kind == "declarator" && DescendantOfKind(original_child, "trailing-return-type");
+			const bool function_child_context = input->kind == "function-definition" && original_child && (original_child->kind == "compound-statement" || declarator_with_trailing_return || original_child->kind == "trailing-return-type");
 			const string node_context = function_child_context ? function_context : child_context;
 			const CPPGMAstNodePtr using_target = original_child && original_child->kind == "using-declaration" ? ChildOfKindLocal(original_child, "target") : CPPGMAstNodePtr();
 			const bool drop_function_using = using_target && IsOrdinaryTemplateUsingTarget(using_target->value, node_context) && class_contexts_.find(node_context) == class_contexts_.end() &&

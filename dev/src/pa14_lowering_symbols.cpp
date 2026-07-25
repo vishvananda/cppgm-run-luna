@@ -121,6 +121,42 @@ string abi_fundamental(const string& raw)
 
 string abi_type_text(const string& raw);
 
+bool abi_split_direct_function_type(const string& raw, string* result,
+                                    vector<string>* parameters)
+{
+  const string value = abi_trim(raw);
+  int angle = 0;
+  size_t open = string::npos;
+  for(size_t position = 0; position < value.size(); ++position) {
+    if(value[position] == '<') ++angle;
+    else if(value[position] == '>' && angle > 0) --angle;
+    else if(value[position] == '(' && angle == 0) {
+      open = position;
+      break;
+    }
+  }
+  if(open == string::npos) return false;
+  const string prefix = abi_trim(value.substr(0, open));
+  if(prefix.empty() || prefix.find("(*") != string::npos ||
+     prefix.find("(&") != string::npos) return false;
+  int depth = 0;
+  size_t close = string::npos;
+  for(size_t position = open; position < value.size(); ++position) {
+    if(value[position] == '(') ++depth;
+    else if(value[position] == ')' && --depth == 0) {
+      close = position;
+      break;
+    }
+  }
+  if(close == string::npos || !abi_trim(value.substr(close + 1)).empty()) return false;
+  if(result) *result = prefix;
+  if(parameters) {
+    *parameters = abi_split_arguments(value.substr(open + 1, close - open - 1));
+    if(parameters->size() == 1 && (*parameters)[0] == "void") parameters->clear();
+  }
+  return true;
+}
+
 string abi_component(const string& raw)
 {
   string value = abi_remove_tag(raw);
@@ -157,6 +193,14 @@ string abi_type_text(const string& raw)
 	// treating it as an identifier.
 	if(value == "true") return "Lb1E";
 	if(value == "false") return "Lb0E";
+	string function_result;
+	vector<string> function_parameters;
+	if(abi_split_direct_function_type(value, &function_result, &function_parameters)) {
+		string encoded = "F";
+		for(size_t parameter = 0; parameter < function_parameters.size(); ++parameter)
+			encoded += abi_type_text(function_parameters[parameter]);
+		return encoded + "E" + abi_type_text(function_result);
+	}
 	// PA19 preserves an enum non-type argument as `EnumType value` so the
 	// source type remains available for specialization names.  In the ABI it
 	// is a typed non-type literal, not a named type containing a space.

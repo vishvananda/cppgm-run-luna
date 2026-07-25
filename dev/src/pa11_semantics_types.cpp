@@ -13,18 +13,44 @@ TypePtr Analyzer::ResolveArrayReferenceSpelledType(const string& spelling, Scope
 TypePtr Analyzer::ResolveFunctionSpelledType(const string& spelling, Scope* scope,
 	SpecFacts& info)
 {
-	const size_t pointer_open = spelling.find("(*");
-	const size_t reference_open = spelling.find("(&");
+	// A substituted forwarding reference can leave an outer reference after
+	// the complete function-pointer spelling (`int(*)()&`).  That suffix is a
+	// reference to the pointer object, not a function cv/ref qualifier.  Peel
+	// it before parsing the function type and restore it around the resulting
+	// pointer below.
+	string core = spelling;
+	TypeKind outer_reference = TYPE_FUNDAMENTAL;
+	if (core.size() > 2 && core.compare(core.size() - 2, 2, "&&") == 0) {
+		outer_reference = TYPE_RVALUE_REFERENCE;
+		core.erase(core.size() - 2);
+	} else if (!core.empty() && core[core.size() - 1] == '&') {
+		outer_reference = TYPE_LVALUE_REFERENCE;
+		core.erase(core.size() - 1);
+	}
+	const size_t pointer_open = core.find("(*");
+	const size_t reference_open = core.find("(&");
 	const bool function_pointer = pointer_open != string::npos;
 	const bool function_reference = !function_pointer && reference_open != string::npos;
-	const size_t function_open = function_pointer ? pointer_open : reference_open;
+	const size_t direct_open = !function_pointer && !function_reference ?
+		core.find('(') : string::npos;
+	const bool direct_function = !function_pointer && !function_reference &&
+		direct_open != string::npos && direct_open > 0 &&
+		core[core.size() - 1] == ')' && core.find(')', 0) == core.size() - 1 &&
+		core.substr(0, direct_open) != "decltype" &&
+		core.substr(0, direct_open) != "sizeof" &&
+		core.substr(0, direct_open) != "alignof" &&
+		core.substr(0, direct_open) != "new";
+	const size_t function_open = function_pointer ? pointer_open :
+		function_reference ? reference_open : direct_open;
 	const size_t parameters_open = function_open == string::npos ? string::npos :
-		spelling.find(")(", function_open + 2);
-	if ((!function_pointer && !function_reference) || parameters_open == string::npos ||
-		spelling.empty() || spelling[spelling.size() - 1] != ')') return TypePtr();
-	const string result_spelling = spelling.substr(0, function_open);
-	const string parameter_spelling = spelling.substr(parameters_open + 2,
-		spelling.size() - parameters_open - 3);
+		(direct_function ? function_open : core.find(")(", function_open + 2));
+	if ((!function_pointer && !function_reference && !direct_function) ||
+		parameters_open == string::npos ||
+		core.empty() || core[core.size() - 1] != ')') return TypePtr();
+	const string result_spelling = core.substr(0, function_open);
+	const size_t parameter_begin = direct_function ? parameters_open + 1 : parameters_open + 2;
+	const string parameter_spelling = core.substr(parameter_begin,
+		core.size() - parameter_begin - 1);
 	vector<string> parameter_names;
 	int angle_depth = 0, parenthesis_depth = 0, bracket_depth = 0;
 	size_t begin = 0;
@@ -54,5 +80,8 @@ TypePtr Analyzer::ResolveFunctionSpelledType(const string& spelling, Scope* scop
 	SpecFacts result_info;
 	TypePtr result_type = ResolveSpelledType(result_spelling, scope, result_info);
 	TypePtr function = FunctionOf(parameters, variadic, result_type);
-	return function_pointer ? PointerTo(function) : ReferenceTo(TYPE_LVALUE_REFERENCE, function);
+	TypePtr result = function_pointer ? PointerTo(function) :
+		function_reference ? ReferenceTo(TYPE_LVALUE_REFERENCE, function) : function;
+	return outer_reference == TYPE_FUNDAMENTAL ? result :
+		ReferenceTo(outer_reference, result);
 }

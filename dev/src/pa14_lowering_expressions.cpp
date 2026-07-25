@@ -1325,10 +1325,22 @@ PA14Lowerer::Value PA14Lowerer::EmitValue(const CPPGMAstNodePtr& node, Scope* sc
          operand->kind == "id-expression") {
         VariablePlan* local = LocalForName(operand->value);
         if(local && type_value(local->type) &&
-           type_value(local->type)->kind == TYPE_CLASS &&
-           (!type_value(local->type)->template_specialization ||
-            type_value(local->type)->materialize_sizeof_address))
-          (void)EmitAddress(operand, scope);
+           type_value(local->type)->kind == TYPE_CLASS) {
+          bool has_array_member = false;
+          for(size_t member = 0; member < type_value(local->type)->class_members.size(); ++member) {
+            TypePtr member_type = type_value(
+              type_value(local->type)->class_members[member].type);
+            if(!type_value(local->type)->class_members[member].is_static && member_type &&
+               member_type->kind == TYPE_ARRAY) {
+              has_array_member = true;
+              break;
+            }
+          }
+          if(!has_array_member &&
+             (!type_value(local->type)->template_specialization ||
+              type_value(local->type)->materialize_sizeof_address))
+            (void)EmitAddress(operand, scope);
+        }
       } else if(node->kind == "sizeof-expression" && operand &&
          operand->kind == "member-expression" && !operand->children.empty()) {
         // A member sizeof-expression needs the base object address so the

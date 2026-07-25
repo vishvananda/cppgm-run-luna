@@ -111,6 +111,101 @@ void PA18TemplateExpander::SortFunctionTemplateCandidates(
 		});
 }
 
+void PA18TemplateExpander::RankFunctionTemplateCandidatesForCall(
+	vector<const TemplateDefinition*>* candidates, const CPPGMAstNodePtr& call,
+	const string& context, const map<string, string>& substitutions) const
+{
+	if(!candidates || !call) return;
+	// Partial ordering does not carry the call's value category and top-level cv
+	// through this AST boundary.  Rank otherwise-equivalent viable templates
+	// with those typed facts before materialization.
+	map<const TemplateDefinition*, bool> call_viable;
+	map<const TemplateDefinition*, int> call_score;
+	map<const TemplateDefinition*, int> call_non_dependent;
+	map<const TemplateDefinition*, int> call_fixedness;
+	const CPPGMAstNodePtr call_arguments = call->children.size() > 1 &&
+		call->children[1] && call->children[1]->kind == "argument-list" ?
+		call->children[1] : CPPGMAstNodePtr();
+	for(size_t candidate = 0; candidate < candidates->size(); ++candidate) {
+		const TemplateDefinition* definition = (*candidates)[candidate];
+		vector<string> inferred;
+		bool viable = false;
+		try { viable = InferFunctionArguments(*definition, call, &inferred,
+			substitutions, context, 0); }
+		catch(const PA18SubstitutionFailure&) { viable = false; }
+		call_viable[definition] = viable;
+		if(!viable) { call_score[definition] = 1000000; continue; }
+		int score = 0, non_dependent = 0, fixedness = 0;
+		for(size_t parameter = 0; parameter < definition->parameters.size(); ++parameter)
+			if(!definition->parameters[parameter].pack) ++fixedness;
+		const CPPGMAstNodePtr parameter_clause = DescendantOfKind(
+			FunctionDeclarator(definition->declaration), "parameter-clause");
+		size_t argument_index = 0;
+		if(parameter_clause && call_arguments) for(size_t parameter = 0;
+			parameter < parameter_clause->children.size(); ++parameter) {
+			const CPPGMAstNodePtr parameter_node = parameter_clause->children[parameter];
+			if(!parameter_node || parameter_node->kind != "parameter-declaration") continue;
+			const string pattern = ParameterTypeSpelling(parameter_node);
+			bool dependent = false;
+			for(size_t template_parameter = 0;
+				template_parameter < definition->parameters.size(); ++template_parameter) {
+				const string& name = definition->parameters[template_parameter].name;
+				for(size_t position = pattern.find(name); !name.empty() &&
+					position != string::npos; position = pattern.find(name,
+					position + name.size())) {
+					const bool left = position == 0 || !IsIdentifierCharacter(pattern[position - 1]);
+					const size_t end = position + name.size();
+					const bool right = end == pattern.size() || !IsIdentifierCharacter(pattern[end]);
+					if(left && right) { dependent = true; break; }
+				}
+				if(dependent) break;
+			}
+			if(!dependent) ++non_dependent;
+			const bool pack = IsFunctionParameterPack(parameter_node);
+			size_t remaining = argument_index < call_arguments->children.size() ?
+				call_arguments->children.size() - argument_index : 0;
+			size_t visits = pack ? remaining : (remaining ? 1 : 0);
+			if(pack) {
+				size_t trailing_fixed = 0;
+				for(size_t later = parameter + 1; later < parameter_clause->children.size(); ++later)
+					if(parameter_clause->children[later] &&
+						parameter_clause->children[later]->kind == "parameter-declaration" &&
+						!IsFunctionParameterPack(parameter_clause->children[later])) ++trailing_fixed;
+				visits = remaining < trailing_fixed ? 0 : remaining - trailing_fixed;
+			}
+			for(size_t visit = 0; visit < visits && argument_index < call_arguments->children.size(); ++visit) {
+				string actual;
+				if(!InferArgument(call_arguments->children[argument_index], &actual,
+					substitutions, context)) { score += 100; ++argument_index; continue; }
+				const bool actual_const = CanonicalSpelling(actual).compare(0, 6, "const ") == 0;
+				const bool reference = !pattern.empty() && pattern[pattern.size() - 1] == '&' &&
+					(pattern.size() < 2 || pattern[pattern.size() - 2] != '&');
+				const bool const_reference = reference && (pattern.find("const ") != string::npos ||
+					pattern.find(" const") != string::npos);
+				if(reference && const_reference != actual_const) ++score;
+				++argument_index;
+			}
+		}
+		call_score[definition] = score;
+		call_non_dependent[definition] = non_dependent;
+		call_fixedness[definition] = fixedness;
+	}
+	stable_sort(candidates->begin(), candidates->end(),
+		[this, &context, &call_viable, &call_score, &call_non_dependent, &call_fixedness](
+			const TemplateDefinition* lhs, const TemplateDefinition* rhs) {
+			if(call_viable[lhs] != call_viable[rhs]) return call_viable[lhs];
+			const bool lhs_more = FunctionTemplateMoreSpecialized(*lhs, *rhs, context);
+			const bool rhs_more = FunctionTemplateMoreSpecialized(*rhs, *lhs, context);
+			if(lhs_more != rhs_more) return lhs_more;
+			if(call_score[lhs] != call_score[rhs]) return call_score[lhs] < call_score[rhs];
+			if(call_non_dependent[lhs] != call_non_dependent[rhs])
+				return call_non_dependent[lhs] > call_non_dependent[rhs];
+			if(call_fixedness[lhs] != call_fixedness[rhs])
+				return call_fixedness[lhs] > call_fixedness[rhs];
+			return false;
+		});
+}
+
 int PA18TemplateExpander::MemberTemplatePatternScore(
 	const TemplateDefinition* candidate) const
 {

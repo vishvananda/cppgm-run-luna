@@ -83,7 +83,19 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
         }
         return has_user_constructor && !has_default_constructor;
       };
+    bool has_array_member = false;
+    for(size_t member = 0; member < object_type->class_members.size(); ++member) {
+      if(object_type->class_members[member].is_static) continue;
+      TypePtr member_type = type_value(object_type->class_members[member].type);
+      if(member_type && member_type->kind == TYPE_ARRAY) {
+        has_array_member = true;
+        break;
+      }
+    }
+    const bool template_context = state_ && state_->record &&
+      state_->record->template_instantiation;
     if(raw_arguments.empty() && !object_type->template_specialization &&
+       !(template_context && has_array_member) &&
        has_nonstatic_member && !HasDefaultConstructionEffects(object_type) &&
        !has_unavailable_default(object_type) && !HasExplicitConstructor(object_type)) return true;
     const string constructor_name = LastComponent(object_type->name);

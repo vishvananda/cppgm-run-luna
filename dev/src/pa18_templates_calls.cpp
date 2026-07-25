@@ -2,7 +2,6 @@
 #include "pa18_templates_rewrite.h"
 using namespace std;
 namespace pa18_templates_internal {
-
 bool PA18TemplateExpander::MaterializeExplicitInstantiation(
 	const CPPGMAstNodePtr& target, const string& context,
 	bool extern_instantiation)
@@ -1366,7 +1365,9 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 				if(find(definitions.begin(), definitions.end(), inherited[inherited_index]) ==
 					definitions.end()) definitions.push_back(inherited[inherited_index]);
 		}
-		if(!PreserveFunctionLookupOrder(definitions, context, substitutions)) SortFunctionTemplateCandidates(&definitions, context);
+		const bool preserve_lookup_order = PreserveFunctionLookupOrder(definitions, context, substitutions);
+		if(!preserve_lookup_order) SortFunctionTemplateCandidates(&definitions, context);
+		if(!preserve_lookup_order && callee_name.compare(0, 8, "operator") != 0) RankFunctionTemplateCandidatesForCall(&definitions, result, context, substitutions);
 		const bool inline_template_candidate = HasInlineTemplateCandidate(definitions, context);
 		bool extern_template_candidate = false;
 		for(size_t candidate = 0; candidate < definitions.size() && !extern_template_candidate;

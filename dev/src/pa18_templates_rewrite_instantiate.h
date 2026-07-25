@@ -1020,6 +1020,29 @@
 			!concrete_owner.empty()) return TypeSuffix(PrefixComponent(definition.qualified_name)) +
 			"__" + LastComponent(definition.name);
 		string local_name = definition.name;
+		// Function overloads share the source name and can also deduce the same
+		// template arguments.  Keep the overload identity in the generated AST;
+		// otherwise two distinct `pick<T>` specializations collapse into one
+		// PA14 binding and are reported as an ambiguous non-template call.
+		if(!definition.class_template && !definition.alias_template &&
+			!definition.variable_template &&
+			definition.name.compare(0, 8, "operator") != 0) {
+			map<string, vector<string> >::const_iterator indexed =
+				definitions_by_name_.find(definition.name);
+			if(indexed != definitions_by_name_.end()) for(size_t overload = 0;
+				overload < indexed->second.size(); ++overload) {
+				map<string, TemplateDefinition>::const_iterator candidate =
+					definitions_.find(indexed->second[overload]);
+				if(candidate != definitions_.end() && &candidate->second == &definition) {
+					if(overload != 0) {
+						ostringstream suffix;
+						suffix << "__ov" << overload;
+						local_name += suffix.str();
+					}
+					break;
+				}
+			}
+		}
 		if(explicit_instantiation && !definition.class_template &&
 			!definition.alias_template && !definition.variable_template)
 			return local_name;
