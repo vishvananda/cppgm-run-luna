@@ -372,6 +372,8 @@
 			// class is materialized would leave names such as `U` dependent in a
 				// non-template generated function; the member-call path materializes
 				// this entity after deduction instead.
+			if(!member.member_template && member.owner == parent.qualified_name)
+				continue;
 			if(member.member_template) continue;
 			const string key = member.qualified_name + "@" + parent_local_name;
 			if(!materialized_member_definitions_.insert(key).second) continue;
@@ -1005,7 +1007,11 @@
 					!definition.parameters[i].type && IsKnownEnumType(
 						ResolveAlias(ReplaceIdentifiers(definition.parameters[i].non_type_type,
 							substitutions), context), context);
-					const string argument_spelling = enum_argument ? metadata_args[i] : args[i];
+					string argument_spelling = enum_argument ? metadata_args[i] : args[i];
+					if(definition.class_template && i < definition.parameters.size() &&
+						definition.parameters[i].type)
+						argument_spelling = QualifyTypeArgument(argument_spelling, context,
+							string(), true);
 					const bool plain_function_type = definition.class_template &&
 						i < definition.parameters.size() && definition.parameters[i].type &&
 						argument_spelling.find('(') != string::npos &&

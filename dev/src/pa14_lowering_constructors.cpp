@@ -6,6 +6,100 @@ using namespace std;
 
 namespace cppgm_pa14_lowering {
 
+string PA14Lowerer::EmitTemporaryObjectAddress(const CPPGMAstNodePtr& node,
+                                               Scope* scope,
+                                               const string& prefix)
+{
+    if(!node || node->kind != "call-expression" || node->children.empty())
+      throw logic_error("invalid temporary object expression");
+    TypePtr object_type = ConstructorObjectType(node->children[0], scope);
+    if(!object_type) throw logic_error("temporary expression is not a class construction");
+    CollectImplicitConstructor(object_type, object_type->owned_scope, true);
+    const string slot = new_special_slot(prefix, low_type(object_type));
+    const string address = new_temp();
+    AddInstruction(address + " = addr $" + slot);
+    const CPPGMAstNodePtr argument_list = node->children.size() > 1 ?
+      node->children[1] : CPPGMAstNodePtr();
+    vector<CPPGMAstNodePtr> arguments = argument_list ?
+      argument_list->children : vector<CPPGMAstNodePtr>();
+    if(node->value == "braced-construction" && arguments.size() == 1 &&
+       arguments[0] && arguments[0]->kind == "braced-init-list")
+      arguments = arguments[0]->children;
+    if(!EmitConstructorAt(object_type, address, arguments, scope,
+                          true, false, false, false, arguments.empty()))
+      throw logic_error("no viable temporary object construction");
+    RegisterTemporaryObject(object_type, address);
+    return address;
+  }
+
+PA14Lowerer::Value PA14Lowerer::EmitObjectValueArgument(
+    const CPPGMAstNodePtr& node, Scope* scope, const TypePtr& target)
+{
+    TypePtr object_type = type_value(target);
+    if(!object_type || object_type->kind != TYPE_CLASS)
+      return EmitValue(node, scope, target);
+    const string slot = new_special_slot("argobj", low_type(object_type));
+    const string address = new_temp();
+    AddInstruction(address + " = addr $" + slot);
+    bool empty_storage = !object_type->direct_base;
+    for(size_t i = 0; i < object_type->class_members.size(); ++i)
+      if(!object_type->class_members[i].is_static &&
+         !object_type->class_members[i].name.empty()) {
+        empty_storage = false;
+        break;
+      }
+    if(empty_storage && IsTrivialValueStorage(object_type)) {
+      const ExprInfo source_info = Infer(node, scope);
+      const TypePtr source_type = expression_value_type(source_info);
+      const TypePtr constructed = node && node->kind == "call-expression" &&
+        !node->children.empty() ? ConstructorObjectType(node->children[0], scope) : TypePtr();
+      if((constructed && PA12SameType(constructed, object_type, true)) ||
+         (node && node->kind == "call-expression" && source_type &&
+          source_type->kind == TYPE_CLASS &&
+          PA12SameType(source_type, object_type, true))) {
+        if(!EmitObjectTransferAt(object_type, address, node, scope, true))
+          return EmitValue(node, scope, target);
+      } else {
+        const string source_address = EmitAddress(node, scope);
+        if(source_type && source_type->kind == TYPE_CLASS &&
+           IsDerivedFrom(source_type, object_type))
+          (void)AdjustBaseAddress(source_address, source_type, object_type);
+      }
+    }
+    else if(!EmitObjectTransferAt(object_type, address, node, scope, true))
+      return EmitValue(node, scope, target);
+    Value result;
+    result.type = object_type;
+    result.operand = "$" + slot;
+    return result;
+  }
+
+bool PA14Lowerer::EmitDestructorAt(const TypePtr& raw_object_type, const string& address,
+                                   Scope* scope, bool force_empty)
+{
+    TypePtr object_type = type_value(raw_object_type);
+    if(!object_type || object_type->kind != TYPE_CLASS) return false;
+    const string name = "~" + LastComponent(object_type->name);
+    vector<Binding*> candidates = MemberBindings(object_type, name);
+    for(size_t i = 0; i < candidates.size(); ++i) {
+      Binding* binding = candidates[i];
+      if(binding->kind != BIND_FUNCTION || !binding->is_member || binding->is_static) continue;
+      FunctionRecord* record = RecordForBinding(binding);
+      if(!record || !record->destructor) continue;
+      if(!HasDestructor(object_type)) continue;
+      if(!force_empty && !DestructorHasEffects(object_type)) continue;
+      record->needed = true;
+      FunctionRecord* base_entry = BaseEntryFor(record);
+      FunctionRecord* call_record = object_type->polymorphic && force_empty && base_entry ?
+        base_entry : record;
+      if(base_entry) base_entry->needed = true;
+      AddInstruction("call void @" + call_record->symbol + "(" + address + ")");
+      return true;
+    }
+    (void)scope;
+    return false;
+  }
+
 bool PA14Lowerer::EmitValueSpecialMemberBody(FunctionRecord& function, Scope* scope)
 {
     if(!function.value_special_member || (!function.defaulted &&

@@ -560,7 +560,8 @@ private:
 	string InheritedTypeName(const string& scope, const string& name,
 		set<string>* active) const;
 	string QualifyTypeArgument(string spelling, const string& context,
-		const string& template_owner = string()) const;
+		const string& template_owner = string(),
+		bool preserve_nested_namespace = false) const;
 	ClassSpecializationIdentity MakeClassSpecializationIdentity(
 		const TemplateDefinition& definition, const vector<string>& arguments,
 		const string& context) const;

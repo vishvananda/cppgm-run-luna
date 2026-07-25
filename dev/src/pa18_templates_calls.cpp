@@ -257,38 +257,6 @@ bool PA18TemplateExpander::MaterializeExplicitInstantiation(
 	return false;
 }
 
-bool PA18TemplateExpander::InferBinaryArgument(const CPPGMAstNodePtr& expression,
-	string* result, const map<string, string>& substitutions, const string& context) const
-{
-	if(!expression || expression->children.size() < 2 || !result) return false;
-	const string operation = RemoveMarker(expression->value);
-	string left;
-	string right;
-	const bool have_operands = InferArgument(expression->children[0], &left,
-		substitutions, context) && InferArgument(expression->children[1], &right,
-		substitutions, context);
-	if(have_operands && InferOperatorResult(operation, left, right, context, result)) return true;
-	if(have_operands && InferTemplateOperatorResult(operation, expression->children[0],
-		expression->children[1], substitutions, context, result)) return true;
-	if(have_operands && (operation == "&&" || operation == "||" || operation == "==" ||
-		operation == "!=" || operation == "<" || operation == ">" ||
-		operation == "<=" || operation == ">=") && IsBuiltinLogicalType(left) &&
-		IsBuiltinLogicalType(right)) {
-		*result = "bool";
-		return true;
-	}
-	if(have_operands && (operation == "+" || operation == "-") &&
-		IsBuiltinArithmeticType(left) && IsBuiltinArithmeticType(right)) {
-		*result = CommonBuiltinArithmeticType(left, right);
-		return true;
-	}
-	string fallback;
-	if(!InferArgument(expression->children[0], &fallback, substitutions, context) ||
-		!IsKnownTypeSpelling(fallback, context)) return false;
-	*result = fallback;
-	return true;
-}
-
 bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 	const CPPGMAstNodePtr& callee, const string& original_member,
 	const string& context,
@@ -513,8 +481,30 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 		const size_t occurrence = candidate_occurrences[&definition]++;
 		const bool direct_member = occurrence == 0 &&
 			find(direct_member_candidates.begin(), direct_member_candidates.end(),
-				&definition) != direct_member_candidates.end();
+					&definition) != direct_member_candidates.end();
 		map<string, string> candidate_substitutions = member_substitutions;
+		// The caller's replay map can contain value-name rewrites introduced by
+		// a local using-declaration.  Those names belong to the call site, not to
+		// the selected member's lexical body; carrying them into a callable
+		// object's operator() can rewrite an inner namespace function into the
+		// outer object itself.  Retain only enclosing/member template bindings;
+		// concrete class aliases are added from the selected owner below.
+		set<string> body_bindings;
+		for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter)
+			if(!definition.parameters[parameter].name.empty())
+				body_bindings.insert(definition.parameters[parameter].name);
+		if(parent) {
+			for(size_t parameter = 0; parameter < parent->parameters.size(); ++parameter)
+				if(!parent->parameters[parameter].name.empty())
+					body_bindings.insert(parent->parameters[parameter].name);
+			if(!parent->name.empty()) body_bindings.insert(parent->name);
+		}
+		for(map<string, string>::iterator binding = candidate_substitutions.begin();
+			binding != candidate_substitutions.end(); ) {
+			if(body_bindings.find(binding->first) == body_bindings.end())
+				candidate_substitutions.erase(binding++);
+			else ++binding;
+		}
 		map<const TemplateDefinition*, string>::const_iterator candidate_owner =
 			inherited_owners.find(&definition);
 		const string concrete_candidate_owner = !direct_member &&
@@ -752,31 +742,6 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 				requested_owner + "::" + generated_name));
 		}
 		return true;
-	}
-	return false;
-}
-
-bool PA18TemplateExpander::IsKnownMemberTemplateId(const string& raw) const
-{
-	const string spelling = CanonicalSpelling(RemoveMarker(raw));
-	const size_t open = spelling.find('<');
-	if(open == string::npos) return false;
-	string base;
-	string arguments;
-	size_t begin = 0;
-	size_t close = string::npos;
-	if(!TemplateBase(spelling, open, &begin, &base) ||
-		!TemplateRange(spelling, open, &arguments, &close)) return false;
-	const string member_name = LastComponent(base);
-	map<string, vector<string> >::const_iterator indexed = definitions_by_name_.find(member_name);
-	if(indexed == definitions_by_name_.end()) return false;
-	for(size_t i = 0; i < indexed->second.size(); ++i) {
-		map<string, TemplateDefinition>::const_iterator found = definitions_.find(indexed->second[i]);
-		if(found == definitions_.end()) continue;
-		const TemplateDefinition& definition = found->second;
-		if(definition.member_template && !definition.class_template &&
-			LastComponent(definition.name) == member_name)
-			return true;
 	}
 	return false;
 }
@@ -1211,7 +1176,18 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 		operator_member->children.push_back(result_callee);
 		operator_member->children.push_back(CPPGMAstNodePtr(
 			new CPPGMAstNode("identifier", "operator()")));
-		if(InstantiateMemberCall(result, operator_member, "operator()", context,
+		const vector<const TemplateDefinition*> named_functions =
+			FindFunctionDefinitions(RemoveMarker(result_callee->value), context);
+		bool visible_named_function = false;
+		for(size_t named = 0; named < named_functions.size(); ++named) {
+			const string owner = PrefixComponent(named_functions[named]->qualified_name);
+			if(owner.empty() || context == owner || (context.size() > owner.size() &&
+				context.compare(0, owner.size(), owner) == 0 && context[owner.size()] == ':')) {
+				visible_named_function = true;
+				break;
+			}
+		}
+		if(!visible_named_function && InstantiateMemberCall(result, operator_member, "operator()", context,
 			substitutions)) {
 			result->children[0] = operator_member;
 			result_callee = operator_member;

@@ -306,9 +306,10 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
       record->type = FunctionOf(parameters, function->variadic, function->child, false,
         false, function->function_lvalue_ref_qualified,
         function->function_rvalue_ref_qualified);
-    } else record->type = function;
+	} else record->type = function;
 	record->qualified_name = qname;
-	if(is_member && !record->member_template && member_owner) {
+	if(is_member && !record->member_template && member_owner &&
+		!member_owner->template_specialization) {
 		const string ordinary_member_name = LastComponent(raw_name);
 		if(ordinary_member_name.compare(0, 8, "operator") != 0) {
 			for(size_t prior = 0; prior < functions_.size(); ++prior) {
@@ -1077,5 +1078,67 @@ void PA14Lowerer::StoreGlobalDeclaration(GlobalRecord& record,
       EnsureThreadLocalGuard(stored);
     if(stored && record_value && record_value->kind == TYPE_CLASS)
       DemandTemplateStaticMembers(record_value);
+  }
+
+void PA14Lowerer::CollectClassStaticMember(const CPPGMAstNodePtr& child,
+                                           const CPPGMAstNodePtr& item,
+                                           const TypePtr& owner, Scope* class_scope,
+                                           const Analyzer::SpecFacts& facts,
+                                           const TypePtr& member_type,
+                                           const string& name)
+{
+    if(!child || !item || !owner || !class_scope || !facts.is_static || name.empty()) return;
+    GlobalRecord record;
+    record.node = child;
+    record.scope = class_scope;
+    record.type = member_type;
+    record.qualified_name = TypeQualifiedName(owner) + "::" + name;
+    record.template_owner = owner;
+    record.template_instantiation = owner->template_specialization ||
+      child->template_instantiation;
+    record.explicit_specialization = child->explicit_specialization;
+    record.weak_binding = record.template_instantiation;
+    record.initializer = item->children.size() > 1 ? item->children[1] :
+      CPPGMAstNodePtr();
+    record.declaration = true;
+    record.internal = false;
+    record.thread_local_storage = HasStorageSpecifier(child, "thread_local");
+    if(type_is_reference(member_type) && !record.initializer) {
+      deferred_static_members_.insert(record.qualified_name);
+      return;
+    }
+    const TypePtr member_value = type_value(member_type);
+    const bool integral_constant = is_integral_type(member_value) ||
+      (member_value && member_value->kind == TYPE_FUNDAMENTAL &&
+       member_value->name == "bool");
+    Binding* semantic_binding = class_scope->local(name);
+    const bool initializer_calls = record.initializer &&
+      DescendantOfKind(record.initializer, "call-expression");
+    const bool typed_const = facts.is_const || facts.is_constexpr ||
+      (member_type && member_type->is_const) ||
+      (member_value && member_value->is_const);
+    if(owner->template_specialization && typed_const && integral_constant) return;
+    if(typed_const && integral_constant && !record.initializer) return;
+    if((facts.is_const || facts.is_constexpr) && record.initializer &&
+       integral_constant && ((semantic_binding && semantic_binding->has_value) ||
+       !initializer_calls)) return;
+    const string key = global_key(record.qualified_name);
+    map<string, GlobalRecord*>::iterator global_found = global_by_key_.find(key);
+    if(global_found == global_by_key_.end()) {
+      globals_.push_back(record);
+      global_by_key_[key] = &globals_.back();
+      return;
+    }
+    GlobalRecord* prior = global_found->second;
+    prior->type = record.type;
+    if(record.template_owner) prior->template_owner = record.template_owner;
+    prior->template_instantiation = prior->template_instantiation ||
+      record.template_instantiation;
+    prior->explicit_specialization = prior->explicit_specialization ||
+      record.explicit_specialization;
+    prior->weak_binding = prior->weak_binding || record.weak_binding;
+    prior->thread_local_storage = prior->thread_local_storage ||
+      record.thread_local_storage;
+    if(record.initializer) prior->initializer = record.initializer;
   }
 } // namespace cppgm_pa14_lowering

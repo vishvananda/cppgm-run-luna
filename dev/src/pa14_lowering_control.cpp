@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cerrno>
 #include <cstdlib>
+#include <functional>
 #include <iomanip>
 #include <limits>
 #include <map>
@@ -43,6 +44,48 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
     const size_t temporary_mark = state_ ? state_->temporary_objects.size() : 0;
     TypePtr object_type = type_value(raw_object_type);
     if(!object_type || object_type->kind != TYPE_CLASS) return false;
+    // An aggregate's implicit default constructor has no lowered action when
+    // the aggregate is a concrete (non-template) class with no construction
+    // effects.  Keep materialized template specializations on the normal path:
+    // their generated lifecycle entry is part of the replayed typed state.
+    bool has_nonstatic_member = false;
+    for(size_t member = 0; member < object_type->class_members.size(); ++member)
+      if(!object_type->class_members[member].is_static &&
+         !object_type->class_members[member].name.empty()) {
+        has_nonstatic_member = true;
+        break;
+      }
+    function<bool(const TypePtr&)> has_unavailable_default =
+      [&](const TypePtr& raw_member) {
+        TypePtr member_type = type_value(raw_member);
+        if(!member_type) return false;
+        if(member_type->kind == TYPE_ARRAY) return has_unavailable_default(member_type->child);
+        if(member_type->kind != TYPE_CLASS) return false;
+        if(member_type->direct_base && has_unavailable_default(member_type->direct_base)) return true;
+        for(size_t field = 0; field < member_type->class_members.size(); ++field)
+          if(!member_type->class_members[field].is_static &&
+             has_unavailable_default(member_type->class_members[field].type)) return true;
+        bool has_user_constructor = false;
+        bool has_default_constructor = false;
+        const vector<Binding*> constructors = MemberBindings(member_type,
+          LastComponent(member_type->name));
+        for(size_t candidate = 0; candidate < constructors.size(); ++candidate) {
+          FunctionRecord* record = RecordForBinding(constructors[candidate]);
+          if(!record || !record->constructor || record->implicit_constructor ||
+             record->aggregate_constructor || record->copy_constructor ||
+             record->move_constructor) continue;
+          has_user_constructor = true;
+          TypePtr signature = function_target_type(constructors[candidate]->type);
+          bool defaultable = signature && signature->parameters.size() == 0;
+          if(signature) for(size_t parameter = 0; parameter < signature->parameters.size(); ++parameter)
+            if(!HasDefaultArgument(constructors[candidate], parameter)) defaultable = false;
+          if(defaultable && !record->deleted) has_default_constructor = true;
+        }
+        return has_user_constructor && !has_default_constructor;
+      };
+    if(raw_arguments.empty() && !object_type->template_specialization &&
+       has_nonstatic_member && !HasDefaultConstructionEffects(object_type) &&
+       !has_unavailable_default(object_type) && !HasExplicitConstructor(object_type)) return true;
     const string constructor_name = LastComponent(object_type->name);
     // The ordinary semantic pass does not need to materialize an implicit copy
     // constructor merely to type-check a class mem-initializer.  Lowering does
@@ -177,7 +220,8 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
     if(record && base_entry) {
       const TypePtr first_parameter = record->source_type && !record->source_type->parameters.empty() ? record->source_type->parameters[0] : TypePtr();
       if(record->template_instantiation && !raw_arguments.empty() &&
-         (record->value_special_member || !type_is_reference(first_parameter)))
+         (record->value_special_member || !type_is_reference(first_parameter) ||
+          raw_arguments.size() > 1))
         record->needed = true;
       const string original_qname = record->qualified_name;
       const TypePtr original_type = record->type;
@@ -264,97 +308,6 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
     AddInstruction(call.str());
     EmitTemporaryDestructors(temporary_mark, scope);
     return true;
-  }
-string PA14Lowerer::EmitTemporaryObjectAddress(const CPPGMAstNodePtr& node,
-                                               Scope* scope,
-                                               const string& prefix)
-{
-    if(!node || node->kind != "call-expression" || node->children.empty())
-      throw logic_error("invalid temporary object expression");
-    TypePtr object_type = ConstructorObjectType(node->children[0], scope);
-    if(!object_type) throw logic_error("temporary expression is not a class construction");
-    CollectImplicitConstructor(object_type, object_type->owned_scope, true);
-    const string slot = new_special_slot(prefix, low_type(object_type));
-    const string address = new_temp();
-    AddInstruction(address + " = addr $" + slot);
-    const CPPGMAstNodePtr argument_list = node->children.size() > 1 ?
-      node->children[1] : CPPGMAstNodePtr();
-    vector<CPPGMAstNodePtr> arguments = argument_list ?
-      argument_list->children : vector<CPPGMAstNodePtr>();
-    if(node->value == "braced-construction" && arguments.size() == 1 &&
-       arguments[0] && arguments[0]->kind == "braced-init-list")
-      arguments = arguments[0]->children;
-    if(!EmitConstructorAt(object_type, address, arguments, scope,
-                          true, false, false, false, arguments.empty()))
-      throw logic_error("no viable temporary object construction");
-    RegisterTemporaryObject(object_type, address);
-    return address;
-  }
-PA14Lowerer::Value PA14Lowerer::EmitObjectValueArgument(
-    const CPPGMAstNodePtr& node, Scope* scope, const TypePtr& target)
-{
-    TypePtr object_type = type_value(target);
-    if(!object_type || object_type->kind != TYPE_CLASS)
-      return EmitValue(node, scope, target);
-    const string slot = new_special_slot("argobj", low_type(object_type));
-    const string address = new_temp();
-    AddInstruction(address + " = addr $" + slot);
-    bool empty_storage = !object_type->direct_base;
-    for(size_t i = 0; i < object_type->class_members.size(); ++i)
-      if(!object_type->class_members[i].is_static &&
-         !object_type->class_members[i].name.empty()) {
-        empty_storage = false;
-        break;
-      }
-    if(empty_storage && IsTrivialValueStorage(object_type)) {
-      const ExprInfo source_info = Infer(node, scope);
-      const TypePtr source_type = expression_value_type(source_info);
-      const TypePtr constructed = node && node->kind == "call-expression" &&
-        !node->children.empty() ? ConstructorObjectType(node->children[0], scope) : TypePtr();
-      if((constructed && PA12SameType(constructed, object_type, true)) ||
-         (node && node->kind == "call-expression" && source_type &&
-          source_type->kind == TYPE_CLASS &&
-          PA12SameType(source_type, object_type, true))) {
-        if(!EmitObjectTransferAt(object_type, address, node, scope, true))
-          return EmitValue(node, scope, target);
-      } else {
-        const string source_address = EmitAddress(node, scope);
-        if(source_type && source_type->kind == TYPE_CLASS &&
-           IsDerivedFrom(source_type, object_type))
-          (void)AdjustBaseAddress(source_address, source_type, object_type);
-      }
-    }
-    else if(!EmitObjectTransferAt(object_type, address, node, scope, true))
-      return EmitValue(node, scope, target);
-    Value result;
-    result.type = object_type;
-    result.operand = "$" + slot;
-    return result;
-  }
-bool PA14Lowerer::EmitDestructorAt(const TypePtr& raw_object_type, const string& address,
-                                   Scope* scope, bool force_empty)
-{
-    TypePtr object_type = type_value(raw_object_type);
-    if(!object_type || object_type->kind != TYPE_CLASS) return false;
-    const string name = "~" + LastComponent(object_type->name);
-    vector<Binding*> candidates = MemberBindings(object_type, name);
-    for(size_t i = 0; i < candidates.size(); ++i) {
-      Binding* binding = candidates[i];
-      if(binding->kind != BIND_FUNCTION || !binding->is_member || binding->is_static) continue;
-      FunctionRecord* record = RecordForBinding(binding);
-      if(!record || !record->destructor) continue;
-      if(!HasDestructor(object_type)) continue;
-      if(!force_empty && !DestructorHasEffects(object_type)) continue;
-      record->needed = true;
-      FunctionRecord* base_entry = BaseEntryFor(record);
-      FunctionRecord* call_record = object_type->polymorphic && force_empty && base_entry ?
-        base_entry : record;
-      if(base_entry) base_entry->needed = true;
-      AddInstruction("call void @" + call_record->symbol + "(" + address + ")");
-      return true;
-    }
-    (void)scope;
-    return false;
   }
 bool PA14Lowerer::EmitObjectConstructor(VariablePlan* variable,
                                         const TypePtr& raw_object_type,
@@ -758,18 +711,6 @@ void PA14Lowerer::EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr&
     else
       StoreLValue(CPPGMAstNodePtr(new CPPGMAstNode("id-expression", variable->source_name)),
         scope, type_value(variable->type), value.operand);
-  }
-bool PA14Lowerer::HasNonSizeofReference(const CPPGMAstNodePtr& node,
-                                        const string& name, bool inside_sizeof) const
-{
-    if(!node) return false;
-    const bool now_inside_sizeof = inside_sizeof || node->kind == "sizeof-expression" ||
-      node->kind == "sizeof-pack-expression";
-    if(node->kind == "id-expression" && node->value == name && !now_inside_sizeof)
-      return true;
-    for(size_t i = 0; i < node->children.size(); ++i)
-      if(HasNonSizeofReference(node->children[i], name, now_inside_sizeof)) return true;
-    return false;
   }
 bool PA14Lowerer::StatementTerminates(const CPPGMAstNodePtr& node) const
 {
@@ -1322,13 +1263,14 @@ void PA14Lowerer::EmitStatement(const CPPGMAstNodePtr& node, Scope* scope)
             EmitLocalStaticInitialization(found->second, scope);
             continue;
           }
+          bool discard_unused_initializer = false;
           if(found != state_->plans.end() &&
              !type_is_reference(found->second->type) &&
              type_value(found->second->type) &&
              (type_value(found->second->type)->kind == TYPE_CLASS ||
               (type_value(found->second->type)->kind == TYPE_ARRAY &&
                type_value(found->second->type)->child &&
-              type_value(found->second->type)->child->kind == TYPE_CLASS))) {
+               type_value(found->second->type)->child->kind == TYPE_CLASS))) {
             if(node->materialize_object_address && !node->materialize_object_name.empty()) {
               VariablePlan* dependency = LocalForName(node->materialize_object_name);
               if(dependency && dependency != found->second &&
@@ -1349,6 +1291,19 @@ void PA14Lowerer::EmitStatement(const CPPGMAstNodePtr& node, Scope* scope)
               state_->record->node->children.size() > 2 &&
               HasNonSizeofReference(state_->record->node->children[2],
                 found->second->source_name);
+            const bool meaningfully_referenced = state_->record && state_->record->node &&
+              state_->record->node->children.size() > 2 &&
+              HasNonSizeofReference(state_->record->node->children[2],
+                found->second->source_name, false, true);
+            TypePtr planned_object = type_value(found->second->type);
+            CPPGMAstNodePtr planned_expression = item->children.size() > 1 ?
+              InitializerExpression(item->children[1]) : CPPGMAstNodePtr();
+            discard_unused_initializer = initialized && !meaningfully_referenced &&
+              planned_expression && planned_expression->kind == "binary-expression" &&
+              planned_object && planned_object->kind == TYPE_CLASS &&
+              IsTrivialValueStorage(planned_object) &&
+              !HasDestructor(planned_object) &&
+              !HasDefaultConstructionEffects(planned_object);
             if(initialized || (referenced &&
                                (!empty_initializer ||
                                 HasDefaultInitializationEffects(found->second->type))))
@@ -1361,6 +1316,35 @@ void PA14Lowerer::EmitStatement(const CPPGMAstNodePtr& node, Scope* scope)
             found->second->slot_declared = true;
             state_->slot_order.push_back(FunctionState::SlotEntry(
               false, found->second->slot_name, found->second));
+          }
+          if(discard_unused_initializer) {
+            // Still replay the initializer for demand discovery: lowering
+            // the discarded expression marks the selected template bodies
+            // needed, but its instructions and temporary storage are not
+            // observable when the object value is only discarded.
+            const size_t line_mark = state_->current->lines.size();
+            const unsigned int temp_mark = state_->next_temp;
+            const unsigned int label_mark = state_->next_label;
+            const unsigned int special_mark = state_->next_special;
+            const size_t special_slot_mark = state_->special_slots.size();
+            const size_t slot_order_mark = state_->slot_order.size();
+            const size_t temporary_object_mark = state_->temporary_objects.size();
+            const set<string> reserved_name_mark = state_->reserved_value_names;
+            if(found != state_->plans.end() && item->children.size() > 1)
+              EmitInitializer(found->second, item->children[1], scope);
+            state_->current->lines.resize(line_mark);
+            state_->next_temp = temp_mark;
+            state_->next_label = label_mark;
+            state_->next_special = special_mark;
+            state_->reserved_value_names = reserved_name_mark;
+            for(size_t special = special_slot_mark;
+                special < state_->special_slots.size(); ++special)
+              state_->special_slot_types.erase(state_->special_slots[special]);
+            state_->special_slots.resize(special_slot_mark);
+            state_->slot_order.resize(slot_order_mark);
+            state_->temporary_objects.resize(temporary_object_mark);
+            found->second->initialization_address.clear();
+            continue;
           }
           if(found != state_->plans.end() && item->children.size() > 1)
             EmitInitializer(found->second, item->children[1], scope);

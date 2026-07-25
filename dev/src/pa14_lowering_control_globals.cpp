@@ -1,5 +1,8 @@
 #include "pa14_lowering.h"
 
+#include <algorithm>
+#include <sstream>
+
 using namespace std;
 
 namespace cppgm_pa14_lowering
@@ -170,6 +173,110 @@ void PA14Lowerer::EmitLocalStaticInitialization(VariablePlan* variable, Scope* s
       Terminate("jump ^" + ready);
     }
     AddBlock(ready);
+  }
+
+void PA14Lowerer::EmitDynamicInitializers(vector<string>& entries)
+{
+    vector<GlobalRecord*> initializers;
+    vector<GlobalRecord*> tls_initializers;
+    vector<GlobalRecord*> finalizers;
+    for(size_t i = 0; i < globals_.size(); ++i) {
+      if(globals_[i].dynamic_initializer && !globals_[i].local_static) {
+        if(globals_[i].thread_local_storage) tls_initializers.push_back(&globals_[i]);
+        else initializers.push_back(&globals_[i]);
+      }
+      if(globals_[i].dynamic_finalizer && !globals_[i].local_static)
+        finalizers.push_back(&globals_[i]);
+    }
+    if(initializers.empty() && tls_initializers.empty() && finalizers.empty()) return;
+    stable_partition(initializers.begin(), initializers.end(),
+      [](GlobalRecord* object) { return object && type_is_reference(object->type); });
+    const auto render = [](FunctionState& state, const string& name,
+                           const string& metadata) -> string {
+      ostringstream out;
+      out << "function @" << name << "() -> void";
+      if(!metadata.empty()) out << " [" << metadata << "]";
+      out << " {\n";
+      for(size_t i = 0; i < state.special_slots.size(); ++i)
+        out << "  slot $" << state.special_slots[i] << " : " <<
+          state.special_slot_types[state.special_slots[i]] << "\n";
+      if(!state.special_slots.empty()) out << "\n";
+      for(size_t i = 0; i < state.blocks.size(); ++i) {
+        if(i != 0) out << "\n";
+        out << "  block ^" << state.blocks[i].label << ":\n";
+        for(size_t j = 0; j < state.blocks[i].lines.size(); ++j)
+          out << state.blocks[i].lines[j] << "\n";
+      }
+      out << "}";
+      return out.str();
+    };
+    if(!initializers.empty()) {
+      FunctionRecord helper;
+      helper.scope = analyzer_.global_.get();
+      helper.type = FunctionOf(vector<TypePtr>(), false, Fundamental("void"), false);
+      helper.qualified_name = "__cppgm_init";
+      helper.symbol = "__cppgm_init";
+      helper.definition = true;
+      FunctionState state(this, &helper);
+      state_ = &state;
+      state.environments.push_back(map<string, VariablePlan*>());
+      AddBlock("entry");
+      for(size_t i = 0; i < initializers.size() && !state.current->terminated; ++i)
+        EmitGlobalInitializer(*initializers[i], initializers[i]->scope);
+      if(!state.current->terminated) Terminate("return void");
+      entries.push_back(render(state, "__cppgm_init", "role=init"));
+      state_ = 0;
+    }
+    for(size_t i = 0; i < tls_initializers.size(); ++i) {
+      GlobalRecord* object = tls_initializers[i];
+      GlobalRecord* guard = FindGlobal(object->qualified_name + "__tls_guard");
+      if(!guard) {
+        if(initializers.empty()) initializers.push_back(object);
+        continue;
+      }
+      FunctionRecord helper;
+      helper.scope = analyzer_.global_.get();
+      helper.type = FunctionOf(vector<TypePtr>(), false, Fundamental("void"), false);
+      helper.qualified_name = object->qualified_name + "__tls_init";
+      helper.symbol = object->symbol + "__tls_init";
+      helper.definition = true;
+      FunctionState state(this, &helper);
+      state_ = &state;
+      state.environments.push_back(map<string, VariablePlan*>());
+      AddBlock("entry");
+      const string loaded = new_temp();
+      AddInstruction(loaded + " = load i64 @" + guard->symbol);
+      const string initialized = new_temp();
+      AddInstruction(initialized + " = cmp ne i64 " + loaded + ", 0");
+      AddInstruction("branch " + initialized + ", ^local_static_ctor_done_2, ^local_static_ctor_run_1");
+      AddBlock("local_static_ctor_run_1");
+      EmitGlobalInitializer(*object, object->scope);
+      if(!state.current->terminated) {
+        AddInstruction("store i64 1, @" + guard->symbol);
+        Terminate("jump ^local_static_ctor_done_2");
+      }
+      AddBlock("local_static_ctor_done_2");
+      if(!state.current->terminated) Terminate("return void");
+      entries.push_back(render(state, helper.symbol, "binding=internal"));
+      state_ = 0;
+    }
+    if(!finalizers.empty()) {
+      FunctionRecord helper;
+      helper.scope = analyzer_.global_.get();
+      helper.type = FunctionOf(vector<TypePtr>(), false, Fundamental("void"), false);
+      helper.qualified_name = "__cppgm_fini";
+      helper.symbol = "__cppgm_fini";
+      helper.definition = true;
+      FunctionState state(this, &helper);
+      state_ = &state;
+      state.environments.push_back(map<string, VariablePlan*>());
+      AddBlock("entry");
+      for(size_t i = finalizers.size(); i > 0 && !state.current->terminated; --i)
+        EmitGlobalFinalizer(*finalizers[i - 1], finalizers[i - 1]->scope);
+      if(!state.current->terminated) Terminate("return void");
+      entries.push_back(render(state, "__cppgm_fini", "role=fini"));
+      state_ = 0;
+    }
   }
 
 } // namespace cppgm_pa14_lowering

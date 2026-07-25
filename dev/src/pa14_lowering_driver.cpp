@@ -66,13 +66,33 @@ void PA14Lowerer::Lower(ostream& out)
     // the call dependency (construct the pack object before lowering the
     // function that expands its uses).  Constructors demanded transitively by
     // generated functions remain in the member fixed-point below.
+    const auto has_nested_callable_operation = [&](const FunctionRecord& constructor) {
+      const TypePtr owner = type_value(constructor.member_owner);
+      if(!owner || !owner->template_specialization) return false;
+      bool nested_argument = false;
+      for(size_t argument = 0; argument < owner->template_arguments.size(); ++argument)
+        if(owner->template_arguments[argument].find('<') != string::npos) {
+          nested_argument = true;
+          break;
+        }
+      if(!nested_argument) return false;
+      for(size_t candidate = 0; candidate < functions_.size(); ++candidate) {
+        const FunctionRecord& operation = functions_[candidate];
+        if(!operation.definition || !operation.member || operation.constructor ||
+           !operation.needed || operation.emitted || operation.member_owner.get() != owner.get())
+          continue;
+        if(LastComponent(operation.qualified_name) == "operator()") return true;
+      }
+      return false;
+    };
     bool added_root_member = true;
     while(added_root_member) {
       added_root_member = false;
       for(size_t i = 0; i < functions_.size(); ++i) {
         FunctionRecord& function = functions_[i];
         if(!function.definition || !function.member || !function.constructor ||
-           !function.needed || function.emitted || !function.template_instantiation)
+           !function.needed || function.emitted || !function.template_instantiation ||
+           has_nested_callable_operation(function))
           continue;
         entries.push_back(EmitFunction(function));
         function.emitted = true;
@@ -96,6 +116,15 @@ void PA14Lowerer::Lower(ostream& out)
         if(value && value->kind == TYPE_CLASS && value->template_specialization)
           return true;
       }
+      if(LastComponent(function.qualified_name) == "operator()") return true;
+      return false;
+    };
+    const auto is_nested_callable_operation = [](const FunctionRecord& function) {
+      const TypePtr owner = type_value(function.member_owner);
+      if(!owner || !owner->template_specialization ||
+         LastComponent(function.qualified_name) != "operator()") return false;
+      for(size_t argument = 0; argument < owner->template_arguments.size(); ++argument)
+        if(owner->template_arguments[argument].find('<') != string::npos) return true;
       return false;
     };
     // A call from an ordinary root can demand a nested template member
@@ -113,6 +142,16 @@ void PA14Lowerer::Lower(ostream& out)
            !is_nested_reference_template_owner(function)) continue;
         entries.push_back(EmitFunction(function));
         function.emitted = true;
+        if(is_nested_callable_operation(function)) {
+          for(size_t candidate = 0; candidate < functions_.size(); ++candidate) {
+            FunctionRecord& constructor = functions_[candidate];
+            if(!constructor.definition || !constructor.member || !constructor.constructor ||
+               !constructor.needed || constructor.emitted || !constructor.template_instantiation ||
+               constructor.member_owner.get() != function.member_owner.get()) continue;
+            entries.push_back(EmitFunction(constructor));
+            constructor.emitted = true;
+          }
+        }
         added_root_member_operation = true;
       }
     }

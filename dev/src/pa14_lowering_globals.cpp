@@ -1280,8 +1280,39 @@ string PA14Lowerer::EmitMemberAddress(const CPPGMAstNodePtr& node, Scope* scope,
        member->member_index >= member->member_owner->class_members.size())
       throw logic_error("member has no layout record");
     const ClassMemberInfo& fact = member->member_owner->class_members[member->member_index];
-    string base;
     const string op = PA12Operator(node->value);
+    string stable_key;
+    TypePtr field_type = type_value(fact.type);
+    const bool replay_context = state_ && state_->record &&
+      (state_->record->template_instantiation ||
+       (state_->record->member_owner &&
+        state_->record->member_owner->template_specialization));
+    if(replay_context && op == "." && field_type && field_type->kind == TYPE_CLASS &&
+       !field_type->template_specialization &&
+       !HasDefaultConstructionEffects(field_type) &&
+       !HasExplicitConstructor(field_type)) {
+      function<string(const CPPGMAstNodePtr&)> path = [&](const CPPGMAstNodePtr& value) {
+        if(!value) return string();
+        if(value->kind == "id-expression") return value->value;
+        if(value->kind == "parenthesized-expression" && value->children.size() == 1)
+          return path(value->children[0]);
+        if(value->kind == "member-expression" && value->children.size() >= 2 &&
+           value->children[1]) {
+          const string base_path = path(value->children[0]);
+          return base_path.empty() ? string() : base_path + "." + value->children[1]->value;
+        }
+        return string();
+      };
+      if(!node->children.empty()) {
+        const string base_path = path(node->children[0]);
+        if(!base_path.empty()) stable_key = base_path + "." + member->name;
+      }
+      if(!stable_key.empty() && state_) {
+        map<string, string>::const_iterator cached = state_->stable_member_addresses.find(stable_key);
+        if(cached != state_->stable_member_addresses.end()) return cached->second;
+      }
+    }
+    string base;
     if(op == "->") {
       TypePtr object = expression_value_type(object_info);
       if(!object || object->kind != TYPE_POINTER) throw logic_error("arrow requires a pointer to class");
@@ -1328,8 +1359,9 @@ string PA14Lowerer::EmitMemberAddress(const CPPGMAstNodePtr& node, Scope* scope,
        (reference_field ? "[projection=reference_field] " : "[projection=field] ")) +
       base + ", " +
       integer_text(fact.offset));
+    if(!stable_key.empty() && state_) state_->stable_member_addresses[stable_key] = result;
     return result;
-  }
+}
 
 string PA14Lowerer::AdjustBaseAddress(const string& base, const TypePtr& raw_derived,
                                       const TypePtr& target,
@@ -1380,120 +1412,6 @@ string PA14Lowerer::AdjustBaseAddress(const string& base, const TypePtr& raw_der
       adjusted = projected;
     }
     return adjusted;
-  }
-
-void PA14Lowerer::EmitDynamicInitializers(vector<string>& entries)
-{
-    vector<GlobalRecord*> initializers;
-    vector<GlobalRecord*> tls_initializers;
-    vector<GlobalRecord*> finalizers;
-    for(size_t i = 0; i < globals_.size(); ++i) {
-      if(globals_[i].dynamic_initializer && !globals_[i].local_static) {
-        if(globals_[i].thread_local_storage) tls_initializers.push_back(&globals_[i]);
-        else initializers.push_back(&globals_[i]);
-      }
-      if(globals_[i].dynamic_finalizer && !globals_[i].local_static)
-        finalizers.push_back(&globals_[i]);
-    }
-    if(initializers.empty() && tls_initializers.empty() && finalizers.empty()) return;
-
-    // Binding a namespace-scope reference only publishes an address; it does
-    // not require the referred object's dynamic constructor to have run yet.
-    // Emit those address bindings first so the initialization stream follows
-    // the dependency shape represented in LowIR, while preserving source
-    // order within each category.
-    stable_partition(initializers.begin(), initializers.end(),
-      [](GlobalRecord* object) { return object && type_is_reference(object->type); });
-
-    const auto render = [](FunctionState& state, const string& name,
-                           const string& metadata) -> string {
-      ostringstream out;
-      out << "function @" << name << "() -> void";
-      if(!metadata.empty()) out << " [" << metadata << "]";
-      out << " {\n";
-      for(size_t i = 0; i < state.special_slots.size(); ++i)
-        out << "  slot $" << state.special_slots[i] << " : " <<
-          state.special_slot_types[state.special_slots[i]] << "\n";
-      if(!state.special_slots.empty()) out << "\n";
-      for(size_t i = 0; i < state.blocks.size(); ++i) {
-        if(i != 0) out << "\n";
-        out << "  block ^" << state.blocks[i].label << ":\n";
-        for(size_t j = 0; j < state.blocks[i].lines.size(); ++j)
-          out << state.blocks[i].lines[j] << "\n";
-      }
-      out << "}";
-      return out.str();
-    };
-    if(!initializers.empty()) {
-      FunctionRecord helper;
-      helper.scope = analyzer_.global_.get();
-      helper.type = FunctionOf(vector<TypePtr>(), false, Fundamental("void"), false);
-      helper.qualified_name = "__cppgm_init";
-      helper.symbol = "__cppgm_init";
-      helper.definition = true;
-      FunctionState state(this, &helper);
-      state_ = &state;
-      state.environments.push_back(map<string, VariablePlan*>());
-      AddBlock("entry");
-      for(size_t i = 0; i < initializers.size() && !state.current->terminated; ++i)
-        EmitGlobalInitializer(*initializers[i], initializers[i]->scope);
-      if(!state.current->terminated) Terminate("return void");
-      entries.push_back(render(state, "__cppgm_init", "role=init"));
-      state_ = 0;
-    }
-    for(size_t i = 0; i < tls_initializers.size(); ++i) {
-      GlobalRecord* object = tls_initializers[i];
-      GlobalRecord* guard = FindGlobal(object->qualified_name + "__tls_guard");
-      if(!guard) {
-        // The guard is normally created while declarations are collected.
-        // Keep an unexpected late dynamic initializer safe by using the
-        // ordinary helper rather than emitting an invalid guarded function.
-        if(initializers.empty()) initializers.push_back(object);
-        continue;
-      }
-      FunctionRecord helper;
-      helper.scope = analyzer_.global_.get();
-      helper.type = FunctionOf(vector<TypePtr>(), false, Fundamental("void"), false);
-      helper.qualified_name = object->qualified_name + "__tls_init";
-      helper.symbol = object->symbol + "__tls_init";
-      helper.definition = true;
-      FunctionState state(this, &helper);
-      state_ = &state;
-      state.environments.push_back(map<string, VariablePlan*>());
-      AddBlock("entry");
-      const string loaded = new_temp();
-      AddInstruction(loaded + " = load i64 @" + guard->symbol);
-      const string initialized = new_temp();
-      AddInstruction(initialized + " = cmp ne i64 " + loaded + ", 0");
-      AddInstruction("branch " + initialized + ", ^local_static_ctor_done_2, ^local_static_ctor_run_1");
-      AddBlock("local_static_ctor_run_1");
-      EmitGlobalInitializer(*object, object->scope);
-      if(!state.current->terminated) {
-        AddInstruction("store i64 1, @" + guard->symbol);
-        Terminate("jump ^local_static_ctor_done_2");
-      }
-      AddBlock("local_static_ctor_done_2");
-      if(!state.current->terminated) Terminate("return void");
-      entries.push_back(render(state, helper.symbol, "binding=internal"));
-      state_ = 0;
-    }
-    if(!finalizers.empty()) {
-      FunctionRecord helper;
-      helper.scope = analyzer_.global_.get();
-      helper.type = FunctionOf(vector<TypePtr>(), false, Fundamental("void"), false);
-      helper.qualified_name = "__cppgm_fini";
-      helper.symbol = "__cppgm_fini";
-      helper.definition = true;
-      FunctionState state(this, &helper);
-      state_ = &state;
-      state.environments.push_back(map<string, VariablePlan*>());
-      AddBlock("entry");
-      for(size_t i = finalizers.size(); i > 0 && !state.current->terminated; --i)
-        EmitGlobalFinalizer(*finalizers[i - 1], finalizers[i - 1]->scope);
-      if(!state.current->terminated) Terminate("return void");
-      entries.push_back(render(state, "__cppgm_fini", "role=fini"));
-      state_ = 0;
-    }
   }
 
 } // namespace cppgm_pa14_lowering

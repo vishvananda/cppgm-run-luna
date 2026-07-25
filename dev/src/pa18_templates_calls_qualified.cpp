@@ -5,6 +5,31 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
+bool PA18TemplateExpander::IsKnownMemberTemplateId(const string& raw) const
+{
+	const string spelling = CanonicalSpelling(RemoveMarker(raw));
+	const size_t open = spelling.find('<');
+	if(open == string::npos) return false;
+	string base;
+	string arguments;
+	size_t begin = 0;
+	size_t close = string::npos;
+	if(!TemplateBase(spelling, open, &begin, &base) ||
+		!TemplateRange(spelling, open, &arguments, &close)) return false;
+	const string member_name = LastComponent(base);
+	map<string, vector<string> >::const_iterator indexed = definitions_by_name_.find(member_name);
+	if(indexed == definitions_by_name_.end()) return false;
+	for(size_t i = 0; i < indexed->second.size(); ++i) {
+		map<string, TemplateDefinition>::const_iterator found = definitions_.find(indexed->second[i]);
+		if(found == definitions_.end()) continue;
+		const TemplateDefinition& definition = found->second;
+		if(definition.member_template && !definition.class_template &&
+			LastComponent(definition.name) == member_name)
+			return true;
+	}
+	return false;
+}
+
 bool PA18TemplateExpander::HasViableOrdinaryCallableMember(
 	const CPPGMAstNodePtr& call, const string& object_type, const string& member_name,
 	const string& context, const map<string, string>& substitutions)

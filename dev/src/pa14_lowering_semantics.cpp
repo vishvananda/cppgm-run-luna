@@ -1,6 +1,7 @@
 #include "pa14_lowering.h"
 
 #include <cstdlib>
+#include <functional>
 
 using namespace std;
 
@@ -1327,6 +1328,35 @@ bool PA14Lowerer::HasNonstaticMemberFunction(const TypePtr& raw_type) const
       if(binding.kind == BIND_FUNCTION && binding.is_member && !binding.is_static)
         return true;
     }
+  return false;
+}
+
+bool PA14Lowerer::HasNonSizeofReference(const CPPGMAstNodePtr& node,
+                                        const string& name, bool inside_sizeof,
+                                        bool ignore_discarded) const
+{
+    if(!node) return false;
+    bool cast_to_void = false;
+    if(node->kind == "cast-expression" && !node->children.empty() && node->children[0]) {
+      function<bool(const CPPGMAstNodePtr&)> contains_void =
+        [&](const CPPGMAstNodePtr& value) {
+          if(!value) return false;
+          if((value->kind == "type-specifier" || value->kind == "decl-specifier") &&
+             (value->value == "void" || value->value == "KW_VOID:void")) return true;
+          for(size_t child = 0; child < value->children.size(); ++child)
+            if(contains_void(value->children[child])) return true;
+          return false;
+        };
+      cast_to_void = contains_void(node->children[0]);
+    }
+    const bool now_inside_sizeof = inside_sizeof || (ignore_discarded && cast_to_void) ||
+      node->kind == "sizeof-expression" ||
+      node->kind == "sizeof-pack-expression";
+    if(node->kind == "id-expression" && node->value == name && !now_inside_sizeof)
+      return true;
+    for(size_t i = 0; i < node->children.size(); ++i)
+      if(HasNonSizeofReference(node->children[i], name, now_inside_sizeof,
+                               ignore_discarded)) return true;
     return false;
   }
 

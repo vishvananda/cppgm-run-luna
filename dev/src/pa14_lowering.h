@@ -272,6 +272,8 @@ class PA14Lowerer
     string return_object_slot;
     map<string, unsigned int> variable_name_counts;
     set<string> reserved_value_names;
+    map<string, string> stable_member_addresses;
+    map<const CPPGMAstNode*, Value> aggregate_precomputed_values;
     map<const CPPGMAstNode*, string> case_labels;
     set<const CPPGMAstNode*> emitted_cases;
     map<string, string> named_labels;
@@ -285,7 +287,8 @@ class PA14Lowerer
         special_slot_types(), slot_order(), temporary_objects(), blocks(), current(), next_temp(1), next_label(1),
         next_special(1), environments(), return_slot_plan(0), return_object_slot(),
         variable_name_counts(),
-        reserved_value_names(), case_labels(), emitted_cases(), named_labels(),
+        reserved_value_names(), stable_member_addresses(), aggregate_precomputed_values(),
+        case_labels(), emitted_cases(), named_labels(),
         switch_end_targets(), break_targets(), continue_targets(),
         unevaluated_context(false) {}
   };
@@ -360,7 +363,13 @@ bool HasNoexcept(const CPPGMAstNodePtr& node) const;
 
 bool HasInline(const CPPGMAstNodePtr& node) const;
 
-void CollectClassMembers(const CPPGMAstNodePtr& node, Scope* scope);
+  void CollectClassMembers(const CPPGMAstNodePtr& node, Scope* scope);
+  void CollectClassStaticMember(const CPPGMAstNodePtr& child,
+                                const CPPGMAstNodePtr& item,
+                                const TypePtr& owner, Scope* class_scope,
+                                const Analyzer::SpecFacts& facts,
+                                const TypePtr& member_type,
+                                const string& name);
 
 void BindClassMember(Binding* binding, bool is_static, const TypePtr& owner) const;
 
@@ -889,7 +898,47 @@ void EmitAggregateClassFields(const string& base, const TypePtr& type,
                               const CPPGMAstNodePtr& expression, Scope* scope,
                               const CPPGMAstNodePtr& refresh_node,
                               size_t* child_index,
-                              bool direct_first_field = false);
+                              bool direct_first_field = false,
+                              const string& refresh_base = string(),
+                              long long refresh_offset = -1);
+
+void PrecomputeAggregateChildValues(const TypePtr& child_type,
+                                    const CPPGMAstNodePtr& child, Scope* scope,
+                                    vector<const CPPGMAstNode*>* computed);
+
+void ClearAggregateChildValues(const vector<const CPPGMAstNode*>& computed);
+
+string AggregateFieldBase(const string& base, bool refresh_field_base,
+                          const CPPGMAstNodePtr& refresh_node, Scope* scope,
+                          const string& refresh_base, long long refresh_offset,
+                          string* synthetic_refresh_base);
+
+void EmitAggregateClassBitField(const string& base, bool refresh_field_base,
+                                const CPPGMAstNodePtr& refresh_node,
+                                const string& refresh_base, long long refresh_offset,
+                                string* synthetic_refresh_base,
+                                const TypePtr& child_type,
+                                const CPPGMAstNodePtr& child, Scope* scope,
+                                Binding* member_binding, const ClassMemberInfo& member,
+                                bool* storage_initialized,
+                                const Value* precomputed_value);
+
+void EmitAggregateClassReference(const string& base, bool refresh_field_base,
+                                 const CPPGMAstNodePtr& refresh_node,
+                                 const string& refresh_base, long long refresh_offset,
+                                 string* synthetic_refresh_base,
+                                 const TypePtr& member_type,
+                                 const CPPGMAstNodePtr& child, Scope* scope,
+                                 const ClassMemberInfo& member);
+
+bool EmitAggregateClassObject(const string& base, const TypePtr& child_type,
+                              const CPPGMAstNodePtr& child,
+                              const CPPGMAstNodePtr& expression, Scope* scope,
+                              const CPPGMAstNodePtr& refresh_node,
+                              const string& field, const string& member_name,
+                              size_t current_child_index, size_t* child_index,
+                              long long member_offset,
+                              const vector<const CPPGMAstNode*>& computed);
 
 bool EmitAggregateClassArrayField(const string& base, const TypePtr& type,
                                   const CPPGMAstNodePtr& child, Scope* scope,
@@ -903,7 +952,8 @@ void EmitAggregateClassDefaults(const string& base, const TypePtr& type,
                                 bool direct_first_field = false);
 
 bool HasNonSizeofReference(const CPPGMAstNodePtr& node,
-                           const string& name, bool inside_sizeof = false) const;
+                           const string& name, bool inside_sizeof = false,
+                           bool ignore_discarded = false) const;
 
 bool StatementTerminates(const CPPGMAstNodePtr& node) const;
 

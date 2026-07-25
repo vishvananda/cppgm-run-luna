@@ -5,6 +5,38 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
+bool PA18TemplateExpander::InferBinaryArgument(const CPPGMAstNodePtr& expression,
+	string* result, const map<string, string>& substitutions, const string& context) const
+{
+	if(!expression || expression->children.size() < 2 || !result) return false;
+	const string operation = RemoveMarker(expression->value);
+	string left;
+	string right;
+	const bool have_operands = InferArgument(expression->children[0], &left,
+		substitutions, context) && InferArgument(expression->children[1], &right,
+		substitutions, context);
+	if(have_operands && InferOperatorResult(operation, left, right, context, result)) return true;
+	if(have_operands && InferTemplateOperatorResult(operation, expression->children[0],
+		expression->children[1], substitutions, context, result)) return true;
+	if(have_operands && (operation == "&&" || operation == "||" || operation == "==" ||
+		operation == "!=" || operation == "<" || operation == ">" ||
+		operation == "<=" || operation == ">=") && IsBuiltinLogicalType(left) &&
+		IsBuiltinLogicalType(right)) {
+		*result = "bool";
+		return true;
+	}
+	if(have_operands && (operation == "+" || operation == "-") &&
+		IsBuiltinArithmeticType(left) && IsBuiltinArithmeticType(right)) {
+		*result = CommonBuiltinArithmeticType(left, right);
+		return true;
+	}
+	string fallback;
+	if(!InferArgument(expression->children[0], &fallback, substitutions, context) ||
+		!IsKnownTypeSpelling(fallback, context)) return false;
+	*result = fallback;
+	return true;
+}
+
 bool PA18TemplateExpander::IsBuiltinArithmeticType(string raw) const
 {
 	raw = CanonicalSpelling(raw);

@@ -679,7 +679,9 @@ bool PA14Lowerer::EmitObjectTransferAt(const TypePtr& raw_target,
       // Even an empty object reference must be evaluated.  This matters when
       // the lvalue is the result of a comma expression whose discarded side
       // contains an aggregate construction.
-      if(source->kind == "id-expression" ||
+      VariablePlan* source_local = source->kind == "id-expression" ?
+        FindLocalPlan(source->value) : 0;
+      if((source_local && (source_local->parameter || implicit_return_move)) ||
          (source->kind == "binary-expression" && PA12Operator(source->value) == ","))
         (void)EmitAddress(source, scope);
       return true;
@@ -895,57 +897,246 @@ bool PA14Lowerer::EmitAggregateClassArrayField(const string& base, const TypePtr
     return true;
   }
 
+void PA14Lowerer::PrecomputeAggregateChildValues(const TypePtr& child_type,
+                                                 const CPPGMAstNodePtr& child,
+                                                 Scope* scope,
+                                                 vector<const CPPGMAstNode*>* computed)
+{
+    if(!state_ || !child_type || child_type->kind != TYPE_CLASS || !child ||
+       child->kind != "braced-init-list" || !computed) return;
+    size_t nested_child = 0;
+    for(size_t member = 0; member < child_type->class_members.size() &&
+        nested_child < child->children.size(); ++member) {
+      const ClassMemberInfo& nested_field = child_type->class_members[member];
+      if(nested_field.is_static || !nested_field.type) continue;
+      const CPPGMAstNodePtr nested_expression = child->children[nested_child++];
+      if(!nested_expression || nested_expression->kind != "call-expression" ||
+         state_->aggregate_precomputed_values.find(nested_expression.get()) !=
+           state_->aggregate_precomputed_values.end()) continue;
+      Value precomputed;
+      precomputed.type = nested_field.type;
+      if(type_is_reference(nested_field.type)) {
+        precomputed.operand = EmitReferenceArgument(nested_expression, scope,
+          nested_field.type);
+        precomputed.lvalue = true;
+      } else precomputed = EmitValue(nested_expression, scope);
+      state_->aggregate_precomputed_values[nested_expression.get()] = precomputed;
+      computed->push_back(nested_expression.get());
+    }
+  }
+
+void PA14Lowerer::ClearAggregateChildValues(
+  const vector<const CPPGMAstNode*>& computed)
+{
+    if(!state_) return;
+    for(size_t i = 0; i < computed.size(); ++i)
+      state_->aggregate_precomputed_values.erase(computed[i]);
+  }
+
+string PA14Lowerer::AggregateFieldBase(const string& base,
+                                       bool refresh_field_base,
+                                       const CPPGMAstNodePtr& refresh_node,
+                                       Scope* scope, const string& refresh_base,
+                                       long long refresh_offset,
+                                       string* synthetic_refresh_base)
+{
+    if(!refresh_field_base) return base;
+    if(refresh_node) return EmitAddress(refresh_node, scope);
+    if(refresh_base.empty()) return base;
+    if(synthetic_refresh_base && synthetic_refresh_base->empty()) {
+      *synthetic_refresh_base = new_temp();
+      AddInstruction(*synthetic_refresh_base +
+        " = index i8 [projection=field] " + refresh_base + ", " +
+        integer_text(refresh_offset));
+    }
+    return synthetic_refresh_base ? *synthetic_refresh_base : base;
+  }
+
+void PA14Lowerer::EmitAggregateClassBitField(
+  const string& base, bool refresh_field_base,
+  const CPPGMAstNodePtr& refresh_node, const string& refresh_base,
+  long long refresh_offset, string* synthetic_refresh_base,
+  const TypePtr& child_type,
+  const CPPGMAstNodePtr& child, Scope* scope, Binding* member_binding,
+  const ClassMemberInfo& member, bool* storage_initialized,
+  const Value* precomputed_value)
+{
+    Value value = precomputed_value ? *precomputed_value :
+      EmitValue(child, scope, child_type);
+    if(value.known_constant && is_integral_type(value.type) &&
+       is_integral_type(child_type)) {
+      value.type = child_type;
+      value.operand = integer_text(value.constant);
+    } else value = ConvertValue(value, child_type);
+    string stored;
+    if(*storage_initialized) {
+      const string field_base = AggregateFieldBase(base, refresh_field_base,
+        refresh_node, scope, refresh_base, refresh_offset, synthetic_refresh_base);
+      const string read_address = new_temp();
+      AddInstruction(read_address + " = index i8 " + field_base + ", " +
+        integer_text(member.offset));
+      stored = MergeBitFieldValue(member_binding, read_address, member.type,
+        value.operand, true);
+    } else stored = PrepareBitFieldValue(member_binding, member.type, value.operand);
+    const string field_base = AggregateFieldBase(base, refresh_field_base,
+      refresh_node, scope, refresh_base, refresh_offset, synthetic_refresh_base);
+    const string store_address = new_temp();
+    AddInstruction(store_address + " = index i8 " + field_base + ", " +
+      integer_text(member.offset));
+    emit_store(member.type, stored, store_address);
+    *storage_initialized = true;
+  }
+
+void PA14Lowerer::EmitAggregateClassReference(const string& base,
+                                              bool refresh_field_base,
+                                              const CPPGMAstNodePtr& refresh_node,
+                                              const string& refresh_base,
+                                              long long refresh_offset,
+                                              string* synthetic_refresh_base,
+                                              const TypePtr& member_type,
+                                              const CPPGMAstNodePtr& child,
+                                              Scope* scope,
+                                              const ClassMemberInfo& member)
+{
+    string reference;
+    map<const CPPGMAstNode*, Value>::const_iterator cached = state_ ?
+      state_->aggregate_precomputed_values.find(child.get()) :
+      map<const CPPGMAstNode*, Value>::const_iterator();
+    if(state_ && cached != state_->aggregate_precomputed_values.end())
+      reference = cached->second.operand;
+    else reference = EmitReferenceArgument(child, scope, member_type);
+    const string field_base = AggregateFieldBase(base, refresh_field_base,
+      refresh_node, scope, refresh_base, refresh_offset, synthetic_refresh_base);
+    const string field = new_temp();
+    AddInstruction(field + " = index i8 [projection=field] " + field_base + ", " +
+      integer_text(member.offset));
+    emit_store(PointerTo(Fundamental("char")), reference, field);
+  }
+
+bool PA14Lowerer::EmitAggregateClassObject(
+  const string& base, const TypePtr& child_type, const CPPGMAstNodePtr& child,
+  const CPPGMAstNodePtr& expression, Scope* scope,
+  const CPPGMAstNodePtr& refresh_node, const string& field,
+  const string& member_name, size_t current_child_index, size_t* child_index,
+  long long member_offset, const vector<const CPPGMAstNode*>& computed)
+{
+    vector<CPPGMAstNodePtr> arguments = child && child->kind == "braced-init-list" ?
+      child->children : vector<CPPGMAstNodePtr>();
+    if(arguments.empty() && child && child->kind != "braced-init-list")
+      arguments.push_back(child);
+    const bool has_cached_child = state_ &&
+      state_->aggregate_precomputed_values.find(child.get()) !=
+        state_->aggregate_precomputed_values.end();
+    if(child && child->kind != "braced-init-list" && !has_cached_child) {
+      const ExprInfo child_info = Infer(child, scope);
+      const TypePtr child_value_type = expression_value_type(child_info);
+      if(child_value_type && child_value_type->kind == TYPE_CLASS &&
+         (PA12SameType(child_value_type, child_type, true) ||
+          IsDerivedFrom(child_value_type, child_type)) &&
+         EmitObjectTransferAt(child_type, field, child, scope, true)) return true;
+    }
+    if(EmitConstructorAt(child_type, field, arguments, scope)) return true;
+    if(child && child->kind == "braced-init-list") {
+      CPPGMAstNodePtr child_refresh;
+      if(refresh_node) {
+        child_refresh.reset(new CPPGMAstNode("member-expression", "OP_DOT:."));
+        child_refresh->children.push_back(refresh_node);
+        child_refresh->children.push_back(CPPGMAstNodePtr(
+          new CPPGMAstNode("identifier", member_name)));
+      }
+      EmitAggregateAt(field, child_type, child, scope, child_refresh);
+      ClearAggregateChildValues(computed);
+      return true;
+    }
+    FunctionRecord* nested_aggregate = 0;
+    const vector<Binding*> nested_bindings =
+      MemberBindings(child_type, LastComponent(child_type->name));
+    for(size_t i = 0; i < nested_bindings.size(); ++i) {
+      FunctionRecord* nested_record = RecordForBinding(nested_bindings[i]);
+      if(nested_record && nested_record->aggregate_constructor) {
+        nested_aggregate = nested_record;
+        break;
+      }
+    }
+    if(!nested_aggregate) return false;
+    const size_t nested_start = current_child_index;
+    *child_index = nested_start;
+    CPPGMAstNodePtr nested_refresh;
+    if(refresh_node) {
+      nested_refresh.reset(new CPPGMAstNode("member-expression", "OP_DOT:."));
+      nested_refresh->children.push_back(refresh_node);
+      nested_refresh->children.push_back(CPPGMAstNodePtr(
+        new CPPGMAstNode("identifier", member_name)));
+    }
+    EmitAggregateClassFields(field, child_type, expression, scope, nested_refresh,
+      child_index, false, nested_refresh ? string() : base,
+      nested_refresh ? -1 : member_offset);
+    const size_t nested_consumed = *child_index - nested_start;
+    EmitAggregateClassDefaults(field, child_type, expression, scope,
+      nested_refresh, nested_consumed);
+    if(nested_consumed != 0) return true;
+    *child_index = current_child_index + 1;
+    return false;
+  }
+
 void PA14Lowerer::EmitAggregateClassFields(const string& base, const TypePtr& raw_type,
                                            const CPPGMAstNodePtr& expression, Scope* scope,
                                            const CPPGMAstNodePtr& refresh_node,
                                            size_t* child_index,
-                                           bool direct_first_field)
+                                           bool direct_first_field,
+                                           const string& refresh_base,
+                                           long long refresh_offset)
 {
     TypePtr type = type_value(raw_type);
     if(!type || type->kind != TYPE_CLASS || !expression ||
        expression->kind != "braced-init-list" || !child_index) return;
     bool bitfield_storage_initialized = false;
+    string synthetic_refresh_base;
+    const auto aggregate_refresh_base = [&]() {
+      if(refresh_node) return EmitAddress(refresh_node, scope);
+      if(refresh_base.empty()) return base;
+      if(synthetic_refresh_base.empty()) {
+        synthetic_refresh_base = new_temp();
+        AddInstruction(synthetic_refresh_base + " = index i8 [projection=field] " +
+          refresh_base + ", " + integer_text(refresh_offset));
+      }
+      return synthetic_refresh_base;
+    };
     for(size_t i = 0; i < type->class_members.size() &&
         *child_index < expression->children.size(); ++i) {
       const ClassMemberInfo& member = type->class_members[i];
       if(member.is_static || !member.type) continue;
       const size_t current_child_index = *child_index;
       CPPGMAstNodePtr child = expression->children[(*child_index)++];
-      const bool refresh_field_base = refresh_node &&
+      const bool refresh_field_base = (refresh_node || !refresh_base.empty()) &&
         (current_child_index > 0 || base.empty());
       TypePtr child_type = type_value(member.type);
       if(member.name.empty()) {
         if(child_type && child_type->kind == TYPE_CLASS && child_type->is_union) {
-          const string field_base = refresh_field_base ?
-            EmitAddress(refresh_node, scope) : base;
+          const string field_base = refresh_field_base ? aggregate_refresh_base() : base;
           const string field = new_temp();
           AddInstruction(field + " = index i8 [projection=field] " + field_base + ", " +
             integer_text(member.offset));
-          // The anonymous union is itself a member projection.  Keep the
-          // nested active-member projection visible in LowIR instead of
-          // collapsing the union's first member onto the outer storage.
           EmitAggregateAt(field, child_type, child, scope,
                           CPPGMAstNodePtr(), -1, false);
         }
         continue;
       }
+      vector<const CPPGMAstNode*> computed;
+      PrecomputeAggregateChildValues(child_type, child, scope, &computed);
       Value precomputed_value;
-      const bool precompute_address_of = child &&
-        child->kind == "unary-expression" &&
-        PA12Operator(child->value) == "&" &&
-        child_type && child_type->kind != TYPE_CLASS &&
-        child_type->kind != TYPE_ARRAY;
-      if(precompute_address_of)
-        precomputed_value = EmitValue(child, scope, child_type);
+      const bool precompute_address_of = child && child->kind == "unary-expression" &&
+        PA12Operator(child->value) == "&" && child_type &&
+        child_type->kind != TYPE_CLASS && child_type->kind != TYPE_ARRAY;
+      if(precompute_address_of) precomputed_value = EmitValue(child, scope, child_type);
       const bool precompute_scalar = child && !precompute_address_of &&
         child->kind != "braced-init-list" && child_type &&
         child_type->kind != TYPE_CLASS && child_type->kind != TYPE_ARRAY &&
         !type_is_reference(member.type);
-      if(precompute_scalar)
-        precomputed_value = EmitValue(child, scope, child_type);
+      if(precompute_scalar) precomputed_value = EmitValue(child, scope, child_type);
       const bool have_precomputed_value = precompute_address_of || precompute_scalar;
       Binding* member_binding = 0;
-      vector<Binding*> member_bindings = DirectBindings(type->owned_scope, member.name);
+      const vector<Binding*> member_bindings = DirectBindings(type->owned_scope, member.name);
       for(size_t j = 0; j < member_bindings.size(); ++j)
         if(member_bindings[j]->kind == BIND_VARIABLE && member_bindings[j]->is_member &&
            !member_bindings[j]->is_static) { member_binding = member_bindings[j]; break; }
@@ -953,42 +1144,20 @@ void PA14Lowerer::EmitAggregateClassFields(const string& base, const TypePtr& ra
          child->kind == "braced-init-list" && child->children.size() == 1)
         child = child->children[0];
       if(member_binding && IsBitField(member_binding)) {
-        Value value = have_precomputed_value ? precomputed_value :
-          EmitValue(child, scope, child_type);
-        if(value.known_constant && is_integral_type(value.type) &&
-           is_integral_type(child_type)) {
-          value.type = child_type;
-          value.operand = integer_text(value.constant);
-        } else value = ConvertValue(value, child_type);
-        string stored;
-        if(bitfield_storage_initialized) {
-          const string read_base = refresh_field_base ? EmitAddress(refresh_node, scope) : base;
-          const string read_address = new_temp();
-          AddInstruction(read_address + " = index i8 " + read_base + ", " +
-            integer_text(member.offset));
-          stored = MergeBitFieldValue(member_binding, read_address, member.type,
-            value.operand, true);
-        } else stored = PrepareBitFieldValue(member_binding, member.type, value.operand);
-        const string store_base = refresh_field_base ? EmitAddress(refresh_node, scope) : base;
-        const string store_address = new_temp();
-        AddInstruction(store_address + " = index i8 " + store_base + ", " +
-          integer_text(member.offset));
-        emit_store(member.type, stored, store_address);
-        bitfield_storage_initialized = true;
+        EmitAggregateClassBitField(base, refresh_field_base, refresh_node, refresh_base,
+          refresh_offset, &synthetic_refresh_base, child_type, child, scope,
+          member_binding, member, &bitfield_storage_initialized,
+          have_precomputed_value ? &precomputed_value : 0);
         continue;
       }
       if(type_is_reference(member.type)) {
-        const string reference = EmitReferenceArgument(child, scope, member.type);
-        const string field_base = refresh_field_base ? EmitAddress(refresh_node, scope) : base;
-        const string field = new_temp();
-        AddInstruction(field + " = index i8 [projection=field] " + field_base + ", " +
-          integer_text(member.offset));
-        emit_store(PointerTo(Fundamental("char")), reference, field);
+        EmitAggregateClassReference(base, refresh_field_base, refresh_node, refresh_base,
+          refresh_offset, &synthetic_refresh_base, member.type, child, scope, member);
         continue;
       }
       if(EmitAggregateClassArrayField(base, child_type, child, scope, refresh_node,
                                       refresh_field_base, member.offset)) continue;
-      const string field_base = refresh_field_base ? EmitAddress(refresh_node, scope) : base;
+      const string field_base = refresh_field_base ? aggregate_refresh_base() : base;
       string field;
       if(direct_first_field && current_child_index == 0 && member.offset == 0)
         field = field_base;
@@ -997,66 +1166,29 @@ void PA14Lowerer::EmitAggregateClassFields(const string& base, const TypePtr& ra
         AddInstruction(field + " = index i8 [projection=field] " + field_base + ", " +
           integer_text(member.offset));
       }
-      if(child_type && child_type->kind == TYPE_CLASS) {
-        vector<CPPGMAstNodePtr> arguments = child && child->kind == "braced-init-list" ?
-          child->children : vector<CPPGMAstNodePtr>();
-        if(arguments.empty() && child && child->kind != "braced-init-list")
-          arguments.push_back(child);
-        if(child && child->kind != "braced-init-list") {
-          const ExprInfo child_info = Infer(child, scope);
-          const TypePtr child_value_type = expression_value_type(child_info);
-          if(child_value_type && child_value_type->kind == TYPE_CLASS &&
-             (PA12SameType(child_value_type, child_type, true) ||
-              IsDerivedFrom(child_value_type, child_type)) &&
-             EmitObjectTransferAt(child_type, field, child, scope, true)) continue;
-        }
-        if(EmitConstructorAt(child_type, field, arguments, scope)) continue;
-        if(child && child->kind == "braced-init-list") {
-          EmitAggregateAt(field, child_type, child, scope);
-          continue;
-        }
-        // Aggregate initialization permits brace elision: a scalar can
-        // initialize the first member of a nested aggregate, and the next
-        // enclosing initializer then continues with the nested aggregate's
-        // remaining members.  The failed constructor probe above is also
-        // what distinguishes this from a class with user-declared
-        // constructors.
-        FunctionRecord* nested_aggregate = 0;
-        const vector<Binding*> nested_bindings =
-          MemberBindings(child_type, LastComponent(child_type->name));
-        for(size_t j = 0; j < nested_bindings.size(); ++j) {
-          FunctionRecord* nested_record = RecordForBinding(nested_bindings[j]);
-          if(nested_record && nested_record->aggregate_constructor) {
-            nested_aggregate = nested_record;
-            break;
-          }
-        }
-        if(nested_aggregate) {
-          const size_t nested_start = current_child_index;
-          *child_index = nested_start;
-          CPPGMAstNodePtr nested_refresh;
-          if(refresh_node) {
-            nested_refresh.reset(new CPPGMAstNode("member-expression", "OP_DOT:."));
-            nested_refresh->children.push_back(refresh_node);
-            nested_refresh->children.push_back(CPPGMAstNodePtr(
-              new CPPGMAstNode("identifier", member.name)));
-          }
-          EmitAggregateClassFields(field, child_type, expression, scope,
-            nested_refresh, child_index);
-          const size_t nested_consumed = *child_index - nested_start;
-          EmitAggregateClassDefaults(field, child_type, expression, scope,
-            nested_refresh, nested_consumed);
-          if(nested_consumed != 0) continue;
-          *child_index = current_child_index + 1;
-        }
-      }
+      if(refresh_node && refresh_node->kind == "id-expression" &&
+         child_type && child_type->kind == TYPE_CLASS &&
+         !child_type->template_specialization && !HasDefaultConstructionEffects(child_type) &&
+         !HasExplicitConstructor(child_type) && state_)
+        state_->stable_member_addresses[refresh_node->value + "." + member.name] = field;
+      if(child_type && child_type->kind == TYPE_CLASS &&
+         EmitAggregateClassObject(base, child_type, child, expression, scope,
+           refresh_node, field, member.name, current_child_index, child_index,
+           member.offset, computed)) continue;
       if(child_type && child_type->kind == TYPE_ARRAY &&
          child && child->kind == "braced-init-list") {
         EmitAggregateAt(field, child_type, child, scope, refresh_node, member.offset);
         continue;
       }
-      Value value = have_precomputed_value ? precomputed_value :
-        EmitValue(child, scope, child_type);
+      Value value;
+      map<const CPPGMAstNode*, Value>::const_iterator cached_value = state_ ?
+        state_->aggregate_precomputed_values.find(child.get()) :
+        map<const CPPGMAstNode*, Value>::const_iterator();
+      if(have_precomputed_value) value = precomputed_value;
+      else if(state_ && cached_value != state_->aggregate_precomputed_values.end())
+        value = cached_value->second;
+      else value = EmitValue(child, scope, child_type);
+      ClearAggregateChildValues(computed);
       if(value.known_constant && is_integral_type(value.type) &&
          is_integral_type(child_type)) {
         value.type = child_type;

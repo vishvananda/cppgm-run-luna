@@ -2855,3 +2855,72 @@ ownership and replay selection, then handle the conversion-operator mismatch.
 Validate each changed fixture, the full PA21 report, through-PA20, and the PA21
 file audit.  Preserve the current **207/215** floor while working on this
 group.
+
+## Checkpoint 80 — generated function ownership and materialization scope (2026-07-25)
+
+### Remaining Work Map recorded before implementation
+
+The complete current PA21 failure set is **8/215**, grouped by shared
+compiler behavior:
+
+- **Generated function/body ownership and replay materialization (7):**
+  dependent hidden-friend static-member definition, explicit-type-argument
+  `decltype` member access, existing-template private-constructor access,
+  local-qualified argument replay, namespace function-template hiding,
+  out-of-class constructor using an imported member template, and shadowed
+  non-type member-template replay.  Their canonical LowIR differences are
+  extra or missing generated function bodies/calls, wrong generated owner
+  names, and declaration emission at the wrong replay site.
+- **Partial-specialization conversion-operator type binding (1):**
+  conversion-operator pointer binding leaves three unresolved global
+  declarations in generated LowIR instead of binding the partial
+  specialization's function type.
+
+### Checkpoint Scope
+
+Implement the typed generated-function ownership/materialization group: carry
+the selected owner and function signature through replay, emit only the
+selected generated body at its owning scope, and avoid manufacturing duplicate
+or stale callable bodies during member/hidden-friend lookup.  Validate the
+seven generated-function fixtures, the full PA21 report, through-PA20, and the
+stage file audit.  The conversion-operator binding remains a separate typed
+deduction checkpoint.
+
+### Next Checkpoint Group
+
+After the ownership group, resolve partial-specialization conversion-operator
+pointer binding by preserving the selected specialization's function type and
+conversion candidate through PA18-to-PA14 lowering.
+
+## Checkpoint 81 — PA21 replay ownership and lowering completion (2026-07-25)
+
+### Result
+
+The selected generated-function ownership/materialization group and the
+partial-specialization conversion binding group are complete.  Typed owner-aware
+replay now filters caller substitutions, resolves visible named functions before
+callable fallback, preserves nested namespace type arguments, materializes the
+selected member/friend bodies and constructors at their owning scope, and keeps
+aggregate/reference replay's required demand and evaluation order.  The
+conversion-operator path now binds the selected partial specialization's
+compile-time-only function type without emitting stale global declarations.
+
+The PA21 report is **215/215** and the through-PA20 report is **1635/1635**.
+The PA21 file audit passes with warnings only.
+
+### Remaining Work Map
+
+No current PA21 failures remain.
+
+### Checkpoint Scope
+
+This checkpoint covers the complete remaining PA21 failure set: generated
+function/body ownership and replay materialization (7 fixtures), partial
+specialization conversion-operator pointer binding (1 fixture), and the
+supporting aggregate/object/reference lowering needed by those cases.  It also
+covers source-organization cleanup required to keep the audited implementation
+within file and function limits.
+
+### Next Checkpoint Group
+
+PA21 is complete; hand off to PA22.

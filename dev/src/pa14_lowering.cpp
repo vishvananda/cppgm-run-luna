@@ -734,53 +734,8 @@ void PA14Lowerer::CollectClassMembers(const CPPGMAstNodePtr& node, Scope* scope)
         Binding* member_binding = member_name.empty() ? 0 : class_scope->local(member_name);
         BindClassMember(member_binding, facts.is_static, type_found->second);
         if(!function_type(member_type)) {
-          const string name = member_name;
-          if(!facts.is_static || name.empty()) continue;
-          GlobalRecord record;
-          record.node = child;
-          record.scope = class_scope;
-          record.type = member_type;
-          record.qualified_name = TypeQualifiedName(type_found->second) + "::" + name;
-          record.template_owner = type_found->second;
-          record.template_instantiation = type_found->second->template_specialization ||
-			child->template_instantiation;
-          record.explicit_specialization = child->explicit_specialization;
-          record.weak_binding = record.template_instantiation;
-          record.initializer = item->children.size() > 1 ? item->children[1] :
-            CPPGMAstNodePtr();
-          record.declaration = true;
-          record.internal = false;
-          record.thread_local_storage = HasStorageSpecifier(child, "thread_local");
-			const TypePtr member_value = type_value(member_type);
-				const bool integral_constant = is_integral_type(member_value) || (member_value && member_value->kind == TYPE_FUNDAMENTAL && member_value->name == "bool");
-				Binding* semantic_binding = class_scope->local(name);
-				const bool initializer_calls = record.initializer &&
-					DescendantOfKind(record.initializer, "call-expression");
-				const bool typed_const = facts.is_const || facts.is_constexpr || (member_type && member_type->is_const) || (member_value && member_value->is_const);
-				if(type_found->second->template_specialization && typed_const &&
-					integral_constant) continue;
-				if(typed_const && integral_constant && !record.initializer) continue;
-				if((facts.is_const || facts.is_constexpr) && record.initializer &&
-				integral_constant && ((semantic_binding && semantic_binding->has_value) ||
-					!initializer_calls)) continue;
-          const string key = global_key(record.qualified_name);
-          map<string, GlobalRecord*>::iterator global_found = global_by_key_.find(key);
-          if(global_found == global_by_key_.end()) {
-            globals_.push_back(record);
-            global_by_key_[key] = &globals_.back();
-          } else {
-            GlobalRecord* prior = global_found->second;
-            prior->type = record.type;
-			if(record.template_owner) prior->template_owner = record.template_owner;
-			prior->template_instantiation = prior->template_instantiation ||
-				record.template_instantiation;
-			prior->explicit_specialization = prior->explicit_specialization ||
-				record.explicit_specialization;
-			prior->weak_binding = prior->weak_binding || record.weak_binding;
-            prior->thread_local_storage = prior->thread_local_storage ||
-              record.thread_local_storage;
-            if(record.initializer) prior->initializer = record.initializer;
-          }
+          CollectClassStaticMember(child, item, type_found->second, class_scope,
+            facts, member_type, member_name);
           continue;
         }
         CPPGMAstNodePtr wrapper(new CPPGMAstNode("function-declaration"));

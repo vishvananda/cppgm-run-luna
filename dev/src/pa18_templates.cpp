@@ -413,7 +413,7 @@ string PA18TemplateExpander::InheritedTypeName(const string& scope, const string
 	return string();
 }
 string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& context,
-	const string& template_owner) const
+	const string& template_owner, bool preserve_nested_namespace) const
 {
 	spelling = CanonicalSpelling(spelling);
 	while(spelling.compare(0, 8, "typename") == 0 &&
@@ -517,8 +517,13 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 	const string remainder = spelling.substr(separator);
 	for(string current = context; ; ) {
 		const string candidate = JoinPath(current, first);
-		if(class_contexts_.find(candidate) != class_contexts_.end()) {
-			spelling = candidate + remainder;
+		const string full_candidate = candidate + remainder;
+		if(class_contexts_.find(candidate) != class_contexts_.end() ||
+			(preserve_nested_namespace && (class_contexts_.find(full_candidate) !=
+				class_contexts_.end() || named_type_contexts_.find(full_candidate) !=
+				named_type_contexts_.end() || class_declarations_.find(full_candidate) !=
+				class_declarations_.end()))) {
+			spelling = full_candidate;
 			break;
 		}
 		if(current.empty()) break;
@@ -538,7 +543,10 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 			class_contexts_.find(spelling) != class_contexts_.end() &&
 			specialization_bases_.find(LastComponent(spelling)) !=
 				specialization_bases_.end();
-		if(!generated_specialization) spelling.erase(0, owner_prefix.size());
+		const string owner_relative = spelling.substr(owner_prefix.size());
+		if(!generated_specialization && (!preserve_nested_namespace ||
+			owner_relative.find("::") == string::npos))
+			spelling.erase(0, owner_prefix.size());
 	}
 	}
 	if(spelling.find("::") == string::npos && spelling.find('<') == string::npos) {
