@@ -85,10 +85,8 @@ void PA18TemplateExpander::ResolveTemplateArguments(const TemplateDefinition& de
 					try {
 						argument = ResolveIntegralArgument(parameter, argument, context,
 							*substitutions, &integral_value);
-					} catch(const logic_error& error) {
-						throw logic_error("definition=" + definition.qualified_name +
-							" " + error.what());
-					}
+						} catch(const PA18SubstitutionFailure& error) { throw PA18SubstitutionFailure("definition=" + definition.qualified_name + " " + error.what());
+						} catch(const logic_error& error) { throw logic_error("definition=" + definition.qualified_name + " " + error.what()); }
 					if(!parameter.name.empty()) (*integral_substitutions)[parameter.name] = integral_value;
 				}
 				if(argument.empty()) throw logic_error("missing template argument");
@@ -142,10 +140,8 @@ void PA18TemplateExpander::ResolveTemplateArguments(const TemplateDefinition& de
 			try {
 				argument = ResolveIntegralArgument(parameter, argument, context, *substitutions,
 					&integral_value);
-			} catch(const logic_error& error) {
-				throw logic_error("definition=" + definition.qualified_name +
-					" " + error.what());
-			}
+			} catch(const PA18SubstitutionFailure& error) { throw PA18SubstitutionFailure("definition=" + definition.qualified_name + " " + error.what());
+			} catch(const logic_error& error) { throw logic_error("definition=" + definition.qualified_name + " " + error.what()); }
 			if(!parameter.name.empty()) (*integral_substitutions)[parameter.name] = integral_value;
 		}
 		if(definition.alias_template && parameter.type && !source_type_argument.empty() &&

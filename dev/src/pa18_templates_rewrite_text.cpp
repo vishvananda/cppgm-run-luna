@@ -688,6 +688,9 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 							try {
 							args[i] = ResolveIntegralArgument(definition->parameters[i],
 								args[i], context, substitutions, &value);
+						} catch(const PA18SubstitutionFailure& error) {
+							throw PA18SubstitutionFailure("definition=" + definition->qualified_name +
+								" " + error.what());
 						} catch(const logic_error& error) {
 							throw logic_error("definition=" + definition->qualified_name +
 								" " + error.what());
@@ -807,6 +810,9 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 					try {
 						args[i] = ResolveIntegralArgument(definition->parameters[i], args[i],
 							context, argument_substitutions, &value);
+					} catch(const PA18SubstitutionFailure& error) {
+						throw PA18SubstitutionFailure("definition=" + definition->qualified_name +
+							" " + error.what());
 					} catch(const logic_error& error) {
 						throw logic_error("definition=" + definition->qualified_name +
 							" " + error.what());

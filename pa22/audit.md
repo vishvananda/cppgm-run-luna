@@ -81,3 +81,84 @@ unchecked implementation fragment.  Associated lookup scans only the
   passes after the scoped return-propagation fix.
 - `make build` and `git diff --check` pass; the final commit leaves
   `git status --short` empty.
+
+## Checkpoint 71 Audit
+
+### Scope Reviewed
+
+Reviewed the latest Checkpoint 71 scope and result in [plan.md](plan.md), the
+PA22 contract in [README.md](README.md), commits `fede37f`, `a19082c`, and
+`a0f870a`, the complete active report at
+`/home/vishvananda/work/.ralph/luna-gpt-5.6-luna-ultra/last-test.log`, and the
+changed implementation in `pa18_templates_calls.cpp`,
+`pa18_templates_collection.h`, `pa18_templates_rewrite_arguments.cpp`,
+`pa18_templates_rewrite_emit.cpp`, `pa18_templates_rewrite_infer.cpp`,
+`pa18_templates_rewrite_instantiate.cpp`,
+`pa18_templates_rewrite_instantiate.h`, `pa18_templates_rewrite_members.cpp`,
+and `pa18_templates_rewrite_text.cpp`.
+
+The review covered typed substitution ownership, candidate viability and
+lookup, deferred replay, nested type and constant facts, hot-path work,
+file-audit limits, timeout behavior, and preservation of PA1–PA21.
+
+### Findings
+
+- The checkpoint’s new candidate loops caught `logic_error` broadly and used
+  every semantic failure as a candidate drop.  That was an unsafe fallback:
+  hard errors could be hidden and SFINAE status was not represented at the
+  boundary.  Candidate failures now use `PA18SubstitutionFailure`; deduction
+  preserves that status through its wrappers, while hard failures are not
+  accepted as successful candidates.
+- Generated-member viability had a source-declaration/name scan fallback,
+  including `ContainsName`, after emission.  That recovered semantic facts
+  downstream from generated text.  The fallback was removed; nested class,
+  forward-class, and enum entities are recognized by the typed member lookup,
+  and generated nested entities are checked through the indexed class maps.
+- Qualified non-type arguments had a literal `::value` special case.  It is
+  now a generic qualified-member path that delegates to the indexed constant
+  owner/declaration evaluator, so no member name or payload is embedded in
+  acceptance logic.
+- The non-type template function index is a non-owning declaration index and
+  remains separate from ordinary function signatures; AST ownership is not
+  duplicated.  The implementation was also kept within all PA22 size and
+  function-audit limits.
+- No compiler phase is skipped.  There is no dummy output, embedded payload,
+  interpreter/VM/trampoline substitute, test-specific acceptance gate,
+  timeout workaround, emitted-text execution, weakened check, or unchecked
+  implementation fragment.  The new validation performs a bounded generated
+  type walk over indexed semantic facts; it does not walk the suite or reparse
+  emitted LowIR.
+
+### Changes Made
+
+- Added the typed substitution-failure status and narrowed the Checkpoint 71
+  candidate catches to that status.
+- Preserved the typed status through integral-argument replay and made
+  `InferFunctionArguments` rethrow deduction-time semantic failures as the
+  typed candidate status.
+- Replaced the generated-source member fallback with indexed nested-entity and
+  `FindClassMemberType` lookup.
+- Replaced the hardcoded qualified `::value` path with
+  `EvaluateQualifiedConstantMember` backed by the existing constant-member
+  tables.
+- Reworked the affected formatting and compacted the changed implementation
+  only as needed to restore the PA22 file-audit limits; no checked tests or
+  reference fixtures were changed.
+- Refreshed the plan with the complete 156-fixture failure map, grouped into
+  58 substitution/deferred cases, 46 deduction/ordering cases, and 52
+  aliases/owners/NTTP cases; the next substantial checkpoint is the 58-case
+  `general/300` + `spec/300` group.
+
+### Validation
+
+- Required prior-through check: `make test-report-through-pa21` — **1850/1850
+  passed**.
+- Required file audit: `perl scripts/cppgm_file_audit.pl --stage pa22 --paths
+  dev/src` — **passed** with only the 10 pre-existing warnings.
+- Required active report: `make test-report ACTIVE_TEST_REPORT_PAS='pa22'` —
+  **94/250 passed**, exactly preserving the checkpoint baseline, with 156
+  remaining fixtures and no timeout failures.
+- Checkpoint regression set: `make -C pa22 check TEST=...` for the seven
+  Checkpoint 71 fixtures — **7/7 passed**.
+- Earlier regression probes for the nested-class and dependent type cases —
+  **PA18 2/2** and **PA21 1/1** passed; `git diff --check` passed.

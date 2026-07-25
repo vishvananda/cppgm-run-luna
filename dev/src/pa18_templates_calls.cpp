@@ -1007,7 +1007,7 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 								explicit_definition = overloads[overload];
 								break;
 							}
-					} catch(const logic_error&) {}
+					} catch(const PA18SubstitutionFailure&) {}
 					}
 				}
 			}
@@ -1050,7 +1050,7 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 					(!has_parameter_pack && explicit_args.size() == explicit_definition->parameters.size()));
 				if(complete) complete_args = explicit_args;
 				else try { complete = InferFunctionArguments(*explicit_definition, input, &complete_args, substitutions, context, &explicit_args, 0, &inferred_function_values); }
-				catch(const logic_error&) { complete = false; }
+				catch(const PA18SubstitutionFailure&) { complete = false; }
 				if(complete) {
 					try {
 						const string local_name = Instantiate(*explicit_definition, complete_args, context,
@@ -1067,7 +1067,7 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 							if(child) result->children.push_back(child);
 						}
 						return result;
-					} catch(const logic_error&) {}
+					} catch(const PA18SubstitutionFailure&) {}
 				}
 			}
 		}
@@ -1366,7 +1366,7 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 			++candidate) {
 			vector<string> inferred;
 			try { if(!InferFunctionArguments(*definitions[candidate], result, &inferred, substitutions, context, 0)) continue; }
-			catch(const logic_error&) { continue; }
+			catch(const PA18SubstitutionFailure&) { continue; }
 			ostringstream request_key;
 			request_key << definitions[candidate]->qualified_name << "@" <<
 				definitions[candidate]->declaration.get();
@@ -1395,7 +1395,7 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 				}
 				vector<string> inferred; map<string, vector<string> > inferred_pack_values; map<string, FunctionSignature> inferred_function_values; map<string, vector<string> > forwarding_pack_values; bool inferred_ok = false;
 				try { inferred_ok = InferFunctionArguments(*definition, result, &inferred, substitutions, context, 0, &inferred_pack_values, &inferred_function_values, 0, &forwarding_pack_values); }
-				catch(const logic_error&) { inferred_ok = false; }
+				catch(const PA18SubstitutionFailure&) { inferred_ok = false; }
 				if(!inferred_ok) continue;
 				const TemplateDefinition* selected_definition =
 					FindExplicitFunctionSpecialization(definition->qualified_name, inferred, context);
@@ -1442,7 +1442,7 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 					result_callee->value = qualifier.empty() ? emitted_name : qualifier +
 						"::" + emitted_name;
 					break;
-				} catch(const logic_error&) { continue; }
+				} catch(const PA18SubstitutionFailure&) { continue; }
 			}
 		if(definitions.empty()) {
 			const FunctionSignature* signature = FindFunctionSignature(callee_name, context);

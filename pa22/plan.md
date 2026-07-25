@@ -736,3 +736,23 @@ then preserve lookup context for hidden friends and no-eager class probes.
 Validate that subgroup against its exact fixtures, the full PA22 report,
 through-PA21, and file audit before bundling the remaining 100/200 ordering
 band.
+
+## Checkpoint 72 audit result — 2026-07-25
+
+The Checkpoint 71 implementation was audited and its candidate-status,
+generated-member lookup, and qualified constant-member paths were tightened
+without changing the checkpoint baseline.  The complete current-PA failure
+set remains 156 fixtures, grouped as follows:
+
+- `general/300` + `spec/300` substitution/deferred lookup: **58**
+  (`38 + 20`).
+- `general/100` + `general/200` + `spec/100` + `spec/200` deduction and
+  ordering: **46** (`14 + 13 + 6 + 13`).
+- `general/400` + `general/500` + `spec/400` + `spec/500` aliases, owners,
+  NTTPs, and late conversion cases: **52** (`15 + 26 + 2 + 9`).
+
+These groups account for every fixture in the exact failure map above and
+sum to 156.  The seven Checkpoint 71 fixtures remain passing.  The next
+substantial checkpoint is the 58-fixture `general/300` + `spec/300` group,
+with the 46-fixture 100/200 band bundled as the following checkpoint once
+the dependent substitution path is complete.

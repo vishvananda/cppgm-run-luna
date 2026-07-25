@@ -12,6 +12,8 @@
 #include <utility>
 using namespace std;
 namespace pa18_templates_internal {
+
+class PA18SubstitutionFailure : public logic_error { public: explicit PA18SubstitutionFailure(const string& message) : logic_error(message) {} };
 inline bool IsIdentifierCharacter(char ch)
 {
 	return isalnum(static_cast<unsigned char>(ch)) || ch == '_';
@@ -533,8 +535,7 @@ private:
 	map<string, CPPGMAstNodePtr> function_definitions_;
 	map<string, FunctionSignature> function_signatures_;
 	map<string, vector<string> > function_signatures_by_name_;
-	map<string, vector<FunctionSignature> > function_overloads_; set<const CPPGMAstNode*> template_function_signatures_; // non-type templates stay out of ordinary signatures
-	map<string, string> specialization_bases_;
+	map<string, vector<FunctionSignature> > function_overloads_; set<const CPPGMAstNode*> template_function_signatures_; map<string, string> specialization_bases_;
 	map<string, vector<string> > specialization_arguments_;
 	map<string, vector<string> > specialization_names_by_base_;
 	// Class specializations are subject to source-order rules: once a concrete
@@ -587,8 +588,7 @@ private:
 	bool IsTopLevelPackPattern(const string& value) const;
 	CPPGMAstNodePtr FunctionDeclarator(const CPPGMAstNodePtr& declaration) const;
 	bool IsBuiltinArithmeticType(string raw) const; bool IsKnownTypeSpelling(string raw, const string& context) const;
-	bool HasUnavailableGeneratedMemberType(string raw, const string& context, const map<string, string>& substitutions) const;
-	bool GeneratedNodeHasUnavailableMemberType(const CPPGMAstNodePtr& node, const string& context, const map<string, string>& substitutions) const;
+	bool HasUnavailableGeneratedMemberType(string raw, const string& context, const map<string, string>& substitutions) const; bool GeneratedNodeHasUnavailableMemberType(const CPPGMAstNodePtr& node, const string& context, const map<string, string>& substitutions) const;
 	bool HasUnresolvedTemplateParameter(string raw, const string& context, const map<string, string>& substitutions) const;
 	string CommonBuiltinArithmeticType(const string& left, const string& right) const;
 	bool InferOperatorResult(const string& operation, const string& left, const string& right, const string& context, string* result) const;

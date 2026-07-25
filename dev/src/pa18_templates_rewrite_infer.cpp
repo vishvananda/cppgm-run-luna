@@ -1019,6 +1019,7 @@ bool PA18TemplateExpander::InferFunctionArguments(const TemplateDefinition& defi
 		const map<string, vector<string> >* bound_pack_values,
 		map<string, vector<string> >* forwarding_pack_values) const
 {
+	try {
 	if(inferred_function_values) inferred_function_values->clear();
 	if(!call || call->children.size() < 2 || !result) return false;
 	const CPPGMAstNodePtr declarator = FunctionDeclarator(definition.declaration);
@@ -1081,6 +1082,11 @@ bool PA18TemplateExpander::InferFunctionArguments(const TemplateDefinition& defi
 	return CompleteFunctionArguments(definition, deferred_patterns, deferred_arguments,
 		parameter_names, &inferred, inferred_packs, result, inferred_pack_values, context,
 		forwarding_pack_values);
+	} catch(const PA18SubstitutionFailure&) {
+		throw;
+	} catch(const logic_error& error) {
+		throw PA18SubstitutionFailure(error.what());
+	}
 }
 
 } // namespace pa18_templates_internal

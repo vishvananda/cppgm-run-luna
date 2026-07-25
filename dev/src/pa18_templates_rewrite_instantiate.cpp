@@ -670,6 +670,13 @@ bool PA18TemplateExpander::EvaluateUnqualifiedConstantMember(
 	}
 	return false;
 }
+bool PA18TemplateExpander::EvaluateQualifiedConstantMember(const string& raw, const map<string, string>& substitutions, PA19IntegralValue* result) {
+	if(!result) return false;
+	const size_t separator = raw.rfind("::"); if(separator == string::npos || separator == 0 || separator + 2 >= raw.size()) return false;
+	const string owner = raw.substr(0, separator); const string member = raw.substr(separator + 2);
+	for(size_t character = 0; character < member.size(); ++character) if(!IsIdentifierCharacter(member[character])) return false;
+	return EvaluateUnqualifiedConstantMember(member, owner, substitutions, result);
+}
 
 bool PA18TemplateExpander::ExpandNamedIntegralOperands(
 	const string& raw, const string& context,

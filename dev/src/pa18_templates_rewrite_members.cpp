@@ -508,6 +508,14 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 	for(size_t i = 0; i < declaration->children.size(); ++i) {
 		const CPPGMAstNodePtr child = declaration->children[i];
 		if(!child) continue;
+		if(!aliases_only && (child->kind == "class-specifier" ||
+			child->kind == "class-forward-declaration" ||
+			child->kind == "enum-specifier") &&
+			LastComponent(child->value) == member) {
+			*result = JoinPath(class_key, member);
+			active->erase(active_key);
+			return true;
+		}
 		if(!aliases_only && child->kind == "function-definition" &&
 			child->children.size() > 1 &&
 			LastComponent(FirstIdentifierLocal(child->children[1])) == member) {
