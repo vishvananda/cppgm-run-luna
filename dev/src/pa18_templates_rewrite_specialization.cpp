@@ -338,10 +338,25 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 		const bool dependent_member_pattern = pattern_scope != string::npos &&
 			(pattern_open == string::npos || pattern_scope > pattern_open);
 		if(pattern.find("typename") != string::npos || dependent_member_pattern) {
-			const string rewritten_pattern = NormalizeTypeArgument(
-				const_cast<PA18TemplateExpander*>(this)->RewriteText(
-					ReplaceIdentifiersPreservingPackSizes(pattern, local), context, local, 0));
-			if(!rewritten_pattern.empty()) pattern = rewritten_pattern;
+			try {
+				const string rewritten_pattern = NormalizeTypeArgument(
+					const_cast<PA18TemplateExpander*>(this)->RewriteText(
+						ReplaceIdentifiersPreservingPackSizes(pattern, local), context, local, 0));
+				if(!rewritten_pattern.empty()) pattern = rewritten_pattern;
+			} catch(const PA18SubstitutionFailure&) {
+				return false;
+			}
+		}
+		// A dependent non-type default can be the result of an unevaluated
+		// expression rather than a plain type spelling.  Evaluate it after the
+		// earlier class-template parameters have been matched so substitution
+		// failure rejects this partial specialization locally.
+		if(pattern.compare(0, 9, "decltype(") == 0 && pattern.size() > 10 &&
+			pattern[pattern.size() - 1] == ')') {
+			string evaluated;
+			if(!const_cast<PA18TemplateExpander*>(this)->EvaluateDecltypeExpression(
+				pattern.substr(9, pattern.size() - 10), context, local, &evaluated)) return false;
+			pattern = NormalizeTypeArgument(evaluated);
 		}
 		bool template_parameter = false;
 		for(size_t detail = 0; detail < definition.specialization_parameter_details.size(); ++detail)
@@ -384,6 +399,30 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 			definition.parameters[argument_index].default_type, local));
 		if(expected != NormalizeTypeArgument(arguments[argument_index])) return false;
 		++argument_index;
+	}
+	// Alias expansion in a partial-specialization pattern is itself subject to
+	// substitution.  Class and variable template heads are matched by the
+	// ordinary pattern machinery; only probe alias heads here, so a failed
+	// operation rejects this specialization without trying to rewrite an
+	// unresolved template-template pack.
+	for(size_t pattern_index = 0; pattern_index < definition.specialization_pattern.size();
+		++pattern_index) {
+		const string source_pattern = definition.specialization_pattern[pattern_index];
+		const size_t open = source_pattern.find('<');
+		if(open == string::npos) continue;
+		string base;
+		size_t begin = 0;
+		if(!TemplateBase(source_pattern, open, &begin, &base)) continue;
+		const TemplateDefinition* outer = FindDefinition(base, context);
+		if(!outer || !outer->alias_template) continue;
+		const string substituted_pattern = ReplaceIdentifiersPreservingPackSizes(
+			CanonicalSpelling(source_pattern), local);
+		try {
+			const_cast<PA18TemplateExpander*>(this)->RewriteText(
+				substituted_pattern, context, local, 0);
+		} catch(const PA18SubstitutionFailure&) {
+			return false;
+		}
 	}
 	if(inferred) *inferred = local;
 	return true;

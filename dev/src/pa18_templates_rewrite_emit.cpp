@@ -459,6 +459,9 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 		generated = TransformInstantiatedNode(definition, transform_context,
 			substitutions, integral_substitutions, pack_substitutions,
 			function_substitutions);
+	} catch(const PA18SubstitutionFailure&) {
+		active_instantiation_name_ = previous_instantiation_name;
+		throw;
 	} catch(...) {
 		active_instantiation_name_ = previous_instantiation_name;
 		throw;

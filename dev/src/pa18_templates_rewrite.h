@@ -522,6 +522,8 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 			string type;
 			if(!EvaluateDecltypeExpression(expression, context, substitutions, &type) ||
 				type.empty()) {
+				if(HasReplayContext(substitutions))
+					throw PA18SubstitutionFailure("dependent expression substitution failed");
 				search = close;
 				continue;
 			}

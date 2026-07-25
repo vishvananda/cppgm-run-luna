@@ -10,6 +10,52 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 {
 	if(template_replaced) *template_replaced = false;
 	raw = NormalizeElaboratedSpelling(raw, context);
+	if(!resolve_alias && resolve_member && active_instantiation_name_.empty() &&
+		raw.find("::") == string::npos && raw.find('<') == string::npos &&
+		raw.compare(0, 14, "TT_IDENTIFIER:") == 0) {
+		const string member_name = RemoveMarker(raw);
+		for(string current = context; !current.empty(); ) {
+			string member_type;
+			set<string> active;
+			FindClassMemberType(current, member_name, substitutions, context, &member_type,
+				&active, true);
+			if(member_type.empty()) member_type = MemberAliasType(current, member_name);
+			if(!member_type.empty()) {
+				raw = member_type;
+				break;
+			}
+			const size_t separator = current.rfind("::");
+			if(separator == string::npos) current.clear();
+			else current.erase(separator);
+		}
+	}
+	// The parser's compact type spelling can lose the token boundary between a
+	// user type and a following cv-qualifier in a nested template argument
+	// (`value const &` may arrive as `valueconst&`).  Recover that boundary only
+	// when the prefix is a known type in the current scope; identifiers such as
+	// `constant` must remain unchanged.
+	for(size_t qualifier = 0; qualifier < 2; ++qualifier) {
+		const string word = qualifier == 0 ? "const" : "volatile";
+		for(size_t at = raw.find(word); at != string::npos; ) {
+			const size_t original_end = at + word.size();
+			const bool begins_in_identifier = at > 0 &&
+				IsIdentifierCharacter(raw[at - 1]);
+			const bool ends_as_word = original_end == raw.size() ||
+				!IsIdentifierCharacter(raw[original_end]);
+			if(begins_in_identifier && ends_as_word) {
+				size_t begin = at;
+				while(begin > 0 && (IsIdentifierCharacter(raw[begin - 1]) ||
+					raw[begin - 1] == ':')) --begin;
+				const string prefix = CanonicalSpelling(raw.substr(begin, at - begin));
+				if(IsKnownTypeSpelling(ReplaceIdentifiers(prefix, substitutions), context)) {
+					raw.insert(at, " ");
+					at = original_end + 1;
+					continue;
+				}
+			}
+			at = raw.find(word, original_end);
+		}
+	}
 	for(size_t template_marker = raw.find("::template ");
 		template_marker != string::npos;
 		template_marker = raw.find("::template ", template_marker))
@@ -746,6 +792,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 					search = close + 1;
 					continue;
 				}
+				bool default_substitution_failure = false;
 				if(args.size() < definition->parameters.size()) {
 				map<string, string> default_substitutions = substitutions;
 				for(size_t i = 0; i < args.size() && i < definition->parameters.size(); ++i)
@@ -761,9 +808,20 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 					map<string, string>::const_iterator substituted = default_substitutions.find(
 						definition->parameters[i].name);
 					if(substituted != default_substitutions.end()) argument = substituted->second;
-					else if(!definition->parameters[i].default_type.empty())
-						argument = RewriteText(definition->parameters[i].default_type, context,
-							default_substitutions, 0);
+					else if(!definition->parameters[i].default_type.empty()) {
+						try {
+							argument = RewriteText(definition->parameters[i].default_type, context,
+								default_substitutions, 0);
+						} catch(const PA18SubstitutionFailure&) {
+							// A dependent default template argument is part of the
+							// candidate's substitution context.  Leave this template-id
+							// for call resolution, where the candidate can be discarded
+							// and an overload/fallback can continue.
+							argument.clear();
+							default_substitution_failure = true;
+							break;
+						}
+					}
 					if(argument.empty()) break;
 					argument = NormalizeTypeArgument(ReplaceIdentifiers(argument,
 						default_substitutions));
@@ -781,6 +839,10 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 					if(!definition->parameters[i].name.empty())
 						default_substitutions[definition->parameters[i].name] = argument;
 				}
+				}
+				if(default_substitution_failure) {
+					search = close + 1;
+					continue;
 				}
 				// A type template-id may be encountered while forming the signature of
 				// another dependent call.  Its argument is not a concrete type until the

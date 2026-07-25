@@ -408,8 +408,8 @@
 				substitution != owner_substitutions.end(); ++substitution)
 				substitutions[substitution->first] = substitution->second;
 			substitutions[parent.name] = parent_local_name;
-				const string generated_context = JoinPath(GeneratedOwner(parent),
-					parent_local_name);
+			const string generated_context = JoinPath(GeneratedOwner(parent),
+				parent_local_name);
 			map<string, CPPGMAstNodePtr>::const_iterator concrete = class_declarations_.find(
 				JoinPath(parent.owner, parent_local_name));
 			if(concrete != class_declarations_.end() && concrete->second) {
@@ -444,6 +444,7 @@
 				generated_context, substitutions, integral_substitutions,
 				pack_substitutions, map<string, FunctionSignature>());
 			if(!generated) continue;
+			bool generated_static_data = false;
 			if(generated->kind == "simple-declaration" ||
 				generated->kind == "function-definition") {
 				const CPPGMAstNodePtr declarator = generated->kind == "function-definition" ?
@@ -453,6 +454,9 @@
 					while(identifier->value.compare(0, 2, "::") == 0)
 						identifier->value.erase(0, 2);
 					const string member_name = LastComponent(identifier->value);
+					generated_static_data = member.declaration &&
+						member.declaration->kind == "simple-declaration" &&
+						parent.static_members.find(member_name) != parent.static_members.end();
 					string source_owner = PrefixComponent(identifier->value);
 					// The transformed definition normally already contains the
 					// concrete owner.  If it still carries the primary spelling,
@@ -511,11 +515,12 @@
 			}
 			MarkGeneratedNode(generated, parent.qualified_name, parent_args,
 				explicit_instantiation);
-			// A replayed out-of-class member is a namespace-level LowIR entity.  Its
-			// owner remains encoded in the declarator/mangled name; queue it beside
-			// the source owner so both functions and static data definitions are
-			// visible to the ordinary top-level lowering path.
-			generated_by_owner_[GeneratedOwner(parent)].push_back(generated);
+				// Out-of-class member definitions are namespace-scope AST entities;
+				// their qualified declarator carries the concrete owner.  Queue the
+				// definition beside that owner so the ordinary top-level semantic pass
+				// sees it after the materialized class shell.
+				(void)generated_static_data;
+				generated_by_owner_[GeneratedOwner(parent)].push_back(generated);
 		}
 	}
 	void InstantiateNestedClass(const TemplateDefinition& parent,

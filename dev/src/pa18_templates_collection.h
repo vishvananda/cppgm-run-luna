@@ -538,10 +538,6 @@ private:
 	map<string, vector<FunctionSignature> > function_overloads_; set<const CPPGMAstNode*> template_function_signatures_; map<string, string> specialization_bases_;
 	map<string, vector<string> > specialization_arguments_;
 	map<string, vector<string> > specialization_names_by_base_;
-	// Class specializations are subject to source-order rules: once a concrete
-	// specialization has been materialized, a later explicit specialization of
-	// that same primary is ill-formed.  Keep this semantic fact independently of
-	// the generated-name cache and keyed by the canonical template entity.
 	set<ClassSpecializationIdentity> instantiated_class_specializations_;
 	map<string, TemplateDefinition> explicit_function_specializations_;
 	map<const CPPGMAstNode*, vector<string> > explicit_function_arguments_;
@@ -549,7 +545,10 @@ private:
 	map<string, CPPGMAstNodePtr> extern_instantiation_declarations_;
 	map<string, set<string> > requested_nested_classes_;
 	set<string> materialized_nested_classes_, materialized_member_definitions_;
-	set<string> active_template_member_types_; map<string, FunctionSignature> active_function_substitutions_;
+	set<string> active_template_member_types_;
+	mutable set<string> active_member_type_lookups_, active_function_results_;
+	struct ActiveFunctionResultScope { PA18TemplateExpander* owner; string key; ActiveFunctionResultScope(PA18TemplateExpander* value, const string& name) : owner(value), key(name) {} ~ActiveFunctionResultScope() { owner->active_function_results_.erase(key); } };
+	map<string, FunctionSignature> active_function_substitutions_;
 	size_t EstimateTypeSize(string raw, const string& context) const;
 	void RecordClassTypeSize(const CPPGMAstNodePtr& node, const string& context,
 		const string& class_path);
@@ -622,6 +621,7 @@ private:
 		const string& context, bool extern_instantiation = false);
 	CPPGMAstNodePtr TransformCallExpression(const CPPGMAstNodePtr& input,
 		const string& context, const map<string, string>& substitutions);
+	bool ValidateExplicitFunctionCandidate(const TemplateDefinition& definition, const CPPGMAstNodePtr& input, const string& context, const map<string, string>& substitutions, const vector<string>& raw_explicit_args, vector<string>* arguments);
 	string ResolveAlias(string spelling, const string& context) const;
 	bool FindLogicalNamespaceAlias(const string& spelling, string* alias_key) const;
 	bool IsArrayTypeAlias(const string& alias_name, const string& context) const;

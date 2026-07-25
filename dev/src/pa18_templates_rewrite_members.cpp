@@ -142,6 +142,13 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 {
 	if(!result || !active) return false;
 	string class_key = CanonicalSpelling(raw_class);
+	const string lookup_key = class_key + "|" + member + "|" + context;
+	if(!active_member_type_lookups_.insert(lookup_key).second) return false;
+	struct LookupScope {
+		set<string>* active; string key;
+		LookupScope(set<string>* value, const string& name) : active(value), key(name) {}
+		~LookupScope() { active->erase(key); }
+	} lookup_scope(&active_member_type_lookups_, lookup_key);
 	for(size_t template_marker = class_key.find("template ");
 		template_marker != string::npos;
 		template_marker = class_key.find("template ", template_marker))

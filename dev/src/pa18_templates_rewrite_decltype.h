@@ -1,5 +1,4 @@
 #pragma once
-
 	string InferLiteralArgumentType(const string& value) const
 	{
 		const bool floating = value.find('.') != string::npos || value.find('e') != string::npos ||
@@ -107,21 +106,58 @@
 		return argument == arguments->children.size();
 	}
 
-	bool SplitTopLevelComma(const string& raw, string* tail) const
+	bool SplitTopLevelComma(const string& raw, string* tail, string* head = 0) const
 	{
 		int angle = 0, parentheses = 0, brackets = 0;
 		for(size_t i = 0; i < raw.size(); ++i) {
 			const char ch = raw[i];
-			if(ch == '<') ++angle;
-			else if(ch == '>' && angle > 0) --angle;
+			if(ch == '<' && IsTemplateAngleOpen(raw, i)) ++angle;
+			else if(ch == '>' && angle > 0 && IsTemplateAngleClose(raw, i)) --angle;
 			else if(ch == '(') ++parentheses;
 			else if(ch == ')' && parentheses > 0) --parentheses;
 			else if(ch == '[') ++brackets;
 			else if(ch == ']' && brackets > 0) --brackets;
 			else if(ch == ',' && angle == 0 && parentheses == 0 && brackets == 0) {
+				if(head) *head = Trim(raw.substr(0, i));
 				if(tail) *tail = Trim(raw.substr(i + 1));
 				return true;
 			}
+		}
+		return false;
+	}
+
+	bool SplitTopLevelConditional(const string& raw, string* condition,
+		string* true_expression, string* false_expression) const
+	{
+		int angle = 0, parentheses = 0, brackets = 0, questions = 0;
+		size_t question = string::npos;
+		for(size_t i = 0; i < raw.size(); ++i) {
+			const char ch = raw[i];
+			if(ch == '<' && IsTemplateAngleOpen(raw, i)) ++angle;
+			else if(ch == '>' && angle > 0 && IsTemplateAngleClose(raw, i)) --angle;
+			else if(ch == '(') ++parentheses;
+			else if(ch == ')' && parentheses > 0) --parentheses;
+			else if(ch == '[') ++brackets;
+			else if(ch == ']' && brackets > 0) --brackets;
+			if(angle != 0 || parentheses != 0 || brackets != 0) continue;
+			if(ch == '?' && question == string::npos) {
+				question = i;
+				questions = 1;
+				continue;
+			}
+			if(question == string::npos) continue;
+			if(ch == '?') {
+				++questions;
+				continue;
+			}
+			if(ch != ':' || (i + 1 < raw.size() && raw[i + 1] == ':') ||
+				(i > 0 && raw[i - 1] == ':')) continue;
+			if(--questions != 0) continue;
+			if(condition) *condition = Trim(raw.substr(0, question));
+			if(true_expression) *true_expression = Trim(raw.substr(question + 1,
+				i - question - 1));
+			if(false_expression) *false_expression = Trim(raw.substr(i + 1));
+			return true;
 		}
 		return false;
 	}
@@ -210,10 +246,20 @@
 		const vector<string>* explicit_prefix = 0);
 
 	string FunctionResultType(const TemplateDefinition& definition,
-		const vector<string>& arguments, const string& context)
+		const vector<string>& arguments, const string& context,
+		const map<string, string>* outer_substitutions = 0)
 	{
 		if(!definition.declaration || definition.declaration->children.empty()) return string();
-		map<string, string> local;
+		ostringstream result_key_stream;
+		result_key_stream << definition.qualified_name << "@" << definition.declaration.get()
+			<< "|" << context;
+		for(size_t argument = 0; argument < arguments.size(); ++argument)
+			result_key_stream << "|" << CanonicalSpelling(arguments[argument]);
+		const string result_key = result_key_stream.str();
+		if(!active_function_results_.insert(result_key).second) return string();
+		ActiveFunctionResultScope result_scope(this, result_key);
+		map<string, string> local = outer_substitutions ? *outer_substitutions :
+			map<string, string>();
 		const map<string, vector<string> > previous_packs = active_pack_substitutions_;
 		size_t argument_index = 0;
 		for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter) {
@@ -240,11 +286,31 @@
 				if(argument_index < arguments.size()) ++argument_index;
 			}
 		}
+		for(map<string, string>::iterator binding = local.begin(); binding != local.end();
+			++binding) {
+			string value = CanonicalSpelling(binding->second);
+			set<string> seen;
+			while(!value.empty() && seen.insert(value).second) {
+				map<string, string>::const_iterator next = local.find(value);
+				if(next == local.end() || next->first == binding->first) break;
+				value = CanonicalSpelling(next->second);
+			}
+			binding->second = value;
+		}
 		const CPPGMAstNodePtr declarator = FunctionDeclarator(definition.declaration);
-		string result = NodeTypeSpelling(definition.declaration->children[0]);
-		result += DeclaratorSuffix(declarator);
+		string result;
+		const CPPGMAstNodePtr trailing_return = ChildOfKindLocal(declarator,
+			"trailing-return-type");
+		if(trailing_return) {
+			const CPPGMAstNodePtr type_id = ChildOfKindLocal(trailing_return, "type-id");
+			result = TypeIdSpelling(type_id);
+		} else {
+			result = NodeTypeSpelling(definition.declaration->children[0]);
+			result += DeclaratorSuffix(declarator);
+		}
 		result = RewriteText(result, context, local, 0);
 		result = CollapseReferenceSpelling(ReplaceIdentifiers(result, local));
+		result = ResolveDecltypeTypeName(result, context, local);
 		active_pack_substitutions_ = previous_packs;
 		return NormalizeTypeArgument(result);
 	}
@@ -259,11 +325,6 @@
 		if(!SplitTextCall(expression, &callee, &argument_text)) return false;
 		callee = StripTextParentheses(callee);
 		if(callee.empty()) return false;
-		// A member call replayed while a class specialization is being
-		// transformed has the generated class as its active typed owner, while
-		// the source member templates remain indexed under the primary class.
-		// Recover that source scope before resolving `check<F>(...)` or any
-		// equivalent dependent member call.
 		const string function_context = FunctionLookupContext(context);
 		if(callee[callee.size() - 1] == ')') {
 			string returned;
@@ -283,15 +344,17 @@
 		}
 		vector<string> explicit_arguments;
 		const TemplateDefinition* explicit_definition = 0;
+		string explicit_base_name;
 		const size_t template_open = callee.find('<');
 		const bool callee_is_static_cast = callee.compare(0, 12, "static_cast<") == 0;
 		if(template_open != string::npos && !callee_is_static_cast) {
 			string base_arguments, base;
 			size_t template_close = string::npos, begin = 0;
-			if(!TemplateBase(callee, template_open, &begin, &base) ||
-				!TemplateRange(callee, template_open, &base_arguments, &template_close)) return false;
-			explicit_definition = FindExplicitFunctionTemplate(base, function_context);
-			if(!explicit_definition || explicit_definition->class_template) return false;
+				if(!TemplateBase(callee, template_open, &begin, &base) ||
+					!TemplateRange(callee, template_open, &base_arguments, &template_close)) return false;
+				explicit_base_name = base;
+				explicit_definition = FindExplicitFunctionTemplate(base, function_context);
+				if(!explicit_definition || explicit_definition->class_template) return false;
 			explicit_arguments = SplitTemplateArguments(base_arguments);
 			for(size_t i = 0; i < explicit_arguments.size(); ++i) {
 				explicit_arguments[i] = RewriteText(explicit_arguments[i], function_context,
@@ -348,6 +411,21 @@
 		}
 		string callable_type, callable_operand;
 		if(SplitStaticCast(callee, &callable_type, &callable_operand)) {
+			string function_result;
+			vector<string> function_parameters;
+			if(SplitFunctionPointerType(ReplaceIdentifiers(callable_type, substitutions),
+				&function_result, &function_parameters)) {
+				if(function_parameters.size() != actual_types.size()) return false;
+				for(size_t argument = 0; argument < actual_types.size(); ++argument) {
+					const string parameter = RewriteText(function_parameters[argument],
+						function_context, substitutions, 0);
+					if(!FunctionArgumentViable(parameter, actual_types[argument],
+						function_context)) return false;
+				}
+				*result = NormalizeTypeArgument(ResolveAlias(ReplaceIdentifiers(
+					function_result, substitutions), function_context));
+				return !result->empty();
+			}
 			string object_type = NormalizeTypeArgument(ResolveAlias(
 				ReplaceIdentifiers(callable_type, substitutions), function_context));
 			while(!object_type.empty() && (object_type[object_type.size() - 1] == '&' ||
@@ -360,13 +438,18 @@
 				if(!InferFunctionTypeArguments(*call_operators[candidate], actual_types,
 					&arguments, substitutions, function_context)) continue;
 				*result = FunctionResultType(*call_operators[candidate], arguments,
-					function_context);
+					function_context, &substitutions);
 				if(!result->empty()) return true;
 			}
 		}
 		vector<const TemplateDefinition*> candidates;
-		if(explicit_definition) candidates.push_back(explicit_definition);
+		if(explicit_definition) {
+			candidates = FindFunctionDefinitions(explicit_base_name, function_context);
+			if(candidates.empty()) candidates.push_back(explicit_definition);
+		}
 		else candidates = FindFunctionDefinitions(callee, function_context);
+		string selected_result;
+		bool selected_ellipsis = true;
 		for(size_t i = 0; i < candidates.size(); ++i) {
 			const TemplateDefinition& definition = *candidates[i];
 			vector<string> arguments;
@@ -377,8 +460,33 @@
 				substitutions, function_context, explicit_definition ? &explicit_arguments : 0)) {
 				continue;
 			}
-			*result = FunctionResultType(definition, arguments, function_context);
-			if(!result->empty()) return true;
+			try {
+				if(!FunctionArgumentsViable(definition, arguments, actual_types,
+					function_context)) continue;
+			} catch(const PA18SubstitutionFailure&) {
+				continue;
+			}
+			const string candidate_result = FunctionResultType(definition, arguments,
+				function_context, &substitutions);
+			if(candidate_result.empty()) continue;
+			bool candidate_ellipsis = false;
+			const CPPGMAstNodePtr candidate_clause = DescendantOfKind(
+				FunctionDeclarator(definition.declaration), "parameter-clause");
+			if(candidate_clause) for(size_t parameter = 0;
+				parameter < candidate_clause->children.size(); ++parameter)
+				if(candidate_clause->children[parameter] &&
+					candidate_clause->children[parameter]->kind == "ellipsis") {
+					candidate_ellipsis = true;
+					break;
+				}
+			if(selected_result.empty() || (selected_ellipsis && !candidate_ellipsis)) {
+				selected_result = candidate_result;
+				selected_ellipsis = candidate_ellipsis;
+			}
+		}
+		if(!selected_result.empty()) {
+			*result = selected_result;
+			return true;
 		}
 		if(!explicit_definition) {
 			for(map<string, vector<FunctionSignature> >::const_iterator overload =
@@ -467,7 +575,8 @@
 		for(size_t i = 0; i < definition->parameters.size(); ++i)
 			if(!definition->parameters[i].name.empty())
 				local[definition->parameters[i].name] = arguments[i];
-		string result = FunctionResultType(*definition, arguments, context) + "(*) (";
+		string result = FunctionResultType(*definition, arguments, context,
+			&substitutions) + "(*) (";
 		for(size_t i = 0; i < clause->children.size(); ++i) {
 			const CPPGMAstNodePtr parameter = clause->children[i];
 			if(!parameter || parameter->kind != "parameter-declaration") continue;
@@ -494,11 +603,14 @@
 				expression.compare(i, 2, "<<") != 0) continue;
 			const string left = ExpressionTypeSpelling(expression.substr(0, i),
 				context, substitutions);
-			const string right = ExpressionTypeSpelling(expression.substr(i + 2),
-				context, substitutions);
-			if(left.empty() || right.empty()) return string();
-			CPPGMAstNodePtr declaration = FindClassDeclaration(left, context);
-			if(!declaration) return IsKnownTypeSpelling(left, context) ? left : string();
+				const string right = ExpressionTypeSpelling(expression.substr(i + 2),
+					context, substitutions);
+				if(left.empty() || right.empty()) return string();
+				string free_operator_result;
+				if(InferOperatorResult("<<", left, right, context, &free_operator_result))
+					return free_operator_result;
+				CPPGMAstNodePtr declaration = FindClassDeclaration(left, context);
+				if(!declaration) return IsKnownTypeSpelling(left, context) ? left : string();
 			for(size_t child = 0; child < declaration->children.size(); ++child) {
 				const CPPGMAstNodePtr member = declaration->children[child];
 				if(!member || member->kind != "function-definition" || member->children.size() < 2 ||
@@ -547,17 +659,272 @@
 		return string();
 	}
 
+	bool IsDefaultConstructibleType(string raw, const string& context) const
+	{
+		raw = NormalizeTypeArgument(ResolveAlias(ReplaceIdentifiers(raw, map<string, string>()),
+			context));
+		while(raw.compare(0, 6, "const ") == 0)
+			raw = NormalizeTypeArgument(raw.substr(6));
+		while(raw.compare(0, 9, "volatile ") == 0)
+			raw = NormalizeTypeArgument(raw.substr(9));
+		if(raw == "void" || raw == "nullptr_t" || IsBuiltinArithmeticType(raw)) return true;
+		if(raw.find('*') != string::npos || raw.find('&') != string::npos) return true;
+		const CPPGMAstNodePtr declaration = FindClassDeclaration(raw, context);
+		if(!declaration) return true;
+		const string class_name = LastComponent(raw);
+		bool declared_constructor = false;
+		for(size_t child = 0; child < declaration->children.size(); ++child) {
+			const CPPGMAstNodePtr member = declaration->children[child];
+			if(!member || (member->kind != "special-member-declaration" &&
+				member->kind != "special-member-definition") ||
+				LastComponent(RemoveMarker(member->value)) != class_name) continue;
+			declared_constructor = true;
+			const CPPGMAstNodePtr deleted = ChildOfKindLocal(member, "special-initializer");
+			if(deleted && RemoveMarker(deleted->value) == "delete") continue;
+			const CPPGMAstNodePtr clause = DescendantOfKind(
+				FunctionDeclarator(member), "parameter-clause");
+			if(!clause) continue;
+			bool viable = true;
+			for(size_t parameter = 0; parameter < clause->children.size(); ++parameter) {
+				const CPPGMAstNodePtr node = clause->children[parameter];
+				if(!node || node->kind != "parameter-declaration") continue;
+				if(!ChildOfKindLocal(node, "default-argument")) {
+					viable = false;
+					break;
+				}
+			}
+			if(viable) return true;
+		}
+		return !declared_constructor;
+	}
+
+	string ResolveDecltypeTypeName(string raw, const string& context,
+		const map<string, string>& substitutions) const
+	{
+		raw = NormalizeTypeArgument(ResolveAlias(ReplaceIdentifiers(raw, substitutions),
+			context));
+		if(IsKnownTypeSpelling(raw, context)) return raw;
+		// A type-only operand in decltype can name an alias declared in the
+		// current class.  IsKnownTypeSpelling intentionally describes global and
+		// qualified type names, so consult the typed class-member index for the
+		// unqualified spelling before treating it as an unknown dependent name.
+		for(string current = context; ; ) {
+			if(!current.empty()) {
+				string member_type;
+				set<string> active;
+				const bool found = FindClassMemberType(current, raw, substitutions, context,
+					&member_type, &active, true);
+				if(found && !member_type.empty())
+					return NormalizeTypeArgument(ResolveAlias(ReplaceIdentifiers(
+						member_type, substitutions), context));
+			}
+			if(current.empty()) break;
+			const size_t separator = current.rfind("::");
+			if(separator == string::npos) current.clear();
+			else current.erase(separator);
+		}
+		return raw;
+	}
+
+	string FunctionArgumentObjectType(string raw, const string& context) const
+	{
+		// A dependent call result can retain the source template-id spelling while
+		// a nondependent overload parameter has already been reduced through its
+		// typedef alias.  Normalize concrete template-ids through the same typed
+		// specialization table before comparing the object types.
+		if(raw.find('<') != string::npos) try {
+			raw = const_cast<PA18TemplateExpander*>(this)->RewriteText(raw, context,
+				map<string, string>(), 0);
+		} catch(const PA18SubstitutionFailure&) {
+			// The caller will reject an actually unavailable operand below.
+		}
+		raw = CanonicalSpelling(ResolveAlias(raw, context));
+		while(raw.compare(0, 6, "const ") == 0)
+			raw = CanonicalSpelling(raw.substr(6));
+		while(raw.compare(0, 9, "volatile ") == 0)
+			raw = CanonicalSpelling(raw.substr(9));
+		while(raw.size() > 6 && raw.compare(raw.size() - 6, 6, " const") == 0)
+			raw = CanonicalSpelling(raw.substr(0, raw.size() - 6));
+		while(raw.size() > 9 && raw.compare(raw.size() - 9, 9, " volatile") == 0)
+			raw = CanonicalSpelling(raw.substr(0, raw.size() - 9));
+		while(raw.size() >= 2 && raw.compare(raw.size() - 2, 2, "&&") == 0)
+			raw = CanonicalSpelling(raw.substr(0, raw.size() - 2));
+		while(!raw.empty() && raw[raw.size() - 1] == '&')
+			raw = CanonicalSpelling(raw.substr(0, raw.size() - 1));
+		return raw;
+	}
+
+	bool FunctionArgumentViable(const string& parameter, const string& actual,
+		const string& context) const
+	{
+		const string expected = FunctionArgumentObjectType(parameter, context);
+		const string received = FunctionArgumentObjectType(actual, context);
+		if(expected.empty() || received.empty()) return false;
+		if(expected == received) return true;
+		if(IsBuiltinArithmeticType(expected) && IsBuiltinArithmeticType(received))
+			return true;
+		if(IsBuiltinArithmeticType(expected) && FindClassDeclaration(received, context))
+			return false;
+		// Expression-SFINAE needs to reject an attempted conversion between two
+		// unrelated complete class types.  The ordinary call rewriter handles
+		// constructors and conversion operators; this narrow viability check is
+		// the typed fact needed for probes such as test_aux<To>(declval<From>()).
+		const bool direct_parameter = expected.find('*') == string::npos &&
+			expected.find('&') == string::npos;
+		const bool direct_actual = received.find('*') == string::npos &&
+			received.find('&') == string::npos;
+		if(direct_parameter && direct_actual &&
+			FindClassDeclaration(expected, context) &&
+			FindClassDeclaration(received, context)) return false;
+		return true;
+	}
+
+	bool FunctionArgumentsViable(const TemplateDefinition& definition,
+		const vector<string>& arguments, const vector<string>& actual_types,
+		const string& context)
+	{
+		if(!definition.declaration) return false;
+		const CPPGMAstNodePtr declarator = FunctionDeclarator(definition.declaration);
+		const CPPGMAstNodePtr parameters = DescendantOfKind(declarator, "parameter-clause");
+		if(!parameters) return false;
+		map<string, string> local;
+		map<string, vector<string> > pack_arguments;
+		size_t template_argument = 0;
+		for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter) {
+			const TemplateParameter& detail = definition.parameters[parameter];
+			if(detail.pack) {
+				size_t trailing_fixed = 0;
+				for(size_t later = parameter + 1; later < definition.parameters.size(); ++later)
+					if(!definition.parameters[later].pack) ++trailing_fixed;
+				const size_t available = arguments.size() > template_argument ?
+					arguments.size() - template_argument : 0;
+				const size_t count = available > trailing_fixed ? available - trailing_fixed : 0;
+				for(size_t value = 0; value < count; ++value)
+					pack_arguments[detail.name].push_back(arguments[template_argument + value]);
+				template_argument += count;
+			} else {
+				if(template_argument < arguments.size() && !detail.name.empty())
+					local[detail.name] = arguments[template_argument];
+				if(template_argument < arguments.size()) ++template_argument;
+			}
+		}
+		size_t actual = 0;
+		bool has_ellipsis = false;
+		for(size_t parameter = 0; parameter < parameters->children.size(); ++parameter) {
+			const CPPGMAstNodePtr node = parameters->children[parameter];
+			if(!node) continue;
+			if(node->kind == "ellipsis") {
+				has_ellipsis = true;
+				break;
+			}
+			if(node->kind != "parameter-declaration") continue;
+			if(IsFunctionParameterPack(node)) {
+				size_t trailing_fixed = 0;
+				for(size_t later = parameter + 1; later < parameters->children.size(); ++later)
+					if(parameters->children[later] &&
+						parameters->children[later]->kind == "parameter-declaration" &&
+						!IsFunctionParameterPack(parameters->children[later])) ++trailing_fixed;
+				const size_t available = actual_types.size() > actual ?
+					actual_types.size() - actual : 0;
+				const size_t visits = available > trailing_fixed ? available - trailing_fixed : 0;
+				const string pattern = ParameterTypeSpelling(node);
+				string pack_name;
+				for(size_t candidate = 0; candidate < definition.parameters.size(); ++candidate) {
+					const TemplateParameter& detail = definition.parameters[candidate];
+					if(!detail.pack || detail.name.empty()) continue;
+					const size_t at = pattern.find(detail.name);
+					if(at != string::npos &&
+						(at == 0 || !IsIdentifierCharacter(pattern[at - 1])) &&
+						(at + detail.name.size() == pattern.size() ||
+							!IsIdentifierCharacter(pattern[at + detail.name.size()]))) {
+						pack_name = detail.name;
+						break;
+					}
+				}
+				for(size_t visit = 0; visit < visits; ++visit) {
+					map<string, string> one = local;
+					if(!pack_name.empty()) {
+						const vector<string>& values = pack_arguments[pack_name];
+						if(visit >= values.size()) return false;
+						one[pack_name] = values[visit];
+					}
+					string expected = RewriteText(pattern, context, one, 0);
+					expected = NormalizeTypeArgument(ReplaceIdentifiers(expected, one));
+					if(!FunctionArgumentViable(expected, actual_types[actual + visit], context))
+						return false;
+				}
+				actual += visits;
+				continue;
+			}
+			if(actual >= actual_types.size()) {
+				if(ChildOfKindLocal(node, "default-argument")) continue;
+				return false;
+			}
+			string expected = RewriteText(ParameterTypeSpelling(node), context, local, 0);
+			expected = NormalizeTypeArgument(ReplaceIdentifiers(expected, local));
+			if(!FunctionArgumentViable(expected, actual_types[actual], context)) return false;
+			++actual;
+		}
+		return has_ellipsis || actual == actual_types.size();
+	}
+
 	string ExpressionTypeSpelling(string expression, const string& context,
 		const map<string, string>& substitutions)
 	{
 		expression = StripTextParentheses(CanonicalSpelling(expression));
 		string cast_type, cast_operand;
+		string call_callee, call_arguments;
+		if(SplitTextCall(expression, &call_callee, &call_arguments) &&
+			SplitStaticCast(call_callee, &cast_type, &cast_operand)) {
+			string function_result;
+			vector<string> function_parameters;
+			if(SplitFunctionPointerType(ReplaceIdentifiers(cast_type, substitutions),
+				&function_result, &function_parameters)) {
+				const vector<string> actual_expressions = SplitTemplateArguments(call_arguments);
+				if(actual_expressions.size() != function_parameters.size()) return string();
+				for(size_t argument = 0; argument < actual_expressions.size(); ++argument) {
+					const string actual = ExpressionTypeSpelling(actual_expressions[argument],
+						context, substitutions);
+					const string parameter = RewriteText(function_parameters[argument], context,
+						substitutions, 0);
+					if(actual.empty() || !FunctionArgumentViable(parameter, actual, context))
+						return string();
+				}
+				return NormalizeTypeArgument(ResolveAlias(ReplaceIdentifiers(
+					function_result, substitutions), context));
+			}
+		}
 		if(SplitStaticCast(expression, &cast_type, &cast_operand))
 			return NormalizeTypeArgument(ResolveAlias(ReplaceIdentifiers(
 				cast_type, substitutions), context));
-		string comma_tail;
-		if(SplitTopLevelComma(expression, &comma_tail))
+		string condition, true_expression, false_expression;
+		if(SplitTopLevelConditional(expression, &condition, &true_expression,
+			&false_expression)) {
+			if(condition.empty() || true_expression.empty() || false_expression.empty() ||
+				ExpressionTypeSpelling(condition, context, substitutions).empty()) return string();
+			const string true_type = ExpressionTypeSpelling(true_expression, context,
+				substitutions);
+			const string false_type = ExpressionTypeSpelling(false_expression, context,
+				substitutions);
+			if(true_type.empty() || false_type.empty()) return string();
+			const string normalized_true = NormalizeTypeArgument(true_type);
+			const string normalized_false = NormalizeTypeArgument(false_type);
+			if(normalized_true == normalized_false) return normalized_true;
+			if(IsBuiltinArithmeticType(normalized_true) &&
+				IsBuiltinArithmeticType(normalized_false))
+				return CommonBuiltinArithmeticType(normalized_true, normalized_false);
+			return string();
+		}
+		string comma_head, comma_tail;
+		if(SplitTopLevelComma(expression, &comma_tail, &comma_head)) {
+			// The left operand of a comma expression is still an unevaluated
+			// expression, but it must be well-formed.  Discarding it made every
+			// expression-SFINAE probe look viable, including `missing.member` and
+			// failed overload calls.
+			if(comma_head.empty() || ExpressionTypeSpelling(comma_head, context,
+				substitutions).empty()) return string();
 			return ExpressionTypeSpelling(comma_tail, context, substitutions);
+		}
 		// Member access in a decltype operand is an expression type, not a
 		// qualified type spelling.  Infer the object first so a dependent or
 		// C-style-cast object can use the normal typed member lookup path.
@@ -581,8 +948,15 @@
 			if(left.empty() || member.empty()) continue;
 			set<string> active;
 			string member_type;
-			if(FindClassMemberType(left, LastComponent(member), substitutions, context,
-				&member_type, &active)) return member_type;
+			string member_name = LastComponent(member);
+			const size_t member_call = member_name.find('(');
+			if(member_call != string::npos) member_name.erase(member_call);
+			const size_t member_template = member_name.find('<');
+			if(member_template != string::npos) member_name.erase(member_template);
+			if(FindClassMemberType(left, member_name, substitutions, context,
+				&member_type, &active)) {
+				return member_type;
+			}
 		}
 		if(expression.compare(0, 9, "decltype(") == 0 && expression.size() > 10 &&
 			expression[expression.size() - 1] == ')') {
@@ -590,12 +964,14 @@
 			if(EvaluateDecltypeExpression(expression.substr(9, expression.size() - 10),
 				context, substitutions, &nested)) return nested;
 		}
+		const string binary_type = BinaryExpressionType(expression, context, substitutions);
+		if(!binary_type.empty()) {
+			return binary_type;
+		}
 		string call_type;
 		if(FunctionCallResultType(expression, context, substitutions, &call_type)) return call_type;
 		const string function_type = FunctionTemplateIdType(expression, context, substitutions);
 		if(!function_type.empty()) return function_type;
-		const string binary_type = BinaryExpressionType(expression, context, substitutions);
-		if(!binary_type.empty()) return binary_type;
 		if(expression.size() > 1 && (expression[0] == '*' || expression[0] == '&')) {
 			const string inner = ExpressionTypeSpelling(expression.substr(1), context, substitutions);
 			if(!inner.empty()) {
@@ -627,8 +1003,8 @@
 		}
 		const size_t open = expression.find('(');
 		if(open != string::npos && expression[expression.size() - 1] == ')') {
-			string cast_type = ReplaceIdentifiers(Trim(expression.substr(0, open)), substitutions);
-			cast_type = ResolveAlias(cast_type, context);
+			string cast_type = ResolveDecltypeTypeName(Trim(expression.substr(0, open)),
+				context, substitutions);
 			if(IsKnownTypeSpelling(cast_type, context))
 				return NormalizeTypeArgument(cast_type);
 		}
@@ -655,19 +1031,24 @@
 		if(LookupVariableType(expression, context, &variable_type))
 			return ReplaceIdentifiers(ResolveAlias(variable_type, context), substitutions);
 		if(expression == "true" || expression == "false") return "bool";
+		if(expression == "nullptr") return "nullptr_t";
 		if(!expression.empty() && (isdigit(static_cast<unsigned char>(expression[0])) ||
 			expression[0] == '\'' || expression[0] == '"'))
 			return expression[0] == '\'' ? "char" : "int";
 		return string();
 	}
-
+	bool EvaluateNewExpression(const string& expression, const string& context,
+		const map<string, string>& substitutions, string* result);
 	bool EvaluateDecltypeExpression(const string& expression, const string& context,
 		const map<string, string>& substitutions, string* result)
 	{
 		if(!result) return false;
-		string tail;
-		if(SplitTopLevelComma(expression, &tail))
+		string head, tail;
+		if(SplitTopLevelComma(expression, &tail, &head)) {
+			if(head.empty() || ExpressionTypeSpelling(head, context, substitutions).empty())
+				return false;
 			return EvaluateDecltypeExpression(tail, context, substitutions, result);
+		}
 		string normalized = StripTextParentheses(expression);
 		if(normalized.compare(0, 6, "delete") == 0 && normalized.size() > 6 &&
 			normalized[6] != ' ')
@@ -683,18 +1064,33 @@
 			*result = "void";
 			return true;
 		}
+		if(EvaluateNewExpression(normalized, context, substitutions, result)) return true;
+		const size_t direct_open = normalized.find('(');
+		if(direct_open != string::npos && direct_open > 0 &&
+			normalized.find('.') == string::npos && normalized.find("->") == string::npos &&
+			normalized[normalized.size() - 1] == ')') {
+			const string constructed = ResolveDecltypeTypeName(
+				Trim(normalized.substr(0, direct_open)), context, substitutions);
+			if(IsKnownTypeSpelling(constructed, context)) {
+				if(!IsDefaultConstructibleType(constructed, context)) return false;
+				*result = constructed;
+				return true;
+			}
+		}
 		if(FunctionCallResultType(normalized, context, substitutions, result)) return true;
 		const size_t open = normalized.find('(');
-		if(open != string::npos && open > 0 && normalized[normalized.size() - 1] == ')') {
-			*result = NormalizeTypeArgument(ResolveAlias(ReplaceIdentifiers(
-			Trim(normalized.substr(0, open)), substitutions), context));
+		if(open != string::npos && open > 0 &&
+			normalized.find('.') == string::npos && normalized.find("->") == string::npos &&
+			normalized[normalized.size() - 1] == ')') {
+			*result = ResolveDecltypeTypeName(Trim(normalized.substr(0, open)),
+				context, substitutions);
 			if(!IsKnownTypeSpelling(*result, context)) return false;
+			if(!IsDefaultConstructibleType(*result, context)) return false;
 			return true;
 		}
 		*result = ExpressionTypeSpelling(normalized, context, substitutions);
 		return !result->empty();
 	}
-
 	string TemplateMemberType(const TemplateDefinition& definition,
 		const vector<string>& arguments, const string& member, const string& context);
 	string FinishTemplateMemberType(const string& active_key,

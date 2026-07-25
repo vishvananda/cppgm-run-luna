@@ -15,6 +15,49 @@ string PA18TemplateExpander::FunctionLookupContext(const string& context) const
 		context : generated_base->second;
 }
 
+bool PA18TemplateExpander::EvaluateNewExpression(const string& expression,
+	const string& context, const map<string, string>& substitutions, string* result)
+{
+	if(!result) return false;
+	size_t new_start = string::npos;
+	if(expression.compare(0, 5, "::new") == 0 &&
+		(expression.size() == 5 || !IsIdentifierCharacter(expression[5]))) new_start = 5;
+	else if(expression.compare(0, 3, "new") == 0 &&
+		(expression.size() == 3 || !IsIdentifierCharacter(expression[3]))) new_start = 3;
+	if(new_start == string::npos) return false;
+	string allocated = Trim(expression.substr(new_start));
+	if(!allocated.empty() && allocated[0] == '(') {
+		int depth = 0;
+		size_t close = string::npos;
+		for(size_t position = 0; position < allocated.size(); ++position) {
+			if(allocated[position] == '(') ++depth;
+			else if(allocated[position] == ')' && --depth == 0) {
+				close = position;
+				break;
+			}
+		}
+		if(close == string::npos) return false;
+		allocated = Trim(allocated.substr(close + 1));
+	}
+	int angle = 0;
+	size_t initializer = allocated.size();
+	for(size_t position = 0; position < allocated.size(); ++position) {
+		const char ch = allocated[position];
+		if(ch == '<' && IsTemplateAngleOpen(allocated, position)) ++angle;
+		else if(ch == '>' && angle > 0 && IsTemplateAngleClose(allocated, position)) --angle;
+		else if(angle == 0 && (ch == '(' || ch == '[' || ch == '{')) {
+			initializer = position;
+			break;
+		}
+	}
+	allocated = Trim(allocated.substr(0, initializer));
+	allocated = ResolveDecltypeTypeName(RewriteText(allocated, context, substitutions, 0),
+		context, substitutions);
+	if(!IsKnownTypeSpelling(allocated, context)) return false;
+	*result = NormalizeTypeArgument(allocated + "*");
+	return true;
+}
+
 const TemplateDefinition* PA18TemplateExpander::FindExplicitFunctionTemplate(
 	const string& base, const string& context) const
 {

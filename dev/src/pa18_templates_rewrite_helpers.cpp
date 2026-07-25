@@ -25,7 +25,7 @@ bool PA18TemplateExpander::PreserveEvaluatedDecltype(
 	const CPPGMAstNodePtr& input, const map<string, string>& substitutions,
 	const CPPGMAstNodePtr& result) const
 {
-	if(!input || input->kind != "decltype-specifier" || HasReplayContext(substitutions) ||
+	if(!input || input->kind != "decltype-specifier" ||
 		result->value.compare(0, 9, "decltype(") == 0) return false;
 	result->kind = "type-name";
 	result->value = RemoveMarker(result->value);

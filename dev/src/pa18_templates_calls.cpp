@@ -657,6 +657,13 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 		if(dependent_member_arguments) continue;
 
 		string requested_owner = object_type;
+		if(!active_instantiation_name_.empty()) {
+			map<string, string>::const_iterator active_base = specialization_bases_.find(
+				LastComponent(active_instantiation_name_));
+			if(active_base != specialization_bases_.end() &&
+				LastComponent(active_base->second) == LastComponent(definition.owner))
+				requested_owner = active_instantiation_name_;
+		}
 		map<const TemplateDefinition*, string>::const_iterator inherited_owner =
 			inherited_owners.find(&definition);
 		if(!direct_member && inherited_owner != inherited_owners.end() &&
@@ -1001,13 +1008,11 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 					const vector<string> raw_explicit_args = SplitTemplateArguments(argument_text);
 					for(size_t overload = 0; overload < overloads.size(); ++overload) {
 						vector<string> trial_arguments;
-						try {
-							if(InferFunctionArguments(*overloads[overload], input, &trial_arguments,
-								substitutions, context, &raw_explicit_args)) {
-								explicit_definition = overloads[overload];
-								break;
-							}
-					} catch(const PA18SubstitutionFailure&) {}
+						if(ValidateExplicitFunctionCandidate(*overloads[overload], input, context,
+							substitutions, raw_explicit_args, &trial_arguments)) {
+							explicit_definition = overloads[overload];
+							break;
+						}
 					}
 				}
 			}
@@ -1053,8 +1058,11 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 				catch(const PA18SubstitutionFailure&) { complete = false; }
 				if(complete) {
 					try {
+						const string requested_owner_name = explicit_definition->member_template ?
+							active_instantiation_name_ : string();
+						const string* requested_owner = requested_owner_name.empty() ? 0 : &requested_owner_name;
 						const string local_name = Instantiate(*explicit_definition, complete_args, context,
-							false, 0, 0, 0, &inferred_function_values);
+							false, 0, 0, requested_owner, &inferred_function_values);
 						result->template_primary = explicit_definition->qualified_name;
 						result->template_arguments = complete_args;
 						const string qualifier = PrefixComponent(base);
@@ -1415,8 +1423,6 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 						&inferred_pack_values, 0, requested_owner, &inferred_function_values,
 						&forwarding_pack_values);
 					string inferred_result_type;
-					// Preserve a typed return for associated-namespace templates so a
-					// later dependent operator lookup consumes the selected type directly.
 					if(!selected_definition->owner.empty() && selected_definition->declaration &&
 						!selected_definition->declaration->children.empty()) {
 						map<string, string> return_substitutions = substitutions;
@@ -1477,10 +1483,6 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 				callee.erase(separator + 2, owner.size() + 2);
 		}
 	}
-	// Recompute a member-call result after replaying its concrete owner.  The
-	// source AST may carry a dependent semantic spelling such as `const T&`
-	// from the primary class template; retaining it would override the typed
-	// return recovered from `node_value<key>::_M_v()` during later deduction.
 	if(result_callee && result_callee->kind == "member-expression" &&
 		result_callee->children.size() >= 2 && result_callee->children[1]) {
 		string member_object_type;
@@ -1494,6 +1496,5 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 	}
 	return result;
 }
-
 
 } // namespace pa18_templates_internal

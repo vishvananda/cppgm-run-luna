@@ -1037,6 +1037,13 @@ bool PA18TemplateExpander::InferFunctionArguments(const TemplateDefinition& defi
 	}
 	if(arguments->children.size() < required_parameters ||
 		(!has_pack && arguments->children.size() > parameters->children.size())) return false;
+	bool only_ellipsis = !parameters->children.empty();
+	for(size_t parameter = 0; parameter < parameters->children.size(); ++parameter)
+		if(!parameters->children[parameter] ||
+			parameters->children[parameter]->kind != "ellipsis") {
+			only_ellipsis = false;
+			break;
+		}
 	map<string, string> inferred;
 	map<string, vector<string> > inferred_packs;
 	set<string> parameter_names;
@@ -1070,6 +1077,21 @@ bool PA18TemplateExpander::InferFunctionArguments(const TemplateDefinition& defi
 			!template_parameter.name.empty())
 			inferred[template_parameter.name] = (*explicit_prefix)[explicit_index++];
 	}
+	if(only_ellipsis && explicit_prefix) {
+		if(explicit_prefix->size() > definition.parameters.size()) return false;
+		for(size_t parameter = 0; parameter < explicit_prefix->size(); ++parameter)
+			result->push_back((*explicit_prefix)[parameter]);
+		for(size_t parameter = explicit_prefix->size();
+			parameter < definition.parameters.size(); ++parameter) {
+			if(definition.parameters[parameter].default_type.empty()) return false;
+			result->push_back(definition.parameters[parameter].default_type);
+		}
+		return result->size() == definition.parameters.size();
+	}
+	if(only_ellipsis)
+		return CompleteFunctionArguments(definition, deferred_patterns, deferred_arguments,
+			parameter_names, &inferred, inferred_packs, result, inferred_pack_values,
+			context, forwarding_pack_values);
 	size_t argument_index = 0;
 	for(size_t i = 0; i < parameters->children.size(); ++i) {
 		const bool parameter_ok = InferFunctionParameter(definition, parameters->children[i], parameters, i, arguments, &argument_index,
