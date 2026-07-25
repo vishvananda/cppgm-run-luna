@@ -679,7 +679,22 @@
 		while(raw.size() >= 2 && raw[raw.size() - 1] == '>' &&
 			raw[raw.size() - 2] == ')') raw.erase(raw.size() - 1);
 		PA19IntegralValue value;
-		const bool evaluated = EvaluateIntegralText(raw, context, substitutions, &value);
+		bool evaluated = EvaluateIntegralText(raw, context, substitutions, &value);
+		if(!evaluated && raw.size() > 7 &&
+			raw.compare(raw.size() - 7, 7, "::value") == 0) {
+			// A generated class can have a dependent direct static member whose
+			// initializer was intentionally deferred during class replay.  This
+			// is still a typed constant-member fact once the non-type argument is
+			// being resolved; consult that declaration without broadening the
+			// ordinary expression evaluator.
+			const size_t separator = raw.rfind("::");
+			PA19IntegralValue direct_member;
+			if(separator != string::npos && EvaluateUnqualifiedConstantMember(
+				"value", raw.substr(0, separator), substitutions, &direct_member)) {
+				value = direct_member;
+				evaluated = true;
+			}
+		}
 		if(!evaluated) {
 			string details = "non-type template argument is not an integral constant: " +
 				parameter.name + "=" + raw + " context=" + context + " substitutions=";

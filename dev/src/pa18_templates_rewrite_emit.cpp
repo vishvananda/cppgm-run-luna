@@ -257,6 +257,72 @@ void PA18TemplateExpander::RestoreGeneratedMemberParameterNames(
 	}
 }
 
+bool PA18TemplateExpander::HasUnavailableGeneratedMemberType(string raw,
+	const string& context, const map<string, string>& substitutions) const
+{
+	raw = CanonicalSpelling(RemoveMarker(raw));
+	if(raw.empty() || HasUnresolvedTemplateParameter(raw, context, substitutions)) return false;
+	const size_t separator = TopLevelScopeSeparator(raw);
+	if(separator == string::npos) return false;
+	const string owner = raw.substr(0, separator);
+	const string member = raw.substr(separator + 2);
+	if(specialization_bases_.find(LastComponent(owner)) == specialization_bases_.end()) return false;
+	string member_type;
+	set<string> active_members;
+	if(FindClassMemberType(owner, member, substitutions, context,
+		&member_type, &active_members, false) && !member_type.empty()) return false;
+	if(!MemberAliasType(owner, member).empty()) return false;
+	// A generated owner can be a forward declaration while its alias/type facts
+	// are already indexed.  Preserve a direct member fact even when the full
+	// dependent replay cannot reconstruct its array/reference spelling yet.
+	CPPGMAstNodePtr declaration;
+	map<string, CPPGMAstNodePtr>::const_iterator direct_declaration =
+		class_declarations_.find(owner);
+	if(direct_declaration != class_declarations_.end()) declaration = direct_declaration->second;
+	else declaration = FindClassDeclaration(owner, context);
+	if(declaration) for(size_t child = 0; child < declaration->children.size(); ++child) {
+		const CPPGMAstNodePtr item = declaration->children[child];
+		if(item && (item->kind == "class-specifier" ||
+			item->kind == "class-forward-declaration" || item->kind == "enum-specifier") &&
+			LastComponent(item->value) == member) return false;
+		if(item && item->kind == "simple-declaration" && ContainsName(item, member)) return false;
+		if(!item || item->kind != "simple-declaration") continue;
+		const CPPGMAstNodePtr list = ChildOfKindLocal(item, "init-declarator-list");
+		if(!list) continue;
+		for(size_t entry = 0; entry < list->children.size(); ++entry) {
+			const CPPGMAstNodePtr declarator = list->children[entry];
+			if(declarator && !declarator->children.empty() &&
+				FirstIdentifierLocal(declarator->children[0]) == member) return false;
+		}
+	}
+	map<string, string>::const_iterator generated_base =
+		specialization_bases_.find(LastComponent(owner));
+	map<string, vector<string> >::const_iterator generated_arguments =
+		specialization_arguments_.find(LastComponent(owner));
+	if(generated_base != specialization_bases_.end()) {
+		const TemplateDefinition* source = FindDefinition(generated_base->second, context);
+		if(source && generated_arguments != specialization_arguments_.end())
+			source = SelectClassTemplateDefinition(source, generated_arguments->second, context);
+		if(source && source->declaration && ContainsName(source->declaration, member)) return false;
+	}
+	return true;
+}
+
+bool PA18TemplateExpander::GeneratedNodeHasUnavailableMemberType(
+	const CPPGMAstNodePtr& node, const string& context,
+	const map<string, string>& substitutions) const
+{
+	if(!node) return false;
+	if(node->kind == "decl-specifier" || node->kind == "type-name" ||
+		node->kind == "type-specifier" || node->kind == "decltype-specifier" ||
+		node->kind == "base-name")
+		if(HasUnavailableGeneratedMemberType(node->value, context, substitutions)) return true;
+	for(size_t child = 0; child < node->children.size(); ++child)
+		if(GeneratedNodeHasUnavailableMemberType(node->children[child], context, substitutions)) return true;
+	return false;
+}
+
+
 void PA18TemplateExpander::RegisterGeneratedTypeEntity(
 	const TemplateDefinition& definition, const CPPGMAstNodePtr& generated,
 	const string& generated_owner, const string& local_name,
@@ -429,6 +495,10 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 	}
 	active_instantiation_name_ = previous_instantiation_name;
 	if(!generated) throw logic_error("unable to instantiate template");
+	if(!definition.class_template && GeneratedNodeHasUnavailableMemberType(
+		generated, transform_context, substitutions)) {
+		throw logic_error("dependent type substitution failed");
+	}
 	// Function parameter arrays are adjusted to pointers by [dcl.fct].  Keep
 	// the source declarator's array spelling while deduction is running (the
 	// bound may itself be a template argument), then materialize the adjusted

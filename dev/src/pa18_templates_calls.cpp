@@ -1007,7 +1007,7 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 								explicit_definition = overloads[overload];
 								break;
 							}
-						} catch(const logic_error&) {}
+					} catch(const logic_error&) {}
 					}
 				}
 			}
@@ -1049,23 +1049,25 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 				bool complete = !pack_precedes_fixed && (explicit_pack_elements ||
 					(!has_parameter_pack && explicit_args.size() == explicit_definition->parameters.size()));
 				if(complete) complete_args = explicit_args;
-				else complete = InferFunctionArguments(*explicit_definition, input,
-					&complete_args, substitutions, context, &explicit_args, 0, &inferred_function_values);
+				else try { complete = InferFunctionArguments(*explicit_definition, input, &complete_args, substitutions, context, &explicit_args, 0, &inferred_function_values); }
+				catch(const logic_error&) { complete = false; }
 				if(complete) {
-					const string local_name = Instantiate(*explicit_definition, complete_args, context,
-						false, 0, 0, 0, &inferred_function_values);
-					result->template_primary = explicit_definition->qualified_name;
-					result->template_arguments = complete_args;
-					const string qualifier = PrefixComponent(base);
-					CPPGMAstNodePtr callee(new CPPGMAstNode("id-expression",
-						qualifier.empty() ? local_name : qualifier + "::" + local_name));
-					result->children.push_back(callee);
-					for(size_t i = 1; i < input->children.size(); ++i) {
-						CPPGMAstNodePtr child = TransformNode(input->children[i], context,
-							substitutions);
-						if(child) result->children.push_back(child);
-					}
-					return result;
+					try {
+						const string local_name = Instantiate(*explicit_definition, complete_args, context,
+							false, 0, 0, 0, &inferred_function_values);
+						result->template_primary = explicit_definition->qualified_name;
+						result->template_arguments = complete_args;
+						const string qualifier = PrefixComponent(base);
+						CPPGMAstNodePtr callee(new CPPGMAstNode("id-expression",
+							qualifier.empty() ? local_name : qualifier + "::" + local_name));
+						result->children.push_back(callee);
+						for(size_t i = 1; i < input->children.size(); ++i) {
+							CPPGMAstNodePtr child = TransformNode(input->children[i], context,
+								substitutions);
+							if(child) result->children.push_back(child);
+						}
+						return result;
+					} catch(const logic_error&) {}
 				}
 			}
 		}
@@ -1363,8 +1365,8 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 		for(size_t candidate = 0; candidate < definitions.size() && !extern_template_candidate;
 			++candidate) {
 			vector<string> inferred;
-			if(!InferFunctionArguments(*definitions[candidate], result, &inferred,
-				substitutions, context, 0)) continue;
+			try { if(!InferFunctionArguments(*definitions[candidate], result, &inferred, substitutions, context, 0)) continue; }
+			catch(const logic_error&) { continue; }
 			ostringstream request_key;
 			request_key << definitions[candidate]->qualified_name << "@" <<
 				definitions[candidate]->declaration.get();
@@ -1391,13 +1393,9 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 					}
 					if(has_definition) continue;
 				}
-				vector<string> inferred;
-				map<string, vector<string> > inferred_pack_values;
-				map<string, FunctionSignature> inferred_function_values;
-				map<string, vector<string> > forwarding_pack_values;
-				const bool inferred_ok = InferFunctionArguments(*definition, result, &inferred,
-					substitutions, context, 0, &inferred_pack_values,
-					&inferred_function_values, 0, &forwarding_pack_values);
+				vector<string> inferred; map<string, vector<string> > inferred_pack_values; map<string, FunctionSignature> inferred_function_values; map<string, vector<string> > forwarding_pack_values; bool inferred_ok = false;
+				try { inferred_ok = InferFunctionArguments(*definition, result, &inferred, substitutions, context, 0, &inferred_pack_values, &inferred_function_values, 0, &forwarding_pack_values); }
+				catch(const logic_error&) { inferred_ok = false; }
 				if(!inferred_ok) continue;
 				const TemplateDefinition* selected_definition =
 					FindExplicitFunctionSpecialization(definition->qualified_name, inferred, context);
@@ -1412,35 +1410,39 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 					specialization_bases_.find(LastComponent(requested_owner_name)) !=
 					specialization_bases_.end() && !selected_definition->owner.empty();
 				const string* requested_owner = concrete_member_owner ? &requested_owner_name : 0;
-				const string local_name = Instantiate(*selected_definition, inferred, context, false,
-					&inferred_pack_values, 0, requested_owner, &inferred_function_values,
-					&forwarding_pack_values);
-				// Preserve a typed return for associated-namespace templates so a
-				// later dependent operator lookup consumes the selected type directly.
-				if(!selected_definition->owner.empty() && selected_definition->declaration &&
-					!selected_definition->declaration->children.empty()) {
-					map<string, string> return_substitutions = substitutions;
-					for(size_t parameter = 0; parameter < selected_definition->parameters.size() &&
-						parameter < inferred.size(); ++parameter)
-						if(!selected_definition->parameters[parameter].name.empty())
-							return_substitutions[selected_definition->parameters[parameter].name] =
-								inferred[parameter];
-					string return_type = NodeTypeSpelling(
-						selected_definition->declaration->children[0]);
-					return_type += ReturnDeclaratorSuffix(
-						FunctionDeclarator(selected_definition->declaration));
-					result->inferred_type = CanonicalSpelling(ResolveAlias(RewriteText(
-						return_type, context, return_substitutions, 0), context));
-				}
-				result->template_primary = definition->qualified_name;
-				result->template_arguments = inferred;
-				const string qualifier = concrete_member_owner ? requested_owner_name :
-					GeneratedFunctionQualifier(*definition, callee_name, context);
-				const string emitted_name = concrete_member_owner ?
-					LastComponent(selected_definition->name) : local_name;
+				try {
+					const string local_name = Instantiate(*selected_definition, inferred, context, false,
+						&inferred_pack_values, 0, requested_owner, &inferred_function_values,
+						&forwarding_pack_values);
+					string inferred_result_type;
+					// Preserve a typed return for associated-namespace templates so a
+					// later dependent operator lookup consumes the selected type directly.
+					if(!selected_definition->owner.empty() && selected_definition->declaration &&
+						!selected_definition->declaration->children.empty()) {
+						map<string, string> return_substitutions = substitutions;
+						for(size_t parameter = 0; parameter < selected_definition->parameters.size() &&
+							parameter < inferred.size(); ++parameter)
+							if(!selected_definition->parameters[parameter].name.empty())
+								return_substitutions[selected_definition->parameters[parameter].name] =
+									inferred[parameter];
+						string return_type = NodeTypeSpelling(
+							selected_definition->declaration->children[0]);
+						return_type += ReturnDeclaratorSuffix(
+							FunctionDeclarator(selected_definition->declaration));
+						inferred_result_type = CanonicalSpelling(ResolveAlias(RewriteText(
+							return_type, context, return_substitutions, 0), context));
+					}
+					const string qualifier = concrete_member_owner ? requested_owner_name :
+						GeneratedFunctionQualifier(*definition, callee_name, context);
+					const string emitted_name = concrete_member_owner ?
+						LastComponent(selected_definition->name) : local_name;
+					result->inferred_type = inferred_result_type;
+					result->template_primary = definition->qualified_name;
+					result->template_arguments = inferred;
 					result_callee->value = qualifier.empty() ? emitted_name : qualifier +
 						"::" + emitted_name;
-				break;
+					break;
+				} catch(const logic_error&) { continue; }
 			}
 		if(definitions.empty()) {
 			const FunctionSignature* signature = FindFunctionSignature(callee_name, context);

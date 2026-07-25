@@ -533,7 +533,7 @@ private:
 	map<string, CPPGMAstNodePtr> function_definitions_;
 	map<string, FunctionSignature> function_signatures_;
 	map<string, vector<string> > function_signatures_by_name_;
-	map<string, vector<FunctionSignature> > function_overloads_;
+	map<string, vector<FunctionSignature> > function_overloads_; set<const CPPGMAstNode*> template_function_signatures_; // non-type templates stay out of ordinary signatures
 	map<string, string> specialization_bases_;
 	map<string, vector<string> > specialization_arguments_;
 	map<string, vector<string> > specialization_names_by_base_;
@@ -587,6 +587,8 @@ private:
 	bool IsTopLevelPackPattern(const string& value) const;
 	CPPGMAstNodePtr FunctionDeclarator(const CPPGMAstNodePtr& declaration) const;
 	bool IsBuiltinArithmeticType(string raw) const; bool IsKnownTypeSpelling(string raw, const string& context) const;
+	bool HasUnavailableGeneratedMemberType(string raw, const string& context, const map<string, string>& substitutions) const;
+	bool GeneratedNodeHasUnavailableMemberType(const CPPGMAstNodePtr& node, const string& context, const map<string, string>& substitutions) const;
 	bool HasUnresolvedTemplateParameter(string raw, const string& context, const map<string, string>& substitutions) const;
 	string CommonBuiltinArithmeticType(const string& left, const string& right) const;
 	bool InferOperatorResult(const string& operation, const string& left, const string& right, const string& context, string* result) const;
@@ -651,6 +653,7 @@ private:
 		const string& context)
 	{
 		if(!declaration) return;
+		if(template_function_signatures_.find(declaration.get()) != template_function_signatures_.end()) return;
 		CPPGMAstNodePtr declarator;
 		CPPGMAstNodePtr result_specs;
 		if(declaration->kind == "function-definition" && declaration->children.size() > 1) {
@@ -932,6 +935,8 @@ private:
 		item.member_template = nested_member_template ||
 			(!item.class_template && class_declarations_.find(context) !=
 				class_declarations_.end());
+		bool has_non_type_parameter = false; for(size_t parameter = 0; parameter < item.parameters.size(); ++parameter) if(!item.parameters[parameter].type && !item.parameters[parameter].template_template) has_non_type_parameter = true;
+		if(!item.class_template && !item.alias_template && !item.variable_template && has_non_type_parameter && declaration && (declaration->kind == "function-definition" || declaration->kind == "simple-declaration" || declaration->kind == "special-member-definition" || declaration->kind == "special-member-declaration")) template_function_signatures_.insert(declaration.get());
 		// `template<>` function declarations are explicit specializations, not
 		// overloads of the primary template.  Keep their concrete body in typed
 		// state so a later call can select it after normal template deduction.
