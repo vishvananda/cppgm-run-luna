@@ -54,6 +54,12 @@ bool PA18TemplateExpander::EvaluateNewExpression(const string& expression,
 	allocated = ResolveDecltypeTypeName(RewriteText(allocated, context, substitutions, 0),
 		context, substitutions);
 	if(!IsKnownTypeSpelling(allocated, context)) return false;
+	string object_type = allocated;
+	while(object_type.compare(0, 6, "const ") == 0)
+		object_type = NormalizeTypeArgument(object_type.substr(6));
+	while(object_type.compare(0, 9, "volatile ") == 0)
+		object_type = NormalizeTypeArgument(object_type.substr(9));
+	if(object_type == "void") return false;
 	*result = NormalizeTypeArgument(allocated + "*");
 	return true;
 }

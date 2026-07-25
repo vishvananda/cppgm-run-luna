@@ -5,6 +5,50 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
+bool PA18TemplateExpander::EvaluateLogicalIntegralText(const string& raw,
+	const string& context, const map<string, string>& substitutions,
+	PA19IntegralValue* result)
+{
+	const auto split_logical = [](const string& expression, const string& operation,
+		string* left, string* right) {
+		int angle = 0, parentheses = 0, brackets = 0;
+		for(size_t position = 0; position + 1 < expression.size(); ++position) {
+			const char ch = expression[position];
+			if(ch == '<' && IsTemplateAngleOpen(expression, position)) ++angle;
+			else if(ch == '>' && angle > 0 && IsTemplateAngleClose(expression, position)) --angle;
+			else if(ch == '(') ++parentheses;
+			else if(ch == ')' && parentheses > 0) --parentheses;
+			else if(ch == '[') ++brackets;
+			else if(ch == ']' && brackets > 0) --brackets;
+			if(angle == 0 && parentheses == 0 && brackets == 0 &&
+				expression.compare(position, operation.size(), operation) == 0) {
+				if(left) *left = Trim(expression.substr(0, position));
+				if(right) *right = Trim(expression.substr(position + operation.size()));
+				return !left || !left->empty();
+			}
+		}
+		return false;
+	};
+	string left, right;
+	if(split_logical(raw, "||", &left, &right)) {
+		PA19IntegralValue value;
+		if(!EvaluateIntegralText(left, context, substitutions, &value) || !value.known)
+			return true;
+		if(PA19Raw(value) != 0) *result = PA19IntegralValue::Signed(1, "int", 32);
+		else EvaluateIntegralText(right, context, substitutions, result);
+		return true;
+	}
+	if(split_logical(raw, "&&", &left, &right)) {
+		PA19IntegralValue value;
+		if(!EvaluateIntegralText(left, context, substitutions, &value) || !value.known)
+			return true;
+		if(PA19Raw(value) == 0) *result = PA19IntegralValue::Signed(0, "int", 32);
+		else EvaluateIntegralText(right, context, substitutions, result);
+		return true;
+	}
+	return false;
+}
+
 	bool PA18TemplateExpander::EvaluateMaterializedTemplateValue(const string& raw,
 		const string& context, const map<string, string>& substitutions,
 		PA19IntegralValue* result)

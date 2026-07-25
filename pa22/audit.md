@@ -162,3 +162,81 @@ file-audit limits, timeout behavior, and preservation of PA1–PA21.
   Checkpoint 71 fixtures — **7/7 passed**.
 - Earlier regression probes for the nested-class and dependent type cases —
   **PA18 2/2** and **PA21 1/1** passed; `git diff --check` passed.
+
+## Checkpoint 73 Audit
+
+### Scope Reviewed
+
+Reviewed the latest `Checkpoint Scope` and result in [plan.md](plan.md), the
+PA22 contract in [README.md](README.md), commits `0223a90` and `2739cc9`
+(including the preceding call-deduction checkpoint), the complete active
+report at `/home/vishvananda/work/.ralph/luna-gpt-5.6-luna-ultra/last-test.log`,
+and the changed implementation in the PA18 call-probe, collection,
+decltype, substitution, specialization, inference, text-replay, and emit
+files.  The audit also covered the new checked source-set entry and the
+current `dev/src` file-audit output.
+
+The reviewed scope is the dependent-expression substitution core: conditional
+and default-construction `decltype`, expression-SFINAE member/comma and
+conversion probes, detected-or and member-typedef probes, stream insertion,
+partial-specialization call probes, typed expression-result lookup, lazy
+class references, placement-new results, and concrete member-owner routing.
+
+### Findings
+
+- The checkpoint had a real timeout path in hidden-friend SFINAE.  Expression
+  type inference attempted binary parsing before function-call parsing, so the
+  `<` in a template-id call such as `declval<T>()` could be treated as a
+  relational operator.  The malformed operand then re-entered member lookup
+  and specialization probing.  The integral evaluator also evaluated both
+  operands of top-level `||` and `&&`, recursively materializing a hidden
+  friend that C++ short-circuit semantics do not require.
+- Those were algorithmic issues, not a test timeout budget problem.  Calls are
+  now recognized before binary expressions, and logical integral expressions
+  are split with template/parenthesis/bracket depth tracking and evaluated
+  left-to-right with semantic short-circuiting.  The bounded scan carries no
+  test names, success payload, or fallback-success branch.
+- A nonmatching dependent class partial specialization was still reported as
+  an internal `logic_error`; it now crosses the candidate boundary as the
+  existing typed `PA18SubstitutionFailure` state.  Direct `new void` was also
+  accepted by the decltype helper; it is rejected after qualifier
+  normalization, while `void()` remains valid for unevaluated
+  default-construction probes.
+- No compiler phase is skipped.  There is no dummy output, embedded payload,
+  interpreter/VM/trampoline substitute, source- or test-specific acceptance
+  gate, timeout workaround, weakened check, or unchecked implementation
+  fragment.  The fixes use the existing typed declaration/result lookup and
+  substitution state; they do not duplicate AST ownership or recover facts
+  by reparsing emitted LowIR.  No avoidable full-suite walk or repeated
+  emitted-text scan was introduced.
+- The two touched large implementation files were kept at their PA22 limits
+  (1200 and 1500 lines).  The file audit reports only the same ten pre-existing
+  structural warnings; no new warning or unchecked path was used to evade it.
+
+### Changes Made
+
+- Added call-before-binary ordering in `ExpressionTypeSpelling` so template-id
+  calls retain their typed result instead of entering relational fallback.
+- Added `EvaluateLogicalIntegralText` in the existing checked-in value
+  implementation, with a declaration in the expander interface, to preserve
+  C++ logical short-circuit evaluation without eager recursive probing.
+- Converted partial-specialization pattern mismatch to
+  `PA18SubstitutionFailure` at the substitution boundary.
+- Rejected `new void` in `EvaluateNewExpression` while preserving the valid
+  `void()` unevaluated expression case, and kept all changes within the file
+  audit limits.
+
+### Validation
+
+- Required prior-through check — **passed**: `make test-report-through-pa21`
+  reported **1850/1850**.
+- Required active report — **107/250 passed**, up from the turn-start
+  baseline of **106/250**, with **143** exact remaining failures recorded in
+  the new plan map and **0 timeout failures**.
+- Checkpoint timeout regression — **passed**:
+  `make -C pa22 check TEST=tests/general/300-hidden-friend-sfinae-use-scope-shadowing.t`.
+  The two regression probes for `decltype(T())` and hidden-friend pointer ADL
+  also pass.
+- Required file audit — **passed**:
+  `perl scripts/cppgm_file_audit.pl --stage pa22 --paths dev/src`, with only
+  the ten pre-existing warnings.  `git diff --check` also passes.

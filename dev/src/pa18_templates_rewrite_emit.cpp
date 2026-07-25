@@ -786,8 +786,10 @@ string PA18TemplateExpander::Instantiate(const TemplateDefinition& definition,
 	}
 	if(definition.partial_specialization) {
 		map<string, string> specialized;
+		// A dependent partial-pattern mismatch is substitution failure.  It must
+		// stay inside candidate viability instead of becoming an internal error.
 		if(!MatchClassSpecializationPattern(definition, args, &specialized, context))
-			throw logic_error("class partial specialization does not match");
+			throw PA18SubstitutionFailure("class partial specialization does not match");
 		for(map<string, string>::const_iterator it = specialized.begin(); it != specialized.end(); ++it)
 			substitutions[it->first] = it->second;
 		for(size_t pack_index = 0; pack_index < definition.specialization_pack_names.size(); ++pack_index) {

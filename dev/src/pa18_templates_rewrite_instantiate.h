@@ -150,6 +150,8 @@
 		const map<string, string>& substitutions, PA19IntegralValue* result);
 	bool EvaluateIntegralTextFallbacks(const string& raw, const string& context,
 		const map<string, string>& substitutions, PA19IntegralValue* result);
+	bool EvaluateLogicalIntegralText(const string& raw, const string& context,
+		const map<string, string>& substitutions, PA19IntegralValue* result);
 	bool EvaluateIntegralText(string raw, const string& context,
 		const map<string, string>& substitutions, PA19IntegralValue* result);
 	void RecordTemplateArrayValues(const TemplateDefinition& definition,

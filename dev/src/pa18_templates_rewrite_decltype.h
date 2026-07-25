@@ -317,11 +317,11 @@
 	string FunctionLookupContext(const string& context) const;
 	const TemplateDefinition* FindExplicitFunctionTemplate(const string& base,
 		const string& context) const;
-
 	bool FunctionCallResultType(string expression, const string& context,
 		const map<string, string>& substitutions, string* result)
 	{
-		if(!result) return false; string callee, argument_text;
+		if(!result) return false;
+		string callee, argument_text;
 		if(!SplitTextCall(expression, &callee, &argument_text)) return false;
 		callee = StripTextParentheses(callee);
 		if(callee.empty()) return false;
@@ -964,12 +964,12 @@
 			if(EvaluateDecltypeExpression(expression.substr(9, expression.size() - 10),
 				context, substitutions, &nested)) return nested;
 		}
+		// Classify template-id calls before binary parsing; `<` belongs to the callee.
+		string call_type; if(FunctionCallResultType(expression, context, substitutions, &call_type)) return call_type;
 		const string binary_type = BinaryExpressionType(expression, context, substitutions);
 		if(!binary_type.empty()) {
 			return binary_type;
 		}
-		string call_type;
-		if(FunctionCallResultType(expression, context, substitutions, &call_type)) return call_type;
 		const string function_type = FunctionTemplateIdType(expression, context, substitutions);
 		if(!function_type.empty()) return function_type;
 		if(expression.size() > 1 && (expression[0] == '*' || expression[0] == '&')) {

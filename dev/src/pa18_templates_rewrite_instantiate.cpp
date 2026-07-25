@@ -1069,12 +1069,12 @@ bool PA18TemplateExpander::EvaluateIntegralText(string raw, const string& contex
 		return false;
 	}
 	NormalizeIntegralText(&raw, substitutions);
+	if(EvaluateLogicalIntegralText(raw, context, substitutions, result)) return result->known;
 	if(EvaluateIntegralTextSpecialForms(raw, context, substitutions, result)) return true;
 	const bool known_value = EvaluateIntegralTextKnownValues(raw, context, substitutions, result);
 	if(known_value) return true;
 	return EvaluateIntegralTextFallbacks(raw, context, substitutions, result);
 }
-
 CPPGMAstNodePtr PA18TemplateExpander::FindSourceConstantFunction(
 	string raw, const string& context) const
 {
