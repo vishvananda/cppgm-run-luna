@@ -517,6 +517,18 @@ private:
 	// one to ordinary identifier replacement.
 	map<string, vector<string> > active_pack_substitutions_;
 	map<string, vector<string> > active_pack_identifier_substitutions_;
+	struct ActivePackScope
+	{
+		PA18TemplateExpander* owner;
+		map<string, vector<string> > saved;
+		explicit ActivePackScope(PA18TemplateExpander* value)
+			: owner(value), saved(value->active_pack_substitutions_) {}
+		void Set(const string& name, const vector<string>& values)
+		{
+			if(!name.empty()) owner->active_pack_substitutions_[name] = values;
+		}
+		~ActivePackScope() { owner->active_pack_substitutions_ = saved; }
+	};
 	map<string, string> type_aliases_;
 	// Alias-template specializations retain whether a type argument was a
 	// reference alias.  This lets cv applied by the alias body follow the
@@ -592,6 +604,9 @@ private:
 		const map<string, string>& substitutions, const string& context,
 		vector<const TemplateDefinition*>* result, set<string>* active,
 		map<const TemplateDefinition*, string>* concrete_owners);
+	bool HasViableOrdinaryCallableMember(const CPPGMAstNodePtr& call,
+		const string& object_type, const string& member_name,
+		const string& context, const map<string, string>& substitutions);
 	bool InstantiateMemberCall(const CPPGMAstNodePtr& call,
 		const CPPGMAstNodePtr& callee, const string& original_member,
 		const string& context,
@@ -1035,12 +1050,14 @@ private:
 			for(size_t i = 0; i < item.parameters.size() && i < prior->second.parameters.size(); ++i)
 				if(item.parameters[i].default_type.empty())
 					item.parameters[i].default_type = prior->second.parameters[i].default_type;
+			// A class-specifier with only its class-key is still a complete empty
+			// class (`struct tuple { };`).  Only the grammar's explicit forward
+			// declaration is an incomplete template declaration here; otherwise a
+			// later empty definition would leave the earlier shell selected during
+			// specialization replay.
 			const bool prior_is_shell = prior->second.declaration &&
-				(prior->second.declaration->kind == "class-forward-declaration" ||
-				 (prior->second.declaration->kind == "class-specifier" &&
-				  prior->second.declaration->children.size() <= 1));
-			const bool item_is_definition = declaration->kind == "class-specifier" &&
-				declaration->children.size() > 1;
+				prior->second.declaration->kind == "class-forward-declaration";
+			const bool item_is_definition = declaration->kind == "class-specifier";
 			if(prior_is_shell && item_is_definition) item.declaration = declaration;
 			else if(!item_is_definition && prior->second.declaration) item.declaration = prior->second.declaration;
 			prior->second.parameters = item.parameters;

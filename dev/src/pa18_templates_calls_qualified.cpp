@@ -5,6 +5,42 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
+bool PA18TemplateExpander::HasViableOrdinaryCallableMember(
+	const CPPGMAstNodePtr& call, const string& object_type, const string& member_name,
+	const string& context, const map<string, string>& substitutions)
+{
+	const CPPGMAstNodePtr ordinary_class = FindClassDeclaration(object_type, context);
+	if(!ordinary_class || call->children.size() <= 1 || !call->children[1]) return false;
+	const CPPGMAstNodePtr arguments = call->children[1]->kind == "argument-list" ?
+		call->children[1] : ChildOfKindLocal(call->children[1], "argument-list");
+	if(!arguments) return false;
+	for(size_t member = 0; member < ordinary_class->children.size(); ++member) {
+		const CPPGMAstNodePtr declaration = ordinary_class->children[member];
+		if(!declaration || (declaration->kind != "function-definition" &&
+			declaration->kind != "simple-declaration") ||
+			LastComponent(DeclarationName(declaration)) != member_name) continue;
+		const CPPGMAstNodePtr parameters = DescendantOfKind(
+			FunctionDeclarator(declaration), "parameter-clause");
+		if(!parameters || parameters->children.size() != arguments->children.size()) continue;
+		bool callable_argument = false, viable = true;
+		for(size_t argument = 0; argument < arguments->children.size(); ++argument) {
+			const CPPGMAstNodePtr parameter = parameters->children[argument];
+			if(!parameter || parameter->kind != "parameter-declaration") { viable = false; break; }
+			string actual;
+			FunctionSignature actual_signature;
+			if(!InferArgument(arguments->children[argument], &actual, substitutions,
+				context, &actual_signature)) { viable = false; break; }
+			if(actual_signature.result_specifiers && actual_signature.parameters)
+				callable_argument = true;
+			map<string, string> ignored;
+			if(!MatchTypePattern(FunctionTypeSpelling(parameter), actual,
+				set<string>(), &ignored, context)) { viable = false; break; }
+		}
+		if(viable && callable_argument) return true;
+	}
+	return false;
+}
+
 bool PA18TemplateExpander::TransformQualifiedMemberTemplateCall(
 	const CPPGMAstNodePtr& input, const CPPGMAstNodePtr& input_callee,
 	const string& context, const map<string, string>& substitutions,

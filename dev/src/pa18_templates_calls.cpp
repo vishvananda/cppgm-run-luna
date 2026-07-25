@@ -1,8 +1,6 @@
 #include "pa18_templates_collection.h"
 #include "pa18_templates_rewrite.h"
-
 using namespace std;
-
 namespace pa18_templates_internal {
 
 bool PA18TemplateExpander::MaterializeExplicitInstantiation(
@@ -79,7 +77,6 @@ bool PA18TemplateExpander::MaterializeExplicitInstantiation(
 			Instantiate(*owner_definition, owner_arguments, context, true);
 		return true;
 	}
-	if(candidates.empty()) return false;
 	// A non-member overloaded operator must have a class or enum operand.  Do
 	// this check only after entity lookup: conversion operators and member
 	// operators are valid even when their explicit parameters are arithmetic,
@@ -487,6 +484,8 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 		if(!specialized_candidates.empty()) candidates.swap(specialized_candidates);
 	}
 	const vector<const TemplateDefinition*> direct_member_candidates = candidates;
+	if(HasViableOrdinaryCallableMember(call, object_type, member_name,
+		context, substitutions)) return false;
 	vector<const TemplateDefinition*> inherited_candidates;
 	set<string> inherited_active;
 	map<const TemplateDefinition*, string> inherited_owners;
@@ -742,7 +741,8 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 				definition.owner + "::" + member_name));
 		} else callee->children[1]->value =
 			(ordinary_class_member && !generated_operator) ? member_name :
-			(concrete_owner && !generated_operator ? member_name : generated_name);
+			(concrete_owner && !generated_operator && !definition.member_template ?
+				member_name : generated_name);
 		if(!member_qualifier.empty() && concrete_owner && !static_member) {
 			// Preserve a dependent qualified-base call as a qualified generated
 			// function.  Leaving it as `this->operator=...` redispatches through
@@ -1365,9 +1365,9 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 	if(!constructor_replayed && !implicit_member_instantiated && result_callee &&
 		result_callee->kind == "id-expression" &&
 		result_callee->value.find('<') == string::npos) {
-		const string callee_name = result_callee->value;
-		vector<const TemplateDefinition*> definitions =
-			FindFunctionDefinitions(callee_name, context);
+			const string callee_name = result_callee->value;
+			vector<const TemplateDefinition*> definitions =
+				FindFunctionDefinitions(callee_name, context);
 		map<const TemplateDefinition*, string> inherited_owners;
 		const string qualified_callee_owner = PrefixComponent(callee_name);
 		if(!qualified_callee_owner.empty()) {
@@ -1441,8 +1441,8 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 					GeneratedFunctionQualifier(*definition, callee_name, context);
 				const string emitted_name = concrete_member_owner ?
 					LastComponent(selected_definition->name) : local_name;
-				result_callee->value = qualifier.empty() ? emitted_name : qualifier +
-					"::" + emitted_name;
+					result_callee->value = qualifier.empty() ? emitted_name : qualifier +
+						"::" + emitted_name;
 				break;
 			}
 		if(definitions.empty()) {

@@ -1,10 +1,8 @@
 #include "pa18_templates_collection.h"
 #include "pa18_templates_rewrite.h"
 #include <functional>
-
 using namespace std;
 namespace pa18_templates_internal {
-
 CPPGMAstNodePtr PA18TemplateExpander::TransformSubscriptExpression(
 	const CPPGMAstNodePtr& input, const string& context,
 	const map<string, string>& substitutions)
@@ -40,7 +38,6 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformSubscriptExpression(
 		return call;
 	return transformed;
 }
-
 CPPGMAstNodePtr PA18TemplateExpander::TransformAssignmentExpression(
 	const CPPGMAstNodePtr& input, const string& context,
 	const map<string, string>& substitutions)
@@ -128,7 +125,6 @@ void PA18TemplateExpander::ResolveMemberFunctionArguments(
 		}
 	}
 }
-
 bool PA18TemplateExpander::SplitDirectFunctionType(const string& raw,
 	string* result, vector<string>* parameters, string* qualifiers) const
 {
@@ -435,6 +431,12 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 	pattern = separate_compact_cv(pattern);
 	actual = separate_compact_cv(actual);
 	pattern = CanonicalSpelling(pattern);
+	const int direct_class_parameter = MatchDirectClassTypeParameter(pattern, actual,
+		parameter_names, inferred, context, class_pattern);
+	if(direct_class_parameter >= 0) return direct_class_parameter != 0;
+	const int reference_array = MatchReferenceArrayPattern(pattern, actual,
+		parameter_names, inferred);
+	if(reference_array >= 0) return reference_array != 0;
 	const int object_cv_match = MatchObjectCvPattern(pattern, actual,
 		parameter_names, inferred, context, class_pattern);
 	if(object_cv_match >= 0) return object_cv_match != 0;
@@ -696,7 +698,7 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 		while(pattern.size() > 9 && pattern.compare(pattern.size() - 9, 9, " volatile") == 0)
 			pattern = CanonicalSpelling(pattern.substr(0, pattern.size() - 9));
 		if(!direct_parameter && !bare_reference_parameter &&
-			!forwarding_reference_parameter) {
+			!forwarding_reference_parameter && !preserve_pointee_cv) {
 			while(actual.size() > 6 && actual.compare(actual.size() - 6, 6, " const") == 0)
 				actual = CanonicalSpelling(actual.substr(0, actual.size() - 6));
 			while(actual.size() > 9 && actual.compare(actual.size() - 9, 9, " volatile") == 0)

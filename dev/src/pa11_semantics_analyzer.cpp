@@ -105,8 +105,8 @@ TypePtr Analyzer::ResolveType(Scope* from, const string& raw) const
 			return specialization;
 		}
 	}
-	if (name.find("::") == string::npos)
-	{
+		if (name.find("::") == string::npos)
+		{
 		for (Scope* current = from; current; current = current->parent)
 			for (size_t i = current->bindings.size(); i > 0; --i)
 			{
@@ -923,8 +923,9 @@ void Analyzer::ComputeClassLayout(const CPPGMAstNodePtr& node, const TypePtr& ty
 	ApplyClassAttributes(node, type, class_scope ? class_scope->parent : 0);
 
 	if (type->direct_base && type->direct_base->kind == TYPE_CLASS &&
-		!type->direct_base->complete)
+		!type->direct_base->complete) {
 		throw logic_error("incomplete direct base class");
+	}
 	const bool empty_base = type->direct_base && EmptyBaseStorage(type->direct_base);
 	const bool owns_vpointer = type->has_vpointer;
 	type->direct_base_offset = 0;

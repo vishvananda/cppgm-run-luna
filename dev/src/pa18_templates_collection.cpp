@@ -37,7 +37,20 @@ void PA18TemplateExpander::EnsureForwardClass(const string& spelling,
 	}
 	const string top = type.substr(0, separator);
 	if(class_contexts_.find(top) == class_contexts_.end()) {
-		const string owner_name = PrefixComponent(type);
+		string owner_name = PrefixComponent(type);
+		// An inline namespace keeps the logical spelling (`lib::T`) visible to
+		// source lookup while generated declarations are emitted in its physical
+		// scope (`lib::abi`).  A dependency forward must follow that physical
+		// owner; otherwise PA11 creates a second incomplete `lib::T` type before
+		// it sees the complete `lib::abi::T` specialization.
+		map<string, string>::const_iterator physical_logical =
+			lexical_namespace_logical_.find(owner);
+		if(physical_logical != lexical_namespace_logical_.end() &&
+			physical_logical->second == owner_name) {
+			// `owner` is the generated lexical owner supplied by the replay.
+			// Keep the namespace path used by the dependency queue physical.
+			owner_name = owner;
+		}
 		// A qualified nested type can have a namespace as its first component
 		// while its immediate owner is a class.  Route that forward into the
 		// class replay queue instead of wrapping the class name as a namespace.
@@ -305,6 +318,94 @@ vector<string> SplitTemplateArguments(const string& raw)
 string ReplaceIdentifiersPreservingPackSizes(const string& raw,
 	const map<string, string>& substitutions)
 {
+	// ReplaceIdentifiers must not turn a pack operand into a scalar followed by
+	// an ellipsis (`_Tail...` -> `double...`).  The ellipsis belongs to the
+	// complete operand and is expanded later from typed pack state.  Keep the
+	// ordinary identifier replacement rules, including compact cv spellings,
+	// for every non-pack occurrence.
+	const auto replace_segment = [&](const string& segment) {
+		// The ellipsis applies to the complete preceding expression, not only to
+		// an identifier immediately before it.  Preserve identifiers inside an
+		// expression such as `((void)Pack, true)...` so typed pack replay can
+		// expand each element before scalar substitution runs.
+		vector<pair<size_t, size_t> > pack_spans;
+		for(size_t ellipsis = segment.find("..."); ellipsis != string::npos;
+			ellipsis = segment.find("...", ellipsis + 3)) {
+			if(ellipsis >= 6 && segment.substr(ellipsis - 6, 6) == "sizeof") continue;
+			int angle = 0, parentheses = 0, brackets = 0, braces = 0;
+			size_t begin = ellipsis;
+			while(begin > 0) {
+				const char ch = segment[begin - 1];
+				if(ch == '>') ++angle;
+				else if(ch == '<' && angle > 0) --angle;
+				else if(ch == ')') ++parentheses;
+				else if(ch == '(') {
+					if(parentheses > 0) --parentheses;
+					else if(angle == 0 && brackets == 0 && braces == 0) break;
+				}
+				else if(ch == ']') ++brackets;
+				else if(ch == '[' && brackets > 0) --brackets;
+				else if(ch == '}') ++braces;
+				else if(ch == '{' && braces > 0) --braces;
+				if(ch == ',' && angle == 0 && parentheses == 0 &&
+					brackets == 0 && braces == 0) break;
+				--begin;
+			}
+			if(begin < segment.size() && (segment[begin] == ',' || segment[begin] == '(')) ++begin;
+			if(begin < ellipsis) pack_spans.push_back(make_pair(begin, ellipsis));
+		}
+		string replaced;
+		for(size_t i = 0; i < segment.size();) {
+			if(!IsIdentifierCharacter(segment[i])) {
+				replaced += segment[i++];
+				continue;
+			}
+			size_t end = i + 1;
+			while(end < segment.size() && IsIdentifierCharacter(segment[end])) ++end;
+			const string word = segment.substr(i, end - i);
+			size_t after = end;
+			while(after < segment.size() && isspace(static_cast<unsigned char>(segment[after]))) ++after;
+			bool pack_operand = after + 3 <= segment.size() &&
+				segment.compare(after, 3, "...") == 0;
+			if(!pack_operand) for(size_t span = 0; span < pack_spans.size(); ++span)
+				if(i >= pack_spans[span].first && i < pack_spans[span].second) {
+					pack_operand = true;
+					break;
+				}
+			map<string, string>::const_iterator found = substitutions.find(word);
+			const bool already_qualified = i >= 2 && replaced.size() >= 2 &&
+				replaced.compare(replaced.size() - 2, 2, "::") == 0;
+			if(found != substitutions.end() && !pack_operand && !already_qualified)
+				replaced += found->second;
+			else if(found != substitutions.end()) replaced += word;
+			else {
+				bool compact_substitution = false;
+				if(!pack_operand) for(map<string,string>::const_iterator it = substitutions.begin();
+					it != substitutions.end(); ++it) {
+					if(it->first.empty() || word.size() <= it->first.size()) continue;
+					if(word.compare(0, it->first.size(), it->first) == 0) {
+						const string suffix = word.substr(it->first.size());
+						if(suffix == "const" || suffix == "volatile") {
+							replaced += it->second + " " + suffix;
+							compact_substitution = true;
+							break;
+						}
+					}
+					if(word.compare(word.size() - it->first.size(), it->first.size(), it->first) == 0) {
+						const string prefix = word.substr(0, word.size() - it->first.size());
+						if(prefix == "const" || prefix == "volatile") {
+							replaced += prefix + " " + it->second;
+							compact_substitution = true;
+							break;
+						}
+					}
+				}
+				if(!compact_substitution) replaced += word;
+			}
+			i = end;
+		}
+		return replaced;
+	};
 	string result;
 	size_t cursor = 0;
 	for(size_t search = raw.find("sizeof..."); search != string::npos; ) {
@@ -323,12 +424,12 @@ string ReplaceIdentifiersPreservingPackSizes(const string& raw,
 			}
 		}
 		if(close == string::npos) break;
-		result += ReplaceIdentifiers(raw.substr(cursor, search - cursor), substitutions);
+		result += replace_segment(raw.substr(cursor, search - cursor));
 		result += raw.substr(search, close - search + 1);
 		cursor = close + 1;
 		search = raw.find("sizeof...", cursor);
 	}
-	result += ReplaceIdentifiers(raw.substr(cursor), substitutions);
+	result += replace_segment(raw.substr(cursor));
 	return result;
 }
 

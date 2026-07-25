@@ -1098,6 +1098,12 @@ void PA18TemplateExpander::InsertGenerated(vector<CPPGMAstNodePtr>* children,
 	size_t default_position = 0;
 	while(default_position < children->size()) {
 		const CPPGMAstNodePtr& child = (*children)[default_position];
+		const bool typedef_declaration = child && child->kind == "simple-declaration" &&
+			!child->children.empty() && HasDeclarationSpecifier(child->children[0], "typedef");
+		if(typedef_declaration) {
+			++default_position;
+			continue;
+		}
 		if(child && (child->kind == "function-definition" ||
 			child->kind == "special-member-definition")) break;
 		if(!TypeOnlyNode(child)) break;
@@ -1192,23 +1198,7 @@ void PA18TemplateExpander::InsertGenerated(vector<CPPGMAstNodePtr>* children,
 			break;
 		}
 	}
-	// A generated constexpr function can be referenced by a static assertion
-	// nested in a materialized class.  The ordinary top-level scan above cannot
-	// see that use, so make the generated definition visible before its first
-	// lexical caller as well.  Class bodies that only contain ordinary function
-	// calls remain in their original order so dependent nested types are visible
-	// before a generated function signature names them.
-	for(size_t child = 0; child < children->size(); ++child) {
-		if((*children)[child] && (*children)[child]->kind == "class-specifier" &&
-			!ContainsStaticAssert((*children)[child])) continue;
-		for(size_t function = 0; function < generated_functions.size(); ++function) {
-			const string name = DeclarationName(generated_functions[function]);
-			if(!name.empty() && ContainsName((*children)[child], name)) {
-				function_position = min(function_position, child);
-				break;
-			}
-		}
-	}
+	AdjustGeneratedFunctionPosition(generated_functions, *children, &function_position);
 	if(!generated_functions.empty())
 		children->insert(children->begin() + function_position,
 			generated_functions.begin(), generated_functions.end());
@@ -1264,6 +1254,12 @@ void PA18TemplateExpander::InjectGenerated(const CPPGMAstNodePtr& node,
 				const string class_path = JoinPath(context, LastComponent(node->children[i]->value));
 				map<string, vector<CPPGMAstNodePtr> >::iterator before =
 					generated_before_class_.find(class_path);
+				if(before == generated_before_class_.end()) {
+					map<string, string>::const_iterator base = specialization_bases_.find(
+						LastComponent(node->children[i]->value));
+					if(base != specialization_bases_.end())
+						before = generated_before_class_.find(LastComponent(base->second));
+				}
 				if(before != generated_before_class_.end()) {
 					const size_t inserted = before->second.size();
 					node->children.insert(node->children.begin() + i,
@@ -1293,6 +1289,8 @@ void PA18TemplateExpander::InjectGenerated(const CPPGMAstNodePtr& node,
 				forwards->second.end());
 			generated_namespace_forwards_.erase(forwards);
 		}
+		if(IsInlineNamespace(node) && child_context != child_lexical_context)
+			RewriteInlineGeneratedNames(node, child_context, child_lexical_context);
 		bool last_namespace = true;
 		map<string, size_t>::iterator occurrence = namespace_occurrences_.find(child_lexical_context);
 		if(occurrence != namespace_occurrences_.end() && occurrence->second > 0)

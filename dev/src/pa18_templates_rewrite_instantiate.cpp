@@ -784,6 +784,21 @@ void PA18TemplateExpander::NormalizeIntegralText(string* raw,
 		it != substitutions.end(); ++it)
 		if(raw->find(it->first + "...") != string::npos)
 			expression_substitutions.erase(it->first);
+	// Keep a dependent template-id intact until RewriteText has a concrete
+	// argument list.  Substituting only its base (`matches_` -> the enclosing
+	// generated class) would leave the invalid spelling `Generated_<Args>`.
+	for(map<string,string>::const_iterator substitution = substitutions.begin();
+		substitution != substitutions.end(); ++substitution)
+		for(size_t at = raw->find(substitution->first); at != string::npos;
+			at = raw->find(substitution->first, at + substitution->first.size())) {
+			if(at > 0 && IsIdentifierCharacter((*raw)[at - 1])) continue;
+			size_t after = at + substitution->first.size();
+			while(after < raw->size() && isspace(static_cast<unsigned char>((*raw)[after]))) ++after;
+			if(after < raw->size() && (*raw)[after] == '<') {
+				expression_substitutions.erase(substitution->first);
+				break;
+			}
+		}
 	*raw = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(*raw,
 		expression_substitutions));
 	*raw = NormalizeIntegralExpression(*raw);

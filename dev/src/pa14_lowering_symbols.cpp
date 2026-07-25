@@ -186,7 +186,7 @@ string abi_type_text(const string& raw)
 	}
 	// Non-type integral template arguments use the Itanium literal encoding;
 	// treating a digit as an identifier produces `I1818` instead of `ILi8ELi8E`.
-	if((value[0] == '-' || value[0] == '+' ||
+  if((value[0] == '-' || value[0] == '+' ||
 		isdigit(static_cast<unsigned char>(value[0]))) &&
 		(value[0] == '-' || value[0] == '+' ||
 		isdigit(static_cast<unsigned char>(value[0])))) {
@@ -201,6 +201,23 @@ string abi_type_text(const string& raw)
 				(value[0] == '-' ? "n" : "") + number + "E";
 		}
 	}
+	// Type spelling can place cv-qualifiers after a pointer (`T* volatile`)
+	// even though the ABI encoding places the qualifier before the pointer.
+	// Strip trailing qualifiers before decomposing the pointer, otherwise the
+	// raw source spelling is mistaken for a named type and leaks spaces into
+	// the object symbol.
+	string trailing_cv;
+	for(;;) {
+		if(value.size() > 6 && value.compare(value.size() - 6, 6, " const") == 0) {
+			value.erase(value.size() - 6);
+			trailing_cv = "K" + trailing_cv;
+		} else if(value.size() > 9 &&
+			value.compare(value.size() - 9, 9, " volatile") == 0) {
+			value.erase(value.size() - 9);
+			trailing_cv = "V" + trailing_cv;
+		} else break;
+	}
+	if(!trailing_cv.empty()) return trailing_cv + abi_type_text(value);
   if(value[value.size() - 1] == '&') {
     const bool rvalue = value.size() > 1 && value[value.size() - 2] == '&';
     value.erase(value.size() - (rvalue ? 2 : 1));

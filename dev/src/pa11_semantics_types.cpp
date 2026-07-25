@@ -1,5 +1,15 @@
 #include "pa11_semantics_analyzer.h"
 
+TypePtr Analyzer::ResolveArrayReferenceSpelledType(const string& spelling, Scope* scope,
+	SpecFacts& info)
+{
+	const size_t marker = spelling.find("(&)");
+	if(marker == string::npos || marker + 3 >= spelling.size() || spelling[marker + 3] != '[')
+		return TypePtr();
+	const string referred_spelling = spelling.substr(0, marker) + spelling.substr(marker + 3);
+	return ReferenceTo(TYPE_LVALUE_REFERENCE, ResolveSpelledType(referred_spelling, scope, info));
+}
+
 TypePtr Analyzer::ResolveFunctionSpelledType(const string& spelling, Scope* scope,
 	SpecFacts& info)
 {

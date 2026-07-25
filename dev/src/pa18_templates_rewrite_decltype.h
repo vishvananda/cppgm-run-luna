@@ -207,85 +207,45 @@
 	bool InferFunctionTypeArguments(const TemplateDefinition& definition,
 		const vector<string>& actual_types, vector<string>* result,
 		const map<string, string>& substitutions, const string& context,
-		const vector<string>* explicit_prefix = 0)
-	{
-		if(!result || definition.class_template) return false;
-		const CPPGMAstNodePtr declarator = FunctionDeclarator(definition.declaration);
-		const CPPGMAstNodePtr parameters = DescendantOfKind(declarator, "parameter-clause");
-		if(!parameters) return false;
-		size_t parameter_count = 0;
-		size_t required_parameters = 0;
-		if(!FunctionParameterCounts(parameters, &parameter_count, &required_parameters) ||
-			actual_types.size() < required_parameters || actual_types.size() > parameter_count)
-			return false;
-		map<string, string> inferred;
-		set<string> parameter_names;
-		for(size_t i = 0; i < definition.parameters.size(); ++i) {
-			if(!definition.parameters[i].name.empty()) parameter_names.insert(
-				definition.parameters[i].name);
-			if(explicit_prefix && i < explicit_prefix->size() &&
-				!definition.parameters[i].name.empty())
-				inferred[definition.parameters[i].name] = (*explicit_prefix)[i];
-		}
-		size_t actual = 0;
-		for(size_t i = 0; i < parameters->children.size(); ++i) {
-			const CPPGMAstNodePtr parameter = parameters->children[i];
-			if(!parameter || parameter->kind != "parameter-declaration") continue;
-			if(actual >= actual_types.size()) break;
-			const string pattern = ParameterTypeSpelling(parameter);
-			bool dependent = false;
-			for(size_t p = 0; p < definition.parameters.size() && !dependent; ++p) {
-				const string& name = definition.parameters[p].name;
-				for(size_t at = 0; at + name.size() <= pattern.size(); ++at)
-					if(pattern.compare(at, name.size(), name) == 0 &&
-						(at == 0 || !IsIdentifierCharacter(pattern[at - 1])) &&
-						(at + name.size() == pattern.size() ||
-							!IsIdentifierCharacter(pattern[at + name.size()]))) {
-						dependent = true;
-						break;
-					}
-			}
-			if(dependent) {
-				const string dependent_pattern = CanonicalSpelling(pattern);
-				const string actual_type = CollapseReferenceSpelling(actual_types[actual]);
-				if(dependent_pattern.size() > 2 &&
-					dependent_pattern.compare(dependent_pattern.size() - 2, 2, "&&") == 0 &&
-					!actual_type.empty() && actual_type[actual_type.size() - 1] == '&') {
-					const string base = CanonicalSpelling(dependent_pattern.substr(
-						0, dependent_pattern.size() - 2));
-					if(parameter_names.find(base) != parameter_names.end())
-						inferred[base] = actual_type;
-					else if(!MatchTypePattern(dependent_pattern, actual_type,
-						parameter_names, &inferred, context)) return false;
-				} else if(!MatchTypePattern(dependent_pattern, actual_type,
-					parameter_names, &inferred, context)) return false;
-			}
-			++actual;
-		}
-		for(size_t i = 0; i < definition.parameters.size(); ++i) {
-			map<string, string>::const_iterator found = inferred.find(definition.parameters[i].name);
-			if(found != inferred.end()) result->push_back(found->second);
-			else if(!definition.parameters[i].default_type.empty())
-				result->push_back(RewriteText(definition.parameters[i].default_type,
-					context, inferred, 0));
-			else return false;
-		}
-		(void)substitutions;
-		return true;
-	}
+		const vector<string>* explicit_prefix = 0);
 
 	string FunctionResultType(const TemplateDefinition& definition,
 		const vector<string>& arguments, const string& context)
 	{
 		if(!definition.declaration || definition.declaration->children.empty()) return string();
-			map<string, string> local; for(size_t i = 0; i < definition.parameters.size() && i < arguments.size(); ++i)
-			if(!definition.parameters[i].name.empty())
-				local[definition.parameters[i].name] = arguments[i];
+		map<string, string> local;
+		const map<string, vector<string> > previous_packs = active_pack_substitutions_;
+		size_t argument_index = 0;
+		for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter) {
+			const TemplateParameter& detail = definition.parameters[parameter];
+			if(detail.pack) {
+				size_t trailing_fixed = 0;
+				for(size_t later = parameter + 1; later < definition.parameters.size(); ++later)
+					if(!definition.parameters[later].pack) ++trailing_fixed;
+				const size_t available = arguments.size() > argument_index ?
+					arguments.size() - argument_index : 0;
+				const size_t count = available > trailing_fixed ? available - trailing_fixed : 0;
+				vector<string> values;
+				for(size_t value = 0; value < count; ++value)
+					values.push_back(arguments[argument_index + value]);
+				if(!detail.name.empty()) {
+					active_pack_substitutions_[detail.name] = values;
+					if(!values.empty()) local[detail.name] = values[0];
+					else local.erase(detail.name);
+				}
+				argument_index += count;
+			} else {
+				if(argument_index < arguments.size() && !detail.name.empty())
+					local[detail.name] = arguments[argument_index];
+				if(argument_index < arguments.size()) ++argument_index;
+			}
+		}
 		const CPPGMAstNodePtr declarator = FunctionDeclarator(definition.declaration);
 		string result = NodeTypeSpelling(definition.declaration->children[0]);
 		result += DeclaratorSuffix(declarator);
 		result = RewriteText(result, context, local, 0);
 		result = CollapseReferenceSpelling(ReplaceIdentifiers(result, local));
+		active_pack_substitutions_ = previous_packs;
 		return NormalizeTypeArgument(result);
 	}
 	string FunctionLookupContext(const string& context) const;
@@ -346,9 +306,41 @@
 		for(size_t i = 0; i < actual_expressions.size(); ++i) {
 			if(actual_expressions[i].empty()) continue;
 			string actual_expression = actual_expressions[i];
-			if(actual_expression.size() >= 3 &&
-				actual_expression.compare(actual_expression.size() - 3, 3, "...") == 0)
-				actual_expression.erase(actual_expression.size() - 3);
+			const bool pack_expansion = actual_expression.size() >= 3 &&
+				actual_expression.compare(actual_expression.size() - 3, 3, "...") == 0;
+			if(pack_expansion) actual_expression.erase(actual_expression.size() - 3);
+			if(pack_expansion) {
+				string pack_name;
+				const vector<string>* pack_values = 0;
+				for(map<string, vector<string> >::const_iterator pack =
+					active_pack_substitutions_.begin(); pack != active_pack_substitutions_.end(); ++pack) {
+					if(pack->first.empty()) continue;
+					for(size_t at = actual_expression.find(pack->first); at != string::npos;
+						at = actual_expression.find(pack->first, at + pack->first.size())) {
+						const bool left = at == 0 || !IsIdentifierCharacter(actual_expression[at - 1]);
+						const size_t end = at + pack->first.size();
+						const bool right = end == actual_expression.size() ||
+							!IsIdentifierCharacter(actual_expression[end]);
+						if(left && right) {
+							pack_name = pack->first;
+							pack_values = &pack->second;
+							break;
+						}
+					}
+					if(pack_values) break;
+				}
+				if(pack_values) {
+					for(size_t element = 0; element < pack_values->size(); ++element) {
+						map<string, string> one = substitutions;
+						one[pack_name] = (*pack_values)[element];
+						const string actual = ExpressionTypeSpelling(actual_expression,
+							function_context, one);
+						if(actual.empty()) return false;
+						actual_types.push_back(actual);
+					}
+					continue;
+				}
+			}
 			const string actual = ExpressionTypeSpelling(actual_expression, function_context,
 				substitutions);
 			if(actual.empty()) return false;

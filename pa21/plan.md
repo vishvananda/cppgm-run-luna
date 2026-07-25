@@ -2642,3 +2642,216 @@ body ownership.  Retain the nine focused probes, the **1635/1635** through-PA20
 gate, the **179/215** full PA21 baseline, and the file audit as regression gates;
 the 15-case identity/pack group, five initialization/address cases, and three
 diagnostics can then be bundled into the following smaller checkpoints.
+
+## Checkpoint 74 — typed replay and active-owner pack increment (2026-07-24)
+
+### Result
+
+The selected function-pack, local-qualified owner replay, imported member-template
+constructor, and active-owner operator probes all compile successfully.  The
+required PA21 report is now **199/215**, up from the turn-start **198/215**;
+the report still exposes 16 failures.  The source changes are confined to the
+typed function-pack replay, class-pattern binding, dependent member lookup, and
+generated member-template naming paths.
+
+### Remaining Work Map
+
+The current 16 failures group into four shared behaviors:
+
+- **Generated owner/body LowIR registration (7 mismatches):** dependent hidden
+  friend static-member definition, explicit type-argument `decltype` access,
+  existing-template private constructor access, local-qualified replay,
+  namespace function-template hiding, imported member-template constructor,
+  and shadowed non-type member-template replay.
+- **Dependent nested member/type replay (4 exit failures):** alias rebind
+  through a partial specialization, empty selected member-template packs,
+  reference-member lookup through a dependent base typedef, and partial
+  specialization conversion-operator pointer binding.
+- **Non-type pack expression evaluation (2 exit failures):** comma-expression
+  expansion in `all_dummy`/`AllDummy` non-type packs.
+- **Qualified template-entity lookup and comparison (3 failures):** inline
+  namespace template-template argument, inline-namespace qualified pack
+  expansion, and the top-cv pointer partial-specialization comparator crash.
+
+### Next Checkpoint Scope
+
+Address the four-case dependent nested member/type replay group.  The scope is
+typed resolution of nested aliases, empty partial-specialization packs,
+dependent-base typedefs, and conversion-operator result types, validated by
+those four fixtures plus the four passing replay probes, the full PA21 report,
+through-PA20, and the stage file audit.  The two non-type-pack cases and three
+qualified-lookup/comparator cases remain the next bundled group; the seven
+LowIR-only mismatches remain a separate emission/ownership group.
+
+## Checkpoint 75 — current failure map and non-type pack expression scope (2026-07-24)
+
+### Remaining Work Map
+
+The post-cleanup PA21 report remains **199/215**.  The complete failures group
+as follows:
+
+- **Generated owner/body LowIR mismatches (9):** dependent hidden-friend
+  static-member definition, explicit-type-argument `decltype` access,
+  local-qualified argument replay, namespace function-template hiding,
+  imported member-template constructor, static constexpr function-template
+  pointer array, shadowed non-type member-template replay, conversion-operator
+  pointer binding, and explicit-specialization member-function emission.
+- **Non-type pack expression exits (2):** comma-expression expansion in
+  `general/400-nontype-pack-comma-expression-syntax.t` and
+  `general/400-nttp-pack-void-comma-expression.t`.
+- **Qualified template lookup and specialization selection (3):** friend
+  existing-template private-constructor access, forward-primary/partial
+  switching, and inline-namespace template-template argument/qualified pack
+  expansion (the latter two fixtures); these need to be split further while
+  preserving the comparator failure in the top-cv pointer partial case.
+- **Comparator/tooling failure (1):**
+  `general/100-top-cv-pointer-does-not-match-unqualified-pointer-partial.t`
+  reaches an undefined-array-reference error in the relaxed LowIR comparator.
+
+### Checkpoint Scope
+
+Address the two non-type pack expression exits as one coherent parser-to-typed-
+constant replay increment: preserve comma-expression grouping, expand each
+non-type pack element with its owning substitution, and evaluate `void` comma
+operands without losing the resulting integral value.  Validate both fixtures,
+the four dependent replay probes from Checkpoint 74, the full PA21 report,
+through-PA20, and the stage file audit.  The nine LowIR ownership mismatches,
+the remaining qualified lookup/selection cases, and the comparator failure stay
+outside this checkpoint.
+
+## Checkpoint 76 — typed non-type pack replay result (2026-07-24)
+
+### Result
+
+Both non-type pack comma-expression fixtures pass, including empty/expanded
+typed evaluation of `((void)B, true)...`.  The ten focused replay probes remain
+green, and the full PA21 report improved to **201/215** from the turn-start
+**197/215** baseline.
+
+### Remaining Work Map
+
+The current 14 failures are grouped as:
+
+- **Generated owner/body LowIR mismatches (9):** dependent hidden-friend
+  static-member definition, explicit-type-argument `decltype` access,
+  local-qualified argument replay, namespace function-template hiding,
+  imported member-template constructor, static constexpr function-template
+  pointer array, shadowed non-type member-template replay,
+  conversion-operator pointer binding, and explicit-specialization
+  member-function emission.
+- **Qualified lookup/specialization selection exits (4):** friend existing
+  template private-constructor access, forward-primary/partial switching,
+  inline-namespace template-template argument, and inline-namespace qualified
+  pack expansion.
+- **Comparator/tooling failure (1):** the top-cv pointer partial-specialization
+  fixture reaches an undefined array-reference error inside the relaxed LowIR
+  comparator.
+
+### Next Checkpoint
+
+Address the four qualified lookup/specialization-selection exits as the next
+coherent group, starting with inline-namespace ownership and forwarding the
+selected primary/partial entity.  Validate those four fixtures, the ten typed
+replay probes, full PA21, through-PA20, and the stage file audit.  Keep the nine
+LowIR owner/body mismatches and comparator failure separate for the following
+emission and harness checkpoints.
+
+## Checkpoint 77 — restored prior-PA ordering and current lookup scope (2026-07-24)
+
+### Result
+
+The broad generated-function ordering experiment was removed after it caused
+seven PA18 regressions.  The root through-PA20 report is clean again at
+**1635/1635**.  The PA21 report is now **203/215**, with the earlier PA21
+improvement preserved.
+
+### Remaining Work Map
+
+The current 12 failures group into:
+
+- **Generated owner/body LowIR mismatches (7):** dependent hidden-friend
+  static-member definition, explicit-type-argument `decltype` access,
+  existing-template private-constructor access, local-qualified replay,
+  namespace function-template hiding, imported member-template constructor,
+  and shadowed non-type member-template replay.
+- **Dependent conversion/type replay exit (1):** partial-specialization
+  conversion-operator pointer binding.
+- **Qualified lookup/specialization-selection exits (3):** forward-primary /
+  partial switching, inline-namespace template-template argument, and
+  inline-namespace qualified pack expansion.
+- **Comparator/tooling failure (1):** the top-cv pointer partial-specialization
+  fixture reaches an undefined array-reference error in the relaxed comparator.
+
+### Checkpoint Scope
+
+Address the three inline/forward qualified-lookup exits as one coherent
+lookup-ownership increment: resolve inline namespace aliases, select the
+forwarded primary/partial entity from typed template state, and preserve
+qualified pack expansion.  Validate those three fixtures, the ten passing
+typed replay probes, full PA21, through-PA20, and the stage file audit.  The
+conversion exit, seven LowIR mismatches, and comparator failure remain outside
+this checkpoint.
+
+## Checkpoint 78 — cv-preserving pointer deduction and ABI spelling (2026-07-24)
+
+### Result
+
+The selected top-cv specialization group is complete.  `T*` deduction now
+retains cv-qualifiers belonging to the deduced pointee after the outer pointer
+is removed, and PA14 ABI encoding handles trailing pointer cv-qualifiers
+without leaking source spaces into object symbols.  The top-cv comparator
+fixture now passes, and the PA21 report is **207/215**, up from the checkpoint
+start **203/215**.  The focused fixed-tail pack and inline-namespace replay
+fixtures remain green.
+
+### Remaining Work Map
+
+The current eight failures are grouped as:
+
+- **Generated owner/body LowIR mismatches (7):** dependent hidden-friend
+  static-member definition, explicit-type-argument `decltype` access, existing
+  template private-constructor access, local-qualified replay, namespace
+  function-template hiding, imported member-template constructor, and
+  shadowed non-type member-template replay.
+- **Dependent conversion/type replay LowIR mismatch (1):** partial-specialization
+  conversion-operator pointer binding.
+
+### Checkpoint Scope
+
+This checkpoint covers typed cv-preserving partial-specialization selection,
+recursive specialization replay, and valid ABI object-symbol generation.  The
+next checkpoint should address the seven generated owner/body emission cases
+as one ownership/lookup group, then the conversion-operator mismatch.  The
+full PA21 report, the **1635/1635** through-PA20 gate, and the PA21 file audit
+ remain required validation gates.
+
+## Checkpoint 79 — audit-safe implementation split (2026-07-24)
+
+### Result
+
+The PA18 argument-resolution, function-argument deduction, generated-function
+placement, inline-name rewriting, and nested-member replay responsibilities
+were moved into cohesive source units.  PA11's array-reference type recovery
+and sizeof reference handling were also moved/condensed to keep the source
+audit within its limits.  The frontend rebuild succeeds, the PA21 report
+remains **207/215**, and the file audit passes with warnings only.
+
+### Remaining Work Map
+
+The current eight failures remain grouped as:
+
+- **Generated owner/body LowIR mismatches (7):** dependent hidden-friend
+  static-member definition, explicit-type-argument `decltype` access, existing
+  template private-constructor access, local-qualified replay, namespace
+  function-template hiding, imported member-template constructor, and
+  shadowed non-type member-template replay.
+- **Dependent conversion/type replay LowIR mismatch (1):** partial-specialization
+  conversion-operator pointer binding.
+
+### Next Checkpoint
+
+Address the seven generated owner/body cases through typed generated-declaration
+ownership and replay selection, then handle the conversion-operator mismatch.
+Validate each changed fixture, the full PA21 report, through-PA20, and the PA21
+file audit.  Preserve the current **207/215** floor while working on this
+group.

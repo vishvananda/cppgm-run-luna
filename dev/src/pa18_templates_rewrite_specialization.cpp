@@ -5,6 +5,42 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
+int PA18TemplateExpander::MatchDirectClassTypeParameter(const string& pattern,
+	const string& actual, const set<string>& parameter_names,
+	map<string, string>* inferred, const string& context, bool class_pattern) const
+{
+	if(!class_pattern || parameter_names.find(pattern) == parameter_names.end()) return -1;
+	map<string, string>::const_iterator prior = inferred->find(pattern);
+	if(prior != inferred->end() && CanonicalSpelling(ResolveAlias(
+		prior->second, context)) != CanonicalSpelling(ResolveAlias(actual, context))) return 0;
+	(*inferred)[pattern] = actual;
+	return 1;
+}
+
+int PA18TemplateExpander::MatchReferenceArrayPattern(const string& pattern,
+	const string& actual, const set<string>& parameter_names,
+	map<string, string>* inferred) const
+{
+	const size_t reference_array = actual.find("(&)");
+	if(reference_array == string::npos || actual.find('[', reference_array + 3) == string::npos ||
+		pattern.empty() || pattern[pattern.size() - 1] != '&') return -1;
+	string parameter = CanonicalSpelling(pattern.substr(0, pattern.size() - 1));
+	while(parameter.compare(0, 6, "const ") == 0) parameter = CanonicalSpelling(parameter.substr(6));
+	while(parameter.compare(0, 9, "volatile ") == 0) parameter = CanonicalSpelling(parameter.substr(9));
+	while(parameter.size() > 6 && parameter.compare(parameter.size() - 6, 6, " const") == 0)
+		parameter = CanonicalSpelling(parameter.substr(0, parameter.size() - 6));
+	while(parameter.size() > 9 && parameter.compare(parameter.size() - 9, 9, " volatile") == 0)
+		parameter = CanonicalSpelling(parameter.substr(0, parameter.size() - 9));
+	if(parameter_names.find(parameter) == parameter_names.end()) return -1;
+	string array_type = actual;
+	array_type.erase(reference_array, 3);
+	map<string, string>::const_iterator prior = inferred->find(parameter);
+	if(prior != inferred->end() && CanonicalSpelling(prior->second) !=
+		CanonicalSpelling(array_type)) return 0;
+	(*inferred)[parameter] = CanonicalSpelling(array_type);
+	return 1;
+}
+
 bool PA18TemplateExpander::MatchOrderingTypePattern(const string& raw_pattern,
 	const string& raw_actual, const set<string>& parameter_names,
 	map<string, string>* inferred) const

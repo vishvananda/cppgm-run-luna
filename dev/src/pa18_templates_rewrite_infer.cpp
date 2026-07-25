@@ -1,5 +1,6 @@
 #include "pa18_templates_collection.h"
 #include "pa18_templates_rewrite.h"
+#include <functional>
 
 
 using namespace std;
@@ -98,6 +99,134 @@ bool PA18TemplateExpander::LookupVariableType(const string& name,
 	if(found == variable_types_.end()) return false;
 	*result = found->second;
 	return true;
+}
+
+bool PA18TemplateExpander::InferCallableObjectCall(const CPPGMAstNodePtr& call,
+	const string& object_type, const map<string, string>& substitutions,
+	const string& context, string* result) const
+{
+	if(!call || !result) return false;
+	size_t argument_count = 0;
+	if(call->children.size() > 1 && call->children[1] &&
+		call->children[1]->kind == "argument-list")
+		argument_count = call->children[1]->children.size();
+	string initial = CanonicalSpelling(ReplaceIdentifiers(object_type, substitutions));
+	while(initial.compare(0, 6, "const ") == 0)
+		initial = CanonicalSpelling(initial.substr(6));
+	while(initial.compare(0, 9, "volatile ") == 0)
+		initial = CanonicalSpelling(initial.substr(9));
+	while(!initial.empty() && (initial[initial.size() - 1] == '&' ||
+		initial[initial.size() - 1] == '*'))
+		initial.erase(initial.size() - 1);
+	initial = CanonicalSpelling(initial);
+	if(initial.empty()) return false;
+	set<string> active;
+	function<bool(const string&, const map<string, string>&, const string&)> inspect;
+	inspect = [&](const string& raw_class, const map<string, string>& inherited,
+		const string& inherited_scope) {
+		string class_spelling = CanonicalSpelling(raw_class);
+		while(class_spelling.compare(0, 6, "const ") == 0)
+			class_spelling = CanonicalSpelling(class_spelling.substr(6));
+		while(class_spelling.compare(0, 9, "volatile ") == 0)
+			class_spelling = CanonicalSpelling(class_spelling.substr(9));
+		while(!class_spelling.empty() && (class_spelling[class_spelling.size() - 1] == '&' ||
+			class_spelling[class_spelling.size() - 1] == '*'))
+			class_spelling.erase(class_spelling.size() - 1);
+		class_spelling = CanonicalSpelling(class_spelling);
+		if(class_spelling.empty()) return false;
+		const string active_key = class_spelling + "|" + inherited_scope;
+		if(!active.insert(active_key).second) return false;
+		const size_t open = class_spelling.find('<');
+		string class_base = class_spelling;
+		vector<string> class_arguments;
+		if(open != string::npos) {
+			string argument_text;
+			size_t close = string::npos;
+			if(!TemplateRange(class_spelling, open, &argument_text, &close)) {
+				active.erase(active_key);
+				return false;
+			}
+			class_base = CanonicalSpelling(class_spelling.substr(0, open));
+			class_arguments = SplitTemplateArguments(argument_text);
+		}
+		const TemplateDefinition* primary = FindDefinition(class_base, context);
+		const TemplateDefinition* definition = primary && primary->class_template ?
+			SelectClassTemplateDefinition(primary, class_arguments, context) : primary;
+		CPPGMAstNodePtr declaration = definition && definition->declaration ?
+			definition->declaration : FindClassDeclaration(class_spelling, context);
+		if(!declaration) {
+			active.erase(active_key);
+			return false;
+		}
+		map<string, string> local = inherited;
+		string scope = definition && !definition->qualified_name.empty() ?
+			definition->qualified_name : inherited_scope;
+		if(scope.empty()) scope = class_base;
+		if(definition) {
+			for(size_t parameter = 0; parameter < definition->parameters.size() &&
+				parameter < class_arguments.size(); ++parameter) {
+				const string& name = definition->parameters[parameter].name;
+				if(name.empty()) continue;
+				string value = CanonicalSpelling(class_arguments[parameter]);
+				if(definition->partial_specialization && parameter <
+					definition->specialization_pattern.size()) {
+					const string pattern = CanonicalSpelling(
+						definition->specialization_pattern[parameter]);
+					if(pattern.size() > 1 && pattern[pattern.size() - 1] == '*' &&
+						!value.empty() && value[value.size() - 1] == '*')
+						value = CanonicalSpelling(value.substr(0, value.size() - 1));
+				}
+				local[name] = value;
+			}
+		}
+		// Inherited callable conversions are considered before conversions
+		// declared by the wrapper itself.  The arity-specific base overloads
+		// therefore describe `formatter(what)`, `formatter(what,out)`, and
+		// `formatter(what,out,0)` without reducing the wrapper's function-type
+		// typedef argument to its return type.
+		for(size_t child = 0; child < declaration->children.size(); ++child) {
+			const CPPGMAstNodePtr& member = declaration->children[child];
+			if(!member || member->kind != "base-clause") continue;
+			for(size_t base_index = 0; base_index < member->children.size(); ++base_index) {
+				const CPPGMAstNodePtr& specifier = member->children[base_index];
+				const CPPGMAstNodePtr base_name = ChildOfKindLocal(specifier, "base-name");
+				if(!base_name) continue;
+				string base_spelling = NormalizeElaboratedSpelling(
+					ReplaceIdentifiers(base_name->value, local), context);
+				base_spelling = CanonicalSpelling(base_spelling);
+				if(inspect(base_spelling, local, scope)) {
+					active.erase(active_key);
+					return true;
+				}
+			}
+		}
+		for(size_t child = 0; child < declaration->children.size(); ++child) {
+			const CPPGMAstNodePtr& member = declaration->children[child];
+			if(!member || (member->kind != "special-member-declaration" &&
+				member->kind != "special-member-definition")) continue;
+			string name = RemoveMarker(member->value);
+			if(name.compare(0, 8, "operator") != 0) continue;
+			string target = CanonicalSpelling(name.substr(8));
+			if(target.empty() || target[0] == '(' || target[0] == '[') continue;
+			target = CanonicalSpelling(ReplaceIdentifiers(target, local));
+			target = CanonicalSpelling(ResolveAlias(target, scope));
+			string return_type;
+			vector<string> parameters;
+			string direct_qualifiers;
+			const bool function_pointer = SplitFunctionPointerType(target, &return_type,
+				&parameters);
+			const bool direct_function = !function_pointer && SplitDirectFunctionType(
+				target, &return_type, &parameters, &direct_qualifiers);
+			if((function_pointer || direct_function) && parameters.size() == argument_count) {
+				*result = CanonicalSpelling(return_type);
+				active.erase(active_key);
+				return !result->empty();
+			}
+		}
+		active.erase(active_key);
+		return false;
+	};
+	return inspect(initial, substitutions, context);
 }
 
 bool PA18TemplateExpander::InferArgument(const CPPGMAstNodePtr& expression,
@@ -311,14 +440,29 @@ bool PA18TemplateExpander::InferArgument(const CPPGMAstNodePtr& expression,
 			}
 			const string member = LastComponent(expression->children[0]->value);
 			string owner; for(string current = context; ; ) {
-				if(class_contexts_.find(current) != class_contexts_.end()) { owner = current; break; }
+				const TemplateDefinition* current_definition = FindDefinition(current, context);
+				if(class_contexts_.find(current) != class_contexts_.end() ||
+					class_declarations_.find(current) != class_declarations_.end() ||
+					(current_definition && current_definition->class_template)) {
+					owner = current; break;
+				}
 				if(current.empty()) break;
 				const size_t separator = current.rfind("::");
 				if(separator == string::npos) current.clear(); else current.erase(separator);
 			}
 			set<string> active;
+			string member_type;
 			if(!owner.empty() && !member.empty() && FindClassMemberType(
-				owner, member, substitutions, context, result, &active)) return true;
+				owner, member, substitutions, context, &member_type, &active)) {
+				string callable_result;
+				if(InferCallableObjectCall(expression, member_type, substitutions,
+					context, &callable_result)) {
+					*result = callable_result;
+					return true;
+				}
+				*result = member_type;
+				return true;
+			}
 		}
 		if(expression->kind == "call-expression" && !expression->children.empty() &&
 			expression->children[0] && expression->children[0]->kind == "id-expression") {
@@ -615,8 +759,8 @@ bool PA18TemplateExpander::InferFunctionParameter(
 				&ignored, context)) return false;
 		} else if(inferred_argument &&
 			!MergeInferredFunctionArgument(definition, pattern, type, signature,
-			parameter_substitutions, context, parameter_names, inferred, inferred_packs,
-			inferred_functions, bound_pack_values)) return false;
+				parameter_substitutions, context, parameter_names, inferred, inferred_packs,
+				inferred_functions, bound_pack_values)) return false;
 		++*argument_index;
 	}
 	return true;

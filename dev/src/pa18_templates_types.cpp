@@ -122,6 +122,22 @@ string PA18TemplateExpander::DeclaratorTypeSpelling(const string& base,
 		result += DeclaratorArraySuffix(declarator);
 		return CanonicalSpelling(result);
 	}
+	if(!nested && clause) {
+		// A typedef of a function (`typedef R name(A);`) has a direct
+		// parameter-clause rather than the nested declarator used by a
+		// function pointer.  Retain its complete function type so a later
+		// pointer-shaped partial specialization can bind the typedef as a
+		// type, instead of reducing it to only R.
+		string result = base + "(";
+		for(size_t i = 0; i < clause->children.size(); ++i) {
+			const CPPGMAstNodePtr item = clause->children[i];
+			if(!item || item->kind != "parameter-declaration") continue;
+			if(result[result.size() - 1] != '(') result += ',';
+			result += ParameterTypeSpelling(item);
+		}
+		result += ')';
+		return CanonicalSpelling(result);
+	}
 	if(!nested || !clause) return CanonicalSpelling(base + DeclaratorSuffix(declarator) +
 		DeclaratorArraySuffix(declarator));
 	const CPPGMAstNodePtr inner = nested->children.empty() ? CPPGMAstNodePtr() : nested->children[0];

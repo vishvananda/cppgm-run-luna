@@ -673,7 +673,9 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferMember(const CPPGMAstNodePtr& node,
       return result;
     }
     vector<Binding*> candidates = MemberBindings(object, node->children[1]->value);
-    if(candidates.empty()) throw logic_error("unknown member");
+    if(candidates.empty()) {
+      throw logic_error("unknown member");
+    }
     result.candidates = candidates;
     Binding* selected = 0;
     for(size_t i = 0; i < candidates.size(); ++i) {

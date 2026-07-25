@@ -1099,7 +1099,10 @@ PA14Lowerer::Value PA14Lowerer::EmitValue(const CPPGMAstNodePtr& node, Scope* sc
           // fundamental type; it is not a one-argument cast.
           Value result;
           result.type = builtin_type;
-          result.operand = builtin_type->kind == TYPE_POINTER ? "nullptr" : "0";
+          result.operand = builtin_type->kind == TYPE_POINTER ? "nullptr" :
+            is_floating_type(builtin_type) ?
+              (low_type(builtin_type) == "f32" ? "0.0f" :
+                low_type(builtin_type) == "f80" ? "0.0L" : "0.0") : "0";
           result.known_constant = true;
           result.constant = 0;
           return result;

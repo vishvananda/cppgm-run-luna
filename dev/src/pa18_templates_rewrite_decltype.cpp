@@ -671,6 +671,11 @@ string PA18TemplateExpander::TemplateMemberType(const TemplateDefinition& defini
 	const map<string, vector<string> > previous_packs = active_pack_substitutions_;
 	map<string, string> local;
 	PrepareTemplateMemberSubstitutions(definition, arguments, context, &local);
+	if(definition.class_template && !definition.name.empty() &&
+		local.find(definition.name) == local.end()) {
+		const string generated = Instantiate(definition, arguments, context);
+		if(!generated.empty()) local[definition.name] = generated;
+	}
 	string result;
 	if(!FindDirectTemplateMemberType(definition, arguments, member, context, &local, &result)) {
 		map<string, string>::const_iterator found = local.find(member);

@@ -67,6 +67,37 @@ void PA18TemplateExpander::CheckExplicitSpecializationOrder(
 
 namespace {
 
+string GeneratedOrderingDeclaredName(const CPPGMAstNodePtr& node)
+{
+	if(!node) return string();
+	if(node->kind == "class-specifier" || node->kind == "class-forward-declaration" ||
+		node->kind == "enum-specifier" || node->kind == "alias-declaration")
+		return LastComponent(node->value);
+	if(node->kind != "simple-declaration") return string();
+	const CPPGMAstNodePtr list = ChildOfKindLocal(node, "init-declarator-list");
+	if(!list || list->children.empty() || !list->children[0] ||
+		list->children[0]->children.empty()) return string();
+	return LastComponent(FirstIdentifierLocal(list->children[0]->children[0]));
+}
+
+bool GeneratedOrderingTypeDeclaration(const CPPGMAstNodePtr& node)
+{
+	if(!node) return false;
+	if(node->kind == "class-specifier" || node->kind == "class-forward-declaration" ||
+		node->kind == "enum-specifier" || node->kind == "alias-declaration") return true;
+	return node->kind == "simple-declaration" && !node->children.empty() &&
+		SpellNode(node->children[0]).find("typedef") != string::npos;
+}
+
+bool GeneratedContainsStaticAssert(const CPPGMAstNodePtr& node)
+{
+	if(!node) return false;
+	if(node->kind == "static-assert-declaration") return true;
+	for(size_t child = 0; child < node->children.size(); ++child)
+		if(GeneratedContainsStaticAssert(node->children[child])) return true;
+	return false;
+}
+
 void MarkStaticGeneratedFunction(const CPPGMAstNodePtr& node)
 {
 	if(!node || node->kind != "function-definition" || node->children.empty() ||
@@ -77,6 +108,82 @@ void MarkStaticGeneratedFunction(const CPPGMAstNodePtr& node)
 }
 
 } // namespace
+
+void PA18TemplateExpander::AdjustGeneratedFunctionPosition(
+	const vector<CPPGMAstNodePtr>& generated,
+	const vector<CPPGMAstNodePtr>& children, size_t* position) const
+{
+	if(!position) return;
+	for(size_t child = 0; child < children.size(); ++child) {
+		if(children[child] && children[child]->kind == "class-specifier" &&
+			!GeneratedContainsStaticAssert(children[child])) continue;
+		for(size_t function = 0; function < generated.size(); ++function) {
+			const string name = DeclarationName(generated[function]);
+			const string primary = generated[function] ? LastComponent(
+				generated[function]->template_primary) : string();
+			if((!name.empty() && ContainsName(children[child], name)) ||
+				(!primary.empty() && ContainsName(children[child], primary)))
+				*position = min(*position, child);
+		}
+	}
+	for(size_t child = 0; child < children.size(); ++child) {
+		if(!GeneratedOrderingTypeDeclaration(children[child])) continue;
+		const string declared = GeneratedOrderingDeclaredName(children[child]);
+		if(declared.empty()) continue;
+		for(size_t function = 0; function < generated.size(); ++function) {
+			const string primary = generated[function] ? LastComponent(
+				generated[function]->template_primary) : string();
+			if(primary == declared) *position = max(*position, child + 1);
+		}
+	}
+}
+
+void PA18TemplateExpander::RewriteInlineGeneratedNames(
+	const CPPGMAstNodePtr& node, const string& logical_owner,
+	const string& physical_owner)
+{
+	if(!node || logical_owner.empty() || physical_owner.empty() ||
+		logical_owner == physical_owner) return;
+	set<string> names;
+	for(map<string, TemplateDefinition>::const_iterator definition = definitions_.begin();
+		definition != definitions_.end(); ++definition) {
+		const TemplateDefinition& value = definition->second;
+		const string lexical_owner = value.lexical_owner.empty() ? value.owner :
+			value.lexical_owner;
+		if(value.owner == logical_owner && lexical_owner == physical_owner)
+			names.insert(LastComponent(value.name));
+	}
+	map<string, vector<CPPGMAstNodePtr> >::const_iterator generated =
+		generated_by_owner_.find(physical_owner);
+	if(generated != generated_by_owner_.end()) for(size_t i = 0; i < generated->second.size(); ++i) {
+		const CPPGMAstNodePtr& value = generated->second[i];
+		if(value) {
+			const string name = LastComponent(value->value);
+			if(!name.empty()) names.insert(name);
+			const string primary = LastComponent(value->template_primary);
+			if(!primary.empty()) names.insert(primary);
+		}
+	}
+	if(names.empty()) return;
+	std::function<void(const CPPGMAstNodePtr&)> rewrite =
+		[&](const CPPGMAstNodePtr& current) {
+		if(!current) return;
+		for(set<string>::const_iterator name = names.begin(); name != names.end(); ++name) {
+			const string from = logical_owner + "::" + *name;
+			const string to = physical_owner + "::" + *name;
+			for(size_t at = current->value.find(from); at != string::npos;
+				at = current->value.find(from, at + to.size())) {
+				if((at == 0 || !IsIdentifierCharacter(current->value[at - 1])) &&
+					(at + from.size() == current->value.size() ||
+						!IsIdentifierCharacter(current->value[at + from.size()])))
+					current->value.replace(at, from.size(), to);
+			}
+		}
+		for(size_t child = 0; child < current->children.size(); ++child)
+			rewrite(current->children[child]);
+		};
+	rewrite(node);
+}
 
 void PA18TemplateExpander::RestoreGeneratedMemberParameterNames(
 	const TemplateDefinition& definition,
@@ -236,7 +343,7 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 	const map<string, vector<string> >& pack_substitutions, const string& context,
 	bool explicit_instantiation, const string& key, const string& local_name,
 	const string& requested_owner,
-	const map<string, FunctionSignature>& function_substitutions)
+		const map<string, FunctionSignature>& function_substitutions)
 {
 	const string generated_owner = definition.lexical_owner.empty() ?
 		definition.owner : definition.lexical_owner;
@@ -306,6 +413,7 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 		class_contexts_.insert(JoinPath(generated_owner, local_name));
 	}
 	const string previous_instantiation_name = active_instantiation_name_;
+	const string enclosing_instantiation_name = active_instantiation_name_;
 	active_instantiation_name_ = definition.class_template ? local_name : string();
 	CPPGMAstNodePtr generated;
 	const string transform_context = concrete_owner.empty() ? definition.owner :
@@ -421,7 +529,22 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 		if(!lexical_prefix.empty()) generated_function_owner = JoinPath(
 			lexical_prefix, generated_function_owner);
 	}
+	// Materialized free function templates participate in later deduction just
+	// like source functions.  Keep their transformed signature in typed state
+	// so a generated pack-expanded call can use its concrete return type.
+	if(!definition.class_template && !definition.alias_template &&
+		!definition.member_template &&
+		(generated->kind == "function-definition" ||
+		 generated->kind == "simple-declaration")) {
+		RecordFunctionSignature(generated, generated_function_owner);
+		if(generated_owner != generated_function_owner)
+			RecordFunctionSignature(generated, generated_owner);
+	}
 	generated_by_owner_[generated_function_owner].push_back(generated);
+	if(!enclosing_instantiation_name.empty() && generated_owner.empty() &&
+		generated->kind != "class-specifier" &&
+		generated->kind != "class-forward-declaration")
+		generated_before_class_[enclosing_instantiation_name].push_back(generated);
 	}
 	// Some declarator suffixes are cloned while a generated class is replayed,
 	// so their bound does not pass through the ordinary child transform.  Finish

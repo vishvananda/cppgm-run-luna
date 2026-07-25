@@ -1216,8 +1216,8 @@ ConstantValue Analyzer::Evaluate(const CPPGMAstNodePtr& expression, Scope* scope
 			expression->value.find("NOEXCEPT") != string::npos)
 			return FromIntegralValue(PA19IntegralValue::Signed(
 				NoexceptCall(*this, expression->children[0], scope) ? 1 : 0, "bool", 1));
-		TypePtr type = expression->children[0]->kind == "type-id" ?
-			TypeFromTypeId(expression->children[0], scope) : ExpressionType(expression->children[0], scope);
+		TypePtr type = expression->children[0]->kind == "type-id" ? TypeFromTypeId(expression->children[0], scope) : ExpressionType(expression->children[0], scope);
+		if (expression->children[0]->kind != "type-id" && type && (type->kind == TYPE_LVALUE_REFERENCE || type->kind == TYPE_RVALUE_REFERENCE)) type = type->child;
 		const bool alignment = expression->kind == "type-trait-expression";
 		return FromIntegralValue(PA19IntegralValue::Unsigned(
 			static_cast<unsigned long long>(alignment ? TypeAlignment(type) : TypeSize(type)),

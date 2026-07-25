@@ -188,6 +188,40 @@
 			map<string, TemplateDefinition>::const_iterator found = definitions_.find(by_name->second[0]);
 			if(found != definitions_.end()) return &found->second;
 		}
+		// Unqualified lookup from a logical namespace must also see entities
+		// collected under an inline namespace's physical path.  The ordinary
+		// candidate walk above only probes `lib::basic_json`, while collection
+		// intentionally stores the declaration as `lib::abi::basic_json` so its
+		// emitted owner remains stable.  Recover that relationship from the
+		// typed lexical namespace map instead of inventing a second definition.
+		string logical_context = context;
+		for(string current = context; ; ) {
+			map<string, string>::const_iterator logical = lexical_namespace_logical_.find(current);
+			if(logical != lexical_namespace_logical_.end()) {
+				logical_context = logical->second;
+				break;
+			}
+			if(current.empty()) break;
+			const size_t separator = current.rfind("::");
+			if(separator == string::npos) current.clear();
+			else current.erase(separator);
+		}
+		if(raw_name.find("::") == string::npos && !logical_context.empty()) {
+			const TemplateDefinition* logical_match = 0;
+			for(map<string, TemplateDefinition>::const_iterator it = definitions_.begin();
+				it != definitions_.end(); ++it) {
+				if(LastComponent(it->second.qualified_name) != raw_name) continue;
+				const string physical_owner = PrefixComponent(it->second.qualified_name);
+				map<string, string>::const_iterator logical = lexical_namespace_logical_.find(
+					physical_owner);
+				if(logical == lexical_namespace_logical_.end() ||
+					logical->second != logical_context) continue;
+				if(logical_match && logical_match->qualified_name != it->second.qualified_name)
+					return 0;
+				logical_match = &it->second;
+			}
+			if(logical_match) return logical_match;
+		}
 		// An inline namespace contributes its declarations to the enclosing
 		// namespace for lookup.  Collection keeps the physical namespace in the
 		// typed definition key (`lib::abi::map`) so generated declarations remain

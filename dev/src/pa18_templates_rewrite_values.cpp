@@ -138,6 +138,12 @@ namespace pa18_templates_internal {
 				base_spelling = CanonicalSpelling(RemoveMarker(RewriteText(
 					base_spelling, context, base_substitutions, 0)));
 				base_spelling = ResolveAlias(base_spelling, context);
+				// A still-dependent base from a partial specialization is only a
+				// declaration-time relationship.  Do not try to materialize its
+				// nested pack expression as a concrete template argument while the
+				// enclosing specialization is being replayed; the concrete base is
+				// revisited after the selected pack bindings are known.
+				if(base_spelling.find("...") != string::npos) continue;
 							string base_primary = base_spelling;
 							vector<string> base_arguments;
 							const size_t open = base_spelling.find('<');

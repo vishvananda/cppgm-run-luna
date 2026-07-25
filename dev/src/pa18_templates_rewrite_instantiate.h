@@ -643,7 +643,25 @@
 			raw = ReplaceIdentifiersPreservingPackSizes(raw, expression_substitutions);
 		}
 		raw = RemoveMarker(RewriteText(raw, context, substitutions, 0));
-		raw = ReplaceIdentifiersPreservingPackSizes(raw, substitutions);
+		// RewriteText deliberately leaves a dependent template-id intact when
+		// one of its arguments still belongs to the enclosing replay.  Do not
+		// substitute that id's base name afterwards: replacing `matches_` with
+		// the enclosing generated class would manufacture `Generated_<Args>`
+		// and lose the nested specialization entirely.
+		map<string, string> resolved_substitutions = substitutions;
+		for(map<string, string>::const_iterator substitution = substitutions.begin();
+			substitution != substitutions.end(); ++substitution)
+			for(size_t at = raw.find(substitution->first); at != string::npos;
+				at = raw.find(substitution->first, at + substitution->first.size())) {
+				if(at > 0 && IsIdentifierCharacter(raw[at - 1])) continue;
+				size_t after = at + substitution->first.size();
+				while(after < raw.size() && isspace(static_cast<unsigned char>(raw[after]))) ++after;
+				if(after < raw.size() && raw[after] == '<') {
+					resolved_substitutions.erase(substitution->first);
+					break;
+				}
+			}
+		raw = ReplaceIdentifiersPreservingPackSizes(raw, resolved_substitutions);
 		// When a non-type expression contains a nested template-id followed by
 		// a parenthesized comparison, the compact PA10 spelling can retain the
 		// enclosing template delimiter (`(expr)>`).  The delimiter is not part
@@ -952,126 +970,8 @@
 		map<string, string>* substitutions,
 		map<string, PA19IntegralValue>* integral_substitutions,
 		map<string, vector<string> >* pack_substitutions,
-		const map<string, vector<string> >* pack_hints = 0)
-	{
-		size_t raw_index = 0;
-		for(size_t i = 0; i < definition.parameters.size(); ++i) {
-			const TemplateParameter& parameter = definition.parameters[i];
-			if(parameter.pack) {
-				vector<string> values;
-			// Reserve source arguments for fixed parameters following a pack.
-				size_t trailing_fixed = 0;
-				for(size_t later = i + 1; later < definition.parameters.size(); ++later)
-					if(!definition.parameters[later].pack) ++trailing_fixed;
-				const size_t available = raw_args.size() > raw_index ?
-					raw_args.size() - raw_index : 0;
-				size_t count = available > trailing_fixed ? available - trailing_fixed : 0;
-				if(pack_hints && !parameter.name.empty()) {
-					map<string, vector<string> >::const_iterator hint =
-						pack_hints->find(parameter.name);
-					if(hint != pack_hints->end()) count = hint->second.size();
-				}
-				for(size_t element = 0; element < count; ++element) {
-					string argument = raw_index < raw_args.size() ? raw_args[raw_index++] : string();
-					if(argument.empty() && pack_hints && !parameter.name.empty()) {
-						map<string, vector<string> >::const_iterator hint = pack_hints->find(parameter.name);
-						if(hint != pack_hints->end() && element < hint->second.size()) argument = hint->second[element];
-					}
-					if(argument.empty()) throw logic_error("missing template pack argument");
-					PA19IntegralValue integral_value;
-					if(parameter.template_template) {
-						string normalized;
-						if(!CompatibleTemplateTemplateArgument(parameter, argument, context,
-							*substitutions, &normalized))
-							throw logic_error("template-template argument does not match");
-						argument = normalized;
-					} else if(parameter.type) {
-						argument = RewriteText(argument, context, *substitutions, 0);
-						argument = NormalizeTypeArgument(argument);
-						argument = NormalizeTypeArgument(ReplaceIdentifiers(argument, *substitutions));
-						argument = ResolveAlias(argument, context);
-						argument = RewriteText(argument, context, *substitutions, 0);
-						argument = NormalizeTypeArgument(argument);
-						argument = QualifyTypeArgument(argument, context, definition.owner);
-					} else {
-						try {
-							argument = ResolveIntegralArgument(parameter, argument, context,
-								*substitutions, &integral_value);
-						} catch(const logic_error& error) {
-							throw logic_error("definition=" + definition.qualified_name +
-								" " + error.what());
-						}
-						if(!parameter.name.empty())
-							(*integral_substitutions)[parameter.name] = integral_value;
-					}
-				if(argument.empty()) throw logic_error("missing template argument");
-					values.push_back(argument);
-					args->push_back(argument);
-					metadata_args->push_back(TemplateArgumentMetadata(parameter, argument,
-						integral_value, context, *substitutions));
-				}
-				if(!parameter.name.empty()) {
-					if(pack_substitutions) (*pack_substitutions)[parameter.name] = values;
-					if(!values.empty()) (*substitutions)[parameter.name] = values[0];
-					else substitutions->erase(parameter.name);
-				}
-				continue;
-			}
-			string argument;
-			string source_type_argument;
-			PA19IntegralValue integral_value;
-			if(raw_index < raw_args.size() && !raw_args[raw_index].empty()) {
-				source_type_argument = argument = raw_args[raw_index++];
-			}
-			else {
-				if(!parameter.name.empty()) {
-					map<string, string>::const_iterator substituted = substitutions->find(parameter.name);
-					if(substituted != substitutions->end()) argument = substituted->second;
-					map<string, PA19IntegralValue>::const_iterator integral =
-						integral_substitutions->find(parameter.name);
-					if(argument.empty() && integral != integral_substitutions->end())
-						argument = TemplateIntegralValueSpelling(integral->second);
-				}
-			}
-			if(argument.empty()) argument = parameter.default_type;
-			if(parameter.template_template) {
-				string normalized;
-				if(!CompatibleTemplateTemplateArgument(parameter, argument, context,
-					*substitutions, &normalized))
-					throw logic_error("template-template argument does not match");
-				argument = normalized;
-			} else if(parameter.type) {
-				argument = ExpandPackCallText(argument, *pack_substitutions);
-				argument = RewriteText(argument, context, *substitutions, 0);
-				argument = NormalizeTypeArgument(argument);
-				argument = NormalizeTypeArgument(ReplaceIdentifiers(argument, *substitutions));
-				argument = ResolveAlias(argument, context);
-				argument = RewriteText(argument, context, *substitutions, 0);
-				argument = NormalizeTypeArgument(argument);
-				argument = QualifyTypeArgument(argument, context, definition.owner);
-			} else {
-				try {
-					argument = ResolveIntegralArgument(parameter, argument, context, *substitutions,
-						&integral_value);
-				} catch(const logic_error& error) {
-					throw logic_error("definition=" + definition.qualified_name +
-						" " + error.what());
-				}
-				if(!parameter.name.empty())
-					(*integral_substitutions)[parameter.name] = integral_value;
-			}
-			if(definition.alias_template && parameter.type && !source_type_argument.empty() &&
-				!ResolveAlias(source_type_argument, context).empty() && ResolveAlias(source_type_argument, context).back() == '&')
-				argument = source_type_argument;
-			if(argument.empty()) throw logic_error("missing template argument");
-			args->push_back(argument);
-			metadata_args->push_back(TemplateArgumentMetadata(parameter, argument,
-				integral_value, context, *substitutions));
-			if(!parameter.name.empty()) (*substitutions)[parameter.name] = argument;
-		}
-		if(raw_index != raw_args.size())
-			throw logic_error("too many template arguments");
-	}
+		const map<string, vector<string> >* pack_hints = 0);
+	string FunctionPointerAliasSpelling(const string& spelling, const string& context) const;
 	string GeneratedSpecializationName(const TemplateDefinition& definition,
 		const vector<string>& args, const vector<string>& metadata_args,
 		const map<string, string>& substitutions, const string& context,

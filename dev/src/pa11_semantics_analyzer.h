@@ -293,7 +293,7 @@ public:
 			is_volatile(false), is_static(false), is_mutable(false), is_friend(false),
 			is_virtual(false), fundamental_words(), named_type() {}
 	};
-	TypePtr ResolveFunctionSpelledType(const string& spelling, Scope* scope, SpecFacts& info);
+	TypePtr ResolveFunctionSpelledType(const string& spelling, Scope* scope, SpecFacts& info); TypePtr ResolveArrayReferenceSpelledType(const string& spelling, Scope* scope, SpecFacts& info);
 	TypePtr TypeFromDecltype(const CPPGMAstNodePtr& node, Scope* scope)
 	{
 		if (!node || node->children.empty()) throw logic_error("invalid decltype");
@@ -336,6 +336,7 @@ public:
 		while (!spelling.empty() && isspace(static_cast<unsigned char>(spelling[spelling.size() - 1])))
 			spelling.erase(spelling.size() - 1, 1);
 		spelling = StripTypeMarker(spelling); TypePtr function_type = ResolveFunctionSpelledType(spelling, scope, info); if (function_type) return function_type;
+		if(TypePtr array_reference = ResolveArrayReferenceSpelledType(spelling, scope, info)) return array_reference;
 		if (spelling.compare(0, 8, "typename ") == 0) spelling = spelling.substr(8);
 		while (spelling.compare(0, 7, "static ") == 0) { info.is_static = true; spelling = spelling.substr(7); } while (spelling.compare(0, 10, "constexpr ") == 0) { info.is_constexpr = true; spelling = spelling.substr(10); }
 		bool leading_const = false; bool leading_volatile = false;
@@ -615,8 +616,7 @@ public:
 			if (!type->complete) throw logic_error("sizeof incomplete enum");
 			return type->underlying ? TypeSize(type->underlying) : 4;
 		case TYPE_CLASS:
-			if (!type->complete || !type->layout_complete)
-			throw logic_error("sizeof incomplete class");
+			if (!type->complete || !type->layout_complete) throw logic_error("sizeof incomplete class");
 			return type->object_size;
 		case TYPE_TEMPLATE_PARAMETER:
 		case TYPE_TEMPLATE_TEMPLATE_PARAMETER: return 0;

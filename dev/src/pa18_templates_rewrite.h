@@ -16,6 +16,11 @@ bool MatchClassSpecializationPattern(const TemplateDefinition& definition,
 	const string& context) const;
 bool MatchTypePattern(string pattern, string actual,
 		const set<string>& parameter_names, map<string, string>* inferred, const string& context, bool class_pattern = false) const;
+	int MatchDirectClassTypeParameter(const string& pattern, const string& actual,
+		const set<string>& parameter_names, map<string, string>* inferred,
+		const string& context, bool class_pattern) const;
+	int MatchReferenceArrayPattern(const string& pattern, const string& actual,
+		const set<string>& parameter_names, map<string, string>* inferred) const;
 	int MatchGeneratedBaseTypePattern(const string& pattern, const string& actual,
 		const string& pattern_base, const set<string>& parameter_names,
 		map<string, string>* inferred, const string& context, bool class_pattern) const;
@@ -23,9 +28,13 @@ bool MatchTypePattern(string pattern, string actual,
 	int MatchObjectCvPattern(const string& pattern, const string& actual, const set<string>& parameter_names,
 				map<string, string>* inferred, const string& context,
 				bool class_pattern = false) const;
-	bool MatchTrailingTypePack(const vector<string>& pattern_parts, const vector<string>& actual_parts,
+bool MatchTrailingTypePack(const vector<string>& pattern_parts, const vector<string>& actual_parts,
 		const set<string>& parameter_names, map<string, string>* inferred, const string& context, bool class_pattern) const;
-	bool IsTemplatePackName(const TemplateDefinition& definition, const string& name) const;
+bool IsTemplatePackName(const TemplateDefinition& definition, const string& name) const;
+void AdjustGeneratedFunctionPosition(const vector<CPPGMAstNodePtr>& generated,
+	const vector<CPPGMAstNodePtr>& children, size_t* position) const;
+void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
+	const string& logical_owner, const string& physical_owner);
 		const TemplateDefinition* SelectClassTemplateDefinition(
 		const TemplateDefinition* primary, const vector<string>& arguments,
 		const string& context) const
@@ -154,6 +163,9 @@ bool MatchTypePattern(string pattern, string actual,
 	bool InferArgument(const CPPGMAstNodePtr& expression, string* result,
 		const map<string, string>& substitutions, const string& context,
 		FunctionSignature* function_signature = 0) const;
+	bool InferCallableObjectCall(const CPPGMAstNodePtr& call,
+		const string& object_type, const map<string, string>& substitutions,
+		const string& context, string* result) const;
 	bool IsFunctionParameterPack(const CPPGMAstNodePtr& parameter) const
 	{
 		return parameter && DescendantOfKind(parameter, "parameter-pack");
@@ -490,6 +502,10 @@ bool MatchTypePattern(string pattern, string actual,
 		const string& base, const string& context,
 		const map<string, string>& substitutions, bool* template_replaced,
 		size_t* search);
+	bool RewriteResolvedTemplateMember(string* raw, size_t begin, size_t close,
+		const string& context, const map<string, string>& substitutions,
+		const TemplateDefinition* definition, const vector<string>& args,
+		bool* template_replaced, size_t* search);
 	void ResolveFunctionArguments(const CPPGMAstNodePtr& result,
 		const FunctionSignature* signature, const string& context)
 	{
@@ -763,11 +779,16 @@ bool MatchTypePattern(string pattern, string actual,
 		if(named_pack != active_pack_identifier_substitutions_.end() &&
 			active_pack_substitutions_.find(name) == active_pack_substitutions_.end())
 			values = &named_pack->second;
+		// Transform each pack-expansion operand with the selected pack scoped to
+		// one element.  Otherwise a nested RewriteText call sees the complete
+		// outer vector again and can recursively replay the same dependent
+		// template-id instead of materializing the scalar element.
+		const vector<string> expansion_values = *values;
 		const map<string, PA19IntegralValue> saved_integrals =
 			active_integral_substitutions_;
-		for(size_t i = 0; i < values->size(); ++i) {
+		for(size_t i = 0; i < expansion_values.size(); ++i) {
 			map<string, string> one = substitutions;
-			one[name] = (*values)[i];
+			one[name] = expansion_values[i];
 			// A function parameter pack has two identities in the AST: its
 			// declared type pack (`Args`) and its parameter identifier (`args`).
 			// The parameter-clause replay records the concrete identifier for each
@@ -795,6 +816,9 @@ bool MatchTypePattern(string pattern, string actual,
 					active_integral_substitutions_[integral->first] =
 						PA19Convert(element, integral->second.type);
 			}
+			vector<string> selected(1, expansion_values[i]);
+			ActivePackScope selected_pack(this);
+			selected_pack.Set(name, selected);
 			CPPGMAstNodePtr child = TransformNode(original_child->children[0],
 				child_context, one);
 			if(child) result->children.push_back(child);
