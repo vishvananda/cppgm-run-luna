@@ -1366,6 +1366,7 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 				if(find(definitions.begin(), definitions.end(), inherited[inherited_index]) ==
 					definitions.end()) definitions.push_back(inherited[inherited_index]);
 		}
+		if(!PreserveFunctionLookupOrder(definitions, context, substitutions)) SortFunctionTemplateCandidates(&definitions, context);
 		const bool inline_template_candidate = HasInlineTemplateCandidate(definitions, context);
 		bool extern_template_candidate = false;
 		for(size_t candidate = 0; candidate < definitions.size() && !extern_template_candidate;

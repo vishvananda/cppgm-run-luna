@@ -20,6 +20,97 @@ bool PA18TemplateExpander::ContainsSubstitutionIdentifier(
 	return false;
 }
 
+bool PA18TemplateExpander::FunctionTemplateMoreSpecialized(
+	const TemplateDefinition& lhs, const TemplateDefinition& rhs,
+	const string& context) const
+{
+	const auto parameter_patterns = [this](const TemplateDefinition& definition,
+		vector<string>* result, set<string>* names) {
+		if(!result || !names || !definition.declaration) return false;
+		const CPPGMAstNodePtr parameters = DescendantOfKind(
+			FunctionDeclarator(definition.declaration), "parameter-clause");
+		if(!parameters) return false;
+		for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter)
+			if(!definition.parameters[parameter].name.empty())
+				names->insert(definition.parameters[parameter].name);
+		for(size_t parameter = 0; parameter < parameters->children.size(); ++parameter) {
+			const CPPGMAstNodePtr item = parameters->children[parameter];
+			if(!item || item->kind != "parameter-declaration") continue;
+			string pattern = ParameterTypeSpelling(item);
+			if(IsFunctionParameterPack(item) && pattern.size() >= 3 &&
+				pattern.compare(pattern.size() - 3, 3, "...") == 0)
+				pattern.erase(pattern.size() - 3);
+			result->push_back(CanonicalSpelling(pattern));
+		}
+		return true;
+	};
+	const auto can_deduce = [this, &context, &parameter_patterns](
+		const TemplateDefinition& pattern_definition,
+		const TemplateDefinition& argument_definition) {
+		vector<string> patterns, arguments;
+		set<string> names;
+		if(!parameter_patterns(pattern_definition, &patterns, &names) ||
+			!parameter_patterns(argument_definition, &arguments, &names)) return false;
+		map<string, string> placeholders;
+		size_t placeholder = 0;
+		for(size_t parameter = 0; parameter < argument_definition.parameters.size(); ++parameter) {
+			const string& name = argument_definition.parameters[parameter].name;
+			if(name.empty()) continue;
+			ostringstream value;
+			value << "__pa22_partial_" << placeholder++;
+			placeholders[name] = value.str();
+		}
+		for(size_t argument = 0; argument < arguments.size(); ++argument)
+			arguments[argument] = CanonicalSpelling(ReplaceIdentifiers(arguments[argument], placeholders));
+		for(size_t parameter = 0; parameter < patterns.size(); ++parameter) {
+			if(parameter >= arguments.size()) return false;
+			map<string, string> ignored;
+			if(!MatchTypePattern(patterns[parameter], arguments[parameter], names,
+				&ignored, context)) return false;
+		}
+		return patterns.size() == arguments.size();
+	};
+	try {
+		const bool rhs_from_lhs = can_deduce(rhs, lhs);
+		const bool lhs_from_rhs = can_deduce(lhs, rhs);
+		return rhs_from_lhs && !lhs_from_rhs;
+	} catch(const PA18SubstitutionFailure&) {
+		return false;
+	}
+}
+
+bool PA18TemplateExpander::PreserveFunctionLookupOrder(
+	const vector<const TemplateDefinition*>& definitions, const string& context,
+	const map<string, string>& substitutions) const
+{
+	if(HasReplayContext(substitutions)) return false;
+	map<string, CPPGMAstNodePtr>::const_iterator enclosing =
+		function_definitions_.find(context);
+	if(enclosing == function_definitions_.end() || !enclosing->second ||
+		enclosing->second->source_token_begin == static_cast<size_t>(-1)) return false;
+	const size_t visibility = enclosing->second->source_token_begin;
+	for(size_t candidate = 0; candidate < definitions.size(); ++candidate) {
+		const TemplateDefinition* definition = definitions[candidate];
+		if(definition && definition->declaration &&
+			definition->declaration->source_token_begin != static_cast<size_t>(-1) &&
+			definition->declaration->source_token_begin > visibility) return true;
+	}
+	return false;
+}
+
+void PA18TemplateExpander::SortFunctionTemplateCandidates(
+	vector<const TemplateDefinition*>* candidates, const string& context) const
+{
+	if(!candidates) return;
+	stable_sort(candidates->begin(), candidates->end(),
+		[this, &context](const TemplateDefinition* lhs, const TemplateDefinition* rhs) {
+			if(!lhs || !rhs || lhs->parameters.empty() || rhs->parameters.empty()) return false;
+			if(FunctionTemplateMoreSpecialized(*lhs, *rhs, context)) return true;
+			if(FunctionTemplateMoreSpecialized(*rhs, *lhs, context)) return false;
+			return false;
+		});
+}
+
 int PA18TemplateExpander::MemberTemplatePatternScore(
 	const TemplateDefinition* candidate) const
 {

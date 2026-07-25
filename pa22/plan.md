@@ -1736,3 +1736,80 @@ share the same typed substitution state.  After that, take the remaining
 function-template partial-ordering cases.  Each checkpoint continues to use
 the focused group, full PA22 report, through-PA21 report, and source audit as
 its validation boundary.
+
+## Checkpoint 80 scope — 2026-07-25 (before implementation)
+
+The current PA22 report was refreshed at **123/250**, leaving **127**
+failures (**94** exit-status failures and **33** LowIR comparisons).  The
+grouped Remaining Work Map is: call deduction/arrays/defaults/packs **14**
+general/100; function-template partial ordering and overload ranking **13**
+general/200 plus **12** spec/200; dependent substitution/SFINAE/lookup/owner
+replay **29** general/300, **7** spec/300, and **2** spec/400; alias,
+constructor/conversion, owner, and typed NTTP behavior **15** general/400,
+**24** general/500, and **9** spec/500; and array/non-deduced/defaulted edges
+**6** spec/100.  Some fixtures overlap buckets; the listed bucket is their
+primary planning owner.
+
+Selected scope: make free-function template candidate selection preserve the
+typed partial-ordering distinction between bare parameters and pointer,
+reference, and nested class-template patterns, including defaulted trailing
+parameters or packs.  The focused fixtures are
+`general/200-function-pointer-vs-const-ref-partial-order`,
+`general/200-partial-ordering-pointer-vs-value`,
+`general/200-function-template-partial-order-const-pointer`,
+`general/200-function-template-partial-order-class-template-cv`,
+`general/200-class-template-partial-order-placeholder-argument`,
+`general/200-empty-index-sequence-overload-order`,
+`spec/200-function-template-partial-order-const-pointer`, and
+`spec/200-function-template-class-template-param-partial-order`.
+The shared behavior is candidate ranking after successful typed deduction; it
+must retain ambiguity and substitution failure rather than hardcoding result
+values.  Validation covers this focused group, the full PA22 report,
+through-PA21, and the PA22 source audit.
+
+## Checkpoint 80 result — 2026-07-25
+
+The core free-function partial-ordering increment is complete at **129/250**,
+up six from the 123/250 checkpoint baseline.  The fixed fixtures are
+`general/200-class-template-partial-order-placeholder-argument`,
+`general/200-empty-index-sequence-overload-order`,
+`general/200-function-template-partial-order-class-template-cv`,
+`general/200-function-template-partial-order-const-pointer`,
+`general/200-partial-ordering-pointer-vs-value`, and
+`spec/200-function-template-partial-order-const-pointer`.  The focused group
+is therefore **6/8**: the function-pointer-vs-const-ref case reaches the
+correct ranked candidate but still fails PA14 function-pointer type
+materialization, while the class-template-parameter case has the correct
+selection but a return-object/default-constructor LowIR mismatch.
+
+The implementation compares typed parameter patterns through the existing
+substitution matcher, so bare parameters lose to pointer/reference and nested
+class-template patterns only when deduction establishes a strict ordering.
+It also preserves source-order lookup for an ordinary function body when the
+whole-file collection has indexed later templates; this keeps the PA18
+nondependent-name-binding behavior intact.  No new PA22 failure names were
+introduced: the current residual is **121** fixtures.  Through-PA21 passes
+**1850/1850**, and the PA22 source audit passes with the same 10 pre-existing
+warnings.
+
+### Remaining Work Map
+
+- **Call deduction, arrays, defaults, and packs:** 14 general/100 failures.
+- **Function-template partial ordering and overload ranking:** 8 general/200
+  and 11 spec/200 failures, including the two focused residuals above and
+  the default-tail/trailing-pack cases.
+- **Dependent substitution, SFINAE, lookup, and owner replay:** 26
+  general/300, 6 spec/300, and 2 spec/400 failures.
+- **Alias, constructor/conversion, owner, and typed NTTP behavior:** 15
+  general/400, 24 general/500, and 9 spec/500 failures.
+- **Array/non-deduced/defaulted edges:** 6 spec/100 failures.
+
+### Next Checkpoint Group
+
+Complete the remaining function-template ranking band, starting with
+defaulted trailing parameters and packs, reference-vs-const-reference
+ordering, and the function-pointer/function-reference pattern path.  Bundle
+the return-object/default-constructor LowIR repair only where it is the same
+selected-candidate lowering path.  Then resume the dependent SFINAE/qualified
+lookup band.  The next validation boundary remains the focused ranking group,
+the full PA22 report, through-PA21, and the PA22 source audit.
