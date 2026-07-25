@@ -87,14 +87,8 @@ inline string CanonicalSpelling(string raw)
 }
 string CollapseRepeatedQualifier(string raw);
 string NormalizeTypeArgument(string raw);
-inline string PA18ExplicitSpecializationKey(const string& qualified_name,
-	const vector<string>& arguments)
-{
-	string result = qualified_name;
-	for(size_t i = 0; i < arguments.size(); ++i)
-		result += "|" + NormalizeTypeArgument(arguments[i]);
-	return result;
-}
+string PA18ExplicitSpecializationKey(const string& qualified_name,
+	const vector<string>& arguments);
 inline string JoinPath(const string& prefix, const string& name)
 {
 	if(prefix.empty()) return name;
@@ -164,6 +158,7 @@ inline CPPGMAstNodePtr CloneNode(const CPPGMAstNodePtr& node)
 	result->materialize_object_address = node->materialize_object_address;
 	result->materialize_object_name = node->materialize_object_name;
 	result->inferred_type = node->inferred_type;
+	result->explicit_typename = node->explicit_typename;
 	result->source_token_begin = node->source_token_begin; result->source_token_end = node->source_token_end;
 	result->template_primary = node->template_primary;
 	result->template_arguments = node->template_arguments;

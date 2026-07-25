@@ -16,7 +16,13 @@ bool MatchClassSpecializationPattern(const TemplateDefinition& definition,
 	const string& context) const;
 bool MatchTypePattern(string pattern, string actual,
 		const set<string>& parameter_names, map<string, string>* inferred, const string& context, bool class_pattern = false) const;
-	int MatchDirectClassTypeParameter(const string& pattern, const string& actual,
+	string ArrayPatternElement(const string& raw) const;
+	bool FunctionOwnerCompatible(const string& pattern, const string& actual,
+		bool class_pattern) const;
+	bool PreserveEvaluatedDecltype(const CPPGMAstNodePtr& input,
+		const map<string, string>& substitutions,
+		const CPPGMAstNodePtr& result) const;
+		int MatchDirectClassTypeParameter(const string& pattern, const string& actual,
 		const set<string>& parameter_names, map<string, string>* inferred,
 		const string& context, bool class_pattern) const;
 	int MatchReferenceArrayPattern(const string& pattern, const string& actual,
@@ -235,7 +241,8 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 		const vector<string>* explicit_prefix = 0,
 		map<string, vector<string> >* inferred_pack_values = 0,
 		map<string, FunctionSignature>* inferred_function_values = 0,
-		const map<string, vector<string> >* bound_pack_values = 0) const;
+		const map<string, vector<string> >* bound_pack_values = 0,
+		map<string, vector<string> >* forwarding_pack_values = 0) const;
 	bool MergeInferredFunctionArgument(const TemplateDefinition& definition,
 		const string& pattern, const string& type, const FunctionSignature& signature,
 		const map<string, string>& substitutions, const string& context,
@@ -252,14 +259,16 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 		vector<string>* deferred_patterns,
 		vector<CPPGMAstNodePtr>* deferred_arguments,
 		map<string, FunctionSignature>* inferred_functions,
-		const map<string, vector<string> >* bound_pack_values = 0) const;
+		const map<string, vector<string> >* bound_pack_values = 0,
+		map<string, vector<string> >* forwarding_pack_values = 0) const;
 	bool CompleteFunctionArguments(const TemplateDefinition& definition,
 		const vector<string>& deferred_patterns,
 		const vector<CPPGMAstNodePtr>& deferred_arguments,
 		const set<string>& parameter_names, map<string, string>* inferred,
 		const map<string, vector<string> >& inferred_packs, vector<string>* result,
 		map<string, vector<string> >* inferred_pack_values,
-		const string& context) const;
+		const string& context,
+		const map<string, vector<string> >* forwarding_pack_values = 0) const;
 	bool SplitFunctionPointerType(string raw, string* result_type,
 		vector<string>* parameters) const
 	{
@@ -425,11 +434,12 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 			vector<string> inferred;
 			map<string, vector<string> > inferred_pack_values;
 			map<string, FunctionSignature> inferred_function_values;
+			map<string, vector<string> > forwarding_pack_values;
 			if(!InferFunctionArguments(*candidates[i], call, &inferred,
 				substitutions, context, 0, &inferred_pack_values,
-				&inferred_function_values)) continue;
+				&inferred_function_values, 0, &forwarding_pack_values)) continue;
 			Instantiate(*candidates[i], inferred, context, false, &inferred_pack_values,
-				0, 0, &inferred_function_values);
+				0, 0, &inferred_function_values, &forwarding_pack_values);
 			return;
 		}
 	}

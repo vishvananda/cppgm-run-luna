@@ -11,6 +11,7 @@ CPPGMAstNode::CPPGMAstNode(const string& kind, const string& value)
 	  materialize_object_address(false),
 	  materialize_object_name(),
 	 inferred_type(),
+	 explicit_typename(false),
 	  source_token_begin(static_cast<size_t>(-1)),
 	  source_token_end(static_cast<size_t>(-1)),
 	  template_primary(), template_arguments(), children() {}

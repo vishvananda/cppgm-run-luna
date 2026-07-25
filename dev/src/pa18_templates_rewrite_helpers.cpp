@@ -3,6 +3,35 @@
 
 namespace pa18_templates_internal {
 
+string PA18TemplateExpander::ArrayPatternElement(const string& raw) const
+{
+	string result = CanonicalSpelling(raw);
+	if(result.size() >= 3 && result.compare(result.size() - 3, 3, "(&)") == 0)
+		result = CanonicalSpelling(result.substr(0, result.size() - 3));
+	else if(result.size() >= 5 && result.compare(result.size() - 5, 5, "(& )") == 0)
+		result = CanonicalSpelling(result.substr(0, result.size() - 5));
+	return result;
+}
+
+bool PA18TemplateExpander::FunctionOwnerCompatible(const string& pattern,
+	const string& actual, bool class_pattern) const
+{
+	if(pattern == actual || class_pattern) return pattern == actual;
+	return (pattern.find("(&") != string::npos && actual.find("(*") != string::npos) ||
+		(actual.find("(&") != string::npos && pattern.find("(*") != string::npos);
+}
+
+bool PA18TemplateExpander::PreserveEvaluatedDecltype(
+	const CPPGMAstNodePtr& input, const map<string, string>& substitutions,
+	const CPPGMAstNodePtr& result) const
+{
+	if(!input || input->kind != "decltype-specifier" || HasReplayContext(substitutions) ||
+		result->value.compare(0, 9, "decltype(") == 0) return false;
+	result->kind = "type-name";
+	result->value = RemoveMarker(result->value);
+	return true;
+}
+
 int PA18TemplateExpander::MatchObjectCvPattern(const string& pattern,
 	const string& actual, const set<string>& parameter_names,
 	map<string, string>* inferred, const string& context, bool class_pattern) const

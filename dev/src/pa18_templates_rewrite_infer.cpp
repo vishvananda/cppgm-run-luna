@@ -644,13 +644,15 @@ bool PA18TemplateExpander::InferFunctionParameter(
 	map<string, vector<string> >* inferred_packs, vector<string>* deferred_patterns,
 	vector<CPPGMAstNodePtr>* deferred_arguments,
 	map<string, FunctionSignature>* inferred_functions,
-	const map<string, vector<string> >* bound_pack_values) const
+	const map<string, vector<string> >* bound_pack_values,
+	map<string, vector<string> >* forwarding_pack_values) const
 {
 	if(!parameter || parameter->kind != "parameter-declaration" || !argument_index) return true;
 	const string pattern = parameter->children.size() > 1 && parameter->children[1] &&
 		ChildOfKindLocal(parameter->children[1], "nested-declarator") &&
 		ChildOfKindLocal(parameter->children[1], "parameter-clause") ?
 		FunctionTypeSpelling(parameter) : ParameterTypeSpelling(parameter);
+	string deduction_pattern = pattern;
 	const bool pack_parameter = IsFunctionParameterPack(parameter);
 	const vector<string>* explicit_pack_values = 0;
 	string explicit_pack_name;
@@ -724,14 +726,69 @@ bool PA18TemplateExpander::InferFunctionParameter(
 			if(array != string::npos)
 				type = CanonicalSpelling(type.substr(0, array) + "*");
 		}
-		const vector<string> function_types = pattern.find(")(") != string::npos ?
+		// A parameter declared as `T const s[]` is adjusted to `T const*`
+		// before function-template deduction.  A reference-to-array parameter is
+		// deliberately excluded: its bound and element type are the deduction
+		// pattern, not a decay opportunity.
+		const size_t array_pattern = deduction_pattern.rfind('[');
+		const bool reference_array = deduction_pattern.find("(&)") != string::npos ||
+			deduction_pattern.find("(& ") != string::npos;
+		if(array_pattern != string::npos && !reference_array) {
+			deduction_pattern = CanonicalSpelling(deduction_pattern.substr(0,
+				array_pattern) + "*");
+			const size_t array = type.find('[');
+			if(array != string::npos)
+				 type = CanonicalSpelling(type.substr(0, array) + "*");
+		}
+		// Keep source partial-ordering patterns strict, but apply the ordinary
+		// call-deduction spelling rules here.  The semantic type model commonly
+		// writes promoted unsigned/long values with an explicit `int`, and a
+		// pointer-to-const parameter may accept an unqualified pointer argument.
+		const auto normalize_builtin = [](string spelling) {
+			string prefix;
+			if(spelling.compare(0, 6, "const ") == 0) {
+				prefix = "const "; spelling = CanonicalSpelling(spelling.substr(6));
+			} else if(spelling.compare(0, 9, "volatile ") == 0) {
+				prefix = "volatile "; spelling = CanonicalSpelling(spelling.substr(9));
+			}
+			if(spelling == "unsigned") spelling = "unsigned int";
+			else if(spelling == "short") spelling = "short int";
+			else if(spelling == "unsigned short") spelling = "unsigned short int";
+			else if(spelling == "long") spelling = "long int";
+			else if(spelling == "unsigned long") spelling = "unsigned long int";
+			else if(spelling == "long long") spelling = "long long int";
+			else if(spelling == "unsigned long long") spelling = "unsigned long long int";
+			return CanonicalSpelling(prefix + spelling);
+		};
+		const auto normalize_pointer_pointee_cv = [](string spelling) {
+			if(spelling.size() > 1 && spelling[spelling.size() - 1] == '*') {
+				const string before = spelling.substr(0, spelling.size() - 1);
+				if(before.size() > 6 && before.compare(before.size() - 6, 6, " const") == 0)
+					return CanonicalSpelling("const " + before.substr(0, before.size() - 6) + "*");
+				if(before.size() > 9 && before.compare(before.size() - 9, 9, " volatile") == 0)
+					return CanonicalSpelling("volatile " + before.substr(0, before.size() - 9) + "*");
+			}
+			return spelling;
+		};
+		deduction_pattern = normalize_pointer_pointee_cv(
+			normalize_builtin(deduction_pattern));
+		string deduction_type = normalize_pointer_pointee_cv(normalize_builtin(type));
+		if(deduction_pattern.compare(0, 6, "const ") == 0 &&
+			deduction_pattern.size() > 6 && deduction_pattern[deduction_pattern.size() - 1] == '*' &&
+			deduction_type.compare(0, 6, "const ") != 0)
+			deduction_pattern.erase(0, 6);
+		else if(deduction_pattern.compare(0, 9, "volatile ") == 0 &&
+			deduction_pattern.size() > 9 && deduction_pattern[deduction_pattern.size() - 1] == '*' &&
+			deduction_type.compare(0, 9, "volatile ") != 0)
+			deduction_pattern.erase(0, 9);
+		const vector<string> function_types = deduction_pattern.find(")(") != string::npos ?
 			FunctionExpressionTypes(argument, context) : vector<string>();
 		if(!function_types.empty()) {
 			const bool overloaded = function_types.size() > 1 && argument &&
 				(argument->kind == "id-expression" || (argument->kind == "unary-expression" &&
 				 RemoveMarker(argument->value) == "&"));
 			if(overloaded) {
-				deferred_patterns->push_back(pattern);
+				deferred_patterns->push_back(deduction_pattern);
 				deferred_arguments->push_back(argument);
 				inferred_argument = false;
 			} else {
@@ -743,6 +800,29 @@ bool PA18TemplateExpander::InferFunctionParameter(
 			argument && (argument->kind == "id-expression" || argument->kind == "member-expression" ||
 				argument->kind == "subscript-expression")) {
 			if(type.empty() || type[type.size() - 1] != '&') type = CanonicalSpelling(type + "&");
+			// Forwarding-reference deduction changes the typed argument used for
+			// merging, not just the later replay fact.  Recompute the normalized
+			// spelling after adding the lvalue reference so `T&&` with an lvalue
+			// deduces `T = U&`, rather than materializing a stale `T = U` call.
+			deduction_type = normalize_pointer_pointee_cv(normalize_builtin(type));
+		}
+		if(inferred_argument && forwarding_pack_values && pack_parameter &&
+			pattern.size() > 2 && pattern.compare(pattern.size() - 2, 2, "&&") == 0) {
+			string forwarding_name;
+			for(size_t candidate = 0; candidate < definition.parameters.size(); ++candidate) {
+				const TemplateParameter& template_parameter = definition.parameters[candidate];
+				if(!template_parameter.pack || !template_parameter.type ||
+					template_parameter.name.empty()) continue;
+				const size_t position = pattern.find(template_parameter.name);
+				if(position == string::npos ||
+					(position > 0 && IsIdentifierCharacter(pattern[position - 1])) ||
+					(position + template_parameter.name.size() < pattern.size() &&
+						IsIdentifierCharacter(pattern[position + template_parameter.name.size()]))) continue;
+				forwarding_name = template_parameter.name;
+				break;
+			}
+			if(!forwarding_name.empty())
+				(*forwarding_pack_values)[forwarding_name].push_back(type);
 		}
 		if(inferred_argument && explicit_pack_values) {
 			// Explicit template arguments own this pack.  Ordinary deduction must
@@ -758,7 +838,7 @@ bool PA18TemplateExpander::InferFunctionParameter(
 			if(!MatchTypePattern(explicit_pattern, type, explicit_parameter_names,
 				&ignored, context)) return false;
 		} else if(inferred_argument &&
-			!MergeInferredFunctionArgument(definition, pattern, type, signature,
+			!MergeInferredFunctionArgument(definition, deduction_pattern, deduction_type, signature,
 				parameter_substitutions, context, parameter_names, inferred, inferred_packs,
 				inferred_functions, bound_pack_values)) return false;
 		++*argument_index;
@@ -771,7 +851,8 @@ bool PA18TemplateExpander::CompleteFunctionArguments(
 	const vector<CPPGMAstNodePtr>& deferred_arguments, const set<string>& parameter_names,
 	map<string, string>* inferred, const map<string, vector<string> >& inferred_packs,
 	vector<string>* result, map<string, vector<string> >* inferred_pack_values,
-	const string& context) const
+	const string& context,
+	const map<string, vector<string> >* forwarding_pack_values) const
 {
 	for(size_t deferred = 0; deferred < deferred_patterns.size(); ++deferred) {
 		const vector<string> function_types = FunctionExpressionTypes(deferred_arguments[deferred], context);
@@ -819,7 +900,8 @@ bool PA18TemplateExpander::InferFunctionArguments(const TemplateDefinition& defi
 		const vector<string>* explicit_prefix,
 		map<string, vector<string> >* inferred_pack_values,
 		map<string, FunctionSignature>* inferred_function_values,
-		const map<string, vector<string> >* bound_pack_values) const
+		const map<string, vector<string> >* bound_pack_values,
+		map<string, vector<string> >* forwarding_pack_values) const
 {
 	if(inferred_function_values) inferred_function_values->clear();
 	if(!call || call->children.size() < 2 || !result) return false;
@@ -876,12 +958,13 @@ bool PA18TemplateExpander::InferFunctionArguments(const TemplateDefinition& defi
 		const bool parameter_ok = InferFunctionParameter(definition, parameters->children[i], parameters, i, arguments, &argument_index,
 			substitutions, context, parameter_names, &inferred, &inferred_packs,
 			&deferred_patterns, &deferred_arguments, inferred_function_values,
-			bound_pack_values);
+			bound_pack_values, forwarding_pack_values);
 		if(!parameter_ok) return false;
 	}
 	if(argument_index != arguments->children.size()) return false;
 	return CompleteFunctionArguments(definition, deferred_patterns, deferred_arguments,
-		parameter_names, &inferred, inferred_packs, result, inferred_pack_values, context);
+		parameter_names, &inferred, inferred_packs, result, inferred_pack_values, context,
+		forwarding_pack_values);
 }
 
 } // namespace pa18_templates_internal

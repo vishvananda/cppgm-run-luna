@@ -25,7 +25,8 @@ bool PA18TemplateExpander::InferBinaryArgument(const CPPGMAstNodePtr& expression
 		*result = "bool";
 		return true;
 	}
-	if(have_operands && (operation == "+" || operation == "-") &&
+	if(have_operands && (operation == "+" || operation == "-" ||
+		operation == "*" || operation == "/" || operation == "%") &&
 		IsBuiltinArithmeticType(left) && IsBuiltinArithmeticType(right)) {
 		*result = CommonBuiltinArithmeticType(left, right);
 		return true;

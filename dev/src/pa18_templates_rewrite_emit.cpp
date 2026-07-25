@@ -133,7 +133,8 @@ void PA18TemplateExpander::AdjustGeneratedFunctionPosition(
 		for(size_t function = 0; function < generated.size(); ++function) {
 			const string primary = generated[function] ? LastComponent(
 				generated[function]->template_primary) : string();
-			if(primary == declared) *position = max(*position, child + 1);
+			if(primary == declared || MentionsGeneratedType(generated[function], declared))
+				*position = max(*position, child + 1);
 		}
 	}
 }
@@ -428,6 +429,39 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 	}
 	active_instantiation_name_ = previous_instantiation_name;
 	if(!generated) throw logic_error("unable to instantiate template");
+	// Function parameter arrays are adjusted to pointers by [dcl.fct].  Keep
+	// the source declarator's array spelling while deduction is running (the
+	// bound may itself be a template argument), then materialize the adjusted
+	// typed declarator on the generated function.  A nested declarator denotes
+	// a reference or pointer to an array and must remain unchanged.
+	if(generated->kind == "function-definition" || generated->kind == "simple-declaration") {
+		const CPPGMAstNodePtr generated_declarator = FunctionDeclarator(generated);
+		const CPPGMAstNodePtr generated_clause = DescendantOfKind(
+			generated_declarator, "parameter-clause");
+		if(generated_clause) for(size_t parameter = 0;
+			parameter < generated_clause->children.size(); ++parameter) {
+			const CPPGMAstNodePtr item = generated_clause->children[parameter];
+			if(!item || item->kind != "parameter-declaration" || item->children.size() < 2 ||
+				!item->children[1]) continue;
+			const CPPGMAstNodePtr declarator = item->children[1];
+			bool nested = false;
+			for(size_t child = 0; child < declarator->children.size(); ++child)
+				if(declarator->children[child] &&
+					declarator->children[child]->kind == "nested-declarator") {
+					nested = true;
+					break;
+				}
+			if(nested) continue;
+			for(size_t child = 0; child < declarator->children.size(); ++child)
+				if(declarator->children[child] &&
+					declarator->children[child]->kind == "array-suffix") {
+					declarator->children.erase(declarator->children.begin() + child);
+					declarator->children.insert(declarator->children.begin(),
+						CPPGMAstNodePtr(new CPPGMAstNode("ptr-operator", "OP_STAR:*")));
+					break;
+				}
+		}
+	}
 	if(definition.friend_declaration && !generated->children.empty() &&
 		generated->children[0]) {
 		vector<CPPGMAstNodePtr> specifiers;
@@ -665,7 +699,8 @@ string PA18TemplateExpander::Instantiate(const TemplateDefinition& definition,
 	const vector<string>& raw_args, const string& context, bool explicit_instantiation,
 	const map<string, vector<string> >* pack_hints,
 	const map<string, string>* outer_substitutions, const string* requested_owner,
-	const map<string, FunctionSignature>* function_hints)
+	const map<string, FunctionSignature>* function_hints,
+	const map<string, vector<string> >* forwarding_pack_hints)
 {
 	if(definition.parameters.empty()) throw logic_error("template has no type parameters");
 	vector<string> args, metadata_args;
@@ -695,6 +730,17 @@ string PA18TemplateExpander::Instantiate(const TemplateDefinition& definition,
 	if(pack_hints) for(map<string, vector<string> >::const_iterator hint = pack_hints->begin();
 		hint != pack_hints->end(); ++hint)
 		if(!hint->first.empty()) pack_substitutions[hint->first] = hint->second;
+	// Forwarding-reference lvalue categories are carried separately from the
+	// canonical template arguments.  They affect only pack expansion replay;
+	// keeping them out of `substitutions` preserves specialization identity and
+	// the source spelling used by earlier-stage lookup.
+	if(forwarding_pack_hints) for(map<string, vector<string> >::const_iterator hint =
+		forwarding_pack_hints->begin(); hint != forwarding_pack_hints->end(); ++hint) {
+		if(hint->first.empty()) continue;
+		map<string, vector<string> >::iterator current = pack_substitutions.find(hint->first);
+		if(current != pack_substitutions.end() && current->second.size() == hint->second.size())
+			current->second = hint->second;
+	}
 	if(definition.partial_specialization) {
 		map<string, string> specialized;
 		if(!MatchClassSpecializationPattern(definition, args, &specialized, context))

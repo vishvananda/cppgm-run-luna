@@ -78,9 +78,11 @@ string PA18TemplateExpander::QualifyNestedMembers(string spelling, const string&
 string PA18TemplateExpander::ParameterTypeSpelling(const CPPGMAstNodePtr& parameter) const
 {
 	if(!parameter || parameter->children.empty()) return string();
-	string result = NodeTypeSpelling(parameter->children[0]);
-	if(parameter->children.size() > 1) result += DeclaratorSuffix(parameter->children[1]);
-	return CanonicalSpelling(result);
+	// ParameterTypeSpelling is consumed by deduction as well as by variable
+	// collection.  Preserve array suffixes and nested references so
+	// `T (&)[N]` contributes both its element and bound to deduction.
+	return DeclaratorTypeSpelling(NodeTypeSpelling(parameter->children[0]),
+		parameter->children.size() > 1 ? parameter->children[1] : CPPGMAstNodePtr());
 }
 string PA18TemplateExpander::FunctionTypeSpelling(const CPPGMAstNodePtr& parameter) const
 {

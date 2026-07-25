@@ -285,6 +285,24 @@ string NormalizeTypeArgument(string raw)
 	return CanonicalSpelling(raw);
 }
 
+string PA18ExplicitSpecializationKey(const string& qualified_name,
+	const vector<string>& arguments)
+{
+	string result = qualified_name;
+	for(size_t i = 0; i < arguments.size(); ++i) {
+		string argument = NormalizeTypeArgument(arguments[i]);
+		if(argument == "unsigned int") argument = "unsigned";
+		else if(argument == "short int") argument = "short";
+		else if(argument == "unsigned short int") argument = "unsigned short";
+		else if(argument == "long int") argument = "long";
+		else if(argument == "unsigned long int") argument = "unsigned long";
+		else if(argument == "long long int") argument = "long long";
+		else if(argument == "unsigned long long int") argument = "unsigned long long";
+		result += "|" + argument;
+	}
+	return result;
+}
+
 vector<string> SplitTemplateArguments(const string& raw)
 {
 	vector<string> result;
@@ -646,6 +664,16 @@ bool PA18TemplateExpander::ValidationDependentName(const string& raw,
 	return parameters.find(raw) != parameters.end();
 }
 
+bool ValidationBuiltinTypeName(const string& raw)
+{
+	const string value = RemoveMarker(raw);
+	return value == "bool" || value == "char" || value == "char16_t" ||
+		value == "char32_t" || value == "double" || value == "float" ||
+		value == "int" || value == "long" || value == "short" ||
+		value == "signed" || value == "unsigned" || value == "void" ||
+		value == "wchar_t";
+}
+
 void PA18TemplateExpander::ValidateTemplateNode(const CPPGMAstNodePtr& node,
 	const set<string>& parameters, const set<string>& known_names,
 	const string& current_class, bool in_function,
@@ -656,6 +684,30 @@ void PA18TemplateExpander::ValidateTemplateNode(const CPPGMAstNodePtr& node,
 	if(node->kind == "alias-declaration" &&
 		parameters.find(LastComponent(node->value)) != parameters.end())
 		throw logic_error("alias shadows a template parameter: " + node->value);
+	if(node->kind == "decl-specifier") {
+		const string raw_type = CanonicalSpelling(RemoveMarker(node->value));
+		const bool has_typename = node->explicit_typename ||
+			raw_type.compare(0, 8, "typename") == 0 &&
+			(raw_type.size() == 8 || isspace(static_cast<unsigned char>(raw_type[8])));
+		bool sibling_typename = false;
+		if(parent) for(size_t sibling = 0; sibling < child_index &&
+			sibling < parent->children.size(); ++sibling)
+			if(parent->children[sibling] &&
+				RemoveMarker(parent->children[sibling]->value) == "typename") {
+				sibling_typename = true;
+				break;
+			}
+		const string dependent_qualifier = PrefixComponent(raw_type);
+		const string dependent_base = LastComponent(StripTemplateArgumentsForValidation(
+			dependent_qualifier));
+		const bool current_specialization = !current_class.empty() &&
+			dependent_base == current_class;
+		if(!has_typename && !sibling_typename && !current_specialization &&
+			!dependent_qualifier.empty() &&
+			ValidationDependentName(dependent_qualifier, parameters)) {
+			throw logic_error("dependent qualified type requires typename");
+		}
+	}
 	string member_key;
 	if(node->kind == "special-member-declaration" ||
 		node->kind == "special-member-definition") {
@@ -676,15 +728,23 @@ void PA18TemplateExpander::ValidateTemplateNode(const CPPGMAstNodePtr& node,
 			child_index == 1;
 		if(!member_name && node->value.find("::") == string::npos &&
 			node->value.find('<') == string::npos &&
-			!ValidationDependentName(node->value, parameters) &&
+		!ValidationDependentName(node->value, parameters) &&
+		(!ValidationBuiltinTypeName(node->value) ||
+			(parent && parent->kind == "call-expression" && child_index == 0)) &&
 			known_names.find(node->value) == known_names.end() &&
+			!(parent && parent->kind == "call-expression" && child_index == 0) &&
 			node->value.compare(0, 8, "operator") != 0 &&
 			node->value.compare(0, 10, "__builtin_") != 0)
 			throw logic_error("unknown nondependent template name: " + node->value);
 	}
 	const bool class_node = node->kind == "class-specifier" ||
 		node->kind == "class-forward-declaration";
-	const string next_class = class_node ? LastComponent(node->value) : current_class;
+	string next_class = class_node ? LastComponent(node->value) : current_class;
+	if(!class_node && (node->kind == "special-member-definition" ||
+		node->kind == "special-member-declaration") &&
+		node->value.find("::") != string::npos)
+		next_class = LastComponent(StripTemplateArgumentsForValidation(
+		PrefixComponent(node->value)));
 	const bool function_node = node->kind == "function-definition" ||
 		node->kind == "special-member-definition";
 	for(size_t i = 0; i < node->children.size(); ++i)

@@ -604,8 +604,11 @@ void Analyzer::ValidateNondependentTemplateNode(const CPPGMAstNodePtr& node,
 		const bool type_name = parent && (parent->kind == "type-id" ||
 			parent->kind == "type-specifier" || parent->kind == "base-name" ||
 			parent->kind == "mem-initializer-id");
+		const bool builtin_value_initialization = parent &&
+			parent->kind == "call-expression" && child_index == 0 &&
+			IsFundamentalWord(node->value);
 			if (!member_name && !type_name && !IsDependentTemplateName(current, node->value) &&
-				!ResolveBinding(current, node->value)) {
+				!builtin_value_initialization && !ResolveBinding(current, node->value)) {
 				throw logic_error("unknown nondependent template name: " + node->value);
 			}
 	}

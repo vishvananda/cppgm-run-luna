@@ -446,8 +446,7 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 		if(pattern_array_open == string::npos || actual_array_open == string::npos ||
 			pattern.empty() || actual.empty() || pattern[pattern.size() - 1] != ']' ||
 			actual[actual.size() - 1] != ']') return false;
-		const string pattern_element = CanonicalSpelling(pattern.substr(0,
-			pattern_array_open));
+		const string pattern_element = ArrayPatternElement(pattern.substr(0, pattern_array_open));
 		const string actual_element = CanonicalSpelling(actual.substr(0,
 			actual_array_open));
 		if(!MatchTypePattern(pattern_element, actual_element, parameter_names,
@@ -718,9 +717,9 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 			const size_t actual_reference = actual.rfind("(&", actual_function);
 			const size_t pattern_owner = pattern_pointer != string::npos ? pattern_pointer : pattern_reference;
 			const size_t actual_owner = actual_pointer != string::npos ? actual_pointer : actual_reference;
-			if(pattern_owner == string::npos || actual_owner == string::npos ||
-				pattern.substr(pattern_owner, pattern_function - pattern_owner + 1) !=
-				actual.substr(actual_owner, actual_function - actual_owner + 1)) return false;
+			if(pattern_owner == string::npos || actual_owner == string::npos) return false;
+		if(!FunctionOwnerCompatible(pattern.substr(pattern_owner, pattern_function - pattern_owner + 1),
+			actual.substr(actual_owner, actual_function - actual_owner + 1), class_pattern)) return false;
 			const string pattern_result = pattern.substr(0, pattern_owner);
 			const string actual_result = actual.substr(0, actual_owner);
 			const vector<string> pattern_parameters = SplitTemplateArguments(pattern.substr(
@@ -1185,6 +1184,7 @@ CPPGMAstNodePtr PA18TemplateExpander::RewriteRegularNodeValue(
 		input->kind == "type-name" || input->kind == "type-specifier";
 	result->value = RewriteText(input->value, context, substitutions,
 			&template_replaced, !type_spelling, true);
+	if(PreserveEvaluatedDecltype(input, substitutions, result)) return result;
 	if((input->kind == "special-member-definition" ||
 		input->kind == "special-member-declaration") &&
 		input->value.find("::") != string::npos && result->value.find("::") == string::npos)

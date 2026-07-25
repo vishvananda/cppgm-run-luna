@@ -79,7 +79,9 @@ CPPGMAstNodePtr Parser::ParseDeclSpecifier(bool type_id_context)
 			Restore(mark);
 			return CPPGMAstNodePtr();
 		}
-		return Node("decl-specifier", name);
+		CPPGMAstNodePtr result = Node("decl-specifier", name);
+		result->explicit_typename = true;
+		return result;
 	}
 	if (text == "::")
 	{
@@ -151,7 +153,9 @@ CPPGMAstNodePtr Parser::ParseTypeSpecifier()
 			Restore(mark);
 			return CPPGMAstNodePtr();
 		}
-		return Node("type-name", name);
+		CPPGMAstNodePtr result = Node("type-name", name);
+		result->explicit_typename = true;
+		return result;
 	}
 	if (text == "::")
 	{

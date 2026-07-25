@@ -12,7 +12,15 @@
 			 spelling == "constexpr" || spelling == "extern" ||
 			 spelling == "thread_local" || spelling == "register" || spelling == "mutable"))
 			continue;
-		if(child->kind != "decl-specifier" && child->kind != "type-name" &&
+		if(child->kind == "class-forward-declaration" ||
+			child->kind == "class-specifier") {
+			// An elaborated declaration such as `const struct Foo x` stores
+			// `Foo` as a declaration-specifier child.  The previous spelling
+			// filter discarded that child and left only `const`, which made
+			// deduction compare unrelated variables as if they had the same
+			// incomplete type.
+			spelling = LastComponent(RemoveMarker(child->value));
+		} else if(child->kind != "decl-specifier" && child->kind != "type-name" &&
 			child->kind != "type-specifier" && child->kind != "decltype-specifier" &&
 			child->kind != "cv-qualifier") continue;
 		if(spelling.empty()) continue;
@@ -981,6 +989,9 @@
 	{
 		const bool static_member = definition.static_member;
 		if(definition.friend_declaration) return definition.name;
+		if(definition.explicit_specialization && !definition.class_template &&
+			!definition.alias_template && !definition.variable_template)
+			return definition.name;
 		if(static_member && definition.owner.find("::") == string::npos &&
 			!concrete_owner.empty()) return TypeSuffix(PrefixComponent(definition.qualified_name)) +
 			"__" + LastComponent(definition.name);
@@ -1054,7 +1065,8 @@
 		const map<string, vector<string> >* pack_hints = 0,
 		const map<string, string>* outer_substitutions = 0,
 		const string* concrete_owner = 0,
-		const map<string, FunctionSignature>* function_hints = 0);
+		const map<string, FunctionSignature>* function_hints = 0,
+		const map<string, vector<string> >* forwarding_pack_hints = 0);
 	string MaterializeExternInstantiation(const TemplateDefinition& definition,
 		const vector<string>& args, const vector<string>& metadata_args,
 		map<string, string> substitutions,

@@ -616,10 +616,11 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 				} else if(parent_argument < parent_arguments.size()) ++parent_argument;
 			}
 		}
-		try {
-			inferred = InferFunctionArguments(definition, call, &member_arguments,
+	map<string, vector<string> > forwarding_pack_values;
+	try {
+		inferred = InferFunctionArguments(definition, call, &member_arguments,
 				deduction_substitutions, context, explicit_prefix, &inferred_pack_values,
-				&inferred_function_values, &bound_pack_values);
+				&inferred_function_values, &bound_pack_values, &forwarding_pack_values);
 		} catch(const logic_error&) {
 			inferred = false;
 		}
@@ -679,7 +680,8 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 		generated_name = Instantiate(definition, member_arguments, context,
 			explicit_instantiation,
 				&instantiation_pack_hints, &candidate_substitutions,
-				requested_owner_pointer, &inferred_function_values);
+				requested_owner_pointer, &inferred_function_values,
+				&forwarding_pack_values);
 		} catch(const logic_error&) {
 			active_concrete_owner_ = previous_concrete_owner;
 			continue;
@@ -1392,9 +1394,10 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 				vector<string> inferred;
 				map<string, vector<string> > inferred_pack_values;
 				map<string, FunctionSignature> inferred_function_values;
+				map<string, vector<string> > forwarding_pack_values;
 				const bool inferred_ok = InferFunctionArguments(*definition, result, &inferred,
 					substitutions, context, 0, &inferred_pack_values,
-					&inferred_function_values);
+					&inferred_function_values, 0, &forwarding_pack_values);
 				if(!inferred_ok) continue;
 				const TemplateDefinition* selected_definition =
 					FindExplicitFunctionSpecialization(definition->qualified_name, inferred, context);
@@ -1410,7 +1413,8 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 					specialization_bases_.end() && !selected_definition->owner.empty();
 				const string* requested_owner = concrete_member_owner ? &requested_owner_name : 0;
 				const string local_name = Instantiate(*selected_definition, inferred, context, false,
-					&inferred_pack_values, 0, requested_owner, &inferred_function_values);
+					&inferred_pack_values, 0, requested_owner, &inferred_function_values,
+					&forwarding_pack_values);
 				result->template_primary = definition->qualified_name;
 				result->template_arguments = inferred;
 				const string qualifier = concrete_member_owner ? requested_owner_name :
