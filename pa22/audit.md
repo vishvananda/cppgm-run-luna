@@ -403,3 +403,86 @@ candidate-admission behavior, including the reported
   the 11 pre-existing warnings.
 - `git diff --check` passed, and the cohesive audit fixes plus documentation
   are committed with an empty `git status --short`.
+
+## Checkpoint 91 Audit — 2026-07-26
+
+### Scope Reviewed
+
+Reviewed the latest `Checkpoint Scope` and result in [plan.md](plan.md), the
+PA22 contract in [README.md](README.md), commits `b727079`, `5af6c7b`,
+`a966998`, and `4b20268`, the complete report at
+`/home/vishvananda/work/.ralph/luna-gpt-5.6-luna-ultra/last-test.log`, and
+the changed lookup, deduction, replay, and candidate-viability sources:
+`pa18_templates_collection.{h,cpp}`, `pa18_templates_calls_qualified.cpp`,
+`pa18_templates_rewrite.{h,cpp}`, and `pa18_templates_rewrite_infer.cpp`.
+The review included the three Checkpoint 91 fixtures, the complete PA22
+failure set, the PA22 file audit, and the PA1–PA21 through-report.
+
+The audit specifically traced using-directive export ownership, using-imported
+member visibility, deferred member-typedef function-pointer deduction,
+selected function-template argument materialization, implicit-object cv
+viability, and the checkpoint's hot-path candidate probes.
+
+### Findings
+
+- The checkpoint's namespace using-directive index stored declaration identity
+  as `(visible-name, map-key-string)` pairs and recovered the declaration from
+  `definitions_` during replay.  That duplicated ownership information and
+  contradicted the checkpoint's typed-lookup design.  The member-template
+  promotion gate was also a process-wide name set, so an unrelated class with
+  the same member spelling could be promoted as an imported template.
+- `ResolveFunctionArguments` correctly recognized an explicit `&foo` operand,
+  but wrote the selected specialization through the outer unary node.  That
+  could erase the address-of operator while materializing a selected function
+  template argument.
+- `CompleteFunctionArguments` performed `FunctionExpressionTypes` even after
+  a typed expected-signature match had already succeeded.  This was avoidable
+  replay work on a deduction hot path and could force an unnecessary second
+  overload walk.
+- The ordinary-member probe recursively rewrites dependent base names before
+  deciding viability.  A substitution or semantic failure in that probe must
+  reject only that ordinary candidate; allowing it to escape could turn a
+  lookup probe into a hard failure.
+- No skipped compiler phase, dummy output, embedded payload,
+  interpreter/VM/trampoline substitute, source- or test-specific acceptance
+  gate, timeout workaround, emitted-text execution, weakened check, or
+  unchecked implementation fragment was found.  The checkpoint still uses
+  the normal typed deduction, substitution, overload, and LowIR paths.  The
+  residual fixtures are semantic parity work outside this checkpoint, not
+  deferred checkpoint blockers.
+
+### Changes Made
+
+- Changed using-directive exports to non-owning `TemplateDefinition*` entries
+  owned solely by `definitions_`; indexing now receives the inserted typed
+  definition directly, and replay consumes its qualified name without key
+  recovery.
+- Replaced the global using-member name set with a scope-indexed typed import
+  table resolved after collection, matching imported member templates by
+  owner and retaining declaration identity through replay.
+- Materialized a selected function template into the referenced identifier
+  child, preserving an enclosing unary address-of node.
+- Avoided `FunctionExpressionTypes` when typed expected-signature matching has
+  already established the deferred deduction, and made dependent base probing
+  convert substitution/semantic failures into ordinary-candidate rejection.
+- Kept all implementation changes in the checked `dev/src` source set; no
+  tests or reference fixtures were changed.
+
+### Validation
+
+- Required active report — **172/250 passed**, with **78** residual fixtures
+  and **0** timeout failures.  The report command exits nonzero because those
+  residual PA22 fixtures are expected at this checkpoint; the count is equal
+  to the turn-start baseline, so stage-progress preservation passes.
+- All three Checkpoint 91 fixtures pass in exit-status and LowIR modes:
+  `general/300-using-declaration-imports-member-template-sfinae-shadow`,
+  `general/300-using-directive-overloaded-function-template-arg`, and
+  `general/300-using-member-template-implicit-object-cv-overload`.
+- Required prior-through check — **passed**:
+  `n=22; if [ "$n" -le 1 ]; then echo '===== ALL TESTS PASSED SUCCESSFULLY! (0/0) ====='; else make test-report-through-pa$((n - 1)); fi`
+  reported **1850/1850** through PA21.
+- Required file audit — **passed**:
+  `perl scripts/cppgm_file_audit.pl --stage pa22 --paths dev/src`, with only
+  the repository's existing 11 structural warnings.
+- `make build` and `git diff --check` pass.  The final commit will verify an
+  empty `git status --short`.

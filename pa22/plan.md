@@ -2625,3 +2625,113 @@ warnings.
 Next checkpoint group: the remaining general/300 dependent lookup and
 substitution-failure cases, starting with the alias/qualified-value and
 detector fixtures, while preserving the now-green using-lookup paths.
+
+## Checkpoint 91 audit result — 2026-07-26
+
+The checkpoint audit found and fixed four implementation issues before handoff:
+using-directive exports now retain non-owning typed declaration pointers;
+using-imported member-template promotion is scope-indexed by typed imported
+definitions; selected function-template arguments replace only the referenced
+identifier beneath an explicit address-of node; and deferred expected-signature
+matches no longer recompute function-expression candidates.  Dependent base
+rewrites in the ordinary-member viability probe now reject that candidate on
+substitution failure instead of escaping as a hard lookup failure.  No
+checkpoint shortcut, timeout workaround, output bypass, ownership violation,
+or audit bypass remains.
+
+The exact authoritative current-PA residual is **78/250** failures, unchanged
+from the turn-start **172/250** passing baseline, with no timeout.  The
+required through-PA21 report is **1850/1850** and the source audit passes with
+11 pre-existing structural warnings.
+
+### Remaining Work Map (refreshed from the complete report)
+
+- **General/100–200 (2):** status
+  `general/100-template-array-reference-cv-default-arg`; LowIR parity
+  `general/200-inherited-constructor-template-forwarding`.
+- **General/300 (11; 7 status, 4 LowIR):** status
+  `general/300-abstract-array-parameter-sfinae`,
+  `general/300-alias-sfinae-inherited-member-value`,
+  `general/300-base-qualified-template-value-arg-syntax`,
+  `general/300-boost-enable-if-type-condition-static-keyword-overload`,
+  `general/300-constructor-template-keeps-ctor-refinement-viable`,
+  `general/300-local-alias-explicit-template-pack-decltype`, and
+  `general/300-single-element-detector-idiom-sfinae-false`; LowIR parity
+  `general/300-defaulted-sfinae-ctor-candidate-drop`,
+  `general/300-empty-pack-unknown-bound-array-lowir`,
+  `general/300-explicit-template-call-transitive-base-deduction`, and
+  `general/300-qualified-alias-sfinae-function-pointer-deduction-key`.
+- **General/400 (14; 12 status, 2 LowIR):** status
+  `general/400-alias-template-function-argument-cv`,
+  `general/400-bad-constructor-template-parameter-shadowing-target-aware`,
+  `general/400-conversion-function-template-prefers-nontemplate`,
+  `general/400-defaulted-pointer-nontype-cstyle-null`,
+  `general/400-enum-nttp-cstyle-cast-default-rebind`,
+  `general/400-function-assignment-invocable-and-helper`,
+  `general/400-member-alias-template-template-partial-deduction-owner`,
+  `general/400-object-pointer-nttp-address`,
+  `general/400-object-pointer-nttp-rebound-member-template`,
+  `general/400-pack-expansion-size-mismatch-sfinae`,
+  `general/400-partial-specialization-inherited-constructor-template`, and
+  `general/400-template-template-alias-default-arity-sfinae`; LowIR parity
+  `general/400-constructor-template-pack-before-defaulted-nontype` and
+  `general/400-static-data-nttp-pack-sizeof-bound`.
+- **General/500 (23; 19 status, 4 LowIR):** status
+  `general/500-adl-alias-return-operator-template`,
+  `general/500-alias-pack-enable-if-constexpr-constructor`,
+  `general/500-alias-template-template-defaulted-sfinae-canonical-args`,
+  `general/500-async-initiate-dependent-return-sfinae`,
+  `general/500-boost-mp11-conditional-alias-reference-set`,
+  `general/500-constructor-pack-default-rewritten-pointer`,
+  `general/500-constructor-sfinae-member-template-value`,
+  `general/500-defaulted-nontype-qualified-alias-value`,
+  `general/500-defaulted-pack-bool-short-circuit-sfinae`,
+  `general/500-dependent-result-sizeof-sfinae-base`,
+  `general/500-explicit-pack-deduced-pack-member-result`,
+  `general/500-index-sequence-alias-constructor-deduction`,
+  `general/500-member-template-dependent-owner-defaulted-sfinae`,
+  `general/500-member-template-retained-dependent-param-candidate-drop`,
+  `general/500-owner-enum-nontype-result-sfinae`,
+  `general/500-partial-specialization-cv-qualifier-subset`,
+  `general/500-short-circuit-alias-member-sfinae`,
+  `general/500-sizeof-void-sfinae-fallback`, and
+  `general/500-weak-ptr-shared-ptr-template-ctor`; LowIR parity
+  `general/500-bool-alias-function-template-result-metadata`,
+  `general/500-current-specialization-nontype-default-dependent`,
+  `general/500-dependent-member-alias-function-return`, and
+  `general/500-inherited-constructor-template-member-alias-pack`.
+- **Specification bands (28):** spec/100 (5: status
+  `spec/100-constructor-template-braced-array-bound-deduction`,
+  `spec/100-function-template-array-bound-braced-empty-argument`; LowIR
+  `spec/100-explicit-specialization-dependent-param-typedef`,
+  `spec/100-explicit-template-argument-overload-rejects-short-candidate`,
+  `spec/100-function-template-array-parameter-string-literal`); spec/200
+  (7: status `spec/200-member-operator-fixed-tag-default-partial-order`,
+  `spec/200-member-template-explicit-pack-forward-call`,
+  `spec/200-overload-set-address-nondeduced-bad`; LowIR
+  `spec/200-constructor-template-qualified-nested-id-partial-ordering`,
+  `spec/200-defaulted-class-template-argument-prefix-deduction`,
+  `spec/200-dependent-specialized-default-arg-deduction`,
+  `spec/200-member-template-nontype-param-shadows-inherited-value-sum`);
+  spec/300 (6: status `spec/300-constructor-forwarding-lvalue-beats-const-ref`,
+  `spec/300-constructor-template-const-ref-conversion`,
+  `spec/300-conversion-function-template-owner-result-copy-init`,
+  `spec/300-template-id-direct-parameter-same-name-deduction`; LowIR
+  `spec/300-cross-specialization-converting-ctor-operator-template`,
+  `spec/300-qualified-member-function-value-fallback-sfinae`); spec/400
+  (2: status `spec/400-nontype-reference-argument`; LowIR
+  `spec/400-dependent-decltype-member-template-conversion-operator`); and
+  spec/500 (8: status
+  `spec/500-conversion-function-template-reference-conditional-auto-ref`,
+  `spec/500-conversion-function-template-same-name-target`,
+  `spec/500-defaulted-rebind-constructor-deduction`,
+  `spec/500-function-result-template-id-shadowed-argument`,
+  `spec/500-hidden-friend-query-free-decltype-noexcept`,
+  `spec/500-template-template-conversion-operator-reference-target`,
+  `spec/500-template-template-piecewise-partial-ordering`; LowIR
+  `spec/500-type-pack-qualified-static-member-expansion`).
+
+Next substantial checkpoint group: bundle the two general/100–200 cases with
+the 11 general/300 cases (13 total), beginning with the shared qualified/base
+value and detector/SFINAE behavior.  Preserve the now-typed using-lookup
+tables and the three green Checkpoint 91 fixtures while repairing that group.

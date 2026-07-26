@@ -182,8 +182,9 @@ bool HasFriendSpecifier(const CPPGMAstNodePtr& node)
 }
 
 void PA18TemplateExpander::IndexUsingDirectiveDefinition(
-	const TemplateDefinition& definition, const string& key)
+	const TemplateDefinition& definition)
 {
+	const TemplateDefinition* typed_definition = &definition;
 	const string& qualified = definition.qualified_name;
 	size_t component_begin = 0;
 	string target;
@@ -196,12 +197,11 @@ void PA18TemplateExpander::IndexUsingDirectiveDefinition(
 		if(!target.empty()) target += "::";
 		target += component;
 		const size_t visible_begin = separator + 2;
-		const size_t visible_end = qualified.find("::", visible_begin);
-		if(visible_begin < qualified.size())
-			using_directive_exports_[target].push_back(make_pair(
-				qualified.substr(visible_begin,
-					visible_end == string::npos ? string::npos : visible_end - visible_begin),
-				key));
+		if(visible_begin < qualified.size()) {
+			vector<const TemplateDefinition*>& exports = using_directive_exports_[target];
+			if(find(exports.begin(), exports.end(), typed_definition) == exports.end())
+				exports.push_back(typed_definition);
+		}
 		component_begin = visible_begin;
 	}
 }
@@ -214,6 +214,7 @@ string PA18TemplateExpander::GeneratedOwner(const TemplateDefinition& definition
 void PA18TemplateExpander::ResolveUsingDeclarationTargets()
 {
 	using_declaration_targets_.clear();
+	using_member_template_targets_.clear();
 	for(map<string, vector<string> >::const_iterator scope =
 		pending_using_declarations_.begin();
 		scope != pending_using_declarations_.end(); ++scope) {
@@ -224,15 +225,93 @@ void PA18TemplateExpander::ResolveUsingDeclarationTargets()
 			while(!target_name.empty() && target_name[0] == ':') target_name.erase(0, 1);
 			map<string, TemplateDefinition>::const_iterator definition =
 				definitions_.find(target_name);
-			if(definition == definitions_.end() ||
-				(!definition->second.class_template &&
-				 !definition->second.alias_template &&
-				 !definition->second.variable_template)) continue;
-			if(find(targets.begin(), targets.end(), &definition->second) == targets.end())
+			if(definition != definitions_.end() &&
+				(definition->second.class_template || definition->second.alias_template ||
+				 definition->second.variable_template) &&
+				find(targets.begin(), targets.end(), &definition->second) == targets.end())
 				targets.push_back(&definition->second);
+			if(class_contexts_.find(scope->first) == class_contexts_.end()) continue;
+			const size_t separator = target_name.rfind("::");
+			if(separator == string::npos || separator + 2 >= target_name.size()) continue;
+			string target_owner = target_name.substr(0, separator);
+			while(!target_owner.empty() && target_owner[0] == ':') target_owner.erase(0, 1);
+			const string resolved_target_owner = CanonicalSpelling(ResolveAlias(
+				target_owner, scope->first));
+			if(!resolved_target_owner.empty()) target_owner = resolved_target_owner;
+			const size_t target_open = target_owner.find('<');
+			if(target_open != string::npos) target_owner.erase(target_open);
+			const string target_member = target_name.substr(separator + 2);
+			bool dependent_owner = false;
+			for(map<string, TemplateDefinition>::const_iterator owner = definitions_.begin();
+				owner != definitions_.end() && !dependent_owner; ++owner) {
+				if(!owner->second.class_template ||
+					(owner->second.qualified_name != scope->first &&
+						LastComponent(owner->second.qualified_name) != LastComponent(scope->first))) continue;
+				for(size_t parameter = 0; parameter < owner->second.parameters.size(); ++parameter)
+					if(owner->second.parameters[parameter].type &&
+						owner->second.parameters[parameter].name == target_owner) {
+						dependent_owner = true;
+						break;
+					}
+			}
+			map<string, vector<string> >::const_iterator indexed = definitions_by_name_.find(
+				LastComponent(target_member));
+			if(indexed == definitions_by_name_.end()) continue;
+			for(size_t candidate_index = 0; candidate_index < indexed->second.size();
+				++candidate_index) {
+				map<string, TemplateDefinition>::const_iterator candidate = definitions_.find(
+					indexed->second[candidate_index]);
+				if(candidate == definitions_.end() || !candidate->second.member_template ||
+					candidate->second.class_template || candidate->second.alias_template ||
+					candidate->second.variable_template ||
+					LastComponent(candidate->second.name) != LastComponent(target_member)) continue;
+				string candidate_owner = candidate->second.owner;
+				const size_t candidate_open = candidate_owner.find('<');
+				if(candidate_open != string::npos) candidate_owner.erase(candidate_open);
+				const bool owner_matches = candidate_owner == target_owner ||
+					(target_owner.find("::") == string::npos &&
+						LastComponent(candidate_owner) == LastComponent(target_owner)) ||
+					candidate_owner == scope->first ||
+					(scope->first.find("::") == string::npos &&
+						LastComponent(candidate_owner) == LastComponent(scope->first));
+				if(!owner_matches && !dependent_owner) continue;
+				vector<const TemplateDefinition*>& member_targets =
+					using_member_template_targets_[scope->first];
+				if(find(member_targets.begin(), member_targets.end(), &candidate->second) ==
+					member_targets.end()) member_targets.push_back(&candidate->second);
+			}
 		}
 	}
 	pending_using_declarations_.clear();
+}
+
+bool PA18TemplateExpander::HasUsingMemberTemplate(const string& context,
+	const string& member) const
+{
+	for(map<string, vector<const TemplateDefinition*> >::const_iterator imported =
+		using_member_template_targets_.begin(); imported != using_member_template_targets_.end(); ++imported)
+		for(size_t index = 0; index < imported->second.size(); ++index) {
+			const TemplateDefinition* definition = imported->second[index];
+			if(!definition || LastComponent(definition->name) != member) continue;
+			string owner = definition->owner;
+			const size_t open = owner.find('<');
+			if(open != string::npos) owner.erase(open);
+			if(owner == context || (context.find("::") == string::npos &&
+				LastComponent(owner) == LastComponent(context))) return true;
+		}
+	for(string current = context; ; ) {
+		map<string, vector<const TemplateDefinition*> >::const_iterator imported =
+			using_member_template_targets_.find(current);
+		if(imported != using_member_template_targets_.end())
+			for(size_t index = 0; index < imported->second.size(); ++index)
+				if(imported->second[index] && LastComponent(imported->second[index]->name) == member)
+					return true;
+		if(current.empty()) break;
+		const size_t separator = current.rfind("::");
+		if(separator == string::npos) current.clear();
+		else current.erase(separator);
+	}
+	return false;
 }
 
 bool PA18TemplateExpander::PreserveInlineGeneratedOrder(

@@ -89,8 +89,15 @@ bool PA18TemplateExpander::HasViableOrdinaryCallableMember(
 			for(size_t base = 0; base < clause->children.size(); ++base) {
 				const CPPGMAstNodePtr base_name = ChildOfKindLocal(clause->children[base], "base-name");
 				if(!base_name) continue;
-				string base_spelling = CanonicalSpelling(ResolveAlias(RewriteText(
-					base_name->value, context, substitutions, 0), context));
+				string base_spelling;
+				try {
+					base_spelling = CanonicalSpelling(ResolveAlias(RewriteText(
+						base_name->value, context, substitutions, 0), context));
+				} catch(const PA18SubstitutionFailure&) {
+					continue;
+				} catch(const logic_error&) {
+					continue;
+				}
 				if(scan(base_spelling)) { active.erase(class_name); return true; }
 			}
 		}

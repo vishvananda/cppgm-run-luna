@@ -40,7 +40,10 @@ void PA18TemplateExpander::ResolveFunctionArguments(const CPPGMAstNodePtr& resul
 				try {
 					const string local_name = Instantiate(*function_candidates[candidate],
 						inferred, context);
-					result_arguments->children[argument]->value = local_name;
+					// Keep an explicit address-of node intact.  The selected
+					// specialization replaces the referenced declaration, not the
+					// unary operator carrying it.
+					argument_node->value = local_name;
 					break;
 				} catch(const logic_error&) {}
 			}
@@ -1056,19 +1059,20 @@ void PA18TemplateExpander::RecordUsingDirective(const CPPGMAstNodePtr& original_
 		if(!visible.empty() && local_substitutions->find(visible) == local_substitutions->end())
 			(*local_substitutions)[visible] = target->value + "::" + visible;
 	}
-	map<string, vector<pair<string, string> > >::const_iterator indexed =
+	map<string, vector<const TemplateDefinition*> >::const_iterator indexed =
 		using_directive_exports_.find(target->value);
 	if(indexed == using_directive_exports_.end()) return;
 	for(size_t index = 0; index < indexed->second.size(); ++index) {
-		const string& visible = indexed->second[index].first;
-		const string qualified_prefix = target->value + "::" + visible;
-		map<string, TemplateDefinition>::const_iterator definition = definitions_.find(
-			indexed->second[index].second);
-		if(definition == definitions_.end()) continue;
-		if(definition->second.qualified_name != qualified_prefix) continue;
+		const TemplateDefinition* definition = indexed->second[index];
+		if(!definition) continue;
+		const string qualified_prefix = target->value + "::";
+		if(definition->qualified_name.compare(0, qualified_prefix.size(),
+			qualified_prefix) != 0) continue;
+		const string visible = definition->qualified_name.substr(qualified_prefix.size());
+		if(visible.empty() || visible.find("::") != string::npos) continue;
 		if(variable_types_.find(visible) != variable_types_.end()) continue;
 		if(local_substitutions->find(visible) == local_substitutions->end())
-			(*local_substitutions)[visible] = qualified_prefix;
+			(*local_substitutions)[visible] = definition->qualified_name;
 	}
 }
 void PA18TemplateExpander::TransformRegularChildren(const CPPGMAstNodePtr& input,

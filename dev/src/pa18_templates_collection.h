@@ -470,7 +470,7 @@ private:
 		const string& inherited_context,
 		const map<string, bool>& inherited_parameters) const;
 	map<string, TemplateDefinition> definitions_;
-	map<string, vector<string> > definitions_by_name_, pending_using_declarations_; map<string, vector<const TemplateDefinition*> > using_declaration_targets_; map<string, vector<pair<string, string> > > using_directive_exports_;
+	map<string, vector<string> > definitions_by_name_, pending_using_declarations_; map<string, vector<const TemplateDefinition*> > using_declaration_targets_, using_directive_exports_;
 	set<string> template_pack_names_, template_parameter_names_;
 	map<string, vector<TemplateDefinition> > class_specializations_;
 	map<const CPPGMAstNode*, string> lexical_contexts_;
@@ -490,7 +490,7 @@ private:
 	set<string> class_contexts_;
 	set<string> function_contexts_;
 	map<string, string> function_owners_;
-	map<string, string> local_class_names_; map<string, CPPGMAstNodePtr> class_declarations_; map<string, set<string> > static_members_by_class_; set<string> using_member_template_names_;
+	map<string, string> local_class_names_; map<string, CPPGMAstNodePtr> class_declarations_; map<string, set<string> > static_members_by_class_; map<string, vector<const TemplateDefinition*> > using_member_template_targets_;
 	map<string, vector<string> > constant_member_owners_;
 	set<string> named_type_contexts_; map<string, string> enumerator_types_; map<string, string> variable_types_;
 	map<string, map<string, string> > function_parameter_types_;
@@ -571,7 +571,7 @@ private:
 	string TypeIdSpelling(const CPPGMAstNodePtr& type_id) const;
 	// Keep generated declaration ownership in one typed helper so forwards,
 	// class shells, and materialized definitions cannot diverge.
-	string GeneratedOwner(const TemplateDefinition& definition) const; string QualifyAliasTarget(const string& target, const string& alias) const; void ResolveUsingDeclarationTargets();
+	string GeneratedOwner(const TemplateDefinition& definition) const; string QualifyAliasTarget(const string& target, const string& alias) const; void ResolveUsingDeclarationTargets(); bool HasUsingMemberTemplate(const string& context, const string& member) const;
 	bool HasReplayContext(const map<string, string>& substitutions) const
 	{
 		return !substitutions.empty() || !active_concrete_owner_.name.empty();
@@ -1042,7 +1042,7 @@ private:
 			overload_key << item.qualified_name << "#overload" << definitions_by_name_[item.name].size();
 			definitions_[overload_key.str()] = item;
 			definitions_by_name_[item.name].push_back(overload_key.str());
-			IndexUsingDirectiveDefinition(item, overload_key.str());
+			IndexUsingDirectiveDefinition(definitions_[overload_key.str()]);
 			Collect(declaration, item.owner);
 			return;
 		}
@@ -1068,19 +1068,19 @@ private:
 		} else {
 			definitions_[item.qualified_name] = item;
 			definitions_by_name_[item.name].push_back(item.qualified_name);
-			IndexUsingDirectiveDefinition(item, item.qualified_name);
+			IndexUsingDirectiveDefinition(definitions_[item.qualified_name]);
 		}
 		// A nested template is looked up in the concrete class scope later.  It
 		// is still useful to register its lexical spelling now.
 		Collect(declaration, item.class_template ? JoinPath(item.owner, name) : item.owner);
 	}
-	void IndexConstantMembers(const CPPGMAstNodePtr& node, const string& owner); void IndexStaticMembers(const CPPGMAstNodePtr& node, set<string>& members) const; void IndexUsingDirectiveDefinition(const TemplateDefinition& definition, const string& key);
+	void IndexConstantMembers(const CPPGMAstNodePtr& node, const string& owner); void IndexStaticMembers(const CPPGMAstNodePtr& node, set<string>& members) const; void IndexUsingDirectiveDefinition(const TemplateDefinition& definition);
 	bool HasStaticMember(const TemplateDefinition* definition, const string& owner, const string& name) const;
 	void Collect(const CPPGMAstNodePtr& node, const string& context, bool type_reference = false)
 	{
 		if(!node) return;
 		const bool elaborated_type_reference = type_reference && node->kind == "class-forward-declaration";
-		if(node->kind == "using-declaration") { const CPPGMAstNodePtr target = ChildOfKindLocal(node, "target"); if(target) { const string target_name = RemoveMarker(target->value); if(!target_name.empty() && target_name.find("::") != string::npos) pending_using_declarations_[context].push_back(target_name); if(class_contexts_.find(context) != class_contexts_.end()) using_member_template_names_.insert(LastComponent(target_name)); } }
+		if(node->kind == "using-declaration") { const CPPGMAstNodePtr target = ChildOfKindLocal(node, "target"); if(target) { const string target_name = RemoveMarker(target->value); if(!target_name.empty() && target_name.find("::") != string::npos) pending_using_declarations_[context].push_back(target_name); } }
 		if(node->kind == "translation-unit") {
 			for(size_t i = 0; i < node->children.size(); ++i) Collect(node->children[i], context);
 			return;

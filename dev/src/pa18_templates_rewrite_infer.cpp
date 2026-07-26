@@ -1141,16 +1141,17 @@ bool PA18TemplateExpander::CompleteFunctionArguments(
 					&ignored, context)) matched = true;
 			}
 		}
-		const vector<string> function_types = FunctionExpressionTypes(
-			deferred_arguments[deferred], context);
-		for(size_t candidate = 0; candidate < function_types.size(); ++candidate) {
-			if(matched) break;
-			map<string, string> one = *inferred;
-			if(!MatchTypePattern(deferred_patterns[deferred], function_types[candidate],
-				parameter_names, &one, context)) continue;
-			*inferred = one;
-			matched = true;
-			break;
+		if(!matched) {
+			const vector<string> function_types = FunctionExpressionTypes(
+				deferred_arguments[deferred], context);
+			for(size_t candidate = 0; candidate < function_types.size(); ++candidate) {
+				map<string, string> one = *inferred;
+				if(!MatchTypePattern(deferred_patterns[deferred], function_types[candidate],
+					parameter_names, &one, context)) continue;
+				*inferred = one;
+				matched = true;
+				break;
+			}
 		}
 		if(!matched) return false;
 	}

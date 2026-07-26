@@ -1139,7 +1139,7 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 				input->children[1]->kind == "function-definition" && !context.empty()) {
 				const string member = LastComponent(DeclarationName(input->children[1]));
 				if(active_instantiation_name_.empty() &&
-					using_member_template_names_.find(member) != using_member_template_names_.end()) {
+					HasUsingMemberTemplate(context, member)) {
 					// PA11 needs the template entity for using-declaration lookup. Keep the real dependent signature, but expose it as a declaration so
 					// PA14 never lowers the source body; concrete calls use Instantiate().
 					CPPGMAstNodePtr declaration = CloneNode(input);
