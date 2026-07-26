@@ -2483,3 +2483,84 @@ the two small general/100–200 cases, focusing on shared dependent lookup,
 substitution-failure candidate viability, and deferred constructor replay.
 Validation remains the focused cluster, the full PA22 report, through-PA21,
 and the PA22 source audit.
+
+## Checkpoint 90 scope — 2026-07-26 (before implementation)
+
+The fresh baseline remains **163/250**, with **87** residual fixtures and no
+timeouts.  The complete current failure set is grouped as general/100 (1),
+general/200 (1), general/300 (18), general/400 (14), general/500 (24), and
+spec/100/200/300/400/500 (5/7/6/2/9); the report classifies **63** as status
+failures and **24** as LowIR parity failures.  The prior checkpoint's six
+general/300 parser/replay fixtures remain green.
+
+Selected scope: preserve typed constant and declaration facts for variable
+and static member templates when they are used as non-type template arguments,
+dependent detector specializations, or inherited enable-if conditions.  The
+focused fixtures are:
+
+- `general/300-inherited-variable-template-enable-if-return`
+- `general/300-variable-template-detected-idiom-direct-arg`
+- `general/300-static-member-template-function-pointer-nttp`
+- `general/300-qualified-rebind-detected-type-arg`
+
+This scope covers materializing a variable-template specialization's boolean
+value, selecting dependent partial specializations from a qualified alias,
+and retaining the typed address/signature of a static member function template
+for NTTP deduction.  Validation is the four focused fixtures in exit-status
+and LowIR modes, the complete PA22 report, through-PA21, and the source audit.
+The remaining 83 fixtures stay grouped for later deduction/ordering,
+constructor/conversion, and specification-band checkpoints.
+
+## Checkpoint 90 result — 2026-07-26
+
+The selected variable/static member replay scope is complete.  Non-type
+function-address arguments now retain and validate their typed member-function
+signatures, explicit null-pointer calls can complete dependent pointer
+deduction, variable-template specializations are evaluated through the typed
+constant table, and dependent static constants are deferred until concrete
+replay.  Generated-owner call-result lookup and partial-specialization
+`decltype` matching use the same typed replay state.  Omitted template
+arguments now use the referenced template's own defaults, preventing an
+outer same-spelled parameter from leaking into an alias default such as
+`enable_if_t<B>`.
+
+All four focused fixtures pass in exit-status and LowIR modes:
+
+- `general/300-inherited-variable-template-enable-if-return`
+- `general/300-variable-template-detected-idiom-direct-arg`
+- `general/300-static-member-template-function-pointer-nttp`
+- `general/300-qualified-rebind-detected-type-arg`
+
+The authoritative PA22 report improved from **163/250** to **169/250**;
+**81** fixtures remain, with no timeout failures.  Through-PA21 passes
+**1850/1850**, and the PA22 source audit passes with the repository's existing
+11 structural warnings.  During validation, an over-broad generated-owner
+lookup was narrowed back to source-owner spelling; the two PA21 regressions
+then cleared while the checkpoint fixtures remained green.
+
+### Remaining Work Map
+
+- **General/100–200 (2):** one array-reference/default-deduction status
+  failure and one inherited-constructor LowIR parity case.
+- **General/300 (14):** dependent array and alias SFINAE, qualified/base
+  non-type lookup, constructor viability, empty-pack replay, transitive-base
+  deduction, using-declaration/directive lookup, and remaining detector idioms
+  (9 status, 5 LowIR parity).
+- **General/400 (14):** typed aliases, constructor parameter/pack/default
+  handling, conversion ranking, template-template deduction, pointer/enum
+  NTTPs, pack mismatch, inherited constructors, and static data (12 status,
+  2 LowIR parity).
+- **General/500 (23):** owner/ADL rebinding, alias packs and
+  template-template SFINAE, constructor/conversion replay, dependent member
+  results, enum/pack NTTPs, and short-circuit/sizeof viability (19 status,
+  4 LowIR parity).
+- **Specification bands (28):** spec/100 has 5 array/specialization cases
+  (2 status, 3 LowIR), spec/200 has 7 default/ordering/member-pack cases
+  (3 status, 4 LowIR), spec/300 has 6 conversion/decltype cases (4 status,
+  2 LowIR), spec/400 has 2 dependent-decltype/reference cases (1 status,
+  1 LowIR), and spec/500 has 8 owner/template-template/pack cases (7 status,
+  1 LowIR).
+
+Next checkpoint group: the 14 remaining general/300 fixtures, beginning with
+the shared dependent lookup and substitution-failure candidate-viability
+cases, while preserving the now-green variable/static member replay paths.

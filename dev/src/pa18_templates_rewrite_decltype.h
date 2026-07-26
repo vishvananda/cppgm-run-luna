@@ -325,8 +325,8 @@
 		const map<string, string>& substitutions, const vector<string>& actual_types, string* result);
 	void ExpandExplicitFunctionArguments(const string& raw, const string& context,
 		const map<string, string>& substitutions, vector<string>* result);
-	bool FunctionCallResultType(string expression, const string& context,
-		const map<string, string>& substitutions, string* result)
+	bool GeneratedFunctionCallResultType(const string& callee, const string& function_context, const map<string, string>& substitutions, const vector<string>& actual_types, string* result);
+	bool FunctionCallResultType(string expression, const string& context, const map<string, string>& substitutions, string* result)
 	{
 		if(!result) return false;
 		string callee, argument_text;
@@ -484,6 +484,8 @@
 			CollectInheritedMemberTemplates(context, callee, substitutions,
 				function_context, &candidates, &active, &concrete_owners);
 		}
+		if(candidates.empty() && GeneratedFunctionCallResultType(callee, function_context,
+			substitutions, actual_types, result)) return true;
 		string selected_result;
 		bool selected_ellipsis = true;
 		for(size_t i = 0; i < candidates.size(); ++i) {

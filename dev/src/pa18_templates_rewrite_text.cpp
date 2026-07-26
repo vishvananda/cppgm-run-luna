@@ -483,7 +483,8 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			// partial specialization), so ordinary name lookup is intentionally not
 			// sufficient here.  Select the nested definition through the typed owner
 			// specialization before materializing its own arguments.
-			if(!definition && !active_concrete_owner_.name.empty()) {
+			if(!definition && !active_concrete_owner_.name.empty() &&
+				base.find("::") == string::npos) {
 				const TemplateDefinition* owner_definition =
 					active_concrete_owner_.definition;
 				if(owner_definition && owner_definition->class_template) {
@@ -741,13 +742,13 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 								deferred_pack_argument = true;
 								break;
 							}
-							}
-							PA19IntegralValue value;
-							try {
-							args[i] = ResolveIntegralArgument(definition->parameters[i],
-								args[i], context, substitutions, &value);
-						} catch(const PA18SubstitutionFailure& error) {
-							throw PA18SubstitutionFailure("definition=" + definition->qualified_name +
+					}
+					PA19IntegralValue value;
+				try {
+					args[i] = ResolveIntegralArgument(definition->parameters[i],
+						args[i], context, substitutions, &value);
+				} catch(const PA18SubstitutionFailure& error) {
+					throw PA18SubstitutionFailure("definition=" + definition->qualified_name +
 								" " + error.what());
 						} catch(const logic_error& error) {
 							throw logic_error("definition=" + definition->qualified_name +
@@ -826,10 +827,11 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 					// otherwise become `F<first>` during replay).
 					if(definition->parameters[i].pack) continue;
 					string argument;
-					map<string, string>::const_iterator substituted = default_substitutions.find(
-						definition->parameters[i].name);
-					if(substituted != default_substitutions.end()) argument = substituted->second;
-					else if(!definition->parameters[i].default_type.empty()) {
+					// An omitted argument is supplied by this template's own default,
+					// not by an unrelated caller binding with the same spelling.  For
+					// example, the `T` in `enable_if_t<B>` must use its declared
+					// `void` default even when the enclosing function also has `T`.
+					if(!definition->parameters[i].default_type.empty()) {
 						try {
 							argument = RewriteText(definition->parameters[i].default_type, context,
 								default_substitutions, 0);
@@ -859,9 +861,9 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 					args.push_back(argument);
 					if(!definition->parameters[i].name.empty())
 						default_substitutions[definition->parameters[i].name] = argument;
+					}
 				}
-				}
-				if(default_substitution_failure) {
+					if(default_substitution_failure) {
 					search = close + 1;
 					continue;
 				}
@@ -925,7 +927,9 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				if(!definition->parameters[i].name.empty())
 					argument_substitutions[definition->parameters[i].name] = args[i];
 			}
-			definition = SelectClassTemplateDefinition(definition, args, context);
+			const TemplateDefinition* selected_definition = SelectClassTemplateDefinition(
+				definition, args, context);
+			definition = selected_definition;
 			// Resolve a concrete nested owner before the generic member lookup so
 			// dependent outer packs remain represented by the materialized class.
 			const bool dependent_nested_member = close + 2 < raw.size() &&
@@ -1016,6 +1020,21 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			}
 				if(!inferred_nested_owner.empty())
 					concrete_owner_for_instantiation = inferred_nested_owner;
+			vector<const TemplateDefinition*> instantiation_candidates;
+			if(definition && !definition->class_template && !definition->alias_template &&
+				!definition->variable_template) {
+				const vector<const TemplateDefinition*> overloads = FindFunctionDefinitions(
+					base, context);
+				for(size_t overload = 0; overload < overloads.size(); ++overload) {
+					if(!overloads[overload] || overloads[overload]->qualified_name !=
+						definition->qualified_name || overloads[overload]->parameters.size() !=
+						definition->parameters.size()) continue;
+					if(find(instantiation_candidates.begin(), instantiation_candidates.end(),
+						overloads[overload]) == instantiation_candidates.end())
+						instantiation_candidates.push_back(overloads[overload]);
+				}
+			}
+			if(instantiation_candidates.empty()) instantiation_candidates.push_back(definition);
 			const ConcreteOwnerContext previous_concrete_owner = active_concrete_owner_;
 			if(!concrete_owner_for_instantiation.empty())
 				SetActiveConcreteOwner(concrete_owner_for_instantiation, context);
@@ -1027,14 +1046,34 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				&requested_owner_name;
 				string local_name;
 					try {
-							local_name = Instantiate(*definition, args, context, false,
-								inferred_nested_parent_packs.empty() ? 0 : &inferred_nested_parent_packs,
-								&instantiation_substitutions, requested_owner, 0, 0,
-								defer_class_definition);
-				} catch(...) {
-				active_concrete_owner_ = previous_concrete_owner;
-				throw;
-			}
+							string last_candidate_failure;
+							bool selected_candidate = false;
+							for(size_t candidate = 0; candidate < instantiation_candidates.size(); ++candidate) {
+								try {
+									local_name = Instantiate(*instantiation_candidates[candidate], args, context, false,
+										inferred_nested_parent_packs.empty() ? 0 : &inferred_nested_parent_packs,
+										&instantiation_substitutions, requested_owner, 0, 0,
+										defer_class_definition);
+									definition = instantiation_candidates[candidate];
+									selected_candidate = true;
+									break;
+								} catch(const PA18SubstitutionFailure& error) {
+									last_candidate_failure = error.what();
+								}
+							}
+							if(!selected_candidate)
+								throw PA18SubstitutionFailure(last_candidate_failure.empty() ?
+									"function template overload substitution failed" : last_candidate_failure);
+						} catch(const PA18SubstitutionFailure&) {
+							active_concrete_owner_ = previous_concrete_owner;
+							throw;
+						} catch(const logic_error&) {
+							active_concrete_owner_ = previous_concrete_owner;
+							throw;
+						} catch(...) {
+							active_concrete_owner_ = previous_concrete_owner;
+							throw;
+						}
 			active_concrete_owner_ = previous_concrete_owner;
 			// A bare class template-id in a declaration type (notably a typedef)
 			// does not instantiate the class definition.  Member-qualified uses do
@@ -1088,11 +1127,20 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 						if(concrete_value != concrete_alias) replacement = concrete_value;
 					}
 				}
-				if(replacement == local_name && !definition->owner.empty()) {
-					const string source_alias = JoinPath(definition->owner, local_name);
-					const string source_target = ResolveAlias(source_alias, context);
-					if(source_target != source_alias) replacement = source_target;
-				}
+					if(!definition->owner.empty() || !definition->lexical_owner.empty()) {
+						const string source_owner = definition->lexical_owner.empty() ?
+							definition->owner : definition->lexical_owner;
+						const string source_alias = JoinPath(source_owner, local_name);
+						const string source_target = ResolveAlias(source_alias, context);
+						if(source_target != source_alias) replacement = source_target;
+						else if(source_owner != definition->owner && !definition->owner.empty()) {
+							const string qualified_source_alias = JoinPath(definition->owner, local_name);
+							const string qualified_source_target = ResolveAlias(
+								qualified_source_alias, context);
+							if(qualified_source_target != qualified_source_alias)
+								replacement = qualified_source_target;
+						}
+					}
 			}
 			if(close + 1 < raw.size() && IsIdentifierCharacter(raw[close + 1]) &&
 				!replacement.empty() && IsIdentifierCharacter(replacement[replacement.size() - 1]))

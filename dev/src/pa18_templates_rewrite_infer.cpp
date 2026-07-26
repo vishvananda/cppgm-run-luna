@@ -1050,6 +1050,24 @@ bool PA18TemplateExpander::InferFunctionParameter(
 			if(!forwarding_name.empty())
 				(*forwarding_pack_values)[forwarding_name].push_back(type);
 		}
+		bool null_pointer_conversion = false;
+		if(inferred_argument && argument && argument->kind == "literal" &&
+			Trim(RemoveMarker(argument->value)) == "0" && fixed_template_parameters &&
+			!fixed_template_parameters->empty() && deduction_pattern.find('*') != string::npos) {
+			map<string, string> null_pointer_substitutions = parameter_substitutions;
+			for(map<string, string>::const_iterator binding = inferred->begin();
+				binding != inferred->end(); ++binding)
+				null_pointer_substitutions[binding->first] = binding->second;
+			string null_pointer_pattern = NormalizeTypeArgument(ReplaceIdentifiers(
+				deduction_pattern, null_pointer_substitutions));
+			null_pointer_pattern = const_cast<PA18TemplateExpander*>(this)->RewriteText(
+				null_pointer_pattern, context, null_pointer_substitutions, 0);
+			null_pointer_pattern = NormalizeTypeArgument(ReplaceIdentifiers(
+				null_pointer_pattern, null_pointer_substitutions));
+			null_pointer_conversion = null_pointer_pattern.find('*') != string::npos &&
+				!HasUnresolvedTemplateParameter(null_pointer_pattern, context,
+					null_pointer_substitutions);
+		}
 		if(inferred_argument && explicit_pack_values) {
 			// Explicit template arguments own this pack.  Ordinary deduction must
 			// not append the same element a second time, but it still has to prove
@@ -1063,7 +1081,7 @@ bool PA18TemplateExpander::InferFunctionParameter(
 			map<string, string> ignored;
 			if(!MatchTypePattern(explicit_pattern, type, explicit_parameter_names,
 				&ignored, context)) return false;
-		} else if(inferred_argument) {
+		} else if(inferred_argument && !null_pointer_conversion) {
 			if(!MergeInferredFunctionArgument(definition, deduction_pattern,
 				deduction_type, signature, parameter_substitutions, context, parameter_names,
 				inferred, inferred_packs, inferred_functions, bound_pack_values,

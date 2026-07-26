@@ -256,6 +256,7 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 		if(!definition.specialization_parameters[i].empty())
 			parameter_names.insert(definition.specialization_parameters[i]);
 	map<string, string> local;
+	vector<pair<string, string> > deferred_decltypes;
 	size_t pattern_index = 0;
 	size_t argument_index = 0;
 	for(; pattern_index < definition.specialization_pattern.size(); ++pattern_index) {
@@ -399,6 +400,19 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 		// failure rejects this partial specialization locally.
 		if(pattern.compare(0, 9, "decltype(") == 0 && pattern.size() > 10 &&
 			pattern[pattern.size() - 1] == ')') {
+			bool defer_decltype = false;
+			for(set<string>::const_iterator parameter = parameter_names.begin();
+				parameter != parameter_names.end(); ++parameter) {
+				const size_t occurrence = pattern.find(*parameter);
+				if(occurrence != string::npos && local.find(*parameter) == local.end()) {
+					defer_decltype = true;
+					break;
+				}
+			}
+			if(defer_decltype) {
+				deferred_decltypes.push_back(make_pair(pattern, actual));
+				continue;
+			}
 			string evaluated;
 			if(!const_cast<PA18TemplateExpander*>(this)->EvaluateDecltypeExpression(
 				pattern.substr(9, pattern.size() - 10), context, local, &evaluated)) return false;
@@ -445,6 +459,14 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 			definition.parameters[argument_index].default_type, local));
 		if(expected != NormalizeTypeArgument(arguments[argument_index])) return false;
 		++argument_index;
+	}
+	for(size_t deferred = 0; deferred < deferred_decltypes.size(); ++deferred) {
+		const string& pattern = deferred_decltypes[deferred].first;
+		string evaluated;
+		if(!const_cast<PA18TemplateExpander*>(this)->EvaluateDecltypeExpression(
+			pattern.substr(9, pattern.size() - 10), context, local, &evaluated)) return false;
+		if(NormalizeTypeArgument(evaluated) !=
+			NormalizeTypeArgument(deferred_decltypes[deferred].second)) return false;
 	}
 	// Alias expansion in a partial-specialization pattern is itself subject to
 	// substitution.  Class and variable template heads are matched by the

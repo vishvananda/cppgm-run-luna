@@ -5,6 +5,121 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
+const TemplateDefinition* PA18TemplateExpander::FindNestedDefinition(
+	const TemplateDefinition& parent, const string& nested_name) const
+{
+	set<string> active;
+	function<const TemplateDefinition*(const TemplateDefinition&)> search;
+	search = [&](const TemplateDefinition& current) -> const TemplateDefinition* {
+		if(!active.insert(current.qualified_name).second) return 0;
+		const TemplateDefinition* fallback = 0;
+		for(map<string, TemplateDefinition>::const_iterator it = definitions_.begin();
+			it != definitions_.end(); ++it) {
+			const TemplateDefinition& candidate = it->second;
+			if(!candidate.class_template && !candidate.alias_template &&
+				!candidate.variable_template) continue;
+			if(candidate.name != nested_name) continue;
+			const size_t angle = candidate.owner.find('<');
+			const string owner_prefix = angle == string::npos ? candidate.owner :
+				candidate.owner.substr(0, angle);
+			if(owner_prefix != current.qualified_name && owner_prefix !=
+				JoinPath(current.qualified_name, current.qualified_name)) continue;
+			if(!fallback) fallback = &candidate;
+			if(candidate.class_template && candidate.declaration &&
+				candidate.declaration->kind == "class-specifier" &&
+				candidate.declaration->children.size() > 1) return &candidate;
+		}
+		if(fallback) return fallback;
+		if(!current.declaration) return static_cast<const TemplateDefinition*>(0);
+		for(size_t child = 0; child < current.declaration->children.size(); ++child) {
+			const CPPGMAstNodePtr clause = current.declaration->children[child];
+			if(!clause || clause->kind != "base-clause") continue;
+			for(size_t base_index = 0; base_index < clause->children.size(); ++base_index) {
+				const CPPGMAstNodePtr base_name = ChildOfKindLocal(
+					clause->children[base_index], "base-name");
+				if(!base_name) continue;
+				string spelling = CanonicalSpelling(RemoveMarker(base_name->value));
+				spelling = CanonicalSpelling(ReplaceIdentifiers(spelling,
+					map<string, string>()));
+				const size_t open = spelling.find('<');
+				if(open != string::npos) spelling.erase(open);
+				const TemplateDefinition* base = FindDefinition(spelling, current.owner);
+				if(!base) base = FindDefinition(LastComponent(spelling), current.owner);
+				if(!base || !base->class_template) continue;
+				const TemplateDefinition* inherited = search(*base);
+				if(inherited) return inherited;
+			}
+		}
+		return static_cast<const TemplateDefinition*>(0);
+	};
+	return search(parent);
+}
+
+bool PA18TemplateExpander::EvaluateVariableTemplateValue(
+	const string& raw, const string& context,
+	const map<string, string>& substitutions, PA19IntegralValue* result)
+{
+	if(!result) return false;
+	const size_t open = raw.find('<');
+	if(open == string::npos || raw.empty() || raw[raw.size() - 1] != '>') return false;
+	string base;
+	size_t begin = 0, close = string::npos;
+	string argument_text;
+	if(!TemplateBase(raw, open, &begin, &base) ||
+		!TemplateRange(raw, open, &argument_text, &close) || close + 1 != raw.size())
+		return false;
+	const TemplateDefinition* primary = FindDefinition(base, context);
+	if(!primary || !primary->variable_template) return false;
+	const vector<string> source_arguments = SplitTemplateArguments(argument_text);
+	vector<string> arguments;
+	for(size_t source = 0; source < source_arguments.size(); ++source) {
+		string argument = CanonicalSpelling(source_arguments[source]);
+		if(argument.size() >= 3 && argument.compare(argument.size() - 3, 3, "...") == 0) {
+			const string pack_name = CanonicalSpelling(argument.substr(0, argument.size() - 3));
+			vector<string> values;
+			map<string, vector<string> >::const_iterator active_pack =
+				active_pack_substitutions_.find(pack_name);
+			if(active_pack != active_pack_substitutions_.end()) values = active_pack->second;
+			if(values.empty()) {
+				map<string, string>::const_iterator scalar = substitutions.find(pack_name);
+				if(scalar != substitutions.end() && scalar->second.find("...") == string::npos)
+					values.push_back(scalar->second);
+			}
+			if(values.empty() && !pack_name.empty()) return false;
+			for(size_t value = 0; value < values.size(); ++value)
+				arguments.push_back(CanonicalSpelling(ReplaceIdentifiers(values[value], substitutions)));
+			continue;
+		}
+		argument = CanonicalSpelling(RemoveMarker(RewriteText(argument, context,
+			substitutions, 0)));
+		argument = CanonicalSpelling(ReplaceIdentifiers(argument, substitutions));
+		arguments.push_back(argument);
+	}
+	if(arguments.empty() && !primary->parameters.empty()) return false;
+	const TemplateDefinition* selected = SelectClassTemplateDefinition(primary, arguments, context);
+	if(!selected) selected = primary;
+	try {
+		const string local_name = Instantiate(*selected, arguments, context, false,
+			0, &substitutions);
+		map<string, PA19IntegralValue>::const_iterator value = constant_values_.find(local_name);
+		if(value != constant_values_.end() && value->second.known) {
+			*result = value->second;
+			return true;
+		}
+		const string qualified = JoinPath(selected->owner, local_name);
+		value = constant_values_.find(qualified);
+		if(value != constant_values_.end() && value->second.known) {
+			*result = value->second;
+			return true;
+		}
+	} catch(const PA18SubstitutionFailure&) {
+		return false;
+	} catch(const logic_error&) {
+		return false;
+	}
+	return false;
+}
+
 bool PA18TemplateExpander::EvaluateLogicalIntegralText(const string& raw,
 	const string& context, const map<string, string>& substitutions,
 	PA19IntegralValue* result)

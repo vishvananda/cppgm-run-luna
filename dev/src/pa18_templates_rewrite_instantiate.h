@@ -108,6 +108,9 @@
 	bool EvaluateMaterializedTemplateValue(const string& raw,
 		const string& context, const map<string, string>& substitutions,
 		PA19IntegralValue* result);
+	bool EvaluateVariableTemplateValue(const string& raw,
+		const string& context, const map<string, string>& substitutions,
+		PA19IntegralValue* result);
 	bool ExpandIntegralValueOperands(const string& raw,
 		const string& context, const map<string, string>& substitutions,
 		PA19IntegralValue* result);
@@ -307,24 +310,7 @@
 		return result;
 	}
 	const TemplateDefinition* FindNestedDefinition(const TemplateDefinition& parent,
-		const string& nested_name) const
-	{
-		const TemplateDefinition* fallback = 0;
-		for(map<string, TemplateDefinition>::const_iterator it = definitions_.begin();
-			it != definitions_.end(); ++it) {
-			const TemplateDefinition& candidate = it->second;
-			if(!candidate.class_template || candidate.name != nested_name) continue;
-			const size_t angle = candidate.owner.find('<');
-			const string owner_prefix = angle == string::npos ? candidate.owner :
-				candidate.owner.substr(0, angle);
-			if(owner_prefix != parent.qualified_name && owner_prefix !=
-				JoinPath(parent.qualified_name, parent.qualified_name)) continue;
-			if(!fallback) fallback = &candidate;
-			if(candidate.declaration && candidate.declaration->kind == "class-specifier" &&
-				candidate.declaration->children.size() > 1) return &candidate;
-		}
-		return fallback;
-	}
+		const string& nested_name) const;
 	vector<const TemplateDefinition*> NestedDefinitions(
 		const TemplateDefinition& parent) const
 	{
@@ -530,6 +516,7 @@
 		const string& nested_name, const string& context)
 	{
 		const TemplateDefinition* nested = FindNestedDefinition(parent, nested_name);
+		if(nested && !nested->class_template) nested = 0;
 		CPPGMAstNodePtr nested_declaration = nested ? nested->declaration : CPPGMAstNodePtr();
 		vector<TemplateParameter> nested_parameters;
 		if(nested) nested_parameters = nested->parameters;
@@ -647,6 +634,9 @@
 		for(set<string>::const_iterator it = requested.begin(); it != requested.end(); ++it)
 			InstantiateNestedClass(parent, parent_args, parent_local_name, *it, context);
 	}
+	bool IsValidFunctionAddressTemplateArgument(const string& raw,
+		const string& expected, const string& context,
+		const map<string, string>& substitutions) const;
 	string ResolveIntegralArgument(const TemplateParameter& parameter,
 		string raw, const string& context, const map<string, string>& substitutions,
 		PA19IntegralValue* typed_result = 0)
@@ -704,6 +694,13 @@
 		bool evaluated = EvaluateIntegralText(raw, context, substitutions, &value);
 		if(!evaluated && EvaluateQualifiedConstantMember(raw, substitutions,
 			&value)) evaluated = true;
+		string expected = RewriteText(parameter.non_type_type, context, substitutions, 0);
+		expected = ResolveAlias(ReplaceIdentifiers(expected, substitutions), context);
+		if(!evaluated && IsValidFunctionAddressTemplateArgument(raw, expected,
+			context, substitutions)) {
+			if(typed_result) *typed_result = PA19IntegralValue();
+			return CanonicalSpelling(raw);
+		}
 		if(!evaluated) {
 			string details = "non-type template argument is not an integral constant: " +
 				parameter.name + "=" + raw + " context=" + context + " substitutions=";
@@ -720,8 +717,6 @@
 			}
 			throw PA18SubstitutionFailure(details);
 		}
-		string expected = RewriteText(parameter.non_type_type, context, substitutions, 0);
-		expected = ResolveAlias(ReplaceIdentifiers(expected, substitutions), context);
 		const PA19IntegralType expected_type = PA19Type(expected);
 		if(expected_type.integral) value = PA19Convert(value, expected_type);
 		if(typed_result) *typed_result = value;

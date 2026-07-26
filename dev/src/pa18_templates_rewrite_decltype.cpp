@@ -5,6 +5,61 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
+bool PA18TemplateExpander::GeneratedFunctionCallResultType(
+	const string& callee, const string& function_context,
+	const map<string, string>& substitutions,
+	const vector<string>& actual_types, string* result)
+{
+	if(!result) return false;
+	string generated_ellipsis_result;
+	for(map<string, vector<CPPGMAstNodePtr> >::const_iterator owner =
+		generated_by_owner_.begin(); owner != generated_by_owner_.end(); ++owner)
+		for(size_t generated = 0; generated < owner->second.size(); ++generated) {
+			const CPPGMAstNodePtr declaration = owner->second[generated];
+			if(!declaration || (declaration->kind != "function-definition" &&
+				declaration->kind != "simple-declaration") ||
+				DeclarationName(declaration) != LastComponent(callee)) continue;
+			const CPPGMAstNodePtr declarator = FunctionDeclarator(declaration);
+			const CPPGMAstNodePtr clause = DescendantOfKind(declarator, "parameter-clause");
+			if(!declarator || !clause) continue;
+			bool has_ellipsis = false;
+			size_t parameter_count = 0;
+			bool viable = true;
+			for(size_t parameter = 0; parameter < clause->children.size(); ++parameter) {
+				const CPPGMAstNodePtr item = clause->children[parameter];
+				if(!item) continue;
+				if(item->kind == "ellipsis") {
+					has_ellipsis = true;
+					continue;
+				}
+				if(item->kind != "parameter-declaration") continue;
+				if(parameter_count >= actual_types.size() || !FunctionArgumentViable(
+					ParameterTypeSpelling(item), actual_types[parameter_count], function_context)) {
+					viable = false;
+					break;
+				}
+				++parameter_count;
+			}
+			if(!viable || (!has_ellipsis && parameter_count != actual_types.size()) ||
+				(has_ellipsis && parameter_count > actual_types.size())) continue;
+			string generated_result = NodeTypeSpelling(declaration->children.empty() ?
+				CPPGMAstNodePtr() : declaration->children[0]) + DeclaratorSuffix(declarator);
+			generated_result = RewriteText(generated_result, function_context,
+				substitutions, 0);
+			generated_result = NormalizeTypeArgument(ResolveAlias(
+				ReplaceIdentifiers(generated_result, substitutions), function_context));
+			if(generated_result.empty()) continue;
+			if(!has_ellipsis) {
+				*result = generated_result;
+				return true;
+			}
+			if(generated_ellipsis_result.empty()) generated_ellipsis_result = generated_result;
+		}
+	if(generated_ellipsis_result.empty()) return false;
+	*result = generated_ellipsis_result;
+	return true;
+}
+
 string PA18TemplateExpander::FunctionArgumentObjectType(string raw,
 	const string& context) const
 {

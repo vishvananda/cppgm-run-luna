@@ -277,9 +277,8 @@ vector<const TemplateDefinition*> PA18TemplateExpander::MemberDefinitions(
 		PA19IntegralValue value;
 		const CPPGMAstNodePtr expression = initializer->children[0];
 		const string expression_text = ConstantExpressionSpelling(expression);
-		// Leave dependent primary-template initializers for replay in their scope.
-		if(!HasReplayContext(substitutions) && expression_text.find("decltype(") != string::npos)
-			continue;
+		if(!HasReplayContext(substitutions) && HasUnresolvedTemplateParameter(expression_text, context, substitutions)) continue;
+		if(!HasReplayContext(substitutions) && expression_text.find("decltype(") != string::npos) continue;
 		if(!EvaluateIntegralText(expression_text, context, substitutions, &value)) continue;
 		const bool size_expression = ContainsSizeOrAlignExpression(expression);
 		if(size_expression &&
@@ -815,6 +814,7 @@ bool PA18TemplateExpander::EvaluateIntegralTextSpecialForms(const string& raw,
 	const string& context, const map<string, string>& substitutions,
 	PA19IntegralValue* result)
 {
+	if(EvaluateVariableTemplateValue(raw, context, substitutions, result)) return true;
 	if(raw.find('<') != string::npos) {
 		const string rewritten = CanonicalSpelling(RemoveMarker(
 			RewriteText(raw, context, substitutions, 0)));

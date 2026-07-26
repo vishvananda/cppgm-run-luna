@@ -32,6 +32,86 @@ string PA18TemplateExpander::FunctionPointerAliasSpelling(const string& spelling
 	return matching_alias.empty() ? result : matching_alias + "*";
 }
 
+bool PA18TemplateExpander::IsValidFunctionAddressTemplateArgument(
+	const string& raw, const string& expected, const string& context,
+	const map<string, string>& substitutions) const
+{
+	string address = CanonicalSpelling(ReplaceIdentifiers(raw, substitutions));
+	if(address.size() < 4 || address[0] != '&') return false;
+	const size_t separator = address.rfind("::");
+	if(separator == string::npos || separator + 2 >= address.size()) return false;
+	string owner = CanonicalSpelling(ResolveAlias(address.substr(1, separator - 1), context));
+	const string member = LastComponent(address.substr(separator + 2));
+	map<string, string>::const_iterator owner_base = specialization_bases_.find(LastComponent(owner));
+	map<string, vector<string> >::const_iterator owner_arguments =
+		specialization_arguments_.find(LastComponent(owner));
+	string expected_result;
+	vector<string> expected_parameters;
+	if(!SplitFunctionPointerType(expected, &expected_result, &expected_parameters)) return false;
+	const vector<const TemplateDefinition*> candidates = FindFunctionDefinitions(member, owner);
+	for(size_t candidate = 0; candidate < candidates.size(); ++candidate) {
+		if(!candidates[candidate] || candidates[candidate]->class_template) continue;
+		vector<string> arguments;
+		string source_expected = RestoreSpecializationSpelling(expected);
+		const CPPGMAstNodePtr candidate_declarator = FunctionDeclarator(
+			candidates[candidate]->declaration);
+		if(owner_base != specialization_bases_.end() &&
+			owner_arguments != specialization_arguments_.end()) {
+			string source_owner = owner_base->second + "<";
+			for(size_t argument = 0; argument < owner_arguments->second.size(); ++argument) {
+				if(argument) source_owner += ", ";
+				source_owner += RestoreSpecializationSpelling(owner_arguments->second[argument]);
+			}
+			source_owner += ">";
+			string candidate_result;
+			vector<string> candidate_parameters;
+			if(candidate_declarator && !candidates[candidate]->declaration->children.empty()) {
+				candidate_result = NodeTypeSpelling(candidates[candidate]->declaration->children[0]) +
+					DeclaratorSuffix(candidate_declarator);
+				const CPPGMAstNodePtr clause = DescendantOfKind(candidate_declarator,
+					"parameter-clause");
+				if(clause) for(size_t parameter = 0; parameter < clause->children.size(); ++parameter)
+					if(clause->children[parameter] && clause->children[parameter]->kind ==
+						"parameter-declaration") candidate_parameters.push_back(
+						ParameterTypeSpelling(clause->children[parameter]));
+			}
+			if(CanonicalSpelling(candidate_result) == LastComponent(owner_base->second))
+				candidate_result = source_owner;
+			set<string> parameter_names;
+			for(size_t parameter = 0; parameter < candidates[candidate]->parameters.size(); ++parameter)
+				if(!candidates[candidate]->parameters[parameter].name.empty())
+					parameter_names.insert(candidates[candidate]->parameters[parameter].name);
+			map<string, string> inferred;
+			string source_result;
+			vector<string> source_parameters;
+			if(SplitFunctionPointerType(source_expected, &source_result, &source_parameters) &&
+				candidate_parameters.size() == source_parameters.size() &&
+				MatchTypePattern(candidate_result, source_result, parameter_names, &inferred, context)) {
+				bool matched = true;
+				for(size_t parameter = 0; parameter < candidate_parameters.size(); ++parameter)
+					if(!MatchTypePattern(candidate_parameters[parameter], source_parameters[parameter],
+						parameter_names, &inferred, context)) {
+						matched = false;
+						break;
+					}
+				if(matched) for(size_t parameter = 0; parameter < candidates[candidate]->parameters.size(); ++parameter) {
+					const TemplateParameter& formal = candidates[candidate]->parameters[parameter];
+					if(formal.name.empty() || inferred.find(formal.name) != inferred.end() ||
+						!formal.default_type.empty()) continue;
+					matched = false;
+					break;
+				}
+				if(matched) return true;
+			}
+		}
+		if((InferFunctionFromExpected(*candidates[candidate], expected, &arguments, context) ||
+			InferFunctionFromExpected(*candidates[candidate], source_expected, &arguments, context))) {
+			return true;
+		}
+	}
+	return false;
+}
+
 void PA18TemplateExpander::ResolveTemplateArguments(const TemplateDefinition& definition,
 	const vector<string>& raw_args, const string& context,
 	vector<string>* args, vector<string>* metadata_args,
