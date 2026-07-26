@@ -16,6 +16,8 @@ bool MatchClassSpecializationPattern(const TemplateDefinition& definition,
 	const string& context) const;
 bool MatchTypePattern(string pattern, string actual,
 		const set<string>& parameter_names, map<string, string>* inferred, const string& context, bool class_pattern = false) const;
+	bool MatchForwardingReferencePattern(const string& pattern, const string& actual,
+		const set<string>& parameter_names, map<string, string>* inferred) const;
 	bool MatchNestedFunctionPointerPattern(const string& pattern, const string& actual,
 		const set<string>& parameter_names, map<string, string>* inferred,
 		const string& context, bool class_pattern) const;
@@ -989,6 +991,9 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 		const CPPGMAstNodePtr parameter_specs = parameter->children.empty() ?
 			CPPGMAstNodePtr() : parameter->children[0];
 		if(!parameter_specs || parameter_specs->children.empty()) return;
+		const CPPGMAstNodePtr declaration_specs = ChildOfKindLocal(input,
+			"decl-specifier-seq");
+		if(declaration_specs && HasFriendSpecifier(declaration_specs)) return;
 		const string raw_type = RemoveMarker(parameter_specs->children[0]->value);
 		const size_t open = raw_type.find('<');
 		if(open == string::npos) return;
@@ -999,8 +1004,15 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 		if(!TemplateBase(raw_type, open, &begin, &base) ||
 			!TemplateRange(raw_type, open, &arguments, &close) ||
 			!FindDefinition(base, context)) return;
-		const string callee = RewriteText(raw_type, context, substitutions, 0);
-		if(callee.empty() || callee == raw_type) return;
+		const TemplateDefinition* callee_definition = FindDefinition(base, context);
+		// The parser represents a direct-initializer such as `Wrapper w(get<0>(t))`
+		// as a synthetic parameter-declaration.  Keep a function template-id in
+		// source spelling until the synthetic call below can use its argument for
+		// deduction; RewriteText only has the explicit prefix (`0`) at this point
+		// and would incorrectly materialize `get<0>` without the deduced type pack.
+		const string callee = callee_definition && !callee_definition->class_template ?
+			raw_type : RewriteText(raw_type, context, substitutions, 0);
+		if(callee.empty()) return;
 		string argument_name = FirstIdentifierLocal(parameter->children.size() > 1 ?
 			parameter->children[1] : CPPGMAstNodePtr());
 		if(argument_name.empty()) return;
@@ -1036,6 +1048,9 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 		const string& context, const map<string, string>& substitutions,
 		const CPPGMAstNodePtr& result, const string& promoted_local_class,
 		bool defer_type_only_classes = false);
+	bool ConsumeMaterializedStaticAssert(const CPPGMAstNodePtr& input,
+		const CPPGMAstNodePtr& result, const string& context,
+		const map<string, string>& substitutions);
 	bool TransformExplicitSpecialization(const CPPGMAstNodePtr& input,
 		const string& context, const map<string, string>& substitutions);
 	void CheckExplicitSpecializationOrder(const CPPGMAstNodePtr& input,

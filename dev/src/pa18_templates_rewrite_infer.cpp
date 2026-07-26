@@ -515,8 +515,11 @@ bool PA18TemplateExpander::InferCallIdentifierArgument(
 			const CPPGMAstNodePtr declarator = FunctionDeclarator(definition->declaration);
 			string return_type = NodeTypeSpelling(definition->declaration->children[0]) +
 				DeclaratorSuffix(declarator);
-			*result = CollapseReferenceSpelling(ReplaceIdentifiers(
-				return_type, function_substitutions));
+			string resolved_return = ReplaceIdentifiers(return_type,
+				function_substitutions);
+			resolved_return = const_cast<PA18TemplateExpander*>(this)->RewriteText(
+				resolved_return, context, function_substitutions, 0);
+			*result = CanonicalSpelling(ResolveAlias(resolved_return, context));
 			if(!result->empty()) return true;
 		}
 	}
@@ -1086,7 +1089,8 @@ bool PA18TemplateExpander::InferFunctionParameter(
 		if(inferred_argument && pattern.size() > 2 && pattern.compare(pattern.size() - 2, 2, "&&") == 0 &&
 			argument && (argument->kind == "id-expression" || argument->kind == "member-expression" ||
 				argument->kind == "subscript-expression") && !enumerator_prvalue) {
-			if(type.empty() || type[type.size() - 1] != '&') type = CanonicalSpelling(type + "&");
+			while(!type.empty() && type[type.size() - 1] == '&') type.erase(type.size() - 1);
+			type = CanonicalSpelling(type + "&");
 			// Forwarding-reference deduction changes the typed argument used for
 			// merging, not just the later replay fact.  Recompute the normalized
 			// spelling after adding the lvalue reference so `T&&` with an lvalue
@@ -1124,11 +1128,11 @@ bool PA18TemplateExpander::InferFunctionParameter(
 			map<string, string> ignored;
 			if(!MatchTypePattern(explicit_pattern, type, explicit_parameter_names,
 				&ignored, context)) return false;
-		} else if(inferred_argument &&
-			!MergeInferredFunctionArgument(definition, deduction_pattern, deduction_type, signature,
+		} else if(inferred_argument) {
+			if(!MergeInferredFunctionArgument(definition, deduction_pattern, deduction_type, signature,
 				parameter_substitutions, context, parameter_names, inferred, inferred_packs,
-				inferred_functions, bound_pack_values, fixed_template_parameters)) {
-			return false;
+				inferred_functions, bound_pack_values, fixed_template_parameters))
+				return false;
 		}
 		++*argument_index;
 	}

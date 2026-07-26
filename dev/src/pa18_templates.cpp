@@ -1442,6 +1442,20 @@ void PA18TemplateExpander::CollectVariables(const CPPGMAstNodePtr& node,
 				const string name = FirstIdentifierLocal(parameter->children[1]);
 				if(!name.empty()) {
 					const string type = ParameterTypeSpelling(parameter);
+					// A class direct-initializer is parsed as a synthetic
+					// parameter-clause (`Wrapper w(get<0>(t))`).  Its `t` is an
+					// expression, not a declaration whose type is `get<0>`; do not
+					// let that temporary spelling overwrite the real variable type
+					// collected from the surrounding declaration.
+					const size_t template_open = type.find('<');
+					string template_base, template_arguments;
+					size_t template_close = string::npos;
+					const bool function_template_expression = template_open != string::npos &&
+						TemplateBase(type, template_open, 0, &template_base) &&
+						TemplateRange(type, template_open, &template_arguments, &template_close) &&
+						FindDefinition(template_base, context) &&
+						!FindDefinition(template_base, context)->class_template;
+					if(function_template_expression) continue;
 					variable_types_[name] = type;
 					function_parameter_types_[JoinPath(context, DeclarationName(node))][name] = type;
 				}

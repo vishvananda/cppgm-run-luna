@@ -863,6 +863,10 @@ string PA18TemplateExpander::Instantiate(const TemplateDefinition& definition,
 	const map<string, vector<string> >* forwarding_pack_hints,
 	bool defer_class_definition)
 {
+	if(definition.class_template)
+		for(size_t argument = 0; argument < raw_args.size(); ++argument)
+			if(raw_args[argument].find("...") != string::npos)
+				throw PA18SubstitutionFailure("dependent template pack argument");
 	if(definition.parameters.empty()) throw logic_error("template has no type parameters");
 	vector<string> args, metadata_args;
 	map<string, string> substitutions = outer_substitutions ? *outer_substitutions :

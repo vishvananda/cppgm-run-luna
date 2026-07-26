@@ -643,13 +643,8 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 			}
 			if(!removed) break;
 		}
-		if(forwarding_reference_parameter) {
-			const string base = CanonicalSpelling(pattern.substr(0, pattern.size() - 2));
-			if(parameter_names.find(base) != parameter_names.end()) {
-				(*inferred)[base] = actual;
-				return true;
-			}
-		}
+		if(forwarding_reference_parameter && MatchForwardingReferencePattern(
+			pattern, actual, parameter_names, inferred)) return true;
 		while(!pattern.empty() && pattern[pattern.size() - 1] == '&')
 			pattern.erase(pattern.size() - 1);
 		while(!actual.empty() && actual[actual.size() - 1] == '&')
@@ -1327,6 +1322,8 @@ CPPGMAstNodePtr PA18TemplateExpander::FinishRegularNode(
 		map<string, string> local_substitutions = substitutions;
 		struct TypeOnlyScope { size_t& depth; const size_t saved; TypeOnlyScope(size_t& d, bool active) : depth(d), saved(d) { if(active) ++depth; } ~TypeOnlyScope() { depth = saved; } } type_only_scope(defer_type_only_class_definitions_, defer_type_only_classes);
 		TransformRegularChildren(input, child_context, function_context, substitutions, &local_substitutions, result);
+		if(ConsumeMaterializedStaticAssert(input, result, child_context,
+			local_substitutions)) return CPPGMAstNodePtr();
 		if(input->kind == "array-suffix" && !result->children.empty() && result->children[0]) { PA19IntegralValue bound;
 			if(EvaluateIntegralText(ConstantExpressionSpelling(result->children[0]), child_context, local_substitutions, &bound))
 				result->children[0] = CPPGMAstNodePtr(new CPPGMAstNode("literal", IntegralValueSpelling(bound)));

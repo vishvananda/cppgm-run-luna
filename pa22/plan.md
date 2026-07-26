@@ -1907,6 +1907,42 @@ SFINAE rejection and must not hardcode any callee or return value.
 Validation for this checkpoint covers the three focused fixtures, the full
 PA22 report, through-PA21, and the PA22 source audit.
 
+## Checkpoint 85 result and next scope — 2026-07-26
+
+The selected pack/forwarding slice is implemented.  Empty type-pack static
+assertions now disappear after a known-true materialization, type-pack
+element results retain their concrete copy-constructor type, and forwarding
+references deduce the underlying rvalue type or the lvalue reference type as
+appropriate.  Dependent `remove_reference_t` return types are rewritten from
+typed substitutions, function-template expressions in synthetic direct
+initializers are replayed through call deduction, and constructor
+mem-initializers materialize selected member-template constructors.  The
+materialized static-assert check is owned by the rewrite-helper module so the
+source-size audit remains within its limit.  Friend declarations are excluded
+from synthetic-initializer rewriting, preserving the PA21 friend-access path.
+
+The required PA22 report is **145/250**, up from the turn-start **110/250**;
+the residual set is **105** fixtures, including one timeout.  Its grouped
+remaining map is: general/100 **8**, general/200 **4**, general/300 **26**,
+general/400 **15**, general/500 **23**, spec/100 **5**, spec/200 **7**,
+spec/300 **6**, spec/400 **2**, and spec/500 **9**.  The remaining behaviors
+are primarily explicit/defaulted deduction and LowIR parity in general/100,
+partial ordering and constructor ranking in general/200, dependent
+substitution/SFINAE and deferred lookup in general/300, and alias, owner,
+conversion, pack, and typed-NTTP replay in the 400/500 and spec bands.
+
+Validation completed: the three focused PA22 fixtures and the PA21 friend
+fixture compile successfully; `make test-report ACTIVE_TEST_REPORT_PAS='pa22'`
+reports 145/250; `make test-report-through-pa21` passes **1850/1850**; and
+`perl scripts/cppgm_file_audit.pl --stage pa22 --paths dev/src` passes with
+the repository's existing warnings.
+
+Next checkpoint scope: bundle the remaining **general/100 + general/200
+(12-fixture)** deduction and overload-ordering group.  Preserve typed
+top-level cv/array/default and pack deduction while making partial ordering,
+ambiguity, and constructor ranking use the same candidate facts; validate the
+focused group, the full PA22 report, through-PA21, and the source audit.
+
 ## Checkpoint 82 result and next scope — 2026-07-25
 
 The checkpoint implementation passed all three focused fixtures and raised
@@ -2042,3 +2078,24 @@ normalization group, beginning with dependent remove-reference forwarding,
 top-level-cv function-pointer deduction, empty-pack/static-assert expansion,
 and concrete type-pack element replay.  Validate focused comparisons, the
 full PA22 report, through-PA21, and the source audit.
+
+## Checkpoint 85 scope — 2026-07-26 (before implementation)
+
+The current report was refreshed from the clean checkpoint and remains
+**142/250**, with **108** failures: general/100 **11**, general/200 **4**,
+general/300 **26**, general/400 **15**, general/500 **23**, spec/100 **5**,
+spec/200 **7**, spec/300 **6**, spec/400 **2**, and spec/500 **9**.  The
+complete names are in the report-derived residual set; the general/100 names
+are the immediate shared call-deduction band.
+
+Selected scope: repair typed pack and forwarding replay for
+`general/100-empty-pack-static-assert-trait-expansion`,
+`general/100-type-pack-element-result-selects-copy-ctor`, and
+`general/100-dependent-remove-reference-transform-forwarding`.  These cases
+share empty type-pack bindings, pack-element specialization replay, and
+forwarding-reference substitution through `remove_reference_t`; the scope
+covers deduction, dependent return/type rewriting, static-assert expansion,
+and aggregate/copy construction without hardcoding any fixture symbols.
+
+Validation for this checkpoint covers the three focused fixtures, the full
+PA22 report, through-PA21, and the PA22 source audit.

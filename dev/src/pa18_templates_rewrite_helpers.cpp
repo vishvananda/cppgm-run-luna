@@ -3,6 +3,33 @@
 
 namespace pa18_templates_internal {
 
+bool PA18TemplateExpander::MatchForwardingReferencePattern(const string& pattern,
+	const string& actual, const set<string>& parameter_names,
+	map<string, string>* inferred) const
+{
+	const string base = CanonicalSpelling(pattern.substr(0, pattern.size() - 2));
+	if(parameter_names.find(base) == parameter_names.end()) return false;
+	string deduced = actual;
+	if(deduced.size() > 1 && deduced.compare(deduced.size() - 2, 2, "&&") == 0)
+		deduced = CanonicalSpelling(deduced.substr(0, deduced.size() - 2));
+	(*inferred)[base] = deduced;
+	return true;
+}
+
+bool PA18TemplateExpander::ConsumeMaterializedStaticAssert(
+	const CPPGMAstNodePtr& input, const CPPGMAstNodePtr& result,
+	const string& context, const map<string, string>& substitutions)
+{
+	if(!input || input->kind != "static-assert-declaration" ||
+		active_instantiation_name_.empty() || !result || result->children.empty()) return false;
+	PA19IntegralValue value;
+	const bool evaluated = EvaluateIntegralText(ConstantExpressionSpelling(
+		result->children[0]), context, substitutions, &value);
+	if(!evaluated || !value.known) return false;
+	if(PA19Raw(value) == 0) throw logic_error("static assertion failed");
+	return true;
+}
+
 string PA18TemplateExpander::PromotedLocalClass(const string& name,
 	const string& context) const
 {

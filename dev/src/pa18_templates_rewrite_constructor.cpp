@@ -22,7 +22,56 @@ void PA18TemplateExpander::MaterializeInitializerConstructor(
 	const CPPGMAstNodePtr& input, const CPPGMAstNodePtr& result,
 	const string& context, const map<string, string>& substitutions)
 {
-	if(!input || !result || input->kind != "simple-declaration") return;
+	if(!input || !result) return;
+	if(input->kind == "special-member-definition") {
+		// A constructor mem-initializer is the same semantic event as a direct
+		// initializer, but the parser keeps it under `ctor-initializer` instead
+		// of a simple-declaration.  Materialize member-template constructors here
+		// so the lowering pass can emit the selected forwarding constructor body.
+		const CPPGMAstNodePtr original_ctor = ChildOfKindLocal(input,
+			"ctor-initializer");
+		const CPPGMAstNodePtr transformed_ctor = ChildOfKindLocal(result,
+			"ctor-initializer");
+		if(!original_ctor || !transformed_ctor) return;
+		for(size_t initializer = 0; initializer < original_ctor->children.size();
+			++initializer) {
+			const CPPGMAstNodePtr original_member = original_ctor->children[initializer];
+			const CPPGMAstNodePtr transformed_member = initializer <
+				transformed_ctor->children.size() ? transformed_ctor->children[initializer] :
+				CPPGMAstNodePtr();
+			if(!original_member || !transformed_member ||
+				original_member->kind != "mem-initializer" ||
+				transformed_member->kind != "mem-initializer") continue;
+			const CPPGMAstNodePtr member_id = ChildOfKindLocal(original_member,
+				"mem-initializer-id");
+			if(!member_id || member_id->value.empty()) continue;
+			const CPPGMAstNodePtr transformed_arguments = ChildOfKindLocal(
+				transformed_member, "paren-argument-list");
+			if(!transformed_arguments) continue;
+			string member_type;
+			set<string> active;
+			if(!FindClassMemberType(context, LastComponent(member_id->value),
+				substitutions, context, &member_type, &active)) continue;
+			member_type = CanonicalSpelling(ResolveAlias(RewriteText(member_type,
+				context, substitutions, 0), context));
+			if(member_type.empty() || !FindClassDeclaration(member_type, context)) continue;
+			CPPGMAstNodePtr object(new CPPGMAstNode("id-expression"));
+			object->inferred_type = member_type;
+			CPPGMAstNodePtr member(new CPPGMAstNode("member-expression", "."));
+			member->children.push_back(object);
+			member->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
+				"identifier", LastComponent(member_type))));
+			CPPGMAstNodePtr call(new CPPGMAstNode("call-expression"));
+			call->children.push_back(member);
+			CPPGMAstNodePtr arguments(new CPPGMAstNode("argument-list"));
+			arguments->children = transformed_arguments->children;
+			call->children.push_back(arguments);
+			InstantiateMemberCall(call, member, LastComponent(member_type), context,
+				substitutions);
+		}
+		return;
+	}
+	if(input->kind != "simple-declaration") return;
 	const CPPGMAstNodePtr original_list = ChildOfKindLocal(input,
 		"init-declarator-list");
 	const CPPGMAstNodePtr transformed_list = ChildOfKindLocal(result,

@@ -885,11 +885,21 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				bool unresolved_type_argument = false;
 				for(size_t i = 0; i < args.size() && i < definition->parameters.size(); ++i)
 					if(definition->parameters[i].type &&
-						HasUnresolvedTemplateParameter(args[i], context, substitutions)) {
+						(args[i].find("...") != string::npos ||
+							HasUnresolvedTemplateParameter(args[i], context, substitutions))) {
 						unresolved_type_argument = true;
 						break;
 					}
 				if(unresolved_type_argument) {
+					search = close + 1;
+					continue;
+				}
+				// An explicit function-template prefix is not a complete function
+				// specialization.  The remaining parameters are deduced from the call
+				// argument (including a type pack such as `get<0>(tuple<T...>&)`), so
+				// preserve the template-id for the call replay instead of registering
+				// a declaration with only the explicit prefix bound.
+				if(!definition->class_template && args.size() < definition->parameters.size()) {
 					search = close + 1;
 					continue;
 				}
