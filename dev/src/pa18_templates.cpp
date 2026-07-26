@@ -1,6 +1,5 @@
 #include "pa18_templates_collection.h"
 #include "pa18_templates_rewrite.h"
-
 #include <functional>
 
 using namespace pa18_templates_internal;
@@ -1093,7 +1092,8 @@ void PA18TemplateExpander::InsertGenerated(vector<CPPGMAstNodePtr>* children,
 		if(generated->kind == "class-specifier" ||
 			generated->kind == "class-forward-declaration" ||
 			generated->kind == "alias-declaration") generated_classes.push_back(generated);
-		else if(generated->kind == "simple-declaration") generated_variables.push_back(generated);
+		else if(generated->kind == "simple-declaration" &&
+			!DescendantOfKind(generated, "parameter-clause")) generated_variables.push_back(generated);
 		else generated_functions.push_back(generated);
 	}
 	generated_classes = OrderGeneratedClasses(generated_classes);
@@ -1131,6 +1131,11 @@ void PA18TemplateExpander::InsertGenerated(vector<CPPGMAstNodePtr>* children,
 		for(size_t child = 0; child < children->size(); ++child) {
 			const CPPGMAstNodePtr& source = (*children)[child];
 			if(!source) continue;
+			if(source->kind == "namespace-definition") {
+				vector<CPPGMAstNodePtr> source_dependency(1, source);
+				if(MentionsGeneratedLayoutClass(generated, source_dependency))
+					positions[i] = max(positions[i], child + 1);
+			}
 			const bool generated_forward =
 				source->kind == "class-forward-declaration" &&
 				generated_names.find(source->value) != generated_names.end();

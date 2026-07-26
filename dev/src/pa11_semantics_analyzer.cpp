@@ -134,7 +134,29 @@ TypePtr Analyzer::ResolveType(Scope* from, const string& raw) const
 	Binding* binding = ResolveBinding(from, name);
 	if (!binding || (binding->kind != BIND_TYPE &&
 		binding->kind != BIND_TYPE_ALIAS) || !AccessibleType(*binding, from))
+	{
+		// A transformed alias can retain only a concrete specialization of a
+		// class primary in the namespace scope.  Recover the primary from that
+		// typed specialization instead of creating an unrelated incomplete type.
+		if (!binding && name.find("::") != string::npos) {
+			const size_t separator = name.rfind("::");
+			PathTarget owner = ResolvePath(from, name.substr(0, separator));
+			Scope* owner_scope = owner.scope;
+			if (!owner_scope && owner.binding) owner_scope = ScopeForType(owner.binding->type);
+			const string requested = LastComponent(name.substr(separator + 2));
+			if (owner_scope) for (size_t i = 0; i < owner_scope->bindings.size(); ++i) {
+				const Binding& candidate = owner_scope->bindings[i];
+				TypePtr type = candidate.type;
+				if ((candidate.kind != BIND_TYPE && candidate.kind != BIND_TYPE_ALIAS) || !type)
+					continue;
+				if (type->kind == TYPE_CLASS &&
+					(LastComponent(type->name) == requested ||
+					 LastComponent(type->template_primary) == requested))
+					return type;
+			}
+		}
 		throw logic_error("unknown type: " + raw);
+	}
 	return binding->type;
 }
 

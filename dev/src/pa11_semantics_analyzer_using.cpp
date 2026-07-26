@@ -30,6 +30,20 @@ void Analyzer::ProcessUsingDeclaration(const CPPGMAstNodePtr& node, Scope* scope
 					owner_scope->bindings[i].name.compare(0, generated_prefix.size(), generated_prefix) == 0)
 					targets.push_back(&owner_scope->bindings[i]);
 		}
+		// PA18 renames a materialized class and its constructor together.  The
+		// source using-id still names the primary constructor (`Base::Base`),
+		// while the concrete owner scope contains `Base_args_::Base_args_`.
+		// Treat that typed owner identity as the constructor declaration.
+		if (targets.empty() && owner_scope && owner_scope->owner_type) {
+			const string concrete_constructor = LastComponent(
+				owner_scope->owner_type->name);
+			for (size_t i = 0; i < owner_scope->bindings.size(); ++i)
+				if (owner_scope->bindings[i].kind == BIND_FUNCTION &&
+					owner_scope->bindings[i].name == concrete_constructor) {
+					targets.push_back(&owner_scope->bindings[i]);
+					break;
+				}
+		}
 		if (owner_scope)
 			for (size_t child_index = 0; child_index < owner_scope->children.size(); ++child_index)
 			{
@@ -38,8 +52,21 @@ void Analyzer::ProcessUsingDeclaration(const CPPGMAstNodePtr& node, Scope* scope
 				for (size_t i = 0; i < child->bindings.size(); ++i)
 					if (child->bindings[i].name == LastComponent(target_name) &&
 						child->bindings[i].kind == BIND_FUNCTION)
-						targets.push_back(&child->bindings[i]);
-			}
+							targets.push_back(&child->bindings[i]);
+				}
+		// A using-declaration may name a member inherited from the direct base.
+		// Generated template classes commonly spell this through the concrete
+		// derived owner (`relay_int_::get`) even though the declaration is retained
+		// in `base_impl_false__int_`'s typed scope.
+		if (targets.empty() && owner_scope && owner_scope->owner_type)
+			for (TypePtr base = owner_scope->owner_type->direct_base; base &&
+				targets.empty(); base = base->direct_base)
+				if (base->owned_scope)
+					for (size_t i = 0; i < base->owned_scope->bindings.size(); ++i)
+						if (base->owned_scope->bindings[i].name == LastComponent(target_name)) {
+							targets.push_back(&base->owned_scope->bindings[i]);
+							break;
+						}
 	}
 	if (targets.empty()) {
 		Binding* target = ResolveBinding(scope, target_name);
@@ -61,7 +88,8 @@ void Analyzer::ProcessUsingDeclaration(const CPPGMAstNodePtr& node, Scope* scope
 		const bool materialized_target = imported.name.compare(0, generated_prefix.size(), generated_prefix) == 0;
 		const bool constructor_target = imported.kind == BIND_FUNCTION &&
 			scope && scope->kind == SCOPE_CLASS && scope->owner_type &&
-			!target_owner_name.empty() && LastComponent(target_name) == target_owner_name;
+			!target_owner_name.empty() && (LastComponent(target_name) == target_owner_name ||
+				imported.name == target_owner_name);
 		imported.name = constructor_target ? LastComponent(scope->owner_type->name) :
 			materialized_target ? imported.name : LastComponent(target_name);
 		// Scope::add preserves an already-qualified binding name.  An imported

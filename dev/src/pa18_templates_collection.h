@@ -12,7 +12,6 @@
 #include <utility>
 using namespace std;
 namespace pa18_templates_internal {
-
 class PA18SubstitutionFailure : public logic_error { public: explicit PA18SubstitutionFailure(const string& message) : logic_error(message) {} };
 inline bool IsIdentifierCharacter(char ch)
 {
@@ -607,7 +606,7 @@ private:
 		const CPPGMAstNodePtr& callee, const string& original_member,
 		const string& context,
 		const map<string, string>& substitutions,
-		bool explicit_instantiation = false); int MemberTemplatePatternScore(const TemplateDefinition* candidate) const; void RestoreMemberTemplateDefaults(const string& member_name, const TemplateDefinition& definition, TemplateDefinition* result) const; bool ContainsSubstitutionIdentifier(const string& text, const map<string, string>& substitutions) const; bool FunctionTemplateMoreSpecialized(const TemplateDefinition& lhs, const TemplateDefinition& rhs, const string& context) const; bool PreserveFunctionLookupOrder(const vector<const TemplateDefinition*>& definitions, const string& context, const map<string, string>& substitutions) const; void SortFunctionTemplateCandidates(vector<const TemplateDefinition*>* candidates, const string& context) const; void RankFunctionTemplateCandidatesForCall(vector<const TemplateDefinition*>* candidates, const CPPGMAstNodePtr& call, const string& context, const map<string, string>& substitutions) const;
+		bool explicit_instantiation = false); int MemberTemplatePatternScore(const TemplateDefinition* candidate) const; void RestoreMemberTemplateDefaults(const string& member_name, const TemplateDefinition& definition, TemplateDefinition* result) const; bool ContainsSubstitutionIdentifier(const string& text, const map<string, string>& substitutions) const; bool FunctionTemplateCvPointerTie(const TemplateDefinition& lhs, const TemplateDefinition& rhs) const; bool FunctionTemplateMoreSpecialized(const TemplateDefinition& lhs, const TemplateDefinition& rhs, const string& context) const; bool PreserveFunctionLookupOrder(const vector<const TemplateDefinition*>& definitions, const string& context, const map<string, string>& substitutions) const; void SortFunctionTemplateCandidates(vector<const TemplateDefinition*>* candidates, const string& context) const; void RankFunctionTemplateCandidatesForCall(vector<const TemplateDefinition*>* candidates, const CPPGMAstNodePtr& call, const string& context, const map<string, string>& substitutions) const;
 	void RankMemberCandidatesByClassExactness(vector<const TemplateDefinition*>* candidates, const CPPGMAstNodePtr& call, const map<string, string>& substitutions, const string& context);
 	bool TransformQualifiedMemberTemplateCall(const CPPGMAstNodePtr& input,
 		const CPPGMAstNodePtr& input_callee, const string& context,
@@ -1077,9 +1076,10 @@ private:
 	}
 	void IndexConstantMembers(const CPPGMAstNodePtr& node, const string& owner); void IndexStaticMembers(const CPPGMAstNodePtr& node, set<string>& members) const; void IndexUsingDirectiveDefinition(const TemplateDefinition& definition, const string& key);
 	bool HasStaticMember(const TemplateDefinition* definition, const string& owner, const string& name) const;
-	void Collect(const CPPGMAstNodePtr& node, const string& context)
+	void Collect(const CPPGMAstNodePtr& node, const string& context, bool type_reference = false)
 	{
 		if(!node) return;
+		const bool elaborated_type_reference = type_reference && node->kind == "class-forward-declaration";
 		if(node->kind == "using-declaration") { const CPPGMAstNodePtr target = ChildOfKindLocal(node, "target"); if(target) { const string target_name = RemoveMarker(target->value); if(!target_name.empty() && target_name.find("::") != string::npos) pending_using_declarations_[context].push_back(target_name); if(class_contexts_.find(context) != class_contexts_.end()) using_member_template_names_.insert(LastComponent(target_name)); } }
 		if(node->kind == "translation-unit") {
 			for(size_t i = 0; i < node->children.size(); ++i) Collect(node->children[i], context);
@@ -1153,7 +1153,7 @@ private:
 			}
 		}
 		string next_context = context;
-		if(node->kind == "class-specifier" || node->kind == "class-forward-declaration") {
+		if(!elaborated_type_reference && (node->kind == "class-specifier" || node->kind == "class-forward-declaration")) {
 			const string class_name = LastComponent(node->value);
 			next_context = JoinPath(context, class_name);
 			class_declarations_[next_context] = node;
@@ -1175,8 +1175,8 @@ private:
 		}
 		if(node->kind == "enum-specifier" && !node->value.empty())
 			named_type_contexts_.insert(JoinPath(context, LastComponent(node->value)));
-		for(size_t i = 0; i < node->children.size(); ++i) Collect(node->children[i], next_context);
-		if(node->kind == "class-specifier" || node->kind == "class-forward-declaration")
+		for(size_t i = 0; i < node->children.size(); ++i) { const bool child_type_reference = node->kind == "decl-specifier-seq" && node->children[i] && node->children[i]->kind == "class-forward-declaration"; Collect(node->children[i], next_context, child_type_reference); }
+		if(!elaborated_type_reference && (node->kind == "class-specifier" || node->kind == "class-forward-declaration"))
 			RecordClassTypeSize(node, context, JoinPath(context, LastComponent(node->value)));
 	}
 	void CollectVariables(const CPPGMAstNodePtr& node, const string& context);

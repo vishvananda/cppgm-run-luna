@@ -89,15 +89,6 @@ bool GeneratedOrderingTypeDeclaration(const CPPGMAstNodePtr& node)
 		SpellNode(node->children[0]).find("typedef") != string::npos;
 }
 
-bool GeneratedContainsStaticAssert(const CPPGMAstNodePtr& node)
-{
-	if(!node) return false;
-	if(node->kind == "static-assert-declaration") return true;
-	for(size_t child = 0; child < node->children.size(); ++child)
-		if(GeneratedContainsStaticAssert(node->children[child])) return true;
-	return false;
-}
-
 void MarkStaticGeneratedFunction(const CPPGMAstNodePtr& node)
 {
 	if(!node || node->kind != "function-definition" || node->children.empty() ||
@@ -115,8 +106,7 @@ void PA18TemplateExpander::AdjustGeneratedFunctionPosition(
 {
 	if(!position) return;
 	for(size_t child = 0; child < children.size(); ++child) {
-		if(children[child] && children[child]->kind == "class-specifier" &&
-			!GeneratedContainsStaticAssert(children[child])) continue;
+		if(!children[child]) continue;
 		for(size_t function = 0; function < generated.size(); ++function) {
 			const string name = DeclarationName(generated[function]);
 			const string primary = generated[function] ? LastComponent(
@@ -669,7 +659,18 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 		(!definition.class_template || !definition.owner.empty()) &&
 		context != definition.owner &&
 		!recursive_context_argument) {
-		generated_before_class_[context].push_back(generated);
+		string before_context = context;
+		// A dependent type discovered while replaying a class can carry the
+		// source class component twice (X::X).  The insertion map is keyed by
+		// the actual class path (X), so normalize that lexical replay spelling
+		// before queuing the generated prerequisite.
+		const string context_parent = PrefixComponent(context);
+		if(!context_parent.empty() && LastComponent(context) == LastComponent(context_parent))
+			before_context = context_parent;
+		if(before_context != context)
+			generated_by_owner_[generated_owner].push_back(generated);
+		else
+			generated_before_class_[before_context].push_back(generated);
 	}
 	else if(recursive_context_argument && definition.owner.empty() &&
 		!PrefixComponent(context).empty())

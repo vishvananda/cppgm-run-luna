@@ -20,6 +20,18 @@ string TypeNameValue(const CPPGMAstNodePtr& node)
     return string();
   }
 
+string StripTemplateArgumentsForLookup(const string& raw)
+{
+    string result;
+    int depth = 0;
+    for(size_t i = 0; i < raw.size(); ++i) {
+      if(raw[i] == '<') { ++depth; continue; }
+      if(raw[i] == '>') { if(depth > 0) --depth; continue; }
+      if(depth == 0) result += raw[i];
+    }
+    return result;
+  }
+
 bool FriendTypeMatches(const TypePtr& pattern, const TypePtr& actual)
 {
     TypePtr left = type_value(pattern);
@@ -159,7 +171,8 @@ Scope* PA14Lowerer::ScopeComponent(Scope* current, const string& component,
 vector<Binding*> PA14Lowerer::Lookup(const string& raw, Scope* from) const
 {
     bool absolute = false;
-    const vector<string> parts = analyzer_.SplitPath(raw, &absolute);
+    const vector<string> parts = analyzer_.SplitPath(
+      StripTemplateArgumentsForLookup(raw), &absolute);
     if(parts.empty()) return vector<Binding*>();
     if(parts.size() == 1 && !absolute) {
       vector<Binding*> result = LookupUnqualifiedAll(from, parts[0]);
@@ -319,7 +332,35 @@ vector<Binding*> PA14Lowerer::MemberBindings(const TypePtr& raw_object,
           if(!destructor_bindings[i]->hidden_friend) direct.push_back(destructor_bindings[i]);
       }
     }
-    if(!direct.empty()) return direct;
+    // A using-declaration stores an imported copy in the derived scope.  Its
+    // member_owner identifies the declaring base, so consult that typed base
+    // scope again instead of letting the single imported source declaration
+    // hide materialized overloads (including const/non-const member-template
+    // specializations) added to the base later in collection.
+    if(!direct.empty()) {
+      vector<Binding*> imported;
+      for(size_t i = 0; i < direct.size(); ++i) {
+        TypePtr imported_owner = type_value(direct[i]->member_owner);
+        if(!imported_owner || imported_owner.get() == object.get()) continue;
+        if(!imported_owner->owned_scope) continue;
+        const vector<Binding*> base_bindings = DirectBindings(
+          imported_owner->owned_scope, last_component(name));
+        for(size_t base = 0; base < base_bindings.size(); ++base)
+          if(!base_bindings[base]->hidden_friend &&
+             find(imported.begin(), imported.end(), base_bindings[base]) == imported.end())
+            imported.push_back(base_bindings[base]);
+      }
+      if(!imported.empty()) {
+        // Keep the imported declaration first: a public using-declaration may
+        // deliberately re-expose a protected base member.  The base entries
+        // are supplemental overloads, not replacements for that access
+        // adjustment.
+        for(size_t base = 0; base < imported.size(); ++base)
+          if(find(direct.begin(), direct.end(), imported[base]) == direct.end())
+            direct.push_back(imported[base]);
+      }
+      return direct;
+    }
     if(object->direct_base) return MemberBindings(object->direct_base, name);
     return vector<Binding*>();
   }
@@ -830,7 +871,33 @@ TypePtr PA14Lowerer::ConstructorObjectType(const CPPGMAstNodePtr& callee,
       if(candidates[i]->kind != BIND_TYPE && candidates[i]->kind != BIND_TYPE_ALIAS)
         continue;
       TypePtr type = type_value(candidates[i]->type);
-      if(type && (type->kind == TYPE_CLASS || type->kind == TYPE_ARRAY)) return type;
+      if(type && (type->kind == TYPE_CLASS || type->kind == TYPE_ARRAY)) {
+        const size_t open = effective->value.find('<');
+        if(type->kind == TYPE_CLASS && open != string::npos &&
+           !effective->value.empty() && effective->value[effective->value.size() - 1] == '>') {
+          TypePtr specialization(new Type(*type));
+          specialization->name = effective->value;
+          specialization->template_specialization = true;
+          specialization->template_primary = type->template_primary.empty() ?
+            type->name : type->template_primary;
+          specialization->template_arguments.clear();
+          string argument;
+          int depth = 0;
+          for(size_t p = open + 1; p + 1 < effective->value.size(); ++p) {
+            const char ch = effective->value[p];
+            if(ch == '<') ++depth;
+            else if(ch == '>' && depth > 0) --depth;
+            if(ch == ',' && depth == 0) {
+              specialization->template_arguments.push_back(trim_type_name(argument));
+              argument.clear();
+            } else argument += ch;
+          }
+          if(!argument.empty())
+            specialization->template_arguments.push_back(trim_type_name(argument));
+          return specialization;
+        }
+        return type;
+      }
     }
     // A generated specialization may install its constructor binding under
     // the same spelling as the class while the type binding is still

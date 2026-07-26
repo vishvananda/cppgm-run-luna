@@ -95,10 +95,35 @@ bool PA18TemplateExpander::ResolveCallableTemporaryCallResult(
 	if(!declaration) return false;
 	for(size_t member = 0; member < declaration->children.size(); ++member) {
 		const CPPGMAstNodePtr candidate = declaration->children[member];
-		if(!candidate || (candidate->kind != "special-member-declaration" &&
+		if(!candidate || (candidate->kind != "simple-declaration" &&
+			candidate->kind != "special-member-declaration" &&
 			candidate->kind != "special-member-definition")) continue;
-		const string name = RemoveMarker(candidate->value);
+		const string name = candidate->kind == "simple-declaration" ?
+			DeclarationName(candidate) : RemoveMarker(candidate->value);
 		if(name.compare(0, 8, "operator") != 0) continue;
+		if(candidate->kind == "simple-declaration") {
+			const CPPGMAstNodePtr declarator = FunctionDeclarator(candidate);
+			const CPPGMAstNodePtr parameters = DescendantOfKind(declarator,
+				"parameter-clause");
+			if(!declarator || !parameters) continue;
+			vector<string> parameter_types;
+			for(size_t parameter = 0; parameter < parameters->children.size(); ++parameter) {
+				const CPPGMAstNodePtr item = parameters->children[parameter];
+				if(item && item->kind == "parameter-declaration")
+					parameter_types.push_back(ParameterTypeSpelling(item));
+			}
+			if(parameter_types.size() != actual_types.size()) continue;
+			bool viable = true;
+			for(size_t parameter = 0; parameter < parameter_types.size(); ++parameter)
+				if(!FunctionArgumentViable(parameter_types[parameter], actual_types[parameter],
+					context)) { viable = false; break; }
+			if(!viable) continue;
+			*result = NormalizeTypeArgument(ResolveAlias(
+				NodeTypeSpelling(candidate->children.empty() ? CPPGMAstNodePtr() :
+					candidate->children[0]) + ReturnDeclaratorSuffix(declarator),
+				context));
+			return !result->empty();
+		}
 		string target = CanonicalSpelling(name.substr(8));
 		if(target.empty() || target[0] == '(' || target[0] == '[') continue;
 		target = CanonicalSpelling(ResolveAlias(

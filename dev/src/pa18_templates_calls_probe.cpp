@@ -20,10 +20,59 @@ bool PA18TemplateExpander::ContainsSubstitutionIdentifier(
 	return false;
 }
 
+bool PA18TemplateExpander::FunctionTemplateCvPointerTie(
+	const TemplateDefinition& lhs, const TemplateDefinition& rhs) const
+{
+	const auto parameter_pattern = [this](const TemplateDefinition& definition) {
+		vector<string> result;
+		if(!definition.declaration) return result;
+		const CPPGMAstNodePtr parameters = DescendantOfKind(
+			FunctionDeclarator(definition.declaration), "parameter-clause");
+		if(!parameters || parameters->children.size() != 1 || !parameters->children[0])
+			return result;
+		result.push_back(CanonicalSpelling(ParameterTypeSpelling(parameters->children[0])));
+		return result;
+	};
+	const vector<string> left = parameter_pattern(lhs);
+	const vector<string> right = parameter_pattern(rhs);
+	if(left.size() != 1 || right.size() != 1 ||
+		left[0].empty() || right[0].empty() ||
+		left[0][left[0].size() - 1] != '*' || right[0][right[0].size() - 1] != '*')
+		return false;
+	const auto without_cv = [](string pattern) {
+		const string tokens[] = {"const", "volatile"};
+		for(size_t token = 0; token < 2; ++token)
+			for(size_t position = pattern.find(tokens[token]); position != string::npos; ) {
+				const bool left_boundary = position == 0 ||
+					!IsIdentifierCharacter(pattern[position - 1]);
+				const size_t end = position + tokens[token].size();
+				const bool right_boundary = end == pattern.size() ||
+					!IsIdentifierCharacter(pattern[end]);
+				if(left_boundary && right_boundary) pattern.erase(position, tokens[token].size());
+				else position = end;
+				position = pattern.find(tokens[token], position);
+			}
+		return CanonicalSpelling(pattern);
+	};
+	const bool left_const = left[0].find("const") != string::npos;
+	const bool left_volatile = left[0].find("volatile") != string::npos;
+	const bool right_const = right[0].find("const") != string::npos;
+	const bool right_volatile = right[0].find("volatile") != string::npos;
+	if(left_const == right_const || left_volatile == right_volatile ||
+		left_const == left_volatile || right_const == right_volatile)
+		return false;
+	return without_cv(left[0]) == without_cv(right[0]);
+}
+
 bool PA18TemplateExpander::FunctionTemplateMoreSpecialized(
 	const TemplateDefinition& lhs, const TemplateDefinition& rhs,
 	const string& context) const
 {
+	// `const T*` and `volatile T*` are symmetric partial-ordering patterns.
+	// Neither can be selected over the other for a cv-qualified pointer, so
+	// leave the tie visible to call ranking instead of treating cv as a
+	// deduction-insensitive match.
+	if(FunctionTemplateCvPointerTie(lhs, rhs)) return false;
 	const auto parameter_patterns = [this](const TemplateDefinition& definition,
 		vector<string>* result, set<string>* names) {
 		if(!result || !names || !definition.declaration) return false;
@@ -189,6 +238,15 @@ void PA18TemplateExpander::RankFunctionTemplateCandidatesForCall(
 		call_score[definition] = score;
 		call_non_dependent[definition] = non_dependent;
 		call_fixedness[definition] = fixedness;
+	}
+	for(size_t left = 0; left < candidates->size(); ++left) {
+		const TemplateDefinition* lhs = (*candidates)[left];
+		if(!lhs || !call_viable[lhs]) continue;
+		for(size_t right = left + 1; right < candidates->size(); ++right) {
+			const TemplateDefinition* rhs = (*candidates)[right];
+			if(!rhs || !call_viable[rhs] || !FunctionTemplateCvPointerTie(*lhs, *rhs)) continue;
+			throw logic_error("ambiguous function template overload");
+		}
 	}
 	stable_sort(candidates->begin(), candidates->end(),
 		[this, &context, &call_viable, &call_score, &call_non_dependent, &call_fixedness](

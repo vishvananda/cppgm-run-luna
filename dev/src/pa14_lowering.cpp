@@ -713,8 +713,12 @@ void PA14Lowerer::CollectClassMembers(const CPPGMAstNodePtr& node, Scope* scope)
       if(child->kind == "using-declaration") {
         const CPPGMAstNodePtr target = ChildOfKind(child, "target");
         TypePtr direct_base = type_value(type_found->second->direct_base);
-        if(target && direct_base && LastComponent(target->value) ==
-           LastComponent(direct_base->name))
+        const string direct_base_primary = direct_base &&
+          !direct_base->template_primary.empty() ?
+          LastComponent(direct_base->template_primary) : string();
+        if(target && direct_base && (LastComponent(target->value) ==
+           LastComponent(direct_base->name) || (!direct_base_primary.empty() &&
+           LastComponent(target->value) == direct_base_primary)))
           has_inheriting_constructor_using = true;
         continue;
       }

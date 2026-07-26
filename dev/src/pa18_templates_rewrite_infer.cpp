@@ -473,121 +473,6 @@ bool PA18TemplateExpander::InferCallMemberArgument(const CPPGMAstNodePtr& expres
 		object_type, member, substitutions, context, result, &active);
 }
 
-bool PA18TemplateExpander::InferCallIdentifierArgument(
-	const CPPGMAstNodePtr& expression, string* result,
-	const map<string, string>& substitutions, const string& context) const
-{
-	if(!expression || expression->children.empty() || !expression->children[0] ||
-		expression->children[0]->kind != "id-expression") return false;
-	// A callable data member has a typed operator() result; do not let an
-	// unknown operand trigger unrelated free-function template deduction.
-	string callable_object_type;
-	if(LookupVariableType(expression->children[0]->value, context,
-		&callable_object_type)) {
-		callable_object_type = NormalizeTypeArgument(ResolveAlias(
-			ReplaceIdentifiers(callable_object_type, substitutions), context));
-		string callable_result;
-		set<string> callable_active;
-		if(FindClassMemberType(callable_object_type, "operator()", substitutions,
-			context, &callable_result, &callable_active) && !callable_result.empty()) {
-			*result = callable_result;
-			return true;
-		}
-		if(InferCallableObjectCall(expression, callable_object_type, substitutions,
-			context, &callable_result) && !callable_result.empty()) {
-			*result = callable_result;
-			return true;
-		}
-	}
-	if(!expression->template_primary.empty() && !expression->template_arguments.empty()) {
-		const vector<const TemplateDefinition*> materialized =
-			FindFunctionDefinitions(expression->template_primary, context);
-		for(size_t candidate = 0; candidate < materialized.size(); ++candidate) {
-			const TemplateDefinition* definition = materialized[candidate];
-			if(!definition || definition->parameters.size() !=
-				expression->template_arguments.size() || !definition->declaration ||
-				definition->declaration->children.empty()) continue;
-			map<string, string> function_substitutions;
-			for(size_t parameter = 0; parameter < definition->parameters.size(); ++parameter)
-				if(!definition->parameters[parameter].name.empty())
-					function_substitutions[definition->parameters[parameter].name] =
-						expression->template_arguments[parameter];
-			const CPPGMAstNodePtr declarator = FunctionDeclarator(definition->declaration);
-			string return_type = NodeTypeSpelling(definition->declaration->children[0]) +
-				DeclaratorSuffix(declarator);
-			string resolved_return = ReplaceIdentifiers(return_type,
-				function_substitutions);
-			resolved_return = const_cast<PA18TemplateExpander*>(this)->RewriteText(
-				resolved_return, context, function_substitutions, 0);
-			*result = CanonicalSpelling(ResolveAlias(resolved_return, context));
-			if(!result->empty()) return true;
-		}
-	}
-	const string member = LastComponent(expression->children[0]->value);
-	string owner;
-	for(string current = context; ; ) {
-		const TemplateDefinition* current_definition = FindDefinition(current, context);
-		if(class_contexts_.find(current) != class_contexts_.end() ||
-			class_declarations_.find(current) != class_declarations_.end() ||
-			(current_definition && current_definition->class_template)) {
-			owner = current;
-			break;
-		}
-		if(current.empty()) break;
-		const size_t separator = current.rfind("::");
-		if(separator == string::npos) current.clear();
-		else current.erase(separator);
-	}
-	set<string> active;
-	string member_type;
-	if(!owner.empty() && !member.empty() && FindClassMemberType(
-		owner, member, substitutions, context, &member_type, &active)) {
-		string callable_result;
-		if(InferCallableObjectCall(expression, member_type, substitutions,
-			context, &callable_result)) {
-			*result = callable_result;
-			return true;
-		}
-		*result = member_type;
-		return true;
-	}
-	const string callee = LastComponent(expression->children[0]->value);
-	string nested_class;
-	const string qualified_callee = expression->children[0]->value;
-	if(class_contexts_.find(qualified_callee) != class_contexts_.end() ||
-		class_declarations_.find(qualified_callee) != class_declarations_.end())
-		nested_class = qualified_callee;
-	for(string current = context; nested_class.empty(); ) {
-		const string candidate = JoinPath(current, callee);
-		if(class_contexts_.find(candidate) != class_contexts_.end() ||
-			class_declarations_.find(candidate) != class_declarations_.end()) {
-			nested_class = candidate;
-			break;
-		}
-		if(current.empty()) break;
-		const size_t separator = current.rfind("::");
-		if(separator == string::npos) current.clear();
-		else current.erase(separator);
-	}
-	if(!nested_class.empty()) {
-		*result = nested_class;
-		return true;
-	}
-	const FunctionSignature* signature = FindFunctionSignature(
-		expression->children[0]->value, context);
-	if(signature && signature->result_specifiers) {
-		const string return_type = NodeTypeSpelling(signature->result_specifiers) +
-			ReturnDeclaratorSuffix(signature->declarator);
-		*result = CanonicalSpelling(ResolveAlias(ReplaceIdentifiers(
-			return_type, substitutions), context));
-		if(!result->empty()) return true;
-	}
-	const string fallback = ResolveAlias(expression->children[0]->value, context);
-	if(!IsKnownTypeSpelling(fallback, context)) return false;
-	*result = fallback;
-	return true;
-}
-
 bool PA18TemplateExpander::InferCallArgument(const CPPGMAstNodePtr& expression,
 	string* result, const map<string, string>& substitutions,
 	const string& context) const
@@ -774,9 +659,22 @@ bool PA18TemplateExpander::MergeInferredFunctionArgument(
 		if(!pattern_shape.first.empty() && pattern_shape == actual_shape &&
 			pattern.find("...") == string::npos) rewrite_inferred = false;
 	}
+	bool bound_pack_in_pattern = false;
+	if(bound_pack_values) for(map<string, vector<string> >::const_iterator bound =
+		bound_pack_values->begin(); bound != bound_pack_values->end() && !bound_pack_in_pattern;
+		++bound) {
+		if(bound->first.empty()) continue;
+		for(size_t position = pattern.find(bound->first); position != string::npos;
+			position = pattern.find(bound->first, position + bound->first.size())) {
+			const bool left = position == 0 || !IsIdentifierCharacter(pattern[position - 1]);
+			const size_t end = position + bound->first.size();
+			const bool right = end == pattern.size() || !IsIdentifierCharacter(pattern[end]);
+			if(left && right) { bound_pack_in_pattern = true; break; }
+		}
+	}
 	const bool rewrite_pattern = !pattern_substitutions.empty() &&
 		(alias_substitution || (rewrite_inferred && pattern.find("::") != string::npos) ||
-		(bound_pack_values && !bound_pack_values->empty()) || dependent_substitution);
+		bound_pack_in_pattern || dependent_substitution);
 	if(rewrite_pattern) {
 		match_pattern = const_cast<PA18TemplateExpander*>(this)->RewriteText(
 			pattern, context, pattern_substitutions, 0);
@@ -1095,7 +993,7 @@ bool PA18TemplateExpander::InferFunctionParameter(
 			// merging, not just the later replay fact.  Recompute the normalized
 			// spelling after adding the lvalue reference so `T&&` with an lvalue
 			// deduces `T = U&`, rather than materializing a stale `T = U` call.
-			deduction_type = normalize_pointer_pointee_cv(normalize_builtin(type));
+				deduction_type = normalize_pointer_pointee_cv(normalize_builtin(type));
 		}
 		if(inferred_argument && forwarding_pack_values && pack_parameter &&
 			pattern.size() > 2 && pattern.compare(pattern.size() - 2, 2, "&&") == 0) {

@@ -426,6 +426,40 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 	pattern = separate_compact_cv(pattern);
 	actual = separate_compact_cv(actual);
 	pattern = CanonicalSpelling(pattern);
+	// A dependent alias-template spelling cannot be resolved by the ordinary
+	// concrete alias table: `mp_size_t<I>` has no concrete key until I is
+	// deduced.  Match its typed target instead, retaining the formal argument
+	// expressions so the normal class-specialization matcher can infer them.
+	{
+		const size_t alias_open = pattern.find('<');
+		if(alias_open != string::npos) {
+			string alias_arguments;
+			size_t alias_close = string::npos;
+			if(TemplateRange(pattern, alias_open, &alias_arguments, &alias_close)) {
+				const string alias_base = CanonicalSpelling(pattern.substr(0, alias_open));
+				const TemplateDefinition* alias_definition = FindDefinition(alias_base, context);
+				if(alias_definition && alias_definition->alias_template &&
+					alias_definition->declaration &&
+					!alias_definition->declaration->children.empty()) {
+					const vector<string> alias_parts = SplitTemplateArguments(alias_arguments);
+					map<string, string> alias_substitutions;
+					for(size_t parameter = 0; parameter < alias_definition->parameters.size() &&
+						parameter < alias_parts.size(); ++parameter)
+						if(!alias_definition->parameters[parameter].name.empty())
+							alias_substitutions[alias_definition->parameters[parameter].name] =
+								alias_parts[parameter];
+					string alias_target = TypeIdSpelling(alias_definition->declaration->children[0]);
+					alias_target = ReplaceIdentifiersPreservingPackSizes(alias_target,
+						alias_substitutions);
+					alias_target = CanonicalSpelling(alias_target + pattern.substr(alias_close + 1));
+					if(!alias_target.empty() && alias_target != pattern) {
+						return MatchTypePattern(alias_target, actual, parameter_names, inferred,
+							context, class_pattern);
+					}
+				}
+			}
+		}
+	}
 	const int direct_type_parameter = MatchDirectTypeParameter(pattern, actual,
 		parameter_names, inferred, context, class_pattern);
 	if(direct_type_parameter >= 0) return direct_type_parameter != 0;
@@ -884,17 +918,19 @@ bool PA18TemplateExpander::TransformPackChild(
 		const CPPGMAstNodePtr expansion = original_child->children[0];
 		const string pack_name = PackExpansionIdentifier(expansion->children.empty() ? CPPGMAstNodePtr() : expansion->children[0]);
 		map<string, vector<string> >::const_iterator pack = active_pack_substitutions_.find(pack_name);
-		if(pack != active_pack_substitutions_.end())
-			for(size_t element = 0; element < pack->second.size(); ++element) {
+		if(pack != active_pack_substitutions_.end()) {
+			const vector<string> pack_values = pack->second;
+			for(size_t element = 0; element < pack_values.size(); ++element) {
 				CPPGMAstNodePtr expanded = CloneNode(original_child);
 				CPPGMAstNodePtr body = expansion->children.empty() ? CPPGMAstNodePtr() : CloneNode(expansion->children[0]);
 				if(!body) continue;
 				RemoveParameterPackMarkers(body); expanded->children[0] = body;
-				map<string, string> one = substitutions; one[pack_name] = pack->second[element];
+				map<string, string> one = substitutions; one[pack_name] = pack_values[element];
 				if(CPPGMAstNodePtr child = TransformNode(expanded, child_context, one))
 					result->children.push_back(child);
 			}
-		return true;
+			return true;
+		}
 	}
 	if(input->kind == "base-clause" && original_child &&
 		original_child->kind == "base-specifier" &&
@@ -904,13 +940,14 @@ bool PA18TemplateExpander::TransformPackChild(
 		map<string, vector<string> >::const_iterator pack =
 			active_pack_substitutions_.find(pack_name);
 		if(pack != active_pack_substitutions_.end()) {
-			for(size_t element = 0; element < pack->second.size(); ++element) {
+			const vector<string> pack_values = pack->second;
+			for(size_t element = 0; element < pack_values.size(); ++element) {
 				CPPGMAstNodePtr expanded = CloneNode(original_child);
 				RemoveParameterPackMarkers(expanded);
 				const CPPGMAstNodePtr base = ChildOfKindLocal(expanded, "base-name");
 				if(base && original_base) {
 					map<string, string> one = substitutions;
-					one[pack_name] = pack->second[element];
+					one[pack_name] = pack_values[element];
 					base->value = ReplaceIdentifiers(original_base->value, one);
 				}
 				CPPGMAstNodePtr child = TransformNode(expanded, child_context,
@@ -932,22 +969,23 @@ bool PA18TemplateExpander::TransformPackChild(
 		map<string, vector<string> >::const_iterator values =
 			active_pack_substitutions_.find(pack_name);
 		if(values != active_pack_substitutions_.end()) {
+			const vector<string> pack_values = values->second;
 			const string identifier = ParameterIdentifier(original_child);
 			vector<string>& expanded_identifiers =
 				active_pack_identifier_substitutions_[identifier];
-			for(size_t element = 0; element < values->second.size(); ++element) {
+			for(size_t element = 0; element < pack_values.size(); ++element) {
 				ostringstream pack_suffix;
 				pack_suffix << element + 1;
 				const string expanded_name = identifier.empty() || element == 0 ? identifier :
 					identifier + "__pack" + pack_suffix.str();
 				if(!identifier.empty()) expanded_identifiers.push_back(expanded_name);
 				map<string, string> one = substitutions;
-				one[pack_name] = values->second[element];
-				if(!identifier.empty()) one[identifier] = expanded_name;
-				CPPGMAstNodePtr copy = CloneNode(original_child);
-				RemoveParameterPackMarkers(copy);
-				CPPGMAstNodePtr child = TransformNode(copy, child_context, one);
-				if(child) result->children.push_back(child);
+				one[pack_name] = pack_values[element];
+					if(!identifier.empty()) one[identifier] = expanded_name;
+					CPPGMAstNodePtr copy = CloneNode(original_child);
+					RemoveParameterPackMarkers(copy);
+					CPPGMAstNodePtr child = TransformNode(copy, child_context, one);
+					if(child) result->children.push_back(child);
 			}
 			return true;
 		}
@@ -1162,121 +1200,6 @@ bool PA18TemplateExpander::PreserveDependentStaticDeclarator(
 	result->value = input->value;
 	*promoted_name = string();
 	return true;
-}
-CPPGMAstNodePtr PA18TemplateExpander::RewriteRegularNodeValue(
-	const CPPGMAstNodePtr& input, const string& context,
-	const map<string, string>& substitutions,
-	const CPPGMAstNodePtr& result, string* promoted_name)
-{
-	bool template_replaced = false;
-	if(PreserveDependentStaticDeclarator(input, context, substitutions, result,
-		promoted_name)) return CPPGMAstNodePtr();
-	const bool type_spelling = input->kind == "decl-specifier" ||
-		input->kind == "type-name" || input->kind == "type-specifier";
-	if(input->kind == "literal" && input->value.size() >= 2 &&
-		input->value[0] == '"' && input->value[input->value.size() - 1] == '"')
-		result->value = input->value;
-	else result->value = RewriteText(input->value, context, substitutions, &template_replaced,
-		!type_spelling, true, defer_type_only_class_definitions_ != 0);
-	if((input->kind == "special-member-definition" ||
-		input->kind == "special-member-declaration" || input->kind == "identifier") &&
-		result->value.compare(0, 8, "operator") == 0) {
-		const string target = result->value.substr(8);
-		if(!target.empty() && IsIdentifierCharacter(target[0]) && target.find('<') != string::npos) {
-			const string rewritten_target = RewriteText(target, context, substitutions, 0,
-				true, true, defer_type_only_class_definitions_ != 0);
-			if(!rewritten_target.empty()) result->value = "operator" + rewritten_target;
-		}
-	}
-	if(input->kind == "id-expression") {
-		const string name = RemoveMarker(result->value);
-		const string promoted_local = PromotedLocalClass(name, context);
-		if(!promoted_local.empty()) result->value = promoted_local;
-	}
-	if(PreserveEvaluatedDecltype(input, substitutions, result)) return result;
-	if((input->kind == "special-member-definition" ||
-		input->kind == "special-member-declaration") &&
-		input->value.find("::") != string::npos && result->value.find("::") == string::npos)
-		result->value += "::" + LastComponent(input->value);
-	if(type_spelling && (result->value.find('[') != string::npos ||
-		result->value.find("(&") != string::npos ||
-		result->value.find("(*") != string::npos)) {
-		bool preserved_template = false;
-			const string preserved = RewriteText(input->value, context, substitutions,
-				&preserved_template, false, false, defer_type_only_class_definitions_ != 0);
-		if(!preserved.empty()) result->value = preserved;
-	}
-		if(input->kind == "id-expression") {
-			map<string, PA19IntegralValue>::const_iterator typed =
-				active_integral_substitutions_.find(RemoveMarker(input->value));
-			if(typed != active_integral_substitutions_.end() && typed->second.known) {
-				const string spelling = IntegralValueSpelling(typed->second);
-				if(typed->second.type.name == "bool")
-					return CPPGMAstNodePtr(new CPPGMAstNode("keyword-literal",
-						PA19Raw(typed->second) ? "KW_TRUE:true" : "KW_FALSE:false"));
-				CPPGMAstNodePtr literal(new CPPGMAstNode("literal", spelling));
-				literal->initializer_form = input->initializer_form;
-				return literal;
-			}
-		}
-		if((type_spelling || input->kind == "id-expression") &&
-			result->value.find('<') != string::npos)
-			result->value = RewriteText(result->value, context, substitutions, &template_replaced,
-				true, true, defer_type_only_class_definitions_ != 0);
-		if(input->kind == "target") {
-			const string raw_target = RemoveMarker(input->value);
-			const size_t separator = raw_target.rfind("::");
-			if(separator != string::npos && raw_target.substr(0, separator) ==
-				raw_target.substr(separator + 2)) {
-				map<string, string>::const_iterator alias = substitutions.find(
-					raw_target.substr(0, separator));
-				if(alias != substitutions.end() && !alias->second.empty())
-					result->value = alias->second + "::" + LastComponent(alias->second);
-			}
-		}
-		if(input->kind == "decl-specifier" || input->kind == "type-name" ||
-			input->kind == "type-specifier") {
-			const size_t marker_colon = result->value.find(':');
-			string marker;
-			if(marker_colon != string::npos) {
-				const string prefix = result->value.substr(0, marker_colon);
-				if(prefix == "TT_IDENTIFIER" || prefix.compare(0, 3, "KW_") == 0 ||
-					prefix.compare(0, 3, "OP_") == 0)
-					marker = result->value.substr(0, marker_colon + 1);
-			}
-			const string spelling = RemoveMarker(result->value);
-			string qualified = QualifyTypeArgument(spelling, context);
-			string resolved = ResolveAlias(qualified, context);
-			if(!HasReplayContext(substitutions) && input->value.find('<') == string::npos)
-				resolved = qualified;
-			if(resolved.find('<') != string::npos)
-					resolved = RewriteText(resolved, context, substitutions, 0, true, true,
-						defer_type_only_class_definitions_ != 0);
-			if(resolved.find('(') != string::npos && resolved.find(')') != string::npos)
-				resolved = qualified;
-			if(resolved != qualified) qualified = resolved;
-			if(qualified != spelling) result->value = marker + qualified;
-			if(input->kind == "decl-specifier" && marker.empty() &&
-				qualified != spelling && result->value.find(':') == string::npos)
-				result->value = "TT_IDENTIFIER:" + qualified;
-			if(input->kind == "decl-specifier" && marker.empty() &&
-				(qualified.find(' ') != string::npos || qualified.find('*') != string::npos ||
-					qualified.find('&') != string::npos || qualified.find('[') != string::npos))
-				result->value = "TT_IDENTIFIER:" + qualified;
-		}
-	string promoted_local_class;
-	if(input->kind == "class-specifier" || input->kind == "class-forward-declaration") {
-		const string promoted_local = PromotedLocalClass(LastComponent(input->value), context);
-		if(!promoted_local.empty()) {
-				promoted_local_class = LastComponent(promoted_local);
-				result->value = promoted_local_class;
-			}
-		}
-	if(input->kind == "decl-specifier" && template_replaced &&
-			result->value.find(':') == string::npos)
-			result->value = "TT_IDENTIFIER:" + result->value;
-	*promoted_name = promoted_local_class;
-	return CPPGMAstNodePtr();
 }
 CPPGMAstNodePtr PA18TemplateExpander::FinishRegularNode(
 	const CPPGMAstNodePtr& input, const string& context,

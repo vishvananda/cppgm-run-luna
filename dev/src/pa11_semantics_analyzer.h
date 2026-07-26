@@ -634,17 +634,62 @@ public:
 		if (type->kind == TYPE_ENUM && type->underlying) return TypeAlignment(type->underlying);
 		return TypeSize(type);
 	}
-	TypePtr ExpressionType(const CPPGMAstNodePtr& expression, Scope* scope)
+	TypePtr ExpressionType(const CPPGMAstNodePtr& expression, Scope* scope,
+		size_t requested_arguments = static_cast<size_t>(-1))
 	{
 		if (!expression) throw logic_error("invalid expression type");
 		if (expression->kind == "id-expression")
 		{
 			Binding* binding = ResolveBinding(scope, expression->value);
+			if (!binding && expression->value.find('<') != string::npos) {
+				try { return ResolveType(scope, expression->value); }
+				catch (const logic_error&) {}
+			}
 			if (!binding) throw logic_error("unknown expression name");
 			return binding->type;
 		}
 		if (expression->kind == "parenthesized-expression" && !expression->children.empty())
-			return ExpressionType(expression->children[0], scope);
+			return ExpressionType(expression->children[0], scope, requested_arguments);
+		if (expression->kind == "member-expression" && expression->children.size() >= 2)
+		{
+			TypePtr object = ExpressionType(expression->children[0], scope);
+			while (object && (object->kind == TYPE_LVALUE_REFERENCE ||
+				object->kind == TYPE_RVALUE_REFERENCE || object->kind == TYPE_POINTER))
+				object = object->child;
+			if (!object || object->kind != TYPE_CLASS) return Fundamental("int");
+			const string member_name = expression->children[1]->value;
+			Binding* selected = 0;
+			size_t selected_score = static_cast<size_t>(-1);
+			for (TypePtr current = object; current; current = current->direct_base)
+			{
+				Scope* owner = ScopeForType(current);
+				if (!owner) continue;
+				for (size_t i = 0; i < owner->bindings.size(); ++i)
+				{
+					Binding& candidate = owner->bindings[i];
+					if (candidate.name != member_name || !candidate.type) continue;
+					if (candidate.kind == BIND_FUNCTION && candidate.type->kind == TYPE_FUNCTION)
+					{
+						if (object->is_const && !candidate.type->function_const) continue;
+						if (object->is_volatile && !candidate.type->function_volatile) continue;
+						const size_t arity = candidate.type->parameters.size();
+						if (requested_arguments != static_cast<size_t>(-1) &&
+							((!candidate.type->variadic && arity != requested_arguments) ||
+							 (candidate.type->variadic && arity > requested_arguments))) continue;
+						size_t score = requested_arguments == static_cast<size_t>(-1) ?
+							arity : (candidate.type->variadic ? arity + 1 : 0);
+						if (!object->is_const && candidate.type->function_const) score += 2;
+						if (!selected || score < selected_score) {
+							selected = &candidate;
+							selected_score = score;
+						}
+					}
+					else if (!selected) selected = &candidate;
+				}
+			}
+			if (selected) return selected->type;
+			return Fundamental("int");
+		}
 		if (expression->kind == "sizeof-expression" ||
 			expression->kind == "sizeof-pack-expression" ||
 			expression->kind == "type-trait-expression")
@@ -653,7 +698,10 @@ public:
 			return TypeFromTypeId(expression->children[0], scope);
 		if (expression->kind == "call-expression" && !expression->children.empty())
 		{
-			TypePtr callee = ExpressionType(expression->children[0], scope);
+			size_t arity = static_cast<size_t>(-1);
+			if (expression->children.size() > 1 && expression->children[1])
+				arity = expression->children[1]->children.size();
+			TypePtr callee = ExpressionType(expression->children[0], scope, arity);
 			return callee && callee->kind == TYPE_FUNCTION ? callee->child : Fundamental("int");
 		}
 		if (expression->kind == "literal" || expression->kind == "keyword-literal") return Fundamental("int");
@@ -1084,67 +1132,7 @@ public:
 	void ValidateNondependentTemplateNode(const CPPGMAstNodePtr& node,
 		Scope* scope, const CPPGMAstNodePtr& parent = CPPGMAstNodePtr(),
 		size_t child_index = static_cast<size_t>(-1));
-	void ProcessTemplate(const CPPGMAstNodePtr& node, Scope* scope)
-	{
-		if (node->children.size() < 2) throw logic_error("invalid template declaration");
-		Scope* parameters = NewChild(scope, SCOPE_TEMPLATE_PARAMETERS, string());
-		CPPGMAstNodePtr clause = node->children[0];
-		CPPGMAstNodePtr list = ChildOfKind(clause, "template-parameter-list");
-		if (list)
-		{
-			for (size_t i = 0; i < list->children.size(); ++i)
-			{
-				CPPGMAstNodePtr parameter = list->children[i];
-				if (!parameter) continue;
-				if (parameter->kind == "type-parameter")
-				{
-					const string name = FirstIdentifier(parameter);
-					if (name.empty()) continue;
-					const bool template_template = HasKind(parameter, "template-template-parameter");
-					TypePtr type(new Type(template_template ? TYPE_TEMPLATE_TEMPLATE_PARAMETER : TYPE_TEMPLATE_PARAMETER, name));
-					AddTypeBinding(parameters, name, type);
-				}
-			}
-		}
-		Process(node->children[1], parameters);
-		// A friend function template declared inside a class template is a
-		// namespace-level entity whose declaration is nevertheless needed by
-		// the owning class for access checks.  Keep the real transformed
-		// declaration in the AST and record its semantic name after normal
-		// template-parameter processing; PA14 will collect only an actual
-		// definition, never this declaration as a member.
-		if (scope && scope->kind == SCOPE_CLASS && scope->owner_type &&
-			node->children[1] && node->children[1]->kind == "simple-declaration" &&
-			!node->children[1]->children.empty()) {
-			SpecFacts facts;
-			TypePtr friend_type = TypeFromSpecSeq(node->children[1]->children[0],
-				parameters, &facts);
-			const CPPGMAstNodePtr friend_list = ChildOfKind(node->children[1],
-				"init-declarator-list");
-			const CPPGMAstNodePtr friend_item = friend_list &&
-				!friend_list->children.empty() ? friend_list->children[0] :
-				CPPGMAstNodePtr();
-			const CPPGMAstNodePtr friend_declarator = friend_item &&
-				!friend_item->children.empty() ? friend_item->children[0] :
-				CPPGMAstNodePtr();
-			TypePtr friend_function = friend_declarator ? BuildDeclarator(
-				friend_declarator, friend_type, parameters) : TypePtr();
-			if (facts.is_friend && friend_function &&
-				friend_function->kind == TYPE_FUNCTION) {
-				const string friend_name = FirstIdentifier(node->children[1]);
-				if (!friend_name.empty()) scope->owner_type->friend_access.push_back(
-					FriendAccess(FriendAccess::FRIEND_FUNCTION, friend_name, friend_function));
-			}
-		}
-		if (node->children[1] && node->children[1]->kind == "function-definition" &&
-			node->children[1]->children.size() > 1)
-		{
-			const string function_name = FirstIdentifier(node->children[1]->children[1]);
-			Binding* function = parameters->local(function_name);
-			if (function && function->kind == BIND_FUNCTION)
-				constant_template_functions_[function_name].push_back(function);
-		}
-	}
+	void ProcessTemplate(const CPPGMAstNodePtr& node, Scope* scope);
 	void Process(const CPPGMAstNodePtr& node, Scope* scope)
 	{
 		if (!node) return;

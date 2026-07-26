@@ -130,6 +130,51 @@ void PA18TemplateExpander::MaterializeInitializerConstructor(
 				break;
 			}
 		}
+	// An inherited constructor is selected through the derived class's
+	// initializer, but its member-template declaration belongs to the concrete
+	// base named by the derived class.  The specialization map for the derived
+	// owner itself points to `key`, not to the inherited `tuple_like` owner;
+	// follow the typed base edge before giving up on constructor replay.
+	if(!has_member_template_constructor) {
+		const CPPGMAstNodePtr declaration = FindClassDeclaration(target, context);
+		if(declaration) for(size_t child = 0; child < declaration->children.size() &&
+			!has_member_template_constructor; ++child) {
+			const CPPGMAstNodePtr clause = declaration->children[child];
+			if(!clause || clause->kind != "base-clause") continue;
+			for(size_t base = 0; base < clause->children.size() &&
+				!has_member_template_constructor; ++base) {
+				const CPPGMAstNodePtr base_name = ChildOfKindLocal(
+					clause->children[base], "base-name");
+				if(!base_name) continue;
+				const string concrete_base = CanonicalSpelling(ResolveAlias(
+					RewriteText(base_name->value, context, substitutions, 0), context));
+				map<string, string>::const_iterator base_primary =
+					specialization_bases_.find(LastComponent(concrete_base));
+				if(base_primary != specialization_bases_.end()) {
+					source_constructor_owner = base_primary->second;
+					source_constructor_name = LastComponent(source_constructor_owner);
+				} else {
+					source_constructor_owner = concrete_base;
+					source_constructor_name = LastComponent(concrete_base);
+				}
+				indexed_constructors = definitions_by_name_.find(source_constructor_name);
+				if(indexed_constructors == definitions_by_name_.end()) continue;
+				for(size_t candidate = 0; candidate < indexed_constructors->second.size(); ++candidate) {
+					map<string, TemplateDefinition>::const_iterator found = definitions_.find(
+						indexed_constructors->second[candidate]);
+					if(found == definitions_.end()) continue;
+					const TemplateDefinition& definition = found->second;
+					if(!definition.class_template && !definition.alias_template &&
+						definition.member_template && LastComponent(definition.name) ==
+							source_constructor_name && SameTemplateOwner(definition.owner,
+								source_constructor_owner)) {
+						has_member_template_constructor = true;
+						break;
+					}
+				}
+			}
+		}
+	}
 	if(!has_member_template_constructor) return;
 	CPPGMAstNodePtr object(new CPPGMAstNode("id-expression"));
 	object->inferred_type = target;

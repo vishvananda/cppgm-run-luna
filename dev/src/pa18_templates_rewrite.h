@@ -1095,6 +1095,26 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 			CheckExplicitSpecializationOrder(input, context);
 			if(TransformExplicitSpecialization(input, context, substitutions))
 				return CPPGMAstNodePtr();
+			// A member alias template retained in a materialized class is part of
+			// the typed lookup surface for dependent signatures.  Ordinary
+			// namespace-scope aliases still follow the normal transform path; in
+			// particular, their concrete uses must be expanded before PA11 sees
+			// static assertions and type comparisons.
+			const size_t context_open = context.find('<');
+			const string context_primary = context_open == string::npos ? context :
+				context.substr(0, context_open);
+			const bool materialized_class_context =
+				class_contexts_.find(context) != class_contexts_.end() ||
+				(context_open != string::npos && class_contexts_.find(context_primary) !=
+					class_contexts_.end());
+			const bool source_class_context =
+				class_declarations_.find(context) != class_declarations_.end() ||
+				(context_open != string::npos && class_declarations_.find(context_primary) !=
+					class_declarations_.end());
+			if(input->children.size() > 1 && input->children[1] &&
+				input->children[1]->kind == "alias-declaration" &&
+				(!source_class_context || materialized_class_context))
+				return CloneNode(input);
 			// Preserve a friend template declaration with its complete typed
 			// declarator.  The semantic pass records the friend edge from the
 			// normal template-parameter scope; no synthetic empty signature is

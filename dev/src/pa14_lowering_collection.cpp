@@ -24,7 +24,12 @@ bool IsGeneratedMemberTemplate(const CPPGMAstNodePtr& node,
       return false;
     const string primary = LastComponent(node->template_primary);
     string raw_base = LastComponent(raw_name);
-    const size_t generated_suffix = raw_base.find("__inst_");
+    // Materialized member templates may carry both an overload discriminator
+    // and an instantiation discriminator (`get__ov1__inst_0`).  The lookup
+    // identity remains the source member name (`get`), so remove the first
+    // generated suffix before comparing it with template_primary.
+    const size_t generated_suffix = raw_base.find("__ov") != string::npos ?
+        raw_base.find("__ov") : raw_base.find("__inst_");
     if(generated_suffix != string::npos) raw_base.erase(generated_suffix);
     return node->template_primary.find("::") != string::npos &&
       primary == raw_base;
@@ -721,13 +726,69 @@ void PA14Lowerer::CollectInheritedConstructors(const TypePtr& raw_owner, Scope* 
         const string parameter_name = source_name_index < source_names.size() &&
           !source_names[source_name_index].empty() ? source_names[source_name_index] :
           "__param" + integer_text(static_cast<long long>(source_name_index));
-        arguments->children.push_back(CPPGMAstNodePtr(
-          new CPPGMAstNode("id-expression", parameter_name)));
+        CPPGMAstNodePtr argument(new CPPGMAstNode("id-expression", parameter_name));
+		// An inherited forwarding constructor must preserve the reference
+		// category when it initializes the concrete base.  Its parameter is an
+		// lvalue expression inside the synthesized body, so model the source
+		// rvalue-reference type as an explicit cast rather than attempting to
+		// bind that lvalue directly to U&&.
+		if(source_function->parameters[p] &&
+			source_function->parameters[p]->kind == TYPE_RVALUE_REFERENCE &&
+			source_binding->declaration) {
+			CPPGMAstNodePtr source_declarator = ChildOfKind(
+				source_binding->declaration, "declarator");
+			CPPGMAstNodePtr source_clause = source_declarator ?
+				DescendantOfKind(source_declarator, "parameter-clause") :
+				CPPGMAstNodePtr();
+			CPPGMAstNodePtr source_parameter = source_clause && p <
+				source_clause->children.size() ? source_clause->children[p] :
+				CPPGMAstNodePtr();
+			if(source_parameter && source_parameter->children.size() >= 2) {
+				CPPGMAstNodePtr type_id(new CPPGMAstNode("type-id"));
+				CPPGMAstNodePtr specifiers(new CPPGMAstNode("type-specifier-seq"));
+				if(source_parameter->children[0]) for(size_t specifier = 0;
+					specifier < source_parameter->children[0]->children.size(); ++specifier) {
+					const CPPGMAstNodePtr source_specifier =
+						source_parameter->children[0]->children[specifier];
+					if(!source_specifier) continue;
+					string spelling = source_specifier->value;
+					const size_t marker = spelling.find(':');
+					if(marker != string::npos) spelling = spelling.substr(marker + 1);
+					specifiers->children.push_back(CPPGMAstNodePtr(
+						new CPPGMAstNode("type-name", spelling)));
+				}
+				type_id->children.push_back(specifiers);
+				type_id->children.push_back(source_parameter->children[1]);
+				CPPGMAstNodePtr cast(new CPPGMAstNode("cast-expression",
+					"KW_STATIC_CAST:static_cast"));
+				cast->children.push_back(type_id);
+				cast->children.push_back(argument);
+				argument = cast;
+			}
+		}
+		arguments->children.push_back(argument);
       }
       mem_initializer->children.push_back(arguments);
       ctor_initializer->children.push_back(mem_initializer);
       special->children.push_back(ctor_initializer);
       special->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("compound-statement")));
+		// This constructor is synthesized after PA11 has analyzed the source
+		// tree, so it has no parser-created function scope.  Give its forwarding
+		// parameters a typed scope of its own; otherwise the base mem-initializer
+		// sees `__param1` as an unbound expression and rejects the inherited
+		// constructor even though its semantic signature is viable.
+		Scope* function_scope = analyzer_.NewChild(scope, SCOPE_FUNCTION, qname);
+		for(size_t p = 0; p < source_function->parameters.size(); ++p) {
+			const size_t source_name_index = p + 1;
+			const string parameter_name = source_name_index < source_names.size() &&
+				!source_names[source_name_index].empty() ? source_names[source_name_index] :
+				"__param" + integer_text(static_cast<long long>(source_name_index));
+			function_scope->add(Binding(BIND_PARAMETER, parameter_name,
+				source_function->parameters[p]));
+		}
+		// Keep the synthetic node on the same lookup path as a parser-created
+		// function.  FunctionScope() consults this map before the record fallback.
+		analyzer_.function_scopes_[special.get()] = function_scope;
 
       vector<Binding*> existing = DirectBindings(scope, owner_name);
       Binding* binding = 0;
@@ -764,7 +825,7 @@ void PA14Lowerer::CollectInheritedConstructors(const TypePtr& raw_owner, Scope* 
       parameters.insert(parameters.end(), source_function->parameters.begin(),
         source_function->parameters.end());
       record->node = special;
-      record->scope = scope;
+      record->scope = function_scope;
       record->source_type = source_function;
       record->type = FunctionOf(parameters, source_function->variadic,
         source_function->child, false, source_function->function_volatile);

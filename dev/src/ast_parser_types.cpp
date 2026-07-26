@@ -510,8 +510,11 @@ CPPGMAstNodePtr Parser::ParseParameterClause()
 			const size_t separator = spelling.rfind("::");
 			const string last = separator == string::npos ? spelling :
 				spelling.substr(separator + 2);
-			if (separator != string::npos && types_.find(last) == types_.end() &&
-				templates_.find(last) == templates_.end()) {
+			const size_t last_angle = last.find('<');
+			const string last_name = last_angle == string::npos ? last :
+				last.substr(0, last_angle);
+			if (separator != string::npos && types_.find(last_name) == types_.end() &&
+				templates_.find(last_name) == templates_.end()) {
 				Restore(mark);
 				return CPPGMAstNodePtr();
 			}
@@ -540,8 +543,11 @@ CPPGMAstNodePtr Parser::ParseParameterClause()
 				const size_t separator = spelling.rfind("::");
 				const string last = separator == string::npos ? spelling :
 					spelling.substr(separator + 2);
-				if (separator != string::npos && types_.find(last) == types_.end() &&
-					templates_.find(last) == templates_.end()) {
+				const size_t last_angle = last.find('<');
+				const string last_name = last_angle == string::npos ? last :
+					last.substr(0, last_angle);
+				if (separator != string::npos && types_.find(last_name) == types_.end() &&
+					templates_.find(last_name) == templates_.end()) {
 					Restore(mark);
 					return CPPGMAstNodePtr();
 				}

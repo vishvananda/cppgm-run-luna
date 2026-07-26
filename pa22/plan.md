@@ -1909,6 +1909,41 @@ PA22 report, through-PA21, and the PA22 source audit.
 
 ## Checkpoint 85 result and next scope — 2026-07-26
 
+The typed pack/forwarding checkpoint is complete.  Empty-pack static-assert
+expansion, concrete pack-element replay with copy construction, and dependent
+`remove_reference_t` forwarding now pass; the same increment also repairs
+qualified alias deduction, value-base SFINAE rejection, empty index-sequence
+ordering, inherited-constructor forwarding, and symmetric cv-pointer
+partial-ordering ambiguity.  The current report is **153/250**, up from the
+turn-start **110/250**; through-PA21 is **1850/1850**, and the PA22 source
+audit passes.
+
+### Remaining Work Map
+
+- **general/100 — 4:** three LowIR parity differences and the
+  array-reference/default-argument replay timeout.
+- **general/200 — 1:** synthetic virtual-member LowIR parity.
+- **general/300 — 25:** qualified lookup, dependent alias/SFINAE, constructor,
+  and owner replay.
+- **general/400 — 15:** non-type, template-template, alias, and constructor
+  replay.
+- **general/500 — 23:** owner, conversion, alias, and dependent-result
+  behavior.
+- **spec/100 — 5; spec/200 — 7; spec/300 — 6; spec/400 — 2; spec/500 — 9:**
+  remaining array/specialization, ordering/default, conversion/SFINAE,
+  decltype/reference, and template-template/non-type edges.
+
+The remaining **97** failures are concentrated in typed replay and expected
+LowIR ordering/metadata parity; no earlier-assignment regressions remain.
+
+Next checkpoint scope: finish the residual general/100+200 parity band by
+isolating the array-reference replay recursion and normalizing constant-index,
+temporary numbering, and synthetic virtual-constructor emission.  Validate
+that five-fixture group with the full PA22 report, through-PA21, and the PA22
+source audit.
+
+## Checkpoint 85 result and next scope — 2026-07-26
+
 The selected pack/forwarding slice is implemented.  Empty type-pack static
 assertions now disappear after a known-true materialization, type-pack
 element results retain their concrete copy-constructor type, and forwarding
@@ -1942,6 +1977,57 @@ Next checkpoint scope: bundle the remaining **general/100 + general/200
 top-level cv/array/default and pack deduction while making partial ordering,
 ambiguity, and constructor ranking use the same candidate facts; validate the
 focused group, the full PA22 report, through-PA21, and the source audit.
+
+## Checkpoint 86 scope — 2026-07-26 (before implementation)
+
+The current required report was refreshed from commit `e01518f`: **145/250**,
+with **105** residual fixtures and one timeout.  The complete failure set is
+grouped by primary shared behavior as follows: general/100 **8** (explicit
+conversion/LowIR parity, top-level cv and array/default deduction, local
+`decltype`, qualified aliases, and a value-base rejection); general/200 **4**
+(cv-pointer ambiguity, empty-pack overload order, inherited constructor
+visibility, and synthetic virtual-member emission); general/300 **26**
+(dependent lookup, SFINAE, aliases, and deferred materialization);
+general/400 **15** (typed NTTPs, aliases, conversions, and constructor replay);
+general/500 **23** (owners, ADL, aliases, packs, conversions, and dependent
+results); spec/100 **5**, spec/200 **7**, spec/300 **6**, spec/400 **2**, and
+spec/500 **9** (the remaining array, ordering, conversion, decltype,
+template-template, and reference-NTTP edges).  The exact current fixture
+names are the 105 `ERROR` entries in the refreshed PA22 report; no fixture is
+omitted from these buckets.
+
+### Remaining Work Map
+
+- **general/100 (8):**
+  `explicit-template-id-user-conversion-deduction`,
+  `function-parameter-empty-middle-pack-alias`,
+  `function-template-elaborated-top-cv-deduction`,
+  `function-template-fixed-over-trailing-pack-fallback`,
+  `local-class-declval-explicit-template-id`,
+  `qualified-alias-template-member-deduction`,
+  `template-array-reference-cv-default-arg`, and
+  `template-deduction-rejects-value-base-argument`.
+- **general/200 (4):** `ambiguous-cv-pointer-partial-ordering-bad`,
+  `empty-index-sequence-overload-order`,
+  `inherited-constructor-template-forwarding`, and
+  `partial-order-synthetic-virtual-member-emission`.
+- **general/300 (26), general/400 (15), general/500 (23), and
+  spec/100/200/300/400/500 (29):** retain the current report’s complete
+  dependent-substitution, alias/owner/conversion, typed-NTTP, and
+  specification-edge residuals as the follow-up groups.
+
+### Checkpoint Scope
+
+Implement the complete 12-fixture general/100+200 band.  The compiler must
+preserve typed top-level cv/array/default facts during deduction, defer
+function-template and qualified-alias materialization until call context is
+known, keep local-class and `decltype` expression types tied to typed callable
+facts, reject value-base template deductions through SFINAE, and select empty
+pack/constructor/partial-order candidates using the same candidate state.
+The scope includes LowIR parity for the two semantically compiling fixtures
+and must preserve the already passing pack/forwarding checkpoint.  Validate
+focused fixtures, the full PA22 report, through-PA21, and the PA22 source
+audit.
 
 ## Checkpoint 82 result and next scope — 2026-07-25
 

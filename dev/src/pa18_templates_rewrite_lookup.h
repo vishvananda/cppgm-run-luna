@@ -96,6 +96,30 @@
 	bool TemplateRange(const string& raw, size_t open, string* arguments,
 		size_t* close_out) const
 	{
+		// PA10 may preserve adjacent closing template delimiters as `>>`.
+		// IsTemplateAngleClose intentionally rejects some `>>` spellings that
+		// could be a shift expression; inside a known nested template range, a
+		// consecutive run followed by a delimiter or cv/function qualifier is a
+		// closure run instead.  Recognize the whole run so both delimiters update
+		// the nesting depth and the outer text does not retain a stray `>`.
+		const auto nested_close_run = [&raw](size_t position) {
+			if(position >= raw.size() || raw[position] != '>') return false;
+			size_t begin = position;
+			while(begin > 0 && raw[begin - 1] == '>') --begin;
+			size_t end = position;
+			while(end + 1 < raw.size() && raw[end + 1] == '>') ++end;
+			if(end == begin) return false;
+			size_t after = end + 1;
+			while(after < raw.size() && isspace(static_cast<unsigned char>(raw[after]))) ++after;
+			if(after == raw.size()) return true;
+			if(string(",;):]}&*:=").find(raw[after]) != string::npos) return true;
+			if(!isalpha(static_cast<unsigned char>(raw[after])) && raw[after] != '_')
+				return false;
+			size_t word_end = after + 1;
+			while(word_end < raw.size() && IsIdentifierCharacter(raw[word_end])) ++word_end;
+			const string word = raw.substr(after, word_end - after);
+			return word == "const" || word == "volatile" || word == "noexcept";
+		};
 		int depth = 0;
 		int parentheses = 0;
 		int brackets = 0;
@@ -108,7 +132,8 @@
 			if(raw[i] == '<' && IsTemplateAngleOpen(raw, i)) {
 				++depth;
 				angle_parentheses.push_back(parentheses);
-			} else if(raw[i] == '>' && IsTemplateAngleClose(raw, i)) {
+		} else if(raw[i] == '>' && (IsTemplateAngleClose(raw, i) ||
+			(depth > 0 && nested_close_run(i)))) {
 				const int opener_parentheses = angle_parentheses.empty() ? 0 :
 					angle_parentheses.back();
 				if(parentheses > opener_parentheses) continue;
