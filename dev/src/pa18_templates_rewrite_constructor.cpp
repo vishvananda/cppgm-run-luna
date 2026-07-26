@@ -109,6 +109,77 @@ void PA18TemplateExpander::MaterializeInitializerConstructor(
 	target = CanonicalSpelling(ResolveAlias(RewriteText(target, context,
 		substitutions, 0), context));
 	if(target.empty() || !FindClassDeclaration(target, context)) return;
+	// A direct initializer can select a non-template constructor of the target
+	// through a user-defined conversion.  Materialize the conversion object's
+	// constructor before PA11 builds constructor bindings; otherwise a template
+	// such as String(T) is invisible because no source expression names String
+	// directly.
+	const CPPGMAstNodePtr target_declaration = FindClassDeclaration(target, context);
+	const auto materialize_conversion_constructor = [&](const string& raw_parameter,
+		const CPPGMAstNodePtr& argument) {
+		if(!argument) return;
+		string parameter_type = CanonicalSpelling(ResolveAlias(RewriteText(
+			raw_parameter, context, substitutions, 0), context));
+		while(parameter_type.compare(0, 6, "const ") == 0 ||
+			parameter_type.compare(0, 9, "volatile ") == 0) {
+			const size_t space = parameter_type.find(' ');
+			if(space == string::npos) break;
+			parameter_type = CanonicalSpelling(parameter_type.substr(space + 1));
+		}
+		while(!parameter_type.empty() && (parameter_type[parameter_type.size() - 1] == '&' ||
+			parameter_type[parameter_type.size() - 1] == '*'))
+			parameter_type = CanonicalSpelling(parameter_type.substr(0, parameter_type.size() - 1));
+		if(parameter_type.empty() || !FindClassDeclaration(parameter_type, context)) return;
+		string source_owner = parameter_type;
+		string source_name = LastComponent(parameter_type);
+		map<string, string>::const_iterator base = specialization_bases_.find(source_name);
+		if(base != specialization_bases_.end()) {
+			source_owner = base->second;
+			source_name = LastComponent(source_owner);
+		}
+		map<string, vector<string> >::const_iterator indexed = definitions_by_name_.find(source_name);
+		if(indexed == definitions_by_name_.end()) return;
+		for(size_t candidate = 0; candidate < indexed->second.size(); ++candidate) {
+			map<string, TemplateDefinition>::const_iterator found = definitions_.find(
+				indexed->second[candidate]);
+			if(found == definitions_.end()) continue;
+			const TemplateDefinition& definition = found->second;
+			if(definition.class_template || definition.alias_template || !definition.member_template ||
+				LastComponent(definition.name) != source_name ||
+				!SameTemplateOwner(definition.owner, source_owner)) continue;
+			CPPGMAstNodePtr object(new CPPGMAstNode("id-expression"));
+			object->inferred_type = parameter_type;
+			CPPGMAstNodePtr member(new CPPGMAstNode("member-expression", "."));
+			member->children.push_back(object);
+			member->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
+				"identifier", source_name)));
+			CPPGMAstNodePtr call(new CPPGMAstNode("call-expression"));
+			call->children.push_back(member);
+			CPPGMAstNodePtr call_arguments(new CPPGMAstNode("argument-list"));
+			call_arguments->children.push_back(argument);
+			call->children.push_back(call_arguments);
+			try {
+				InstantiateMemberCall(call, member, source_name, context, substitutions);
+			} catch(const PA18SubstitutionFailure&) {
+			} catch(const logic_error&) {
+			}
+			return;
+		}
+	};
+	if(target_declaration) for(size_t child = 0; child < target_declaration->children.size(); ++child) {
+		const CPPGMAstNodePtr constructor = target_declaration->children[child];
+		if(!constructor || (constructor->kind != "special-member-definition" &&
+			constructor->kind != "special-member-declaration")) continue;
+		const CPPGMAstNodePtr clause = DescendantOfKind(FunctionDeclarator(constructor),
+			"parameter-clause");
+		if(!clause) continue;
+		for(size_t parameter = 0; parameter < clause->children.size() &&
+			parameter < arguments.size(); ++parameter) {
+			const CPPGMAstNodePtr item = clause->children[parameter];
+			if(item && item->kind == "parameter-declaration")
+				materialize_conversion_constructor(ParameterTypeSpelling(item), arguments[parameter]);
+		}
+	}
 	const string constructor_name = LastComponent(target);
 	string source_constructor_owner;
 	string source_constructor_name = constructor_name;

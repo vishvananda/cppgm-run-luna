@@ -1,5 +1,6 @@
 #include "pa14_lowering.h"
 
+
 #include <algorithm>
 #include <set>
 #include <sstream>
@@ -435,11 +436,16 @@ void PA14Lowerer::PreparePolymorphicModel()
       const FunctionRecord& function = functions_[i];
       if (!function.definition || type_value(function.member_owner) != type ||
           !function.member || function.static_member) continue;
-      if (IsVirtualFunction(function)) { root = true; break; }
+      if (!IsVirtualFunction(function)) continue;
+      const string declared_name = function.node && function.node->children.size() > 1 ?
+        declarator_name(function.node->children[1]) : string();
+      const bool key_function = declared_name.find("::") != string::npos;
+      if(function.needed || key_function ||
+         complete_template_object_uses_.find(type.get()) !=
+           complete_template_object_uses_.end()) { root = true; break; }
     }
     if (root) emitted_vtables_.insert(type.get());
   }
-
   bool changed = true;
   while (changed) {
     changed = false;

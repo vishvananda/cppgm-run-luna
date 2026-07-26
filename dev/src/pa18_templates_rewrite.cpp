@@ -1111,7 +1111,7 @@ void PA18TemplateExpander::TransformRegularChildren(const CPPGMAstNodePtr& input
 						else child->value = RewriteText(raw_target, node_context, *local_substitutions, 0, false, false);
 				} else child->value = RewriteText(raw_target, node_context, *local_substitutions, 0, false, false);
 					} else if(input->kind == "member-expression" && i == 1 && original_child && original_child->kind == "identifier" && IsKnownMemberTemplateId(original_child->value)) child = CloneNode(original_child);
-					else child = TransformNode(original_child, node_context, *local_substitutions); if(child && input->kind == "array-suffix" && !child->children.empty() && child->children[0]) {
+				else child = TransformNode(original_child, node_context, *local_substitutions); if(child && input->kind == "array-suffix" && !child->children.empty() && child->children[0]) {
 					PA19IntegralValue bound;
 					const string expression = ConstantExpressionSpelling(child->children[0]);
 					if(EvaluateIntegralText(expression, node_context, *local_substitutions, &bound))

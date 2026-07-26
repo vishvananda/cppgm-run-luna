@@ -33,6 +33,10 @@ bool PA18TemplateExpander::GeneratedFunctionCallResultType(
 					continue;
 				}
 				if(item->kind != "parameter-declaration") continue;
+				if(IsAbstractObjectSpelling(ParameterTypeSpelling(item), function_context)) {
+					viable = false;
+					break;
+				}
 				if(parameter_count >= actual_types.size() || !FunctionArgumentViable(
 					ParameterTypeSpelling(item), actual_types[parameter_count], function_context)) {
 					viable = false;
@@ -40,8 +44,45 @@ bool PA18TemplateExpander::GeneratedFunctionCallResultType(
 				}
 				++parameter_count;
 			}
-			if(!viable || (!has_ellipsis && parameter_count != actual_types.size()) ||
-				(has_ellipsis && parameter_count > actual_types.size())) continue;
+		if(!viable || (!has_ellipsis && parameter_count != actual_types.size()) ||
+			(has_ellipsis && parameter_count > actual_types.size())) {
+			// A generated non-ellipsis specialization can be discarded by
+			// substitution (notably when its parameter would contain an abstract
+			// array).  The source overload set may still provide a viable ellipsis
+			// fallback that was never materialized because the rejected candidate
+			// was the first lookup result.
+			if(!viable && declaration && !declaration->template_primary.empty() &&
+				!declaration->template_arguments.empty()) {
+				const vector<const TemplateDefinition*> fallbacks =
+					FindFunctionDefinitions(LastComponent(declaration->template_primary),
+						function_context);
+				for(size_t fallback = 0; fallback < fallbacks.size(); ++fallback) {
+					const TemplateDefinition* source = fallbacks[fallback];
+					if(!source || source->parameters.size() !=
+						declaration->template_arguments.size()) continue;
+					const CPPGMAstNodePtr source_clause = DescendantOfKind(
+						FunctionDeclarator(source->declaration), "parameter-clause");
+					bool source_ellipsis = false;
+					if(source_clause) for(size_t parameter = 0;
+						parameter < source_clause->children.size(); ++parameter)
+						if(source_clause->children[parameter] &&
+							source_clause->children[parameter]->kind == "ellipsis") {
+							source_ellipsis = true;
+							break;
+						}
+					if(!source_ellipsis) continue;
+					try {
+						const string fallback_result = FunctionResultType(*source,
+							declaration->template_arguments, function_context, &substitutions);
+						if(!fallback_result.empty()) {
+							generated_ellipsis_result = fallback_result;
+							break;
+						}
+					} catch(const PA18SubstitutionFailure&) {}
+				}
+			}
+			continue;
+		}
 			string generated_result = NodeTypeSpelling(declaration->children.empty() ?
 				CPPGMAstNodePtr() : declaration->children[0]) + DeclaratorSuffix(declarator);
 			generated_result = RewriteText(generated_result, function_context,
@@ -342,6 +383,7 @@ bool PA18TemplateExpander::ResolveCallableTemporaryCallResult(
 	for(size_t member = 0; member < declaration->children.size(); ++member) {
 		CPPGMAstNodePtr candidate = declaration->children[member];
 		if(!candidate || (candidate->kind != "simple-declaration" &&
+			candidate->kind != "function-definition" &&
 			candidate->kind != "template-declaration" &&
 			candidate->kind != "special-member-declaration" &&
 			candidate->kind != "special-member-definition")) continue;
@@ -352,7 +394,9 @@ bool PA18TemplateExpander::ResolveCallableTemporaryCallResult(
 			candidate->kind != "special-member-declaration" &&
 			candidate->kind != "special-member-definition")) continue;
 		const string name = candidate->kind == "simple-declaration" ?
-			DeclarationName(candidate) : RemoveMarker(candidate->value);
+			DeclarationName(candidate) : (!candidate->value.empty() ?
+				RemoveMarker(candidate->value) : LastComponent(FirstIdentifierLocal(
+					FunctionDeclarator(candidate))));
 		if(name.compare(0, 8, "operator") != 0) continue;
 		if(candidate->kind == "simple-declaration") {
 			const CPPGMAstNodePtr declarator = FunctionDeclarator(candidate);
@@ -375,9 +419,32 @@ bool PA18TemplateExpander::ResolveCallableTemporaryCallResult(
 				NodeTypeSpelling(candidate->children.empty() ? CPPGMAstNodePtr() :
 					candidate->children[0]) + ReturnDeclaratorSuffix(declarator),
 				context));
-			return !result->empty();
-		}
-		string target = CanonicalSpelling(name.substr(8));
+				return !result->empty();
+			}
+			if(name == "operator()") {
+				const CPPGMAstNodePtr declarator = FunctionDeclarator(candidate);
+				const CPPGMAstNodePtr parameters = DescendantOfKind(declarator,
+					"parameter-clause");
+				if(!declarator || !parameters) continue;
+				vector<string> parameter_types;
+				for(size_t parameter = 0; parameter < parameters->children.size(); ++parameter) {
+					const CPPGMAstNodePtr item = parameters->children[parameter];
+					if(item && item->kind == "parameter-declaration")
+						parameter_types.push_back(ParameterTypeSpelling(item));
+				}
+				if(parameter_types.size() != actual_types.size()) continue;
+				bool viable = true;
+				for(size_t parameter = 0; parameter < parameter_types.size(); ++parameter)
+					if(!FunctionArgumentViable(parameter_types[parameter],
+						actual_types[parameter], context)) { viable = false; break; }
+				if(!viable) continue;
+				*result = NormalizeTypeArgument(ResolveAlias(
+					NodeTypeSpelling(candidate->children.empty() ? CPPGMAstNodePtr() :
+						candidate->children[0]) + ReturnDeclaratorSuffix(declarator),
+					context));
+				return !result->empty();
+			}
+			string target = CanonicalSpelling(name.substr(8));
 		if(target.empty() || target[0] == '(' || target[0] == '[') continue;
 		target = CanonicalSpelling(ResolveAlias(
 			ReplaceIdentifiers(target, substitutions), normalized_object));

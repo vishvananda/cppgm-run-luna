@@ -142,6 +142,11 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 {
 	if(!result || !active) return false;
 	string class_key = CanonicalSpelling(raw_class);
+	if(class_key.find("::") == string::npos) {
+		const string resolved_class_key = CanonicalSpelling(ResolveAlias(class_key, context));
+		if(!resolved_class_key.empty() && resolved_class_key != class_key)
+			class_key = resolved_class_key;
+	}
 	const string lookup_key = class_key + "|" + member + "|" + context;
 	if(!active_member_type_lookups_.insert(lookup_key).second) return false;
 	struct LookupScope {
@@ -402,8 +407,34 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 								class_definition->parameters[parameter].template_template ? argument :
 								CanonicalSpelling(ResolveAlias(argument, context));
 						}
-				if(!class_definition->name.empty()) class_substitutions[class_definition->name] =
-					class_key;
+					if(!class_definition->name.empty()) class_substitutions[class_definition->name] =
+						class_key;
+					if(selected_class && selected_class->partial_specialization &&
+						!class_arguments.empty()) for(size_t pattern = 0;
+						pattern < selected_class->specialization_pattern.size(); ++pattern) {
+						string cv_name = CanonicalSpelling(
+							selected_class->specialization_pattern[pattern]);
+						bool trailing_const = cv_name.size() > 5 &&
+							cv_name.compare(cv_name.size() - 5, 5, "const") == 0;
+						bool trailing_volatile = cv_name.size() > 8 &&
+							cv_name.compare(cv_name.size() - 8, 8, "volatile") == 0;
+						if(!trailing_const && !trailing_volatile) continue;
+						const size_t qualifier_size = trailing_const ? 5 : 8;
+						cv_name.erase(cv_name.size() - qualifier_size);
+						while(!cv_name.empty() && isspace(static_cast<unsigned char>(cv_name[cv_name.size() - 1])))
+							cv_name.erase(cv_name.size() - 1);
+						bool known_parameter = false;
+						for(size_t parameter = 0; parameter < selected_class->specialization_parameters.size(); ++parameter)
+							if(selected_class->specialization_parameters[parameter] == cv_name)
+								known_parameter = true;
+						if(!known_parameter) continue;
+						string actual = CanonicalSpelling(class_arguments[0]);
+						const string qualifier = trailing_const ? " const" : " volatile";
+						if(actual.size() <= qualifier.size() || actual.compare(actual.size() - qualifier.size(),
+							qualifier.size(), qualifier) != 0) continue;
+						class_substitutions[cv_name] = CanonicalSpelling(
+							actual.substr(0, actual.size() - qualifier.size()));
+					}
 					// Prefer the already replayed declaration for a concrete
 					// template-id.  Falling back to the source partial here loses
 					// the complete binding of a parameter pack and turns
@@ -499,6 +530,22 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 		}
 		if(!specialization_definition->name.empty())
 			class_substitutions[specialization_definition->name] = class_key;
+		// The generated name records the primary template's concrete arguments,
+		// but its declaration may have been emitted from a class partial
+		// specialization.  Replaying a member alias from the primary bindings
+		// would turn `remove_const<T const>::type` back into `T const` and lose
+		// the partial's specialized binding (`T`).
+		const TemplateDefinition* selected_specialization =
+			SelectClassTemplateDefinition(specialization_definition,
+				specialization_arguments->second, context);
+		if(selected_specialization && selected_specialization->partial_specialization) {
+			map<string, string> specialized_bindings;
+			if(MatchClassSpecializationPattern(*selected_specialization,
+				specialization_arguments->second, &specialized_bindings, context))
+				for(map<string, string>::const_iterator binding = specialized_bindings.begin();
+					binding != specialized_bindings.end(); ++binding)
+					class_substitutions[binding->first] = binding->second;
+		}
 	}
 	if(specialization != specialization_bases_.end() && incomplete_concrete)
 		class_key = specialization->second;

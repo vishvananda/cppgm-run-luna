@@ -921,6 +921,10 @@ bool PA18TemplateExpander::InferFunctionParameter(
 		FunctionSignature signature;
 		bool inferred_argument = InferArgument(argument, &type, parameter_substitutions,
 			context, &signature);
+		if(inferred_argument && signature.result_specifiers && signature.parameters &&
+			pattern.size() > 2 && pattern.compare(pattern.size() - 2, 2, "&&") == 0 &&
+			IsLvalueTemplateArgument(argument))
+			signature.lvalue_argument = true;
 		const bool enumerator_prvalue = argument && argument->kind == "id-expression" &&
 			enumerator_types_.find(RemoveMarker(argument->value)) != enumerator_types_.end();
 		if(!pack_parameter && !pattern.empty() && pattern[pattern.size() - 1] == '&' &&

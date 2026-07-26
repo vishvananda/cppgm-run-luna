@@ -1,5 +1,6 @@
 #include "pa14_lowering.h"
 
+
 using namespace std;
 
 namespace cppgm_pa14_lowering {
@@ -76,6 +77,26 @@ string PA14NodeValues(const CPPGMAstNodePtr& node)
 void PA14Lowerer::IndexCompleteTemplateObjectUses(const CPPGMAstNodePtr& node)
 {
     if(!node) return;
+    if(node->kind == "new-expression" || node->kind == "call-expression") {
+      const string spelling = PA14NodeValues(node);
+      const string callee = node->kind == "call-expression" && !node->children.empty() &&
+        node->children[0] && node->children[0]->kind == "id-expression" ?
+        node->children[0]->value : string();
+      for(map<const CPPGMAstNode*, TypePtr>::const_iterator type =
+            analyzer_.class_types_.begin(); type != analyzer_.class_types_.end(); ++type) {
+        const TypePtr value = type_value(type->second);
+        if(!value || value->kind != TYPE_CLASS || value->name.empty()) continue;
+        const string class_name = LastComponent(value->name);
+        const bool constructor_call = callee == class_name ||
+          (!class_name.empty() && callee.size() > class_name.size() + 2 &&
+           callee.compare(callee.size() - class_name.size() - 2, 2, "::") == 0 &&
+           callee.compare(callee.size() - class_name.size(), class_name.size(), class_name) == 0);
+        if(!class_name.empty() && (node->kind == "new-expression" ?
+            spelling.find(class_name) != string::npos : constructor_call)) {
+          complete_template_object_uses_.insert(value.get());
+        }
+      }
+    }
     if(node->kind == "simple-declaration" && !node->children.empty() &&
        PA14NodeValues(node->children[0]).find("typedef") == string::npos &&
        !node->template_instantiation) {
@@ -91,9 +112,11 @@ void PA14Lowerer::IndexCompleteTemplateObjectUses(const CPPGMAstNodePtr& node)
         for(map<const CPPGMAstNode*, TypePtr>::const_iterator type =
               analyzer_.class_types_.begin(); type != analyzer_.class_types_.end(); ++type) {
           const TypePtr value = type_value(type->second);
-          if(!value || value->kind != TYPE_CLASS || !value->template_specialization ||
-             value->name.empty() || value->template_primary.empty() ||
-             spelling.find(LastComponent(value->template_primary)) == string::npos) continue;
+          if(!value || value->kind != TYPE_CLASS || value->name.empty()) continue;
+          const string class_name = value->template_specialization ?
+            LastComponent(value->template_primary) : LastComponent(value->name);
+          if(class_name.empty() || spelling.find(class_name) == string::npos) continue;
+          if(value->template_specialization && value->template_primary.empty()) continue;
           complete_template_object_uses_.insert(value.get());
         }
       }
@@ -691,6 +714,35 @@ void PA14Lowerer::CollectInheritedConstructors(const TypePtr& raw_owner, Scope* 
         unwind_no = source_record->unwind_no;
         if(source_record->source_type) source_function = source_record->source_type;
       }
+		// A materialized template constructor can carry a synthesized function
+		// record whose parameter metadata has already fallen back to ABI names.
+		// The inherited wrapper is still required to expose the source
+		// declarator's names in LowIR, so recover them from the binding AST before
+		// manufacturing its forwarding declaration.
+		if(source_binding->declaration) {
+			CPPGMAstNodePtr source_declarator;
+			if(source_binding->declaration->kind == "function-definition" &&
+				source_binding->declaration->children.size() > 1)
+				source_declarator = source_binding->declaration->children[1];
+			else source_declarator = ChildOfKind(source_binding->declaration, "declarator");
+			const CPPGMAstNodePtr source_clause = source_declarator ?
+				DescendantOfKind(source_declarator, "parameter-clause") :
+				CPPGMAstNodePtr();
+			if(source_clause) {
+				if(source_names.size() < source_function->parameters.size() + 1)
+					source_names.resize(source_function->parameters.size() + 1);
+				for(size_t p = 0; p < source_function->parameters.size() &&
+					p < source_clause->children.size(); ++p) {
+					const size_t name_index = p + 1;
+					if(!source_names[name_index].empty() &&
+						source_names[name_index].compare(0, 7, "__param") != 0) continue;
+					const CPPGMAstNodePtr parameter = source_clause->children[p];
+					if(!parameter || parameter->children.size() < 2) continue;
+					const string declared = declarator_name(parameter->children[1]);
+					if(!declared.empty()) source_names[name_index] = declared;
+				}
+			}
+		}
       const string qname = TypeQualifiedName(owner) + "::" +
         special_member_symbol_name(owner, owner_name);
       const string key = function_key(qname, source_function);
@@ -1042,7 +1094,9 @@ void PA14Lowerer::CollectGlobalDeclaration(const CPPGMAstNodePtr& node,
       record.dynamic_initializer = !static_member_object ||
         HasDefaultConstructionEffects(value_type) ||
         (value_type && value_type->kind == TYPE_CLASS &&
-         HasUserProvidedConstructor(value_type));
+         HasUserProvidedConstructor(value_type)) ||
+        (static_member_object && static_cast<bool>(record.initializer) &&
+         !facts.is_constexpr);
       // A constexpr object whose only construction is a trivial/defaulted
       // empty construction is already represented by its zero-initialized
       // static storage.  Do not manufacture a runtime constructor call for

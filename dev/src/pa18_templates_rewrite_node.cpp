@@ -14,7 +14,8 @@ CPPGMAstNodePtr PA18TemplateExpander::RewriteRegularNodeValue(
 	if(PreserveDependentStaticDeclarator(input, context, substitutions, result,
 		promoted_name)) return CPPGMAstNodePtr();
 	const bool type_spelling = input->kind == "decl-specifier" ||
-		input->kind == "type-name" || input->kind == "type-specifier";
+		input->kind == "type-name" || input->kind == "type-specifier" ||
+		input->kind == "base-name";
 	if(input->kind == "literal" && input->value.size() >= 2 &&
 		input->value[0] == '"' && input->value[input->value.size() - 1] == '"')
 		result->value = input->value;

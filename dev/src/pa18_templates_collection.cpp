@@ -1213,6 +1213,10 @@ string PA18TemplateExpander::ResolveAlias(string spelling, const string& context
 			}
 		}
 		if(member_type.empty()) break;
+		if(member_type.find("::") == string::npos) {
+			const string resolved_member = ResolveAlias(member_type, context);
+			if(!resolved_member.empty()) member_type = resolved_member;
+		}
 		spelling = CanonicalSpelling(member_type);
 	}
 	// Top-level cv applied to an alias whose target is a reference does not
@@ -1261,6 +1265,7 @@ CPPGMAstNodePtr PA18TemplateExpander::FunctionParameter(
 			}
 		}
 	}
+	if(rvalue_reference && signature.lvalue_argument) rvalue_reference = false;
 	CPPGMAstNodePtr result(new CPPGMAstNode("parameter-declaration"));
 	result->children.push_back(CloneNode(signature.result_specifiers));
 	CPPGMAstNodePtr declarator(new CPPGMAstNode("declarator"));

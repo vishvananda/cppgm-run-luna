@@ -1253,6 +1253,10 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			separator = next_scope_separator(raw, member_end);
 			continue;
 		}
+		if(member_type.find("::") == string::npos) {
+			const string resolved_member_type = ResolveAlias(member_type, context);
+			if(!resolved_member_type.empty()) member_type = resolved_member_type;
+		}
 		size_t replacement_begin = owner_begin;
 		while(replacement_begin > 0 && isspace(static_cast<unsigned char>(raw[replacement_begin - 1])))
 			--replacement_begin;

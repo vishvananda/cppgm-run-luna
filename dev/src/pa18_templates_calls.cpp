@@ -520,13 +520,14 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 			definition.owner.find('<') == string::npos &&
 			FindClassDeclaration(definition.owner, context) != CPPGMAstNodePtr() &&
 			!definition.member_template;
+		const string emitted_member_name = definition.member_template ? generated_name : member_name;
 		if(static_member && definition.owner.find("::") == string::npos && concrete_owner) {
 			call->children[0] = CPPGMAstNodePtr(new CPPGMAstNode("id-expression",
-				definition.owner + "::" + member_name));
+				definition.owner + "::" + emitted_member_name));
 		} else callee->children[1]->value =
 			(ordinary_class_member && !generated_operator) ? member_name :
 			(concrete_owner && !generated_operator ?
-				member_name : generated_name);
+				(definition.member_template ? generated_name : member_name) : generated_name);
 		if(!member_qualifier.empty() && concrete_owner && !static_member) {
 			// Preserve a dependent qualified-base call as a qualified generated
 			// function.  Leaving it as `this->operator=...` redispatches through
@@ -781,6 +782,67 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 		}
 		const size_t open = lookup_callee.find('<');
 		if(open != string::npos) {
+			CPPGMAstNodePtr explicit_deduction_input = input;
+			// An explicit call inside a function-template replay can expand an
+			// enclosing function pack into several fixed parameters of an overload
+			// (`impl<...>(..., forward<Args>(args)...)`).  Validate and deduce the
+			// inner overload against that typed expanded argument list, not the
+			// compact source pack node.
+			try {
+				if(input->children.size() > 1 && input->children[1] &&
+					input->children[1]->kind == "argument-list") {
+					CPPGMAstNodePtr expanded_arguments = CloneNode(input->children[1]);
+					expanded_arguments->children.clear();
+					for(size_t argument = 0; argument < input->children[1]->children.size(); ++argument) {
+						const CPPGMAstNodePtr source_argument = input->children[1]->children[argument];
+						if(!source_argument || source_argument->kind != "pack-expansion-expression") {
+							expanded_arguments->children.push_back(CloneNode(source_argument));
+							continue;
+						}
+						string pack_name;
+						const string source_spelling = SpellNode(source_argument);
+						for(map<string, vector<string> >::const_iterator pack =
+							active_pack_substitutions_.begin(); pack != active_pack_substitutions_.end(); ++pack) {
+							if(pack->first.empty()) continue;
+							const size_t at = source_spelling.find(pack->first);
+							if(at != string::npos && (at == 0 || !IsIdentifierCharacter(source_spelling[at - 1])) &&
+								(at + pack->first.size() == source_spelling.size() ||
+									!IsIdentifierCharacter(source_spelling[at + pack->first.size()]))) {
+								pack_name = pack->first;
+								break;
+							}
+						}
+						map<string, vector<string> >::const_iterator values =
+							active_pack_substitutions_.find(pack_name);
+						if(values == active_pack_substitutions_.end()) continue;
+						for(size_t value = 0; value < values->second.size(); ++value) {
+							CPPGMAstNodePtr expanded = CloneNode(source_argument->children.empty() ?
+								source_argument : source_argument->children[0]);
+							map<string, string> one;
+							one[pack_name] = values->second[value];
+							function<void(const CPPGMAstNodePtr&)> substitute =
+								[&](const CPPGMAstNodePtr& node) {
+									if(!node) return;
+									node->value = ReplaceIdentifiersPreservingPackSizes(node->value, one);
+									for(size_t child = 0; child < node->children.size(); ++child)
+										substitute(node->children[child]);
+							};
+							substitute(expanded);
+							// The expanded forwarding call is a probe only.  Carry the
+							// already typed pack element on the synthetic argument so
+							// candidate validation does not have to materialize its
+							// dependent `forward` helper first.
+							expanded->inferred_type = values->second[value];
+							expanded_arguments->children.push_back(expanded);
+						}
+					}
+					if(!expanded_arguments->children.empty()) {
+						explicit_deduction_input = CloneNode(input);
+						explicit_deduction_input->children.resize(1);
+						explicit_deduction_input->children.push_back(expanded_arguments);
+					}
+				}
+			} catch(const PA18SubstitutionFailure&) {}
 			string base;
 			size_t begin = 0;
 			string argument_text;
@@ -790,17 +852,26 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 				TemplateRange(lookup_callee, open, &argument_text, &close))
 				explicit_definition = FindDefinition(base, context);
 			if(explicit_definition && !explicit_definition->class_template) {
-				const vector<const TemplateDefinition*> overloads = FindFunctionDefinitions(base, context);
+				vector<const TemplateDefinition*> overloads = FindFunctionDefinitions(base, context);
+				RankFunctionTemplateCandidatesForCall(&overloads, explicit_deduction_input,
+					context, substitutions);
 				if(overloads.size() > 1) {
 					const vector<string> raw_explicit_args = SplitTemplateArguments(argument_text);
+					const TemplateDefinition* selected_overload = 0;
 					for(size_t overload = 0; overload < overloads.size(); ++overload) {
 						vector<string> trial_arguments;
-						if(ValidateExplicitFunctionCandidate(*overloads[overload], input, context,
-							substitutions, raw_explicit_args, &trial_arguments)) {
-							explicit_definition = overloads[overload];
-							break;
+						const bool valid_explicit = ValidateExplicitFunctionCandidate(*overloads[overload], explicit_deduction_input, context,
+								substitutions, raw_explicit_args, &trial_arguments);
+						if(valid_explicit) {
+							const bool prefer = !selected_overload ||
+								overloads[overload]->parameters.size() >
+									selected_overload->parameters.size();
+							if(prefer) {
+								selected_overload = overloads[overload];
+							}
 						}
 					}
+					if(selected_overload) explicit_definition = selected_overload;
 				}
 			}
 			if(explicit_definition && !explicit_definition->class_template) {
@@ -841,7 +912,7 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 				bool complete = !pack_precedes_fixed && (explicit_pack_elements ||
 					(!has_parameter_pack && explicit_args.size() == explicit_definition->parameters.size()));
 				if(complete) complete_args = explicit_args;
-				else try { complete = InferFunctionArguments(*explicit_definition, input, &complete_args, substitutions, context, &explicit_args, 0, &inferred_function_values); }
+				else try { complete = InferFunctionArguments(*explicit_definition, explicit_deduction_input, &complete_args, substitutions, context, &explicit_args, 0, &inferred_function_values); }
 				catch(const PA18SubstitutionFailure&) { complete = false; }
 				if(complete) {
 					try {

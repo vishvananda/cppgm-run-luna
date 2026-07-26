@@ -357,7 +357,8 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
       }
     }
     if(base && !delegating && !explicitly_initialized_base && HasConstructor(base) &&
-       (!IsEmptyBaseStorage(base) || HasDefaultConstructionEffects(base))) {
+       (!IsEmptyBaseStorage(base) || HasDefaultConstructionEffects(base) ||
+        HasUserProvidedConstructor(base))) {
       const string this_address = EmitValue(this_node, scope).operand;
       const string base_address = AdjustBaseAddress(this_address, owner, base);
       (void)EmitConstructorAt(base, base_address, vector<CPPGMAstNodePtr>(), scope,
@@ -454,7 +455,8 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
       }
       if(named_base) {
         if(arguments.empty() && IsEmptyBaseStorage(named_base) &&
-           !HasDefaultConstructionEffects(named_base))
+           !HasDefaultConstructionEffects(named_base) &&
+           !HasUserProvidedConstructor(named_base))
           continue;
         const string this_address = EmitValue(this_node, scope).operand;
         const string base_address = AdjustBaseAddress(this_address, owner, named_base);
@@ -466,6 +468,8 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
                (Analyzer::HasNodeValue(function.node, "decl-specifier", "constexpr") ||
                 Analyzer::HasNodeValue(function.node, "specifier", "constexpr"))) ||
               IsDerivedFrom(argument_type, named_base)) &&
+             (!IsEmptyBaseStorage(named_base) ||
+              !HasUserProvidedConstructor(named_base)) &&
              EmitObjectTransferAt(named_base, base_address, arguments[0], scope, true))
             continue;
         }

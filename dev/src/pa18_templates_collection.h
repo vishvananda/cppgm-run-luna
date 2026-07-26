@@ -440,7 +440,7 @@ struct FunctionSignature
 {
 	CPPGMAstNodePtr result_specifiers;
 	CPPGMAstNodePtr declarator;
-	CPPGMAstNodePtr parameters;
+	CPPGMAstNodePtr parameters; bool lvalue_argument; FunctionSignature() : result_specifiers(), declarator(), parameters(), lvalue_argument(false) {}
 };
 class PA18TemplateExpander
 {
@@ -619,7 +619,7 @@ private:
 		const string& context, bool extern_instantiation = false);
 	CPPGMAstNodePtr TransformCallExpression(const CPPGMAstNodePtr& input,
 		const string& context, const map<string, string>& substitutions);
-	bool ValidateExplicitFunctionCandidate(const TemplateDefinition& definition, const CPPGMAstNodePtr& input, const string& context, const map<string, string>& substitutions, const vector<string>& raw_explicit_args, vector<string>* arguments);
+	bool ValidateExplicitFunctionCandidate(const TemplateDefinition& definition, const CPPGMAstNodePtr& input, const string& context, const map<string, string>& substitutions, const vector<string>& raw_explicit_args, vector<string>* arguments); bool HasAbstractFunctionParameter(const TemplateDefinition& definition, const vector<string>& arguments, const string& context, const map<string, string>& substitutions); bool IsAbstractObjectSpelling(const string& raw, const string& context) const;
 	string ResolveAlias(string spelling, const string& context) const;
 	bool FindLogicalNamespaceAlias(const string& spelling, string* alias_key) const;
 	bool IsArrayTypeAlias(const string& alias_name, const string& context) const;

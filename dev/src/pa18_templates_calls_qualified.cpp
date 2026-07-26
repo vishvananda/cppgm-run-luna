@@ -124,7 +124,8 @@ bool PA18TemplateExpander::TransformQualifiedMemberTemplateCall(
 	if(!outer_ok || !outer_range || outer_close + 2 >= raw.size() ||
 		raw.compare(outer_close + 1, 2, "::") != 0)
 		return false;
-	const size_t member_start = outer_close + 3;
+	size_t member_start = outer_close + 3;
+	if(raw.compare(member_start, 9, "template ") == 0) member_start += 9;
 	const size_t member_open = raw.find('<', member_start);
 	if(member_open == string::npos) return false;
 	size_t member_begin = 0, member_close = string::npos;
@@ -179,8 +180,11 @@ bool PA18TemplateExpander::TransformQualifiedMemberTemplateCall(
 	active_concrete_owner_ = previous_owner;
 	if(!instantiated) return false;
 	result->template_instantiation = true;
+	const string emitted_member = member->children.size() > 1 &&
+		member->children[1] ? LastComponent(member->children[1]->value) :
+		LastComponent(member_base);
 	result->children[0] = CPPGMAstNodePtr(new CPPGMAstNode("id-expression",
-		owner + "::" + LastComponent(member_base)));
+		owner + "::" + emitted_member));
 	return true;
 }
 

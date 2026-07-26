@@ -383,11 +383,12 @@ string PA14Lowerer::low_type(const TypePtr& raw) const
     if(!type) throw logic_error("missing type during LowIR lowering");
     if(type->kind == TYPE_POINTER || type->kind == TYPE_FUNCTION ||
        type->kind == TYPE_MEMBER_POINTER) return "ptr";
-    if(type->kind == TYPE_ARRAY) {
-      ostringstream result;
-      result << "obj<" << type_size(type) << "x" << type_alignment(type) << ">";
-      return result.str();
-    }
+	if(type->kind == TYPE_ARRAY) {
+		const size_t size = type_size(type);
+	  ostringstream result;
+	  result << "obj<" << (size ? size : 1) << "x" << type_alignment(type) << ">";
+	  return result.str();
+	}
     if(type->kind == TYPE_CLASS) {
       ostringstream result;
       result << "obj<" << type_size(type) << "x" << type_alignment(type) << ">";

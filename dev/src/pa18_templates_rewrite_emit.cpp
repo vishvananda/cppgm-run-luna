@@ -233,17 +233,21 @@ void PA18TemplateExpander::RestoreGeneratedMemberParameterNames(
 		if(!source_clause || !source_clause->children[parameter] ||
 			(ParameterIdentifier(source_clause->children[parameter]).empty() &&
 				preserve_unnamed_parameters)) continue;
-		const string owner_name = ParameterIdentifier(owner_clause->children[parameter]);
+		const string source_name = ParameterIdentifier(source_clause->children[parameter]);
+		const string owner_name = source_name.empty() ?
+			ParameterIdentifier(owner_clause->children[parameter]) : source_name;
 		if(owner_name.empty() || !generated_clause->children[parameter]) continue;
-		if(!ParameterIdentifier(generated_clause->children[parameter]).empty()) continue;
+		const string generated_name = ParameterIdentifier(generated_clause->children[parameter]);
+		if(!generated_name.empty() && generated_name.compare(0, 7, "__param") != 0) continue;
 		CPPGMAstNodePtr declarator = ChildOfKindLocal(
 			generated_clause->children[parameter], "declarator");
 		if(!declarator) {
 			declarator.reset(new CPPGMAstNode("declarator"));
 			generated_clause->children[parameter]->children.push_back(declarator);
 		}
-		declarator->children.push_back(CPPGMAstNodePtr(
+		if(generated_name.empty()) declarator->children.push_back(CPPGMAstNodePtr(
 			new CPPGMAstNode("identifier", owner_name)));
+		else RenameParameterIdentifier(declarator, owner_name);
 	}
 }
 
@@ -416,13 +420,18 @@ void PA18TemplateExpander::RegisterGeneratedTypeEntity(
 	class_declarations_[lexical_path] = generated;
 	static_members_by_class_[lexical_path] = generated_static_members;
 	class_contexts_.insert(generated_path);
+	const string previous_instantiation_name = active_instantiation_name_;
+	active_instantiation_name_.clear();
 	RegisterGeneratedConstants(generated, generated_path);
+	active_instantiation_name_ = previous_instantiation_name;
 	if(!concrete_owner.empty()) {
 		const string concrete_path = JoinPath(concrete_owner, local_name);
 		class_declarations_[concrete_path] = generated;
 		static_members_by_class_[concrete_path] = generated_static_members;
 		class_contexts_.insert(concrete_path);
+		active_instantiation_name_.clear();
 		RegisterGeneratedConstants(generated, concrete_path);
+		active_instantiation_name_ = previous_instantiation_name;
 	}
 	const map<string, vector<string> > previous_packs = active_pack_substitutions_;
 	active_pack_substitutions_ = pack_substitutions;
@@ -893,6 +902,21 @@ string PA18TemplateExpander::Instantiate(const TemplateDefinition& definition,
 	map<string, vector<string> > pack_substitutions;
 	ResolveTemplateArguments(definition, raw_args, context, &args, &metadata_args,
 		&substitutions, &integral_substitutions, &pack_substitutions, pack_hints);
+	// A dependent member lookup can reach a class template's primary
+	// definition after the matching partial specialization has already been
+	// selected elsewhere.  Re-entering the primary would reuse the same nominal
+	// generated class name and overwrite the partial body (for example, turning
+	// `is_pair_like<pair<...>>` from its `true_type` partial back into the
+	// primary `false_type`).  Route the request through the typed partial before
+	// registering any primary specialization.
+	if(definition.class_template && !definition.partial_specialization) {
+		const TemplateDefinition* selected = SelectClassTemplateDefinition(
+			&definition, args, context);
+		if(selected && selected != &definition)
+			return Instantiate(*selected, args, context, explicit_instantiation,
+				pack_hints, outer_substitutions, requested_owner, function_hints,
+				forwarding_pack_hints, defer_class_definition);
+	}
 	if(pack_hints) for(map<string, vector<string> >::const_iterator hint = pack_hints->begin();
 		hint != pack_hints->end(); ++hint)
 		if(!hint->first.empty()) pack_substitutions[hint->first] = hint->second;
