@@ -339,6 +339,64 @@ void PA18TemplateExpander::RestoreMemberTemplateDefaults(
 	}
 }
 
+bool PA18TemplateExpander::IsAbstractClassType(const string& raw,
+	const string& context, set<string>* active) const
+{
+	string name = CanonicalSpelling(raw);
+	while(name.compare(0, 6, "const ") == 0 ||
+		name.compare(0, 9, "volatile ") == 0)
+		name = CanonicalSpelling(name.substr(name.find(' ') + 1));
+	while(name.size() > 6 && name.compare(name.size() - 6, 6, " const") == 0)
+		name = CanonicalSpelling(name.substr(0, name.size() - 6));
+	while(name.size() > 9 && name.compare(name.size() - 9, 9, " volatile") == 0)
+		name = CanonicalSpelling(name.substr(0, name.size() - 9));
+	while(!name.empty() && (name[name.size() - 1] == '&' ||
+		name[name.size() - 1] == '*')) name.erase(name.size() - 1);
+	name = CanonicalSpelling(name);
+	while(name.compare(0, 6, "const ") == 0 ||
+		name.compare(0, 9, "volatile ") == 0)
+		name = CanonicalSpelling(name.substr(name.find(' ') + 1));
+	if(name.compare(0, 7, "struct ") == 0)
+		name = CanonicalSpelling(name.substr(7));
+	else if(name.compare(0, 6, "class ") == 0)
+		name = CanonicalSpelling(name.substr(6));
+	else if(name.compare(0, 6, "union ") == 0)
+		name = CanonicalSpelling(name.substr(6));
+	if(name.empty() || name.find('<') != string::npos || !active ||
+		!active->insert(name).second) return false;
+	const CPPGMAstNodePtr declaration = FindClassDeclaration(name, context);
+	if(!declaration) {
+		active->erase(name);
+		return false;
+	}
+	for(size_t child = 0; child < declaration->children.size(); ++child) {
+		const CPPGMAstNodePtr member = declaration->children[child];
+		if(!member || member->kind != "simple-declaration" ||
+			member->children.empty() ||
+			!HasDeclarationSpecifier(member->children[0], "virtual")) continue;
+		const CPPGMAstNodePtr initializer = DescendantOfKind(member, "initializer");
+		if(initializer && !initializer->children.empty() && initializer->children[0] &&
+			Trim(RemoveMarker(initializer->children[0]->value)) == "0") {
+			active->erase(name);
+			return true;
+		}
+	}
+	for(size_t child = 0; child < declaration->children.size(); ++child) {
+		const CPPGMAstNodePtr base_clause = declaration->children[child];
+		if(!base_clause || base_clause->kind != "base-clause") continue;
+		for(size_t base = 0; base < base_clause->children.size(); ++base) {
+			const CPPGMAstNodePtr base_name = ChildOfKindLocal(
+				base_clause->children[base], "base-name");
+			if(base_name && IsAbstractClassType(base_name->value, context, active)) {
+				active->erase(name);
+				return true;
+			}
+		}
+	}
+	active->erase(name);
+	return false;
+}
+
 bool PA18TemplateExpander::HasAbstractFunctionParameter(
 	const TemplateDefinition& definition, const vector<string>& arguments,
 	const string& context, const map<string, string>& substitutions)
@@ -348,93 +406,22 @@ bool PA18TemplateExpander::HasAbstractFunctionParameter(
 		parameter < arguments.size(); ++parameter)
 		if(!definition.parameters[parameter].name.empty())
 			bindings[definition.parameters[parameter].name] = arguments[parameter];
-	function<bool(const string&, set<string>*)> is_abstract_class =
-		[&](const string& raw, set<string>* active) -> bool {
-			string spelling = CanonicalSpelling(raw);
-			while(!spelling.empty() && (spelling[spelling.size() - 1] == '&' ||
-				spelling[spelling.size() - 1] == '*')) spelling.erase(spelling.size() - 1);
-			while(!spelling.empty() && spelling[spelling.size() - 1] == ']') {
-				const size_t open = spelling.rfind('[');
-				if(open == string::npos) break;
-				spelling.erase(open);
-			}
-			spelling = CanonicalSpelling(spelling);
-			while(spelling.compare(0, 6, "const ") == 0 ||
-				spelling.compare(0, 9, "volatile ") == 0)
-				spelling = CanonicalSpelling(spelling.substr(
-					spelling.compare(0, 6, "const ") == 0 ? 6 : 9));
-			if(spelling.find('<') != string::npos) return false;
-			if(spelling.compare(0, 7, "struct ") == 0)
-				spelling = spelling.substr(7);
-			else if(spelling.compare(0, 6, "class ") == 0)
-				spelling = spelling.substr(6);
-			spelling = CanonicalSpelling(spelling);
-			if(spelling.empty() || !active || !active->insert(spelling).second) return false;
-			const CPPGMAstNodePtr declaration = FindClassDeclaration(spelling, context);
-			if(!declaration) { active->erase(spelling); return false; }
-			bool pure = false;
-			for(size_t child = 0; child < declaration->children.size(); ++child) {
-				const CPPGMAstNodePtr member = declaration->children[child];
-				if(!member) continue;
-				if(member->kind == "function-definition" && !member->children.empty() &&
-					HasDeclarationSpecifier(member->children[0], "virtual")) continue;
-				if(member->kind != "simple-declaration" || member->children.empty() ||
-					!HasDeclarationSpecifier(member->children[0], "virtual")) continue;
-				const CPPGMAstNodePtr initializer = DescendantOfKind(member, "initializer");
-				if(initializer && !initializer->children.empty() && initializer->children[0] &&
-					Trim(RemoveMarker(initializer->children[0]->value)) == "0") {
-					pure = true;
-					break;
-				}
-			}
-			if(!pure) for(size_t child = 0; child < declaration->children.size(); ++child) {
-				const CPPGMAstNodePtr base_clause = declaration->children[child];
-				if(!base_clause || base_clause->kind != "base-clause") continue;
-				for(size_t base = 0; base < base_clause->children.size(); ++base) {
-					const CPPGMAstNodePtr base_name = ChildOfKindLocal(
-						base_clause->children[base], "base-name");
-					if(base_name && is_abstract_class(base_name->value, active)) {
-						pure = true;
-						break;
-					}
-				}
-				if(pure) break;
-			}
-			active->erase(spelling);
-			return pure;
-		};
 	const CPPGMAstNodePtr parameter_clause = DescendantOfKind(
 		FunctionDeclarator(definition.declaration), "parameter-clause");
 	if(!parameter_clause) return false;
 	for(size_t parameter = 0; parameter < parameter_clause->children.size(); ++parameter) {
 		const CPPGMAstNodePtr parameter_node = parameter_clause->children[parameter];
 		if(!parameter_node || parameter_node->kind != "parameter-declaration") continue;
-		const string pattern = ParameterTypeSpelling(parameter_node);
 		string resolved;
 		try {
-			resolved = NormalizeTypeArgument(ReplaceIdentifiers(pattern, bindings));
-			resolved = NormalizeTypeArgument(RewriteText(resolved, context, bindings, 0));
+			resolved = NormalizeTypeArgument(ReplaceIdentifiers(
+				ParameterTypeSpelling(parameter_node), bindings));
+			resolved = NormalizeTypeArgument(RewriteText(resolved, context,
+				bindings, 0));
 		} catch(const PA18SubstitutionFailure&) {
 			return true;
 		}
-		for(map<string, string>::const_iterator binding = bindings.begin();
-			binding != bindings.end(); ++binding) {
-			const string& name = binding->first;
-			for(size_t at = pattern.find(name); !name.empty() && at != string::npos;
-				at = pattern.find(name, at + name.size())) {
-				if((at == 0 || !IsIdentifierCharacter(pattern[at - 1])) &&
-					(at + name.size() == pattern.size() ||
-					 !IsIdentifierCharacter(pattern[at + name.size()]))) {
-					set<string> active;
-					if(is_abstract_class(binding->second, &active)) {
-						const bool object_array = resolved.find('[') != string::npos;
-						const bool indirection = resolved.find('*') != string::npos ||
-							resolved.find('&') != string::npos;
-						if(object_array || !indirection) return true;
-					}
-				}
-			}
-		}
+		if(IsAbstractObjectSpelling(resolved, context)) return true;
 	}
 	return false;
 }
@@ -442,66 +429,25 @@ bool PA18TemplateExpander::HasAbstractFunctionParameter(
 bool PA18TemplateExpander::IsAbstractObjectSpelling(
 	const string& raw, const string& context) const
 {
-	const string spelling = CanonicalSpelling(raw);
+	string spelling = CanonicalSpelling(raw);
 	if(spelling.find('<') != string::npos) return false;
 	const bool object_array = spelling.find('[') != string::npos;
 	const bool indirection = spelling.find('*') != string::npos ||
 		spelling.find('&') != string::npos;
-	function<bool(const string&, set<string>*)> is_abstract_class =
-		[&](const string& candidate, set<string>* active) -> bool {
-			string name = CanonicalSpelling(candidate);
-			while(!name.empty() && (name[name.size() - 1] == '&' ||
-				name[name.size() - 1] == '*')) name.erase(name.size() - 1);
-			name = CanonicalSpelling(name);
-			if(name.find('<') != string::npos) return false;
-			if(name.compare(0, 7, "struct ") == 0) name = name.substr(7);
-			else if(name.compare(0, 6, "class ") == 0) name = name.substr(6);
-			name = CanonicalSpelling(name);
-			if(name.empty() || !active || !active->insert(name).second) return false;
-			const CPPGMAstNodePtr declaration = FindClassDeclaration(name, context);
-			if(!declaration) { active->erase(name); return false; }
-			for(size_t child = 0; child < declaration->children.size(); ++child) {
-				const CPPGMAstNodePtr member = declaration->children[child];
-				if(!member || member->kind != "simple-declaration" ||
-					member->children.empty() ||
-					!HasDeclarationSpecifier(member->children[0], "virtual")) continue;
-				const CPPGMAstNodePtr initializer = DescendantOfKind(member, "initializer");
-				if(initializer && !initializer->children.empty() && initializer->children[0] &&
-					Trim(RemoveMarker(initializer->children[0]->value)) == "0") {
-					active->erase(name);
-					return true;
-				}
-			}
-			for(size_t child = 0; child < declaration->children.size(); ++child) {
-				const CPPGMAstNodePtr base_clause = declaration->children[child];
-				if(!base_clause || base_clause->kind != "base-clause") continue;
-				for(size_t base = 0; base < base_clause->children.size(); ++base) {
-					const CPPGMAstNodePtr base_name = ChildOfKindLocal(
-						base_clause->children[base], "base-name");
-					if(base_name && is_abstract_class(base_name->value, active)) {
-						active->erase(name);
-						return true;
-					}
-				}
-			}
-			active->erase(name);
-			return false;
-		};
-	for(map<string, CPPGMAstNodePtr>::const_iterator declaration =
-		class_declarations_.begin(); declaration != class_declarations_.end(); ++declaration) {
-		const string name = LastComponent(declaration->first);
-		for(size_t at = spelling.find(name); !name.empty() && at != string::npos;
-			at = spelling.find(name, at + name.size())) {
-			if((at != 0 && IsIdentifierCharacter(spelling[at - 1])) ||
-				(at + name.size() < spelling.size() &&
-				 IsIdentifierCharacter(spelling[at + name.size()]))) continue;
-			set<string> active;
-			if(is_abstract_class(declaration->first, &active)) {
-				if(object_array || !indirection) return true;
-			}
-		}
+	while(!spelling.empty() && spelling[spelling.size() - 1] == ']') {
+		const size_t open = spelling.rfind('[');
+		if(open == string::npos) break;
+		spelling.erase(open);
 	}
-	return false;
+	// An array parameter written as `T (*)[N]` leaves the abstract pointer
+	// declarator parenthesized after its bound is removed.  Strip that syntax
+	// before the typed class lookup; it is not part of the object type.
+	const size_t abstract_pointer = spelling.find("(");
+	if(abstract_pointer != string::npos)
+		spelling = CanonicalSpelling(spelling.substr(0, abstract_pointer));
+	set<string> active;
+	return (object_array || !indirection) &&
+		IsAbstractClassType(spelling, context, &active);
 }
 
 bool PA18TemplateExpander::ValidateExplicitFunctionCandidate(
@@ -533,8 +479,6 @@ bool PA18TemplateExpander::ValidateExplicitFunctionCandidate(
 			(*arguments)[parameter] = NormalizeTypeArgument(value);
 			if(!detail.name.empty()) bindings[detail.name] = (*arguments)[parameter];
 		}
-		const CPPGMAstNodePtr parameter_clause = DescendantOfKind(
-			FunctionDeclarator(definition.declaration), "parameter-clause");
 		try {
 			const string result = FunctionResultType(definition, *arguments, context, &substitutions);
 			string probe = result;

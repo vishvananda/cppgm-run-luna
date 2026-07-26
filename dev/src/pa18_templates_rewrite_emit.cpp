@@ -413,13 +413,14 @@ void PA18TemplateExpander::RegisterGeneratedTypeEntity(
 	if(!definition.class_template) return;
 	const string generated_path = JoinPath(definition.owner, local_name);
 	class_declarations_[generated_path] = generated;
+	RememberClassPath(generated_path);
 	set<string> generated_static_members;
 	IndexStaticMembers(generated, generated_static_members);
 	static_members_by_class_[generated_path] = generated_static_members;
 	const string lexical_path = JoinPath(generated_owner, local_name);
 	class_declarations_[lexical_path] = generated;
+	RememberClassPath(lexical_path);
 	static_members_by_class_[lexical_path] = generated_static_members;
-	class_contexts_.insert(generated_path);
 	const string previous_instantiation_name = active_instantiation_name_;
 	active_instantiation_name_.clear();
 	RegisterGeneratedConstants(generated, generated_path);
@@ -428,7 +429,7 @@ void PA18TemplateExpander::RegisterGeneratedTypeEntity(
 		const string concrete_path = JoinPath(concrete_owner, local_name);
 		class_declarations_[concrete_path] = generated;
 		static_members_by_class_[concrete_path] = generated_static_members;
-		class_contexts_.insert(concrete_path);
+		RememberClassPath(concrete_path);
 		active_instantiation_name_.clear();
 		RegisterGeneratedConstants(generated, concrete_path);
 		active_instantiation_name_ = previous_instantiation_name;
@@ -518,8 +519,8 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 			}
 	}
 	if(definition.class_template) {
-		class_contexts_.insert(JoinPath(definition.owner, local_name));
-		class_contexts_.insert(JoinPath(generated_owner, local_name));
+		RememberClassPath(JoinPath(definition.owner, local_name));
+		RememberClassPath(JoinPath(generated_owner, local_name));
 	}
 	const string previous_instantiation_name = active_instantiation_name_;
 	const string enclosing_instantiation_name = active_instantiation_name_;
@@ -826,10 +827,10 @@ string PA18TemplateExpander::MaterializeInstantiation(const TemplateDefinition& 
 			definition.owner : definition.lexical_owner;
 		const string generated_path = JoinPath(definition.owner, local_name);
 		const string lexical_path = JoinPath(generated_owner, local_name);
-		class_contexts_.insert(generated_path);
-		class_contexts_.insert(lexical_path);
 		class_declarations_[generated_path] = MakeForwardClass(local_name);
 		class_declarations_[lexical_path] = class_declarations_[generated_path];
+		RememberClassPath(generated_path);
+		RememberClassPath(lexical_path);
 		deferred_class_instantiations_.insert(key);
 		return local_name;
 	}
@@ -838,10 +839,10 @@ string PA18TemplateExpander::MaterializeInstantiation(const TemplateDefinition& 
 			definition.owner : definition.lexical_owner;
 		const string generated_path = JoinPath(definition.owner, local_name);
 		const string lexical_path = JoinPath(generated_owner, local_name);
-		class_contexts_.insert(generated_path);
-		class_contexts_.insert(lexical_path);
 		class_declarations_[generated_path] = MakeForwardClass(local_name);
 		class_declarations_[lexical_path] = class_declarations_[generated_path];
+		RememberClassPath(generated_path);
+		RememberClassPath(lexical_path);
 		deferred_class_instantiations_.insert(key);
 		return local_name;
 	}

@@ -217,8 +217,6 @@ namespace pa18_templates_internal {
 					function_context, substitutions)) continue;
 			} catch(const PA18SubstitutionFailure&) {
 				continue;
-			} catch(const exception&) {
-				continue;
 			}
 			string candidate_result;
 			try {

@@ -3,6 +3,11 @@
 #include <cstdlib>
 #include <functional>
 
+void CollectSourceTypeAliasPaths(const CPPGMAstNodePtr& node, const string& scope,
+	set<string>* paths);
+bool ContainsSourceTypeAliasBase(const CPPGMAstNodePtr& node,
+	const set<string>& paths);
+
 namespace {
 
 string AttributeNodeSpelling(const CPPGMAstNodePtr& node)
@@ -165,30 +170,10 @@ void Analyzer::Analyze(const CPPGMAstNodePtr& tree)
 {
 	if (!tree || tree->kind != "translation-unit") throw logic_error("invalid translation unit");
 	PredeclareGeneratedScopes(tree);
-	set<string> source_type_alias_names;
-	function<void(const CPPGMAstNodePtr&)> collect_source_aliases;
-	collect_source_aliases = [&](const CPPGMAstNodePtr& node) {
-		if (!node) return;
-		if (node->kind == "alias-declaration")
-			source_type_alias_names.insert(LastComponent(node->value));
-		if (node->kind == "simple-declaration" && !node->children.empty()) {
-			bool typedef_declaration = false;
-			for (size_t child = 0; child < node->children[0]->children.size(); ++child)
-				if (node->children[0]->children[child] &&
-					node->children[0]->children[child]->value.find("typedef") != string::npos)
-					typedef_declaration = true;
-			if (typedef_declaration) {
-				const CPPGMAstNodePtr list = ChildOfKind(node, "init-declarator-list");
-				if (list) for (size_t item = 0; item < list->children.size(); ++item)
-					if (list->children[item] && !list->children[item]->children.empty())
-						source_type_alias_names.insert(LastComponent(
-							FirstIdentifier(list->children[item]->children[0])));
-			}
-		}
-		for (size_t child = 0; child < node->children.size(); ++child)
-			collect_source_aliases(node->children[child]);
-	};
-	collect_source_aliases(tree);
+	set<string> source_type_alias_paths;
+	// This pass precedes ordinary binding construction, so keep only the
+	// scoped declaration-path facts needed by the early-layout decision.
+	CollectSourceTypeAliasPaths(tree, string(), &source_type_alias_paths);
 	// Only function-type local-class replay needs early layout; broad replay alters prior source-order facts.
 	for (size_t i = 0; i < tree->children.size(); ++i)
 		if (tree->children[i] && tree->children[i]->kind == "class-specifier" &&
@@ -202,20 +187,8 @@ void Analyzer::Analyze(const CPPGMAstNodePtr& tree)
 					function_type_argument = true;
 					break;
 				}
-			bool depends_on_source_alias = false;
-			function<void(const CPPGMAstNodePtr&)> scan_base_alias;
-			scan_base_alias = [&](const CPPGMAstNodePtr& node) {
-				if (!node || depends_on_source_alias) return;
-				if (node->kind == "base-name") {
-					const string base = LastComponent(StripTypeMarker(node->value));
-					if (base.find('<') == string::npos &&
-						source_type_alias_names.find(base) != source_type_alias_names.end())
-						depends_on_source_alias = true;
-				}
-				for (size_t child = 0; child < node->children.size(); ++child)
-					scan_base_alias(node->children[child]);
-			};
-			scan_base_alias(tree->children[i]);
+			const bool depends_on_source_alias = ContainsSourceTypeAliasBase(
+				tree->children[i], source_type_alias_paths);
 			if (function_type_argument && !depends_on_source_alias)
 				Process(tree->children[i], global_.get());
 		}

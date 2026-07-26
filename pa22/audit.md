@@ -486,3 +486,85 @@ viability, and the checkpoint's hot-path candidate probes.
   the repository's existing 11 structural warnings.
 - `make build` and `git diff --check` pass.  The final commit will verify an
   empty `git status --short`.
+
+## Checkpoint 92 Audit — 2026-07-26
+
+### Scope Reviewed
+
+Reviewed the latest Checkpoint 92 scope and result in `pa22/plan.md`, the
+assignment contract in `pa22/README.md`, the complete current-PA log at
+`/home/vishvananda/work/.ralph/luna-gpt-5.6-luna-ultra/last-test.log`, and the
+recent implementation history from `2581989` through the preceding PA22
+checkpoint and audit commits.  The changed implementation surface reviewed
+was `dev/frontend_source_sets.mk`, the PA11 alias-layout pass, PA14 lowering
+collection/driver state and emission pipeline, and the PA18 abstract-parameter,
+type-qualification, class-path, constructor-candidate, decltype-candidate,
+instantiation, and generated-type emission sources.  The review covered all
+13 Checkpoint 92 fixtures, the complete PA22 failure set, the through-PA21
+suite, and the PA22 file audit.
+
+### Findings
+
+- The checkpoint's abstract-parameter work duplicated recursive class
+  declaration traversal in two hot paths and searched every stored declaration
+  by raw spelling.  That duplicated semantic ownership and made abstract-array
+  checks scale with the entire collected class map.  It was replaced with one
+  typed abstract-class predicate and one normalized object-spelling caller.
+- Generated-type lookup still had avoidable full-map work: PA14 rescanned all
+  class types for each new/call/declaration use, and PA18 rescanned all
+  specializations while reconciling generated identities.  The checkpoint also
+  needed a generic namespace recovery path after a dependent replay lost its
+  prefix.  These are now declaration indexes with lexical lookup first,
+  qualified suffix recovery only when the indexed path is unambiguous, and
+  malformed repeated-owner paths are rejected rather than rebound.
+- Candidate viability had broad exception fallbacks.  Constructor materializing
+  and decltype candidate probes could treat unrelated semantic failures as
+  candidate-local recovery.  They now continue only for the typed
+  `PA18SubstitutionFailure` path, and constructor materialization returns only
+  after a candidate actually succeeds.
+- The PA14 lowering driver concentrated the complete lowering pipeline in one
+  oversized function.  Its phase order is now represented by bounded helpers
+  for preparation, root frontiers, member fixed points, and final emission;
+  the refactor preserves the earlier demand order and exposes no skipped
+  phase.
+- The early PA11 source-alias decision used a process-wide short-name set and
+  raw substring detection of `typedef`.  It now uses an AST-kind-checked,
+  scope-qualified alias-path pass in a responsibility-sized source module.
+- No skipped compiler phase, fallback-success path, dummy output, embedded
+  payload, interpreter/VM/trampoline substitute, source/test-specific
+  acceptance gate, timeout workaround, emitted-text reparsing, weakened check,
+  hidden implementation fragment, or unchecked source path was found.  No
+  checkpoint-level architecture or performance blocker remains.
+
+### Changes Made
+
+- Added `pa11_semantics_alias_gate.cpp` and registered it in the checked C++
+  frontend source set; narrowed early layout gating to scoped alias facts.
+- Added typed class-use indexing to PA14 and split its lowering driver into
+  responsibility-sized phase helpers without changing the established phase
+  order.
+- Added `RememberClassPath` and indexed generated/nested declaration paths in
+  PA18; replaced the literal namespace/type recovery cases with generic typed
+  lexical and indexed lookup, including safeguards for repeated generated
+  owners.  Replaced the specialization identity scan with the existing
+  specialization-name index.
+- Centralized abstract-class/object detection, removed broad candidate catches,
+  and kept constructor/decltype substitution failures candidate-local.
+- Kept all fixes in `dev/` and `dev/src/`; no tests or reference fixtures were
+  modified.
+
+### Validation
+
+- Required current-PA report — **178/250 passed**, equal to the audit-start
+  baseline of **178/250** and above the Checkpoint 92 landing baseline of
+  172/250.  The complete residual is 53 exit-status and 19 LowIR-parity
+  failures, with no timeout; the report exits nonzero only because those
+  residual fixtures remain.
+- All 13 Checkpoint 92 fixtures pass: **13/13**.
+- Required prior-through command passed: **1850/1850** through PA21.
+- Required file audit passed:
+  `perl scripts/cppgm_file_audit.pl --stage pa22 --paths dev/src`, with only
+  the repository's existing 11 warnings.
+- `make build` and `git diff --check` pass.  The refreshed exact failure map
+  and the next substantial group, general/400 typed aliases, constructors,
+  conversions, and NTTPs, are recorded in `pa22/plan.md`.

@@ -493,6 +493,7 @@ private:
 	map<string, string> local_class_names_; map<string, CPPGMAstNodePtr> class_declarations_; map<string, set<string> > static_members_by_class_; map<string, vector<const TemplateDefinition*> > using_member_template_targets_;
 	map<string, vector<string> > constant_member_owners_;
 	set<string> named_type_contexts_; map<string, string> enumerator_types_; map<string, string> variable_types_;
+	map<string, vector<string> > class_paths_by_name_;
 	map<string, map<string, string> > function_parameter_types_;
 	map<string, PA19IntegralValue> constant_values_;
 	map<string, vector<PA19IntegralValue> > constant_arrays_; map<string, size_t> constant_type_sizes_, constant_type_alignments_;
@@ -619,11 +620,8 @@ private:
 		const string& context, bool extern_instantiation = false);
 	CPPGMAstNodePtr TransformCallExpression(const CPPGMAstNodePtr& input,
 		const string& context, const map<string, string>& substitutions);
-	bool ValidateExplicitFunctionCandidate(const TemplateDefinition& definition, const CPPGMAstNodePtr& input, const string& context, const map<string, string>& substitutions, const vector<string>& raw_explicit_args, vector<string>* arguments); bool HasAbstractFunctionParameter(const TemplateDefinition& definition, const vector<string>& arguments, const string& context, const map<string, string>& substitutions); bool IsAbstractObjectSpelling(const string& raw, const string& context) const;
-	string ResolveAlias(string spelling, const string& context) const;
-	bool FindLogicalNamespaceAlias(const string& spelling, string* alias_key) const;
-	bool IsArrayTypeAlias(const string& alias_name, const string& context) const;
-	bool HasPackBeforeFixed(const TemplateDefinition& definition) const;
+	bool ValidateExplicitFunctionCandidate(const TemplateDefinition& definition, const CPPGMAstNodePtr& input, const string& context, const map<string, string>& substitutions, const vector<string>& raw_explicit_args, vector<string>* arguments); bool HasAbstractFunctionParameter(const TemplateDefinition& definition, const vector<string>& arguments, const string& context, const map<string, string>& substitutions);
+	bool IsAbstractClassType(const string& raw, const string& context, set<string>* active) const; bool IsAbstractObjectSpelling(const string& raw, const string& context) const; string ResolveAlias(string spelling, const string& context) const; bool FindLogicalNamespaceAlias(const string& spelling, string* alias_key) const; bool IsArrayTypeAlias(const string& alias_name, const string& context) const; bool HasPackBeforeFixed(const TemplateDefinition& definition) const;
 	bool LookupVariableType(const string& name, const string& context,
 		string* result) const;
 	bool ContainsName(const CPPGMAstNodePtr& node, const string& name) const;
@@ -1075,6 +1073,7 @@ private:
 		Collect(declaration, item.class_template ? JoinPath(item.owner, name) : item.owner);
 	}
 	void IndexConstantMembers(const CPPGMAstNodePtr& node, const string& owner); void IndexStaticMembers(const CPPGMAstNodePtr& node, set<string>& members) const; void IndexUsingDirectiveDefinition(const TemplateDefinition& definition);
+	void RememberClassPath(const string& path);
 	bool HasStaticMember(const TemplateDefinition* definition, const string& owner, const string& name) const;
 	void Collect(const CPPGMAstNodePtr& node, const string& context, bool type_reference = false)
 	{
@@ -1170,8 +1169,8 @@ private:
 				const string promoted = JoinPath(function_owner,
 					LastComponent(context) + "__" + class_name);
 				local_class_names_[next_context] = promoted;
-				class_contexts_.insert(promoted);
-			} else class_contexts_.insert(next_context);
+				RememberClassPath(promoted);
+			} else RememberClassPath(next_context);
 		}
 		if(node->kind == "enum-specifier" && !node->value.empty())
 			named_type_contexts_.insert(JoinPath(context, LastComponent(node->value)));

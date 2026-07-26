@@ -535,8 +535,8 @@
 			}
 		}
 		if(!nested_declaration) return;
-		class_contexts_.insert(parent_local_name);
-		class_contexts_.insert(parent_local_name + "::" + nested_name);
+		RememberClassPath(parent_local_name);
+		RememberClassPath(parent_local_name + "::" + nested_name);
 		const string key = parent_local_name + "::" + nested_name;
 		if(!materialized_nested_classes_.insert(key).second) return;
 		map<string, string> substitutions;
@@ -605,6 +605,8 @@
 		generated->value = nested_name;
 		class_declarations_[parent_local_name + "::" + nested_name] = generated;
 		class_declarations_[generated_context + "::" + nested_name] = generated;
+		RememberClassPath(parent_local_name + "::" + nested_name);
+		RememberClassPath(generated_context + "::" + nested_name);
 		EnsureDeclarationDependencies(generated, generated_context, generated_context);
 		generated_by_owner_[generated_context].push_back(generated);
 	}
@@ -623,7 +625,7 @@
 			requested.insert(short_name->second.begin(), short_name->second.end());
 		const vector<const TemplateDefinition*> candidates = NestedDefinitions(parent);
 		for(size_t i = 0; i < candidates.size(); ++i) {
-			class_contexts_.insert(parent_local_name + "::" + candidates[i]->name);
+			RememberClassPath(parent_local_name + "::" + candidates[i]->name);
 			if(!parent.declaration || !candidates[i]->declaration ||
 				candidates[i]->declaration->kind != "class-specifier") continue;
 			for(size_t child = 0; child < parent.declaration->children.size(); ++child) {

@@ -2865,24 +2865,83 @@ and specification bands stay explicitly listed above.
 
 ### Remaining Work Map
 
-- **General/400 typed aliases, constructors, conversions, and NTTPs:** the
-  largest next semantic group, covering alias-template argument cv, defaulted
-  and pack-before-fixed constructor deduction, conversion preference, pointer/
-  enum/object NTTPs, function-assignment viability, inherited/partial
-  constructors, and template-template defaults.
-- **General/500 owner/alias/pack/result replay:** status failures remain in ADL
-  alias return, alias-pack enable-if, dependent returns, constructor rebinding,
-  short-circuit SFINAE, dependent `sizeof`, owner enum, and weak/shared-pointer
-  constructors; LowIR gaps remain in alias result metadata, current
-  specialization defaults, dependent member aliases, inherited constructor
-  aliases, and pack/static replay.
-- **Specification-band ordering and dependent replay:** residual status cases
-  include nested/defaulted deduction, constructor forwarding and conversion,
-  overload-set diagnostics, hidden-friend decltype, and template-template
-  conversion; LowIR cases include explicit specialization/overload ordering,
-  array-bound deduction, nested partial ordering, dependent defaults,
-  cross-specialization conversion, qualified member fallback, and type-pack
-  static expansion.  The full exact set is in the required report output.
+- **General/100–300 (6):** status
+  `general/100-defaulted-nested-class-template-deduction`,
+  `general/100-fixed-over-empty-trailing-pack-index-sequence`,
+  `general/100-template-deduction-rejects-value-base-argument`, and
+  `general/300-hidden-friend-sfinae-use-scope-shadowing`; LowIR parity
+  `general/200-function-template-partial-order-class-template-cv` and
+  `general/200-partial-order-synthetic-virtual-member-emission`.
+- **General/400 (14):** status
+  `general/400-alias-template-function-argument-cv`,
+  `general/400-bad-constructor-template-parameter-shadowing-target-aware`,
+  `general/400-conversion-function-template-prefers-nontemplate`,
+  `general/400-defaulted-pointer-nontype-cstyle-null`,
+  `general/400-enum-nttp-cstyle-cast-default-rebind`,
+  `general/400-function-assignment-invocable-and-helper`,
+  `general/400-member-alias-template-template-partial-deduction-owner`,
+  `general/400-object-pointer-nttp-address`,
+  `general/400-object-pointer-nttp-rebound-member-template`,
+  `general/400-pack-expansion-size-mismatch-sfinae`,
+  `general/400-partial-specialization-inherited-constructor-template`, and
+  `general/400-template-template-alias-default-arity-sfinae`; LowIR parity
+  `general/400-constructor-template-pack-before-defaulted-nontype` and
+  `general/400-static-data-nttp-pack-sizeof-bound`.
+- **General/500 (23):** status
+  `general/500-adl-alias-return-operator-template`,
+  `general/500-alias-pack-enable-if-constexpr-constructor`,
+  `general/500-alias-template-template-defaulted-sfinae-canonical-args`,
+  `general/500-async-initiate-dependent-return-sfinae`,
+  `general/500-boost-mp11-conditional-alias-reference-set`,
+  `general/500-constructor-pack-default-rewritten-pointer`,
+  `general/500-constructor-sfinae-member-template-value`,
+  `general/500-defaulted-nontype-qualified-alias-value`,
+  `general/500-defaulted-pack-bool-short-circuit-sfinae`,
+  `general/500-dependent-result-sizeof-sfinae-base`,
+  `general/500-explicit-pack-deduced-pack-member-result`,
+  `general/500-index-sequence-alias-constructor-deduction`,
+  `general/500-member-template-dependent-owner-defaulted-sfinae`,
+  `general/500-member-template-retained-dependent-param-candidate-drop`,
+  `general/500-owner-enum-nontype-result-sfinae`,
+  `general/500-partial-specialization-cv-qualifier-subset`,
+  `general/500-short-circuit-alias-member-sfinae`,
+  `general/500-sizeof-void-sfinae-fallback`, and
+  `general/500-weak-ptr-shared-ptr-template-ctor`; LowIR parity
+  `general/500-bool-alias-function-template-result-metadata`,
+  `general/500-current-specialization-nontype-default-dependent`,
+  `general/500-dependent-member-alias-function-return`, and
+  `general/500-inherited-constructor-template-member-alias-pack`.
+- **Specification bands (29):** spec/100 status
+  `spec/100-constructor-template-braced-array-bound-deduction`,
+  `spec/100-defaulted-nested-class-template-deduction`, and
+  `spec/100-function-template-array-bound-braced-empty-argument`; LowIR
+  `spec/100-explicit-specialization-dependent-param-typedef`,
+  `spec/100-explicit-template-argument-overload-rejects-short-candidate`, and
+  `spec/100-function-template-array-parameter-string-literal`.  Spec/200
+  status `spec/200-function-template-class-template-param-partial-order`,
+  `spec/200-member-operator-fixed-tag-default-partial-order`, and
+  `spec/200-overload-set-address-nondeduced-bad`; LowIR
+  `spec/200-constructor-template-qualified-nested-id-partial-ordering`,
+  `spec/200-defaulted-class-template-argument-prefix-deduction`,
+  `spec/200-dependent-specialized-default-arg-deduction`, and
+  `spec/200-member-template-nontype-param-shadows-inherited-value-sum`.
+  Spec/300 status
+  `spec/300-constructor-forwarding-lvalue-beats-const-ref`,
+  `spec/300-constructor-template-const-ref-conversion`,
+  `spec/300-conversion-function-template-owner-result-copy-init`, and
+  `spec/300-template-id-direct-parameter-same-name-deduction`; LowIR
+  `spec/300-cross-specialization-converting-ctor-operator-template` and
+  `spec/300-qualified-member-function-value-fallback-sfinae`.  Spec/400
+  status `spec/400-nontype-reference-argument`; LowIR
+  `spec/400-dependent-decltype-member-template-conversion-operator`.  Spec/500
+  status `spec/500-conversion-function-template-reference-conditional-auto-ref`,
+  `spec/500-conversion-function-template-same-name-target`,
+  `spec/500-defaulted-rebind-constructor-deduction`,
+  `spec/500-function-result-template-id-shadowed-argument`,
+  `spec/500-hidden-friend-query-free-decltype-noexcept`,
+  `spec/500-template-template-conversion-operator-reference-target`, and
+  `spec/500-template-template-piecewise-partial-ordering`; LowIR
+  `spec/500-type-pack-qualified-static-member-expansion`.
 
 ### Next Checkpoint Scope
 

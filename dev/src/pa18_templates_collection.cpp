@@ -4,6 +4,16 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
+void PA18TemplateExpander::RememberClassPath(const string& path)
+{
+	if(path.empty()) return;
+	class_contexts_.insert(path);
+	const string name = LastComponent(path);
+	if(name.empty()) return;
+	vector<string>& paths = class_paths_by_name_[name];
+	if(find(paths.begin(), paths.end(), path) == paths.end()) paths.push_back(path);
+}
+
 void PA18TemplateExpander::EnsureForwardClass(const string& spelling,
 	const string& context, const string& owner)
 {

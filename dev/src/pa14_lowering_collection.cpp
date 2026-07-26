@@ -72,30 +72,52 @@ string PA14NodeValues(const CPPGMAstNodePtr& node)
     return result;
 }
 
+string PA14TypeUseName(const CPPGMAstNodePtr& node)
+{
+    if(!node) return string();
+    if(node->kind == "type-name") return node->value;
+    if(node->kind == "decl-specifier") {
+      const size_t marker = node->value.find(':');
+      return marker == string::npos ? node->value : node->value.substr(marker + 1);
+    }
+    for(size_t child = 0; child < node->children.size(); ++child) {
+      const string result = PA14TypeUseName(node->children[child]);
+      if(!result.empty()) return result;
+    }
+    return string();
+}
+
+string PA14TypeUseKey(string raw)
+{
+    while(!raw.empty() && (raw[0] == ':' || isspace(static_cast<unsigned char>(raw[0]))))
+      raw.erase(0, 1);
+    const size_t template_open = raw.find('<');
+    if(template_open != string::npos) raw.erase(template_open);
+    const size_t marker = raw.find(':');
+    if(marker != string::npos && marker + 1 < raw.size() && raw[marker + 1] == ':')
+      raw.erase(0, marker + 2);
+    return LastComponent(raw);
+}
+
 } // namespace
 
 void PA14Lowerer::IndexCompleteTemplateObjectUses(const CPPGMAstNodePtr& node)
 {
     if(!node) return;
     if(node->kind == "new-expression" || node->kind == "call-expression") {
-      const string spelling = PA14NodeValues(node);
+      const CPPGMAstNodePtr type_id = node->kind == "new-expression" ?
+        ChildOfKind(node, "type-id") : CPPGMAstNodePtr();
       const string callee = node->kind == "call-expression" && !node->children.empty() &&
         node->children[0] && node->children[0]->kind == "id-expression" ?
         node->children[0]->value : string();
-      for(map<const CPPGMAstNode*, TypePtr>::const_iterator type =
-            analyzer_.class_types_.begin(); type != analyzer_.class_types_.end(); ++type) {
-        const TypePtr value = type_value(type->second);
-        if(!value || value->kind != TYPE_CLASS || value->name.empty()) continue;
-        const string class_name = LastComponent(value->name);
-        const bool constructor_call = callee == class_name ||
-          (!class_name.empty() && callee.size() > class_name.size() + 2 &&
-           callee.compare(callee.size() - class_name.size() - 2, 2, "::") == 0 &&
-           callee.compare(callee.size() - class_name.size(), class_name.size(), class_name) == 0);
-        if(!class_name.empty() && (node->kind == "new-expression" ?
-            spelling.find(class_name) != string::npos : constructor_call)) {
-          complete_template_object_uses_.insert(value.get());
-        }
-      }
+      const string raw_name = node->kind == "new-expression" ?
+        PA14TypeUseName(type_id) : callee;
+      const string name = PA14TypeUseKey(raw_name);
+      map<string, vector<TypePtr> >::const_iterator found =
+        class_types_by_name_.find(name);
+      if(found != class_types_by_name_.end())
+        for(size_t type = 0; type < found->second.size(); ++type)
+          complete_template_object_uses_.insert(found->second[type].get());
     }
     if(node->kind == "simple-declaration" && !node->children.empty() &&
        PA14NodeValues(node->children[0]).find("typedef") == string::npos &&
@@ -108,17 +130,15 @@ void PA14Lowerer::IndexCompleteTemplateObjectUses(const CPPGMAstNodePtr& node)
         if(!declarator || declarator_name(declarator).find("::") != string::npos ||
            PA14ContainsKind(declarator, "ptr-operator") ||
            PA14ContainsKind(declarator, "parameter-clause")) continue;
-        const string spelling = PA14NodeValues(node->children[0]);
-        for(map<const CPPGMAstNode*, TypePtr>::const_iterator type =
-              analyzer_.class_types_.begin(); type != analyzer_.class_types_.end(); ++type) {
-          const TypePtr value = type_value(type->second);
-          if(!value || value->kind != TYPE_CLASS || value->name.empty()) continue;
-          const string class_name = value->template_specialization ?
-            LastComponent(value->template_primary) : LastComponent(value->name);
-          if(class_name.empty() || spelling.find(class_name) == string::npos) continue;
-          if(value->template_specialization && value->template_primary.empty()) continue;
-          complete_template_object_uses_.insert(value.get());
-        }
+        const string name = PA14TypeUseKey(PA14TypeUseName(node->children[0]));
+        map<string, vector<TypePtr> >::const_iterator found =
+          class_types_by_name_.find(name);
+        if(found != class_types_by_name_.end())
+          for(size_t type = 0; type < found->second.size(); ++type) {
+            const TypePtr value = found->second[type];
+            if(value->template_specialization && value->template_primary.empty()) continue;
+            complete_template_object_uses_.insert(value.get());
+          }
       }
     }
     for(size_t child = 0; child < node->children.size(); ++child)

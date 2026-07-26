@@ -159,11 +159,12 @@ void PA18TemplateExpander::MaterializeInitializerConstructor(
 			call_arguments->children.push_back(argument);
 			call->children.push_back(call_arguments);
 			try {
-				InstantiateMemberCall(call, member, source_name, context, substitutions);
+				if(InstantiateMemberCall(call, member, source_name, context, substitutions))
+					return;
 			} catch(const PA18SubstitutionFailure&) {
-			} catch(const logic_error&) {
+				// This candidate is unavailable after substitution; another
+				// constructor template may still be viable.
 			}
-			return;
 		}
 	};
 	if(target_declaration) for(size_t child = 0; child < target_declaration->children.size(); ++child) {

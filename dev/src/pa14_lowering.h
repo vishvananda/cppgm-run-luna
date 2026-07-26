@@ -317,13 +317,24 @@ class PA14Lowerer
 	set<const Type*> emitted_vtables_;
 	set<const Type*> external_vtables_;
 	set<const Type*> emitted_rtti_;
+	map<string, vector<TypePtr> > class_types_by_name_;
 	FunctionState* state_;
 	  map<const CPPGMAstNode*, InferCacheEntry> infer_cache_;
 	map<const Type*, vector<TypePtr> > friend_owner_index_;
 	mutable map<const Type*, vector<Binding*> > hidden_friend_binding_index_;
 	mutable bool hidden_friend_binding_index_ready_;
 	void IndexFriendOwners();
+	void IndexClassTypesByName();
 	void IndexCompleteTemplateObjectUses(const CPPGMAstNodePtr& node);
+	void PrepareLoweringProgram();
+	void EmitInitialFunctionRoots(vector<string>& entries);
+	void EmitNestedRootOperations(vector<string>& entries);
+	void EmitOrdinaryAndHiddenRoots(vector<string>& entries);
+	void EmitNeededOrdinary(vector<string>& entries);
+	vector<size_t> MemberEmissionOrder() const;
+	void EmitMemberPass(vector<string>& entries);
+	void EmitFinalEntries(vector<string>& entries, ostream& out,
+		size_t initial_global_count);
 
 public:
 explicit PA14Lowerer(const vector<CPPGMAstNodePtr>& trees)

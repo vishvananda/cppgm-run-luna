@@ -52,50 +52,114 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 		suffix = spelling.substr(suffix_begin);
 		spelling = CanonicalSpelling(spelling.substr(0, suffix_begin));
 	}
-	// Template replay can use a concrete class as its lookup context even when
-	// an unqualified helper type belongs to the template's lexical namespace.
-	// Keep this narrowly tied to the typed mp11 helper: ordinary aliases such as
-	// true_type still need the source-order lookup used by the base analyzer.
-	if(spelling == "mp_true" && !template_owner.empty()) {
-		const string owner_candidate = JoinPath(template_owner, spelling);
-		if(class_contexts_.find(owner_candidate) != class_contexts_.end() ||
-			named_type_contexts_.find(owner_candidate) != named_type_contexts_.end() ||
-			class_declarations_.find(owner_candidate) != class_declarations_.end())
-			spelling = owner_candidate;
-	}
-	if(spelling.find("::") != string::npos && spelling.find('<') == string::npos &&
-		LastComponent(spelling) == "mp_true") {
-		const auto known_type = [this](const string& candidate) {
-			return class_contexts_.find(candidate) != class_contexts_.end() ||
-				named_type_contexts_.find(candidate) != named_type_contexts_.end() ||
-				class_declarations_.find(candidate) != class_declarations_.end();
+	const auto known_type = [this](const string& candidate) {
+		return class_contexts_.find(candidate) != class_contexts_.end() ||
+			named_type_contexts_.find(candidate) != named_type_contexts_.end() ||
+			class_declarations_.find(candidate) != class_declarations_.end();
+	};
+	// Resolve a type through the indexed declaration paths.  The lexical walk
+	// keeps ordinary lookup precedence; the unique indexed suffix is only used
+	// when a dependent replay has lost its namespace prefix.
+	const auto indexed_type_path = [&](const string& raw_name, const string& primary,
+		const string& secondary, string* resolved) {
+		if(!resolved) return false;
+		const size_t open = raw_name.find('<');
+		const string base = open == string::npos ? raw_name : raw_name.substr(0, open);
+		const string short_name = LastComponent(base);
+		const auto has_repeated_component = [](const string& path) {
+			string previous;
+			for(size_t component = 0; component < path.size();) {
+				while(component < path.size() && path[component] == ':') ++component;
+				const size_t end = path.find("::", component);
+				const string current = path.substr(component, end == string::npos ?
+					string::npos : end - component);
+				if(!current.empty() && current == previous) return true;
+				previous = current;
+				if(end == string::npos) break;
+				component = end + 2;
+			}
+			return false;
 		};
-		if(!known_type(spelling)) {
-			string current = template_owner;
-			for(;;) {
-				if(!current.empty() && known_type(JoinPath(current, "mp_true"))) {
-					spelling = JoinPath(current, "mp_true");
-					break;
+		if(has_repeated_component(base)) return false;
+		string top = base;
+		if(top.compare(0, 2, "::") == 0) top.erase(0, 2);
+		const size_t top_separator = top.find("::");
+		if(top_separator != string::npos) top.erase(top_separator);
+		map<string, vector<string> >::const_iterator indexed =
+			class_paths_by_name_.find(short_name);
+		if(indexed == class_paths_by_name_.end()) return false;
+		const auto try_scope = [&](const string& scope) {
+			for(string current = scope; ; ) {
+				const string candidate = JoinPath(current, base);
+				if(known_type(candidate)) {
+					*resolved = candidate;
+					return true;
 				}
 				if(current.empty()) break;
 				const size_t parent = current.rfind("::");
 				if(parent == string::npos) current.clear();
 				else current.erase(parent);
 			}
-			if(!known_type(spelling)) {
-				current = context;
-				for(;;) {
-					if(!current.empty() && known_type(JoinPath(current, "mp_true"))) {
-						spelling = JoinPath(current, "mp_true");
-						break;
-					}
-					if(current.empty()) break;
-					const size_t parent = current.rfind("::");
-					if(parent == string::npos) current.clear();
-					else current.erase(parent);
+			return false;
+		};
+		if(try_scope(primary) || try_scope(secondary)) return true;
+		const auto try_short_scope = [&](const string& scope) {
+			for(string current = scope; ; ) {
+				const string candidate = JoinPath(current, short_name);
+				if(known_type(candidate)) {
+					*resolved = candidate;
+					return true;
 				}
+				if(current.empty()) break;
+				const size_t parent = current.rfind("::");
+				if(parent == string::npos) current.clear();
+				else current.erase(parent);
+			}
+			return false;
+		};
+		if(try_short_scope(primary) || try_short_scope(secondary)) return true;
+		// A bare dependent name must not be rebound to an arbitrary class that
+		// merely shares its short name.  Only a qualified spelling may use the
+		// narrowed suffix index after lexical lookup has failed.
+		if(base.find("::") == string::npos) return false;
+		string match;
+		const string suffix = base.compare(0, 2, "::") == 0 ? base.substr(2) : base;
+		const string redundant_prefix = top + "::" + top + "::";
+		for(size_t path = 0; path < indexed->second.size(); ++path) {
+			const string& candidate = indexed->second[path];
+			if(has_repeated_component(candidate)) continue;
+			if(candidate.compare(0, redundant_prefix.size(), redundant_prefix) == 0) continue;
+			if(candidate == suffix || (candidate.size() > suffix.size() &&
+				candidate.compare(candidate.size() - suffix.size(), suffix.size(), suffix) == 0 &&
+				candidate[candidate.size() - suffix.size() - 1] == ':')) {
+				if(match.empty()) match = candidate;
+				else if(match != candidate) return false;
 			}
 		}
+		if(match.empty()) {
+			string compatible;
+			for(size_t path = 0; path < indexed->second.size(); ++path) {
+				const string& candidate = indexed->second[path];
+				if(has_repeated_component(candidate)) continue;
+				if(candidate.compare(0, redundant_prefix.size(), redundant_prefix) == 0) continue;
+				string candidate_top = candidate;
+				const size_t separator = candidate_top.find("::");
+				if(separator != string::npos) candidate_top.erase(separator);
+				if(candidate_top != top) continue;
+				if(!compatible.empty() && compatible != candidate) return false;
+				compatible = candidate;
+			}
+			match = compatible;
+		}
+		if(match.empty()) return false;
+		*resolved = match;
+		return true;
+	};
+	string indexed_spelling;
+	if(spelling.find("::") != string::npos &&
+		indexed_type_path(spelling, template_owner, context, &indexed_spelling)) {
+		const size_t open = spelling.find('<');
+		spelling = indexed_spelling + (open == string::npos ? string() : spelling.substr(open));
 	}
 	const string promoted_local = PromotedLocalClass(spelling, context);
 	if(!promoted_local.empty()) spelling = promoted_local;
@@ -152,46 +216,23 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 	const size_t separator = spelling.find("::");
 	const string first = spelling.substr(0, separator);
 	const string remainder = spelling.substr(separator);
-	for(string current = context; ; ) {
-		const string candidate = JoinPath(current, first);
-		const string full_candidate = candidate + remainder;
-		const bool sibling_namespace_type = spelling.compare(0, 5, "aux::") == 0;
-		if(class_contexts_.find(candidate) != class_contexts_.end() ||
-			((preserve_nested_namespace || sibling_namespace_type) && (class_contexts_.find(full_candidate) !=
+		for(string current = context; ; ) {
+			const string candidate = JoinPath(current, first);
+			const string full_candidate = candidate + remainder;
+			const bool nested_type = class_contexts_.find(full_candidate) !=
 				class_contexts_.end() || named_type_contexts_.find(full_candidate) !=
-				 named_type_contexts_.end() || class_declarations_.find(full_candidate) !=
-				class_declarations_.end()))) {
-			spelling = full_candidate;
-			break;
+				named_type_contexts_.end() || class_declarations_.find(full_candidate) !=
+				class_declarations_.end();
+			if(class_contexts_.find(candidate) != class_contexts_.end() ||
+				(preserve_nested_namespace && nested_type)) {
+				spelling = full_candidate;
+				break;
 		}
 		if(current.empty()) break;
 		const size_t parent = current.rfind("::");
 		if(parent == string::npos) current.clear();
 		else current.erase(parent);
 	}
-	}
-	if(spelling.compare(0, 5, "aux::") == 0) {
-		const auto known_type = [this](const string& candidate) {
-			return class_contexts_.find(candidate) != class_contexts_.end() ||
-				named_type_contexts_.find(candidate) != named_type_contexts_.end() ||
-				class_declarations_.find(candidate) != class_declarations_.end();
-		};
-		if(!known_type(spelling)) {
-			const string suffix = "::" + spelling;
-			string match;
-			const auto consider = [&](const string& candidate) {
-				if(candidate.size() <= suffix.size() ||
-					candidate.compare(candidate.size() - suffix.size(), suffix.size(), suffix) != 0)
-					return;
-				if(match.empty()) match = candidate;
-				else if(match != candidate) match.clear();
-			};
-			for(set<string>::const_iterator candidate = class_contexts_.begin();
-				candidate != class_contexts_.end(); ++candidate) consider(*candidate);
-			for(map<string, CPPGMAstNodePtr>::const_iterator candidate = class_declarations_.begin();
-				candidate != class_declarations_.end(); ++candidate) consider(candidate->first);
-			if(!match.empty()) spelling = match;
-		}
 	}
 	if(!template_owner.empty()) {
 	const string owner_prefix = template_owner + "::";
@@ -327,11 +368,17 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 			};
 		const vector<string>& wanted = generated_arguments->second;
 		string best = generated->first;
-		for(map<string, string>::const_iterator candidate = specialization_bases_.begin();
-			candidate != specialization_bases_.end(); ++candidate) {
-			if(candidate->second != generated->second) continue;
+		map<string, vector<string> >::const_iterator names =
+			specialization_names_by_base_.find(LastComponent(generated->second));
+		if(names != specialization_names_by_base_.end()) for(size_t name = 0;
+			name < names->second.size(); ++name) {
+			const string& candidate_name = names->second[name];
+			map<string, string>::const_iterator candidate = specialization_bases_.find(
+				candidate_name);
+			if(candidate == specialization_bases_.end() || candidate->second != generated->second)
+				continue;
 			map<string, vector<string> >::const_iterator candidate_arguments =
-				specialization_arguments_.find(candidate->first);
+				specialization_arguments_.find(candidate_name);
 			if(candidate_arguments == specialization_arguments_.end() ||
 				candidate_arguments->second.size() != wanted.size()) continue;
 			bool same = true;
@@ -340,7 +387,7 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 					same = false;
 					break;
 				}
-			if(same && candidate->first.size() < best.size()) best = candidate->first;
+			if(same && candidate_name.size() < best.size()) best = candidate_name;
 		}
 		if(best != generated->first) {
 			const string owner = PrefixComponent(result);
