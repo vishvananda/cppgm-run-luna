@@ -753,9 +753,14 @@ bool PA18TemplateExpander::MergeInferredFunctionArgument(
 			fixed_pattern = CanonicalSpelling(fixed_pattern.substr(0, fixed_pattern.size() - 6));
 		while(fixed_actual.size() > 6 && fixed_actual.compare(fixed_actual.size() - 6, 6, " const") == 0)
 			fixed_actual = CanonicalSpelling(fixed_actual.substr(0, fixed_actual.size() - 6));
-		if(!HasUnresolvedTemplateParameter(fixed_pattern_source, context, fixed_substitutions) &&
-			FindClassDeclaration(fixed_pattern, context) &&
-			FindClassDeclaration(fixed_actual, context)) return true;
+		// A nondependent parameter still participates in candidate viability.  Do
+		// not admit every pair of known class types here: that turns an unrelated
+		// overload into a successful deduction and can recursively re-enter the
+		// same template through the generated call expression.  Reuse the typed
+		// argument-compatibility check, which retains arithmetic conversions while
+		// rejecting unrelated complete class objects.
+		if(!HasUnresolvedTemplateParameter(fixed_pattern_source, context, fixed_substitutions))
+			return FunctionArgumentViable(fixed_pattern_source, type, context);
 		return !(FindClassDeclaration(fixed_pattern, context) &&
 			FindClassDeclaration(fixed_actual, context) &&
 			LastComponent(fixed_pattern) != LastComponent(fixed_actual));

@@ -5,6 +5,138 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
+string PA18TemplateExpander::FunctionArgumentObjectType(string raw,
+	const string& context) const
+{
+	// A dependent call result can retain the source template-id spelling while
+	// a nondependent overload parameter has already been reduced through its
+	// typedef alias.  Normalize concrete template-ids through the same typed
+	// specialization table before comparing the object types.
+	if(raw.find('<') != string::npos) try {
+		raw = const_cast<PA18TemplateExpander*>(this)->RewriteText(raw, context,
+		map<string, string>(), 0);
+	} catch(const PA18SubstitutionFailure&) {
+		// The caller will reject an actually unavailable operand below.
+	}
+	raw = CanonicalSpelling(ResolveAlias(raw, context));
+	while(raw.compare(0, 6, "const ") == 0)
+		raw = CanonicalSpelling(raw.substr(6));
+	while(raw.compare(0, 9, "volatile ") == 0)
+		raw = CanonicalSpelling(raw.substr(9));
+	while(raw.size() > 6 && raw.compare(raw.size() - 6, 6, " const") == 0)
+		raw = CanonicalSpelling(raw.substr(0, raw.size() - 6));
+	while(raw.size() > 9 && raw.compare(raw.size() - 9, 9, " volatile") == 0)
+		raw = CanonicalSpelling(raw.substr(0, raw.size() - 9));
+	while(raw.size() >= 2 && raw.compare(raw.size() - 2, 2, "&&") == 0)
+		raw = CanonicalSpelling(raw.substr(0, raw.size() - 2));
+	while(!raw.empty() && raw[raw.size() - 1] == '&')
+		raw = CanonicalSpelling(raw.substr(0, raw.size() - 1));
+	// Removing a reference exposes the cv-qualifier on a spelling such as
+	// `const T&`.  Normalize that qualifier after the reference transport has
+	// been removed so class lookup compares the object type, not `T const`.
+	while(raw.size() > 6 && raw.compare(raw.size() - 6, 6, " const") == 0)
+		raw = CanonicalSpelling(raw.substr(0, raw.size() - 6));
+	while(raw.size() > 9 && raw.compare(raw.size() - 9, 9, " volatile") == 0)
+		raw = CanonicalSpelling(raw.substr(0, raw.size() - 9));
+	return raw;
+}
+
+bool PA18TemplateExpander::HasClassConversion(const string& expected,
+	const string& actual, const string& context) const
+{
+	const CPPGMAstNodePtr declaration = FindClassDeclaration(actual, context);
+	if(!declaration) return false;
+	string class_name = CanonicalSpelling(actual);
+	vector<string> class_arguments;
+	string primary_name = class_name;
+	const size_t open = class_name.find('<');
+	if(open != string::npos) {
+		string argument_text;
+		size_t close = string::npos;
+		if(!TemplateRange(class_name, open, &argument_text, &close)) return false;
+		class_arguments = SplitTemplateArguments(argument_text);
+		primary_name = CanonicalSpelling(class_name.substr(0, open));
+	} else {
+		map<string, vector<string> >::const_iterator generated_arguments =
+			specialization_arguments_.find(LastComponent(class_name));
+		map<string, string>::const_iterator generated_base =
+			specialization_bases_.find(LastComponent(class_name));
+		if(generated_arguments != specialization_arguments_.end())
+			class_arguments = generated_arguments->second;
+		if(generated_base != specialization_bases_.end() &&
+			!generated_base->second.empty()) primary_name = generated_base->second;
+	}
+	const TemplateDefinition* primary = FindDefinition(primary_name, context);
+	if(!primary) primary = FindDefinition(LastComponent(primary_name), context);
+	map<string, string> class_substitutions;
+	if(primary) for(size_t parameter = 0; parameter < primary->parameters.size() &&
+		parameter < class_arguments.size(); ++parameter)
+		if(!primary->parameters[parameter].name.empty())
+			class_substitutions[primary->parameters[parameter].name] =
+				class_arguments[parameter];
+	const auto conversion_target_matches = [&](string target) {
+		target = CanonicalSpelling(ReplaceIdentifiers(target, class_substitutions));
+		if(target.empty()) return false;
+		try {
+			target = const_cast<PA18TemplateExpander*>(this)->RewriteText(
+				target, context, class_substitutions, 0);
+		} catch(const PA18SubstitutionFailure&) {
+			return false;
+		}
+		return FunctionArgumentObjectType(target, context) == expected;
+	};
+	function<bool(const CPPGMAstNodePtr&)> visit = [&](const CPPGMAstNodePtr& node) {
+		if(!node) return false;
+		const string name = RemoveMarker(node->value);
+		if(name.compare(0, 8, "operator") == 0 && name.size() > 8 &&
+			conversion_target_matches(name.substr(8))) return true;
+		for(size_t child = 0; child < node->children.size(); ++child)
+			if(visit(node->children[child])) return true;
+		return false;
+	};
+	return visit(declaration);
+}
+
+bool PA18TemplateExpander::FunctionArgumentViable(const string& parameter,
+	const string& actual, const string& context) const
+{
+	const string expected = FunctionArgumentObjectType(parameter, context);
+	const string received = FunctionArgumentObjectType(actual, context);
+	if(expected.empty() || received.empty()) return false;
+	if(expected == received) return true;
+	// A declaration can spell a class parameter relative to its owning
+	// template while the inferred argument carries the qualified owner.  Use
+	// the typed name resolver before treating the two class objects as
+	// different; this does not collapse distinct template specializations.
+	const string qualified_expected = CanonicalSpelling(QualifyTypeArgument(
+		expected, context));
+	const string qualified_received = CanonicalSpelling(QualifyTypeArgument(
+		received, context));
+	if(!qualified_expected.empty() && qualified_expected == qualified_received)
+		return true;
+	if(expected.find('<') == string::npos && received.find('<') == string::npos) {
+		const CPPGMAstNodePtr expected_declaration = FindClassDeclaration(expected, context);
+		const CPPGMAstNodePtr received_declaration = FindClassDeclaration(received, context);
+		if(expected_declaration && expected_declaration == received_declaration) return true;
+	}
+	if(IsBuiltinArithmeticType(expected) && IsBuiltinArithmeticType(received))
+		return true;
+	if(IsBuiltinArithmeticType(expected) && FindClassDeclaration(received, context))
+		return false;
+	// Expression-SFINAE needs to reject an attempted conversion between two
+	// unrelated complete class types.  The typed class conversion index admits
+	// only a conversion operator whose target matches the expected object.
+	const bool direct_parameter = expected.find('*') == string::npos &&
+		expected.find('&') == string::npos;
+	const bool direct_actual = received.find('*') == string::npos &&
+		received.find('&') == string::npos;
+	if(direct_parameter && direct_actual &&
+		FindClassDeclaration(expected, context) &&
+		FindClassDeclaration(received, context))
+		return HasClassConversion(expected, received, context);
+	return true;
+}
+
 string PA18TemplateExpander::FunctionLookupContext(const string& context) const
 {
 	string generated_owner = active_instantiation_name_.empty() ?

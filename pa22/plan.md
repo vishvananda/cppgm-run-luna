@@ -2186,25 +2186,26 @@ and aggregate/copy construction without hardcoding any fixture symbols.
 Validation for this checkpoint covers the three focused fixtures, the full
 PA22 report, through-PA21, and the PA22 source audit.
 
-## Checkpoint 87 completion audit — 2026-07-26
+## Checkpoint 87 completion and checkpoint-audit result — 2026-07-26
 
-The authoritative result for the committed implementation is **153/250** PA22
-tests, an increase of **43** over the turn-start baseline of **110/250**.
+The implementation entered this audit at **153/250** PA22 tests.  The audit
+fixes raise the authoritative result to **154/250**: the array-reference /
+default-argument replay timeout is gone, with no timeout failures remaining.
 The completed checkpoint scope was typed pack and forwarding replay: empty
 pack static-assert expansion, concrete pack-element copy construction,
 dependent `remove_reference_t` forwarding, qualified alias deduction,
 value-base SFINAE rejection, empty index-sequence ordering,
 inherited-constructor forwarding, and symmetric cv-pointer ambiguity.
 
-Validation for this checkpoint is the full PA22 report, through-PA21, the
-PA22 source audit, and a clean worktree.  Through-PA21 is **1850/1850**; the
-source audit passes with only its existing non-fatal warnings.
-
 ### Remaining Work Map
 
-- **general/100 — 4:** three LowIR parity differences and the
-  array-reference/default-argument replay timeout.
-- **general/200 — 1:** synthetic virtual-member LowIR parity.
+The complete current-PA failure set is **96** fixtures, grouped as follows:
+
+- **general/100 — 3:** `explicit-template-id-user-conversion-deduction`,
+  `function-parameter-empty-middle-pack-alias`, and
+  `function-template-fixed-over-trailing-pack-fallback` (LowIR parity).
+- **general/200 — 1:** `partial-order-synthetic-virtual-member-emission`
+  (LowIR parity).
 - **general/300 — 25:** qualified lookup, dependent alias/SFINAE,
   constructor, and owner replay.
 - **general/400 — 15:** non-type, template-template, alias, and constructor
@@ -2215,9 +2216,7 @@ source audit passes with only its existing non-fatal warnings.
   remaining array/specialization, ordering/default, conversion/SFINAE,
   decltype/reference, and template-template/non-type edges.
 
-The remaining **97** failures are concentrated in typed replay and expected
-LowIR ordering/metadata parity.  Next checkpoint scope is the residual
-general/100+200 parity band: isolate the array-reference replay recursion
-and normalize constant-index, temporary-numbering, and synthetic
-virtual-constructor emission.  Validate that group with the full PA22 report,
-through-PA21, and the PA22 source audit.
+The next substantial checkpoint bundles the four residual general/100+200
+LowIR parity fixtures.  It will normalize the already-semantic output’s
+constant-index, temporary-numbering, and synthetic virtual-constructor
+presentation without reopening the completed deduction or timeout paths.

@@ -316,3 +316,90 @@ preservation.
   `make -C pa19 check TEST=tests/general/100-static-constexpr-member-call-initializer.t`.
 - `make build` and `git diff --check` pass.  The final commit will be checked
   for an empty `git status --short`.
+
+## Checkpoint 87 Audit — 2026-07-26
+
+### Scope Reviewed
+
+Reviewed the latest `Checkpoint Scope` and result in [plan.md](plan.md), the
+PA22 contract in [README.md](README.md), commits `d5d69a5`, `e01518f`,
+`1bbbcb4`, and `10fa1e9`, the current report at
+`/home/vishvananda/work/.ralph/luna-gpt-5.6-luna-ultra/last-test.log`, and
+the changed deduction/replay implementation in
+`pa18_templates_rewrite_infer.cpp`, `pa18_templates_rewrite_decltype.h`, and
+`pa18_templates_rewrite_decltype.cpp`.  The review also covered the checked
+frontend source set, the PA22 general/100 and general/200 regression band,
+the full PA22 report, the PA22 README boundary, and the complete PA1–PA21
+through-report.
+
+The audit focused on the typed pack/forwarding replay checkpoint and its
+candidate-admission behavior, including the reported
+`template-array-reference-cv-default-arg` timeout.
+
+### Findings
+
+- The checkpoint had one real semantic and performance blocker.  Its new
+  fixed-parameter fallback treated every pair of known class types as a
+  viable candidate after `MatchTypePattern` failed.  In the array-reference
+  fixture this admitted the unrelated global `operator<<` for a stream
+  operand, then recursively instantiated another lazy wrapper around the
+  generated helper type until the test timed out.  This was an algorithmic
+  candidate-admission error, not a timeout-budget problem.
+- The shared object-type normalizer also removed the reference transport
+  before removing a trailing cv qualifier, so `const T&` could become `T
+  const` and evade typed class lookup.  That made the broad fallback harder
+  to reject and also affected qualified same-class arguments and legitimate
+  conversion-operator calls.
+- No skipped compiler phase, dummy output, embedded payload,
+  interpreter/VM/trampoline substitute, source- or test-specific acceptance
+  gate, emitted-text execution, weakened check, or unchecked implementation
+  fragment was found in the reviewed checkpoint.  The fix keeps candidate
+  viability in the typed deduction path; it does not add a success fallback
+  for the affected fixture.
+- The compatibility work uses `TemplateDefinition`/AST declaration indexes
+  and the existing typed class-conversion members.  It does not duplicate AST
+  ownership, reconstruct semantic facts from emitted LowIR, or walk the test
+  suite.  The conversion scan is limited to the one mismatched class
+  declaration, and the timeout-causing unbounded re-entry is removed before
+  instantiation.
+- The first corrected implementation enlarged
+  `pa18_templates_rewrite_decltype.h` past the PA22 file-audit limit.  That
+  ownership issue was fixed by moving the non-template compatibility helpers
+  into the responsibility-named `.cpp` module.  The final audit reports only
+  the repository’s existing 11 non-fatal structural warnings.
+
+### Changes Made
+
+- Replaced the unconditional fixed-known-class success path in
+  `MergeInferredFunctionArgument` with `FunctionArgumentViable`, so unrelated
+  fixed class operands are rejected before replay while arithmetic conversions
+  remain viable.
+- Corrected object-type normalization after reference removal, qualified
+  same-class identity checks through the typed resolver/declaration index, and
+  class conversion-operator matching for legitimate user-defined conversions.
+- Moved `FunctionArgumentObjectType`, `HasClassConversion`, and
+  `FunctionArgumentViable` implementations from the header to
+  `pa18_templates_rewrite_decltype.cpp`, restoring file-audit ownership and
+  size health without changing the frontend source set.
+- Did not modify tests or reference fixtures.
+
+### Validation
+
+- Required active report — **154/250 passed**, up from the audit-start
+  baseline of **153/250**; the complete residual set is **96** fixtures,
+  consisting of the three general/100 parity cases, one general/200 parity
+  case, and the previously reported downstream groups.  There are **0
+  timeout failures**.
+- The timeout regression fixture
+  `general/100-template-array-reference-cv-default-arg.t` passes its full
+  LowIR comparison, and the forwarding-reference top-const function-pointer
+  regression passes its full comparison.  The explicit user-conversion case
+  remains a semantic success; its current residual is LowIR parity only.
+- Required prior-through check — **passed**:
+  `n=22; if [ "$n" -le 1 ]; then echo '===== ALL TESTS PASSED SUCCESSFULLY! (0/0) ====='; else make test-report-through-pa$((n - 1)); fi`
+  reported **1850/1850** through PA21.
+- Required file audit — **passed**:
+  `perl scripts/cppgm_file_audit.pl --stage pa22 --paths dev/src`, with only
+  the 11 pre-existing warnings.
+- `git diff --check` passed, and the cohesive audit fixes plus documentation
+  are committed with an empty `git status --short`.

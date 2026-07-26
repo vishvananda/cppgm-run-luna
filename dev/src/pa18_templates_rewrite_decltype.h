@@ -723,57 +723,11 @@
 		}
 		return raw;
 	}
-	string FunctionArgumentObjectType(string raw, const string& context) const
-	{
-		// A dependent call result can retain the source template-id spelling while
-		// a nondependent overload parameter has already been reduced through its
-		// typedef alias.  Normalize concrete template-ids through the same typed
-		// specialization table before comparing the object types.
-		if(raw.find('<') != string::npos) try {
-			raw = const_cast<PA18TemplateExpander*>(this)->RewriteText(raw, context,
-				map<string, string>(), 0);
-		} catch(const PA18SubstitutionFailure&) {
-			// The caller will reject an actually unavailable operand below.
-		}
-		raw = CanonicalSpelling(ResolveAlias(raw, context));
-		while(raw.compare(0, 6, "const ") == 0)
-			raw = CanonicalSpelling(raw.substr(6));
-		while(raw.compare(0, 9, "volatile ") == 0)
-			raw = CanonicalSpelling(raw.substr(9));
-		while(raw.size() > 6 && raw.compare(raw.size() - 6, 6, " const") == 0)
-			raw = CanonicalSpelling(raw.substr(0, raw.size() - 6));
-		while(raw.size() > 9 && raw.compare(raw.size() - 9, 9, " volatile") == 0)
-			raw = CanonicalSpelling(raw.substr(0, raw.size() - 9));
-		while(raw.size() >= 2 && raw.compare(raw.size() - 2, 2, "&&") == 0)
-			raw = CanonicalSpelling(raw.substr(0, raw.size() - 2));
-		while(!raw.empty() && raw[raw.size() - 1] == '&')
-			raw = CanonicalSpelling(raw.substr(0, raw.size() - 1));
-		return raw;
-	}
+	string FunctionArgumentObjectType(string raw, const string& context) const;
+	bool HasClassConversion(const string& expected, const string& actual,
+		const string& context) const;
 	bool FunctionArgumentViable(const string& parameter, const string& actual,
-		const string& context) const
-	{
-		const string expected = FunctionArgumentObjectType(parameter, context);
-		const string received = FunctionArgumentObjectType(actual, context);
-		if(expected.empty() || received.empty()) return false;
-		if(expected == received) return true;
-		if(IsBuiltinArithmeticType(expected) && IsBuiltinArithmeticType(received))
-			return true;
-		if(IsBuiltinArithmeticType(expected) && FindClassDeclaration(received, context))
-			return false;
-		// Expression-SFINAE needs to reject an attempted conversion between two
-		// unrelated complete class types.  The ordinary call rewriter handles
-		// constructors and conversion operators; this narrow viability check is
-		// the typed fact needed for probes such as test_aux<To>(declval<From>()).
-		const bool direct_parameter = expected.find('*') == string::npos &&
-			expected.find('&') == string::npos;
-		const bool direct_actual = received.find('*') == string::npos &&
-			received.find('&') == string::npos;
-		if(direct_parameter && direct_actual &&
-			FindClassDeclaration(expected, context) &&
-			FindClassDeclaration(received, context)) return false;
-		return true;
-	}
+		const string& context) const;
 	bool FunctionArgumentsViable(const TemplateDefinition& definition,
 		const vector<string>& arguments, const vector<string>& actual_types,
 		const string& context)
