@@ -105,7 +105,14 @@ inline PA19IntegralType PA19Type(const std::string& raw)
 	while(name.compare(0, 7, "static ") == 0) name = PA19Compact(name.substr(7));
 	while(name.compare(0, 6, "const ") == 0) name = PA19Compact(name.substr(6));
 	while(name.compare(0, 9, "volatile ") == 0) name = PA19Compact(name.substr(9));
-	if(name == "bool") {
+	// On the Linux x86_64 target, sizeof has the unsigned-long size_t type.
+	// Keep that fact available to template non-type argument validation when a
+	// source typedef spells size_t as decltype(sizeof(...)).
+	if(name.compare(0, 16, "decltype(sizeof(") == 0 && name.size() > 17 &&
+		name.substr(name.size() - 2) == "))") {
+		result.integral = true; result.is_unsigned = true; result.bits = 64;
+		result.rank = 5; result.name = "unsigned long";
+	} else if(name == "bool") {
 		result.integral = true; result.bits = 1; result.rank = 1; result.name = name;
 	} else if(name == "char") {
 		result.integral = true; result.bits = 8; result.rank = 2; result.name = name;

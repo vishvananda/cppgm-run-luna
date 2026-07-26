@@ -82,6 +82,14 @@ PA14Lowerer::Value PA14Lowerer::EmitIdentifier(const CPPGMAstNodePtr& node, Scop
       if(type_is_reference(local->type)) {
         TypePtr referred = local->type->child;
         const string address = local_address(local);
+        if(referred && referred->kind == TYPE_ARRAY) {
+          result.type = referred;
+          result.array = true;
+          const string decay = new_temp();
+          AddInstruction(decay + " = unary decay ptr " + address);
+          result.operand = decay;
+          return result;
+        }
         if(referred && referred->kind == TYPE_FUNCTION) {
           result.type = referred;
           result.function = true;

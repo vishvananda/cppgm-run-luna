@@ -27,6 +27,21 @@ TypePtr Analyzer::ResolveFunctionSpelledType(const string& spelling, Scope* scop
 		outer_reference = TYPE_LVALUE_REFERENCE;
 		core.erase(core.size() - 1);
 	}
+	bool pointer_const = false;
+	bool pointer_volatile = false;
+	if (core.size() > 6 && core.compare(core.size() - 6, 6, " const") == 0) {
+		pointer_const = true;
+		core.erase(core.size() - 6);
+	} else if (core.size() > 5 && core.compare(core.size() - 5, 5, "const") == 0) {
+		pointer_const = true;
+		core.erase(core.size() - 5);
+	} else if (core.size() > 9 && core.compare(core.size() - 9, 9, " volatile") == 0) {
+		pointer_volatile = true;
+		core.erase(core.size() - 9);
+	} else if (core.size() > 8 && core.compare(core.size() - 8, 8, "volatile") == 0) {
+		pointer_volatile = true;
+		core.erase(core.size() - 8);
+	}
 	const size_t pointer_open = core.find("(*");
 	const size_t reference_open = core.find("(&");
 	const bool function_pointer = pointer_open != string::npos;
@@ -82,6 +97,8 @@ TypePtr Analyzer::ResolveFunctionSpelledType(const string& spelling, Scope* scop
 	TypePtr function = FunctionOf(parameters, variadic, result_type);
 	TypePtr result = function_pointer ? PointerTo(function) :
 		function_reference ? ReferenceTo(TYPE_LVALUE_REFERENCE, function) : function;
+	if(function_pointer && (pointer_const || pointer_volatile))
+		result = CloneWithCv(result, pointer_const, pointer_volatile);
 	return outer_reference == TYPE_FUNDAMENTAL ? result :
 		ReferenceTo(outer_reference, result);
 }

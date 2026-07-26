@@ -30,9 +30,10 @@ bool MatchTypePattern(string pattern, string actual,
 			const string& context, bool class_pattern) const;
 	int MatchReferenceArrayPattern(const string& pattern, const string& actual,
 		const set<string>& parameter_names, map<string, string>* inferred) const;
-	int MatchGeneratedBaseTypePattern(const string& pattern, const string& actual,
-		const string& pattern_base, const set<string>& parameter_names,
-		map<string, string>* inferred, const string& context, bool class_pattern) const;
+int MatchGeneratedBaseTypePattern(const string& pattern, const string& actual,
+	const string& pattern_base, const set<string>& parameter_names,
+		map<string, string>* inferred, const string& context, bool class_pattern,
+		set<string>* active = 0) const;
 	bool SplitDirectFunctionType(const string& raw, string* result, vector<string>* parameters, string* qualifiers) const;
 	int MatchObjectCvPattern(const string& pattern, const string& actual, const set<string>& parameter_names,
 				map<string, string>* inferred, const string& context,
@@ -268,7 +269,8 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 		const set<string>& parameter_names, map<string, string>* inferred,
 		map<string, vector<string> >* inferred_packs,
 		map<string, FunctionSignature>* inferred_functions,
-		const map<string, vector<string> >* bound_pack_values = 0) const;
+		const map<string, vector<string> >* bound_pack_values = 0,
+		const set<string>* fixed_template_parameters = 0) const;
 	bool InferFunctionParameter(const TemplateDefinition& definition,
 		const CPPGMAstNodePtr& parameter, const CPPGMAstNodePtr& parameter_list,
 		size_t parameter_position, const CPPGMAstNodePtr& arguments,
@@ -279,7 +281,8 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 		vector<CPPGMAstNodePtr>* deferred_arguments,
 		map<string, FunctionSignature>* inferred_functions,
 		const map<string, vector<string> >* bound_pack_values = 0,
-		map<string, vector<string> >* forwarding_pack_values = 0) const;
+		map<string, vector<string> >* forwarding_pack_values = 0,
+		const set<string>* fixed_template_parameters = 0) const;
 	bool CompleteFunctionArguments(const TemplateDefinition& definition,
 		const vector<string>& deferred_patterns,
 		const vector<CPPGMAstNodePtr>& deferred_arguments,

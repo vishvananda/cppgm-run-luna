@@ -1882,3 +1882,163 @@ defaulted, array-reference, qualified, and member-template ordering cases.
 Keep candidate rejection and source-order lookup typed while extending the
 same ranking path.  Validate with the focused group, full PA22 report,
 through-PA21, and the PA22 source audit.
+
+## Checkpoint 82 scope — 2026-07-25 (before implementation)
+
+The refreshed PA22 report is **134/250**, leaving **116** failures with no
+timeout.  The complete failure set is partitioned as follows: general/100
+**14**, general/200 **5**, general/300 **26**, general/400 **15**, general/500
+**24**, spec/100 **6**, spec/200 **9**, spec/300 **6**, spec/400 **2**, and
+spec/500 **9**.  The general/200 and spec/200 residuals are the remaining
+partial-ordering band; the other buckets are retained as explicit follow-up
+groups rather than omitted from the map.
+
+Selected scope: repair dependent free-function lookup and typed candidate
+materialization for the shared call path behind
+`general/200-range-array-reference-mutable-begin`,
+`spec/200-array-reference-cv-partial-ordering`, and
+`spec/200-nondeduced-qualified-member-type-allows-conversion`.  Each currently
+fails before overload deduction with an unknown `find_not`, qualified `begin`,
+or `next` expression.  The scope covers lookup context/qualification,
+function-template visibility, array-reference and nondeduced parameter
+deduction, and replay of the selected typed result; it must preserve ordinary
+SFINAE rejection and must not hardcode any callee or return value.
+
+Validation for this checkpoint covers the three focused fixtures, the full
+PA22 report, through-PA21, and the PA22 source audit.
+
+## Checkpoint 82 result and next scope — 2026-07-25
+
+The checkpoint implementation passed all three focused fixtures and raised
+the full PA22 report from **134/250** to **138/250**.  It also repaired the
+related `spec/100-function-template-array-bound-only-deduction` fixture.  The
+array-reference group now covers top-level array binding, reference-array
+substitution, by-value array-to-pointer adjustment, nondeduced qualified
+traits, and referenced-array decay in LowIR.
+
+The refreshed remaining map is **112** failures: general/100 **14**,
+general/200 **4**, general/300 **26**, general/400 **15**, general/500 **24**,
+spec/100 **5**, spec/200 **7**, spec/300 **6**, spec/400 **2**, and spec/500
+**9**.  The detailed names remain in the report-derived map for this
+checkpoint; the dominant behaviors are forwarding and template-template/pack
+deduction, dependent alias/SFINAE replay, constructor/member candidate
+materialization, and expected LowIR metadata or overload emission.
+
+Next checkpoint scope: repair the shared forwarding-reference and function
+template argument replay path for the basic general/100 group, beginning with
+`general/100-forwarding-reference-qualified-enumerator`,
+`general/100-forwarding-reference-preserves-top-const-function-pointer`, and
+`general/100-dependent-remove-reference-transform-forwarding`.  This scope
+covers lvalue/rvalue reference typed facts, top-level const and function
+pointer substitution, dependent alias removal, and ordinary SFINAE rejection;
+it will be validated against the focused fixtures, the full PA22 report,
+through-PA21, and the source audit.
+
+## Checkpoint 83 scope — 2026-07-25 (before implementation)
+
+The complete failure set was refreshed before this increment from the active
+report at **140/250** and grouped as: general/100 **12**, general/200 **4**,
+general/300 **26**, general/400 **15**, general/500 **24**, spec/100 **5**,
+spec/200 **7**, spec/300 **6**, spec/400 **2**, and spec/500 **9**.  The
+remaining behaviors are call-argument normalization and packs; partial
+ordering; dependent lookup/SFINAE; constructor, alias, conversion, and owner
+replay; and typed non-type argument lowering.
+
+Selected scope: finish the explicit-template call path for
+`general/100-explicit-template-id-user-conversion-deduction`,
+`general/100-function-template-template-defaulted-argument-deduction`,
+`general/100-function-template-variadic-template-template-deduction`,
+`general/500-adl-explicit-function-template-id`, and
+`general/300-explicit-template-call-transitive-base-deduction`.  This covers
+explicit prefix deduction through a user conversion, defaulted and variadic
+template-template parameters, using-directive/ADL visibility, and recursive
+typed matching through instantiated transitive bases.  The same checkpoint
+also covers the shared special-member body lookup and discarded scalar
+reference-return lowering exposed while validating those calls.  It must
+preserve typed substitution and candidate state rather than select fixture
+specific symbols.
+
+Validation for this checkpoint covers all five focused fixtures with their
+full LowIR comparisons, the required PA22 report, through-PA21, and the PA22
+source audit.
+
+## Checkpoint 83 result and next scope — 2026-07-25
+
+The five focused fixtures now pass their complete comparisons.  Explicit
+template ids retain conversion targets through rewriting, defaulted and
+variadic template-template arguments resolve in the owning definition
+context, top-level using directives make qualified types visible to the later
+call body, and recursive base matching expands class-template defaults and
+pack-derived bases.  Special-member bodies now use their actual compound
+statement for local-use analysis, and discarded reference-return calls
+materialize the scalar value through the ordinary lowering path.
+
+The last exact required report is **138/250**, or **112** residual failures,
+which is **28** above the turn-start **110/250** baseline.  Its grouped map is:
+general/100 **13** (forwarding, cv/array/default, and pack normalization),
+general/200 **4** (ranking and synthetic-member emission), general/300 **26**
+(qualified lookup, alias/SFINAE, and constructor candidates), general/400
+**15** (non-type, template-template, alias, and constructor replay),
+general/500 **24** (owner, conversion, alias, and dependent-result behavior),
+spec/100 **5** (array and specialization edges), spec/200 **7** (defaults and
+partial ordering), spec/300 **6** (constructor/conversion/SFINAE), spec/400
+**2** (decltype and reference non-type arguments), and spec/500 **10**
+(conversion, template-template, alias, and dependent non-type cases).
+
+Next checkpoint scope: take the remaining general/100 forwarding and pack
+normalization band, beginning with dependent remove-reference forwarding,
+top-level-cv function-pointer deduction, empty-pack/static-assert expansion,
+and concrete type-pack element replay.  Validate that group with its full
+comparisons, the PA22 report, through-PA21, and the source audit.
+
+## Checkpoint 84 scope — 2026-07-25 (before implementation)
+
+The complete current-PA failure set was refreshed before this increment from
+the active report at **138/250**.  The selected group targets explicit function
+template calls: incomplete explicit prefixes must remain available for
+call-site deduction, explicitly fixed parameters must remain fixed while
+matching class conversions and transitive bases, and fixed alias-defined
+reference-to-array parameters must retain their reference shape during
+deduction.  The focused semantic cases are
+`general/100-explicit-template-id-user-conversion-deduction`,
+`general/300-explicit-template-call-transitive-base-deduction`, and the PA21
+conversion-operator binding fixture.  The scope also includes the source
+lookup/replay path needed to defer incomplete function template-ids without
+materializing an invalid specialization.
+
+## Checkpoint 84 result and next scope — 2026-07-25
+
+The increment preserves the PA21 conversion-operator selection and raises the
+PA22 report to **142/250**, above the turn-start **110/250** baseline.  The two
+focused PA22 programs now compile through explicit-prefix deduction, user
+conversion viability, and recursive transitive-base matching; their remaining
+report entries are LowIR fixture differences only (the generated code is
+semantically valid).  The PA21 focused fixture passes, and through-PA21 is
+**1850/1850**.  Member class-exactness ranking was moved to a dedicated source
+module so the PA22 file audit remains passing.
+
+### Remaining Work Map
+
+- **general/100 — 11:** forwarding/reference, cv/array/default, and pack
+  normalization, plus the two explicit-call LowIR parity cases.
+- **general/200 — 4:** partial ordering, ambiguity, and synthetic-member
+  emission.
+- **general/300 — 26:** qualified lookup, alias/SFINAE, constructor, and
+  dependent owner replay.
+- **general/400 — 15:** non-type, template-template, alias, and constructor
+  replay.
+- **general/500 — 23:** owner, conversion, alias, and dependent-result
+  behavior.
+- **spec/100 — 5; spec/200 — 7; spec/300 — 6; spec/400 — 2; spec/500 — 9:**
+  remaining array/specialization, ordering/default, conversion/SFINAE,
+  decltype/reference, and template-template/non-type edges.
+
+The report has **108** residual failures.  Six names were removed from the
+138/250 checkpoint set; the two explicit-call names remain as LowIR-only
+parity residuals, with no earlier-PA regressions.
+
+Next checkpoint scope: take the remaining general/100 forwarding and pack
+normalization group, beginning with dependent remove-reference forwarding,
+top-level-cv function-pointer deduction, empty-pack/static-assert expansion,
+and concrete type-pack element replay.  Validate focused comparisons, the
+full PA22 report, through-PA21, and the source audit.

@@ -494,8 +494,7 @@ private:
 	map<string, string> function_owners_;
 	map<string, string> local_class_names_; map<string, CPPGMAstNodePtr> class_declarations_; map<string, set<string> > static_members_by_class_; set<string> using_member_template_names_;
 	map<string, vector<string> > constant_member_owners_;
-	set<string> named_type_contexts_;
-	map<string, string> variable_types_;
+	set<string> named_type_contexts_; map<string, string> enumerator_types_; map<string, string> variable_types_;
 	map<string, map<string, string> > function_parameter_types_;
 	map<string, PA19IntegralValue> constant_values_;
 	map<string, vector<PA19IntegralValue> > constant_arrays_; map<string, size_t> constant_type_sizes_, constant_type_alignments_;
@@ -555,7 +554,7 @@ private:
 		set<string>* active) const;
 	string QualifyTypeArgument(string spelling, const string& context,
 		const string& template_owner = string(),
-		bool preserve_nested_namespace = false) const;
+		bool preserve_nested_namespace = false) const; string PromotedLocalClass(const string& name, const string& context) const;
 	ClassSpecializationIdentity MakeClassSpecializationIdentity(
 		const TemplateDefinition& definition, const vector<string>& arguments,
 		const string& context) const;
@@ -609,6 +608,7 @@ private:
 		const string& context,
 		const map<string, string>& substitutions,
 		bool explicit_instantiation = false); int MemberTemplatePatternScore(const TemplateDefinition* candidate) const; void RestoreMemberTemplateDefaults(const string& member_name, const TemplateDefinition& definition, TemplateDefinition* result) const; bool ContainsSubstitutionIdentifier(const string& text, const map<string, string>& substitutions) const; bool FunctionTemplateMoreSpecialized(const TemplateDefinition& lhs, const TemplateDefinition& rhs, const string& context) const; bool PreserveFunctionLookupOrder(const vector<const TemplateDefinition*>& definitions, const string& context, const map<string, string>& substitutions) const; void SortFunctionTemplateCandidates(vector<const TemplateDefinition*>* candidates, const string& context) const; void RankFunctionTemplateCandidatesForCall(vector<const TemplateDefinition*>* candidates, const CPPGMAstNodePtr& call, const string& context, const map<string, string>& substitutions) const;
+	void RankMemberCandidatesByClassExactness(vector<const TemplateDefinition*>* candidates, const CPPGMAstNodePtr& call, const map<string, string>& substitutions, const string& context);
 	bool TransformQualifiedMemberTemplateCall(const CPPGMAstNodePtr& input,
 		const CPPGMAstNodePtr& input_callee, const string& context,
 		const map<string, string>& substitutions,

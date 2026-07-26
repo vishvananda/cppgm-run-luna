@@ -1,5 +1,6 @@
 #include "pa18_templates_collection.h"
 #include "pa18_templates_rewrite.h"
+
 #include <functional>
 
 using namespace pa18_templates_internal;
@@ -152,6 +153,8 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformTranslationUnit(
 			top_level_substitutions);
 		if(child) result->children.push_back(child);
 		const CPPGMAstNodePtr original = input->children[i];
+		if(original && original->kind == "using-directive")
+			RecordUsingDirective(original, &top_level_substitutions);
 		if(original && original->kind == "simple-declaration" &&
 			!original->children.empty() &&
 			SpellNode(original->children[0]).find("typedef") != string::npos)
@@ -459,9 +462,8 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 		suffix = spelling.substr(suffix_begin);
 		spelling = CanonicalSpelling(spelling.substr(0, suffix_begin));
 	}
-	map<string, string>::const_iterator local = local_class_names_.find(
-		JoinPath(context, spelling));
-	if(local != local_class_names_.end()) spelling = local->second;
+	const string promoted_local = PromotedLocalClass(spelling, context);
+	if(!promoted_local.empty()) spelling = promoted_local;
 	const bool direct_function = SplitDirectFunctionType(spelling, 0, 0, 0);
 	if(spelling.size() > 5 && spelling.compare(spelling.size() - 5, 5, "const") == 0 &&
 		spelling.find("::") == string::npos && !direct_function) {

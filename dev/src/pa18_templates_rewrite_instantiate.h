@@ -172,7 +172,7 @@
 			if(!enumerator->children.empty())
 				EvaluateIntegralText(ConstantExpressionSpelling(enumerator->children[0]), context,
 					map<string,string>(), &value);
-			const string unqualified = JoinPath(context, enumerator->value);
+			const string unqualified = JoinPath(context, enumerator->value); const string enum_type = enum_name.empty() ? string("int") : JoinPath(context, enum_name); enumerator_types_[unqualified] = enum_type; if(enumerator_types_.find(enumerator->value) == enumerator_types_.end()) enumerator_types_[enumerator->value] = enum_type; if(!enum_name.empty()) enumerator_types_[JoinPath(JoinPath(context, enum_name), enumerator->value)] = enum_type;
 			constant_values_[unqualified] = value;
 			if(constant_values_.find(enumerator->value) == constant_values_.end())
 				constant_values_[enumerator->value] = value;

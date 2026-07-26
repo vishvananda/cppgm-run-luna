@@ -23,8 +23,13 @@ int PA18TemplateExpander::MatchReferenceArrayPattern(const string& pattern,
 	map<string, string>* inferred) const
 {
 	const size_t reference_array = actual.find("(&)");
-	if(reference_array == string::npos || actual.find('[', reference_array + 3) == string::npos ||
-		pattern.empty() || pattern[pattern.size() - 1] != '&') return -1;
+	const size_t array_open = actual.rfind('[');
+	const bool typed_reference_array = reference_array != string::npos &&
+		actual.find('[', reference_array + 3) != string::npos;
+	const bool lvalue_array = reference_array == string::npos && array_open != string::npos &&
+		!actual.empty() && actual[actual.size() - 1] == ']';
+	if((!typed_reference_array && !lvalue_array) || pattern.empty() ||
+		pattern[pattern.size() - 1] != '&') return -1;
 	string parameter = CanonicalSpelling(pattern.substr(0, pattern.size() - 1));
 	while(parameter.compare(0, 6, "const ") == 0) parameter = CanonicalSpelling(parameter.substr(6));
 	while(parameter.compare(0, 9, "volatile ") == 0) parameter = CanonicalSpelling(parameter.substr(9));
@@ -34,7 +39,11 @@ int PA18TemplateExpander::MatchReferenceArrayPattern(const string& pattern,
 		parameter = CanonicalSpelling(parameter.substr(0, parameter.size() - 9));
 	if(parameter_names.find(parameter) == parameter_names.end()) return -1;
 	string array_type = actual;
-	array_type.erase(reference_array, 3);
+	if(typed_reference_array) array_type.erase(reference_array, 3);
+	else {
+		const size_t reference_before_array = array_type.find("&[");
+		if(reference_before_array != string::npos) array_type.erase(reference_before_array, 1);
+	}
 	map<string, string>::const_iterator prior = inferred->find(parameter);
 	if(prior != inferred->end() && CanonicalSpelling(prior->second) !=
 		CanonicalSpelling(array_type)) return 0;

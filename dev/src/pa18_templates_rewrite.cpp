@@ -346,7 +346,6 @@ bool PA18TemplateExpander::IsTemplatePackName(const TemplateDefinition& definiti
 			definition.parameters[parameter].name == name) return true;
 	return template_pack_names_.find(name) != template_pack_names_.end();
 }
-
 bool PA18TemplateExpander::IsTopLevelPackPattern(const string& value) const
 {
 	if(value.size() <= 3 || value.compare(value.size() - 3, 3, "...") != 0) return false;
@@ -361,7 +360,6 @@ bool PA18TemplateExpander::IsTopLevelPackPattern(const string& value) const
 	}
 	return angle == 0 && paren == 0 && bracket == 0;
 }
-
 bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 	const set<string>& parameter_names, map<string, string>* inferred,
 	const string& context, bool class_pattern) const
@@ -419,7 +417,6 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 				if(end < spelling.size() && IsIdentifierCharacter(spelling[end])) continue;
 				size_t next = end;
 				while(next < spelling.size() && isspace(static_cast<unsigned char>(spelling[next]))) ++next;
-				// Separate compact dependent names from following cv qualifiers.
 			spelling.insert(at, " ");
 			at += 1;
 			}
@@ -445,8 +442,10 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 			pattern.empty() || actual.empty() || pattern[pattern.size() - 1] != ']' ||
 			actual[actual.size() - 1] != ']') return false;
 		const string pattern_element = ArrayPatternElement(pattern.substr(0, pattern_array_open));
-		const string actual_element = CanonicalSpelling(actual.substr(0,
-			actual_array_open));
+		string actual_element = ArrayPatternElement(actual.substr(0, actual_array_open));
+		while(!actual_element.empty() && actual_element[actual_element.size() - 1] == '&')
+			actual_element.erase(actual_element.size() - 1);
+		actual_element = CanonicalSpelling(actual_element);
 		if(!MatchTypePattern(pattern_element, actual_element, parameter_names,
 			inferred, context, class_pattern)) {
 			return false;
@@ -467,10 +466,6 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 		return CanonicalSpelling(ReplaceIdentifiers(pattern_bound, *inferred)) ==
 			actual_bound;
 	}
-	// Direct function types have a different top-level grammar from function
-	// pointers.  Keep their parameter list and cv/ref qualifiers intact before
-	// the ordinary reference and object-cv normalization below, then bind a
-	// trailing type pack as one typed comma-separated substitution.
 	string pattern_result, actual_result, pattern_qualifiers, actual_qualifiers;
 	vector<string> pattern_parameters, actual_parameters;
 	const bool direct_pattern_function = SplitDirectFunctionType(pattern, &pattern_result,
@@ -514,10 +509,6 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 				parameter_names, inferred, context, class_pattern)) return false;
 		return true;
 	}
-	// A function type used as a nested type argument can be supplied to a
-	// pointer-shaped partial specialization after the language's function-to-
-	// pointer adjustment.  Preserve the typed result and parameter list while
-	// presenting the spelling expected by the existing pointer matcher.
 	if(direct_actual_function && !direct_pattern_function &&
 		pattern.find(")(") != string::npos && actual_qualifiers.empty()) {
 		string converted = actual_result + "(*)(";
@@ -593,10 +584,6 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 	const bool forwarding_reference_parameter = pattern.size() > 2 &&
 		pattern.compare(pattern.size() - 2, 2, "&&") == 0 &&
 		parameter_names.find(pattern.substr(0, pattern.size() - 2)) != parameter_names.end();
-	// A cv qualifier on a reference parameter is part of the binding rule, not
-	// a requirement that the argument spelling carry the same top-level cv.
-	// Keep the stricter comparison for pointer pointee patterns, where
-	// `const T*` and `T*` are distinct specialization keys.
 	if((class_pattern || pattern_has_pointer || actual_has_pointer) &&
 		pattern_effective_cv && pattern_effective_cv != actual_effective_cv &&
 		!reference_pattern) return false;
@@ -614,9 +601,6 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 		(pattern.compare(0, 9, "volatile ") == 0 ? 2 : 0);
 	const int actual_cv_kind = actual.compare(0, 6, "const ") == 0 ? 1 :
 		(actual.compare(0, 9, "volatile ") == 0 ? 2 : 0);
-	// A cv-qualified pattern constrains the corresponding pointee/object
-	// type.  `const T*` may deduce T from `const int*`, but it must not also
-	// claim `int*`; the unqualified `T*` candidate is the viable one there.
 	if(pattern_has_pointer && actual_has_pointer && pattern_cv_qualified &&
 		pattern_cv_kind != actual_cv_kind) return false;
 		string cv_parameter = pattern;
@@ -624,11 +608,6 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 			cv_parameter.erase(cv_parameter.size() -
 				(pattern_trailing_cv == 1 ? 6 : 9));
 		cv_parameter = CanonicalSpelling(cv_parameter);
-		// For T*, cv-qualification before the pointed-to type belongs to T.
-		// It must survive deduction; stripping it here previously made a
-		// candidate deduced from T* and const T& appear consistent when it was
-		// not.  A pattern that explicitly spells const T* still consumes that
-		// qualification as part of the pattern.
 		const bool preserve_pointee_cv = actual_pointer && !pattern_cv_qualified &&
 			(pattern_pointer || (pattern_trailing_cv &&
 				parameter_names.find(cv_parameter) != parameter_names.end()));
@@ -664,11 +643,6 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 			}
 			if(!removed) break;
 		}
-		// A forwarding-reference pattern deduces the underlying parameter as
-		// an lvalue reference when the argument is an lvalue.  Handle the
-		// two-character `&&` suffix before ordinary reference stripping;
-		// otherwise `Args&&` becomes `Args&` and is no longer recognized as the
-		// template parameter name.
 		if(forwarding_reference_parameter) {
 			const string base = CanonicalSpelling(pattern.substr(0, pattern.size() - 2));
 			if(parameter_names.find(base) != parameter_names.end()) {
@@ -676,10 +650,6 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 				return true;
 			}
 		}
-		// Normalize both lvalue and rvalue references before looking up a
-		// generated specialization.  Removing only one character from `T&&`
-		// leaves a trailing `&`, so `Box__inst_int&` misses the typed
-		// specialization table and cannot match `Box<U>&&`.
 		while(!pattern.empty() && pattern[pattern.size() - 1] == '&')
 			pattern.erase(pattern.size() - 1);
 		while(!actual.empty() && actual[actual.size() - 1] == '&')
@@ -702,10 +672,6 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 			while(actual.size() > 9 && actual.compare(actual.size() - 9, 9, " volatile") == 0)
 				actual = CanonicalSpelling(actual.substr(0, actual.size() - 9));
 		}
-		// Function-pointer parameters carry their nested declarator in the
-		// spelling (`R(*)(A...)`).  Match the return type and each parameter
-		// recursively so a dependent parameter such as `T` can be deduced from
-		// the function pointer supplied at the call site.
 		const size_t pattern_function = pattern.find(")(");
 		const size_t actual_function = actual.find(")(");
 		if(pattern_function != string::npos && actual_function != string::npos &&
@@ -748,48 +714,63 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 			size_t pattern_close = string::npos;
 			if(!TemplateRange(pattern, pattern_open, &pattern_arguments, &pattern_close)) return false;
 			const size_t actual_open = actual.find('<');
-			const vector<string> pattern_parts = SplitTemplateArguments(pattern_arguments);
+			vector<string> pattern_parts = SplitTemplateArguments(pattern_arguments);
 			vector<string> actual_parts;
+			const auto template_base = [](string raw) {
+				raw = CanonicalSpelling(raw);
+				while(raw.compare(0, 6, "const ") == 0 || raw.compare(0, 9, "volatile ") == 0) raw = CanonicalSpelling(raw.substr(raw.find(' ') + 1));
+				while(!raw.empty() && (raw[raw.size() - 1] == '&' || raw[raw.size() - 1] == '*')) raw.erase(raw.size() - 1);
+				return CanonicalSpelling(raw);
+			};
+			const auto find_class_definition = [&](const string& raw) {
+				const TemplateDefinition* direct = FindDefinition(raw, context);
+				if(direct && direct->class_template) return direct;
+				const string short_name = LastComponent(raw); const TemplateDefinition* found = 0;
+				for(map<string, TemplateDefinition>::const_iterator item = definitions_.begin(); item != definitions_.end(); ++item) {
+					if(LastComponent(item->first) != short_name || !item->second.class_template) continue;
+					if(found && found != &item->second) return static_cast<const TemplateDefinition*>(0); found = &item->second;
+				}
+				return found;
+			};
+			const auto expand_defaults = [&](const TemplateDefinition* definition,
+				vector<string>* parts) {
+				if(!definition || !parts) return;
+				map<string, string> bindings; size_t index = 0;
+				for(size_t parameter = 0; parameter < definition->parameters.size(); ++parameter) {
+					const TemplateParameter& item = definition->parameters[parameter];
+					if(item.pack) { while(index < parts->size()) ++index; continue; }
+					string value;
+					if(index < parts->size()) value = (*parts)[index++];
+					else if(!item.default_type.empty()) {
+						value = ReplaceIdentifiers(item.default_type, bindings); parts->push_back(CanonicalSpelling(value)); ++index;
+					} else break;
+					if(!item.name.empty()) bindings[item.name] = value;
+				}
+			};
 				if(actual_open == string::npos) {
-					// Function-template deduction may bind a reference to a
-					// dependent base of a non-template derived class (the CRTP
-					// `iterator`/`iterator_base<It>` shape).  Recover that typed
-					// base before treating the argument as an unrelated class.
-					const CPPGMAstNodePtr actual_declaration = FindClassDeclaration(actual,
-						context);
-					if(actual_declaration) for(size_t child = 0;
-						child < actual_declaration->children.size(); ++child) {
-						const CPPGMAstNodePtr clause = actual_declaration->children[child];
-						if(!clause || clause->kind != "base-clause") continue;
-						for(size_t base_index = 0; base_index < clause->children.size();
-							++base_index) {
+					const CPPGMAstNodePtr actual_declaration = FindClassDeclaration(actual, context);
+					if(actual_declaration) for(size_t child = 0; child < actual_declaration->children.size(); ++child) {
+						const CPPGMAstNodePtr clause = actual_declaration->children[child]; if(!clause || clause->kind != "base-clause") continue;
+						for(size_t base_index = 0; base_index < clause->children.size(); ++base_index) {
 							const CPPGMAstNodePtr base_specifier = clause->children[base_index];
-							const CPPGMAstNodePtr base_name = ChildOfKindLocal(
-								base_specifier, "base-name");
-							if(!base_name) continue;
-							if(MatchTypePattern(pattern, CanonicalSpelling(base_name->value),
-								parameter_names, inferred, context, class_pattern)) return true;
+							const CPPGMAstNodePtr base_name = ChildOfKindLocal(base_specifier, "base-name");
+							if(base_name && MatchTypePattern(pattern, CanonicalSpelling(base_name->value), parameter_names, inferred, context, class_pattern)) return true;
 						}
 					}
 					const string pattern_base = LastComponent(pattern.substr(0, pattern_open));
-					map<string, vector<string> >::const_iterator specialization =
-						specialization_arguments_.find(LastComponent(actual));
-					map<string, string>::const_iterator base =
-						specialization_bases_.find(LastComponent(actual));
+					map<string, vector<string> >::const_iterator specialization = specialization_arguments_.find(LastComponent(actual));
+					map<string, string>::const_iterator base = specialization_bases_.find(LastComponent(actual));
 					if(specialization == specialization_arguments_.end() ||
 						base == specialization_bases_.end()) return false;
 					if(parameter_names.find(pattern_base) == parameter_names.end() &&
 						LastComponent(base->second) != pattern_base)
 						return MatchGeneratedBaseTypePattern(pattern, actual, pattern_base,
 							parameter_names, inferred, context, class_pattern) > 0;
-					if(parameter_names.find(pattern_base) != parameter_names.end())
-						(*inferred)[pattern_base] = base->second;
 				if(parameter_names.find(pattern_base) != parameter_names.end())
 					(*inferred)[pattern_base] = base->second;
 				if(pattern_parts.empty()) {
 					if(specialization->second.empty()) return true;
-					const TemplateDefinition* actual_definition = FindDefinition(
-						base->second, context);
+						const TemplateDefinition* actual_definition = FindDefinition(base->second, context);
 					if(!actual_definition || actual_definition->parameters.size() !=
 						specialization->second.size()) return false;
 					map<string, string> default_bindings;
@@ -812,14 +793,35 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 				size_t actual_close = string::npos;
 				if(!TemplateRange(actual, actual_open, &actual_arguments, &actual_close)) return false;
 				const string pattern_base = LastComponent(pattern.substr(0, pattern_open));
-				const string actual_base = LastComponent(actual.substr(0, actual_open));
+					const string actual_base = LastComponent(actual.substr(0, actual_open));
+					vector<string> explicit_actual_parts = SplitTemplateArguments(actual_arguments);
+				if(parameter_names.find(pattern_base) != parameter_names.end()) {
+					const TemplateDefinition* actual_definition = FindDefinition(
+						actual.substr(0, actual_open), context);
+						if(actual_definition && actual_definition->class_template) {
+							vector<string> expanded_actual_parts; map<string, string> actual_bindings; size_t actual_index = 0;
+							for(size_t parameter = 0; parameter < actual_definition->parameters.size(); ++parameter) {
+								const TemplateParameter& actual_parameter = actual_definition->parameters[parameter];
+								if(actual_parameter.pack) {
+									size_t trailing_fixed = 0;
+									for(size_t later = parameter + 1; later < actual_definition->parameters.size(); ++later) if(!actual_definition->parameters[later].pack) ++trailing_fixed;
+									while(actual_index < explicit_actual_parts.size() && explicit_actual_parts.size() - actual_index > trailing_fixed) expanded_actual_parts.push_back(explicit_actual_parts[actual_index++]);
+									continue;
+								}
+								string value;
+								if(actual_index < explicit_actual_parts.size()) value = explicit_actual_parts[actual_index++];
+								else if(!actual_parameter.default_type.empty()) value = ReplaceIdentifiers(actual_parameter.default_type, actual_bindings);
+								else break;
+								expanded_actual_parts.push_back(CanonicalSpelling(value));
+								if(!actual_parameter.name.empty()) actual_bindings[actual_parameter.name] = value;
+							}
+						if(actual_index == explicit_actual_parts.size()) actual_parts.swap(expanded_actual_parts);
+						else actual_parts = explicit_actual_parts;
+					} else actual_parts = explicit_actual_parts;
+				} else actual_parts = explicit_actual_parts;
 				if(parameter_names.find(pattern_base) != parameter_names.end()) {
 					(*inferred)[pattern_base] = CanonicalSpelling(actual.substr(0, actual_open));
 				} else if(pattern_base != actual_base) {
-					// A pointer to a derived class can bind to a dependent base
-					// pointer.  Recover the concrete base spelling from the actual
-					// class template before matching its arguments (for example,
-					// vector<int>* against store<N,U>*).
 					const TemplateDefinition* actual_definition = FindDefinition(
 						actual.substr(0, actual_open), context);
 					if(actual_definition && actual_definition->class_template &&
@@ -845,11 +847,18 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 							}
 						}
 					}
+					if(MatchGeneratedBaseTypePattern(pattern, actual, pattern_base,
+						parameter_names, inferred, context, class_pattern) > 0) return true;
 					return false;
 				}
-				actual_parts = SplitTemplateArguments(actual_arguments);
+				if(parameter_names.find(pattern_base) == parameter_names.end())
+					actual_parts = explicit_actual_parts;
 			}
-			if(!pattern_parts.empty() && pattern_parts.back().size() > 3 &&
+				const TemplateDefinition* pattern_definition = find_class_definition(template_base(pattern.substr(0, pattern_open)));
+				const TemplateDefinition* actual_definition = actual_open == string::npos ? 0 : find_class_definition(template_base(actual.substr(0, actual_open)));
+				expand_defaults(pattern_definition, &pattern_parts);
+				expand_defaults(actual_definition, &actual_parts);
+				if(!pattern_parts.empty() && pattern_parts.back().size() > 3 &&
 				pattern_parts.back().compare(pattern_parts.back().size() - 3, 3, "...") == 0) {
 				const string pack_pattern = CanonicalSpelling(pattern_parts.back().substr(
 					0, pattern_parts.back().size() - 3));
@@ -950,7 +959,6 @@ bool PA18TemplateExpander::TransformPackChild(
 	}
 	return false;
 }
-
 void PA18TemplateExpander::RecordUsingDirective(const CPPGMAstNodePtr& original_child,
 	map<string, string>* local_substitutions)
 {
@@ -963,6 +971,7 @@ void PA18TemplateExpander::RecordUsingDirective(const CPPGMAstNodePtr& original_
 		const string relative = type->substr(prefix.size());
 		const size_t separator = relative.find("::");
 		const string visible = relative.substr(0, separator);
+		if(variable_types_.find(visible) != variable_types_.end()) continue;
 		if(!visible.empty() && local_substitutions->find(visible) == local_substitutions->end())
 			(*local_substitutions)[visible] = target->value + "::" + visible;
 	}
@@ -975,20 +984,15 @@ void PA18TemplateExpander::RecordUsingDirective(const CPPGMAstNodePtr& original_
 		map<string, TemplateDefinition>::const_iterator definition = definitions_.find(
 			indexed->second[index].second);
 		if(definition == definitions_.end()) continue;
-		// A using-directive contributes function overloads to lookup, but it
-		// must not become a scalar identifier substitution.  Rewriting every
-		// occurrence of a local object named `next` to `std::next`, for
-		// example, confuses a value binding with the imported function entity.
-		// Function lookup already consults the indexed definition set.
 		if(!definition->second.class_template &&
 			!definition->second.alias_template &&
 			!definition->second.variable_template) continue;
 		if(definition->second.qualified_name != qualified_prefix) continue;
+		if(variable_types_.find(visible) != variable_types_.end()) continue;
 		if(local_substitutions->find(visible) == local_substitutions->end())
 			(*local_substitutions)[visible] = qualified_prefix;
 	}
 }
-
 void PA18TemplateExpander::TransformRegularChildren(const CPPGMAstNodePtr& input,
 	const string& child_context, const string& function_context,
 	const map<string, string>& substitutions,
@@ -1109,7 +1113,6 @@ void PA18TemplateExpander::TransformRegularChildren(const CPPGMAstNodePtr& input
 				RecordTypedefSubstitutions(original_child, child_context, local_substitutions);
 		}
 }
-
 bool PA18TemplateExpander::PreserveDependentStaticDeclarator(
 	const CPPGMAstNodePtr& input, const string& context,
 	const map<string, string>& substitutions, const CPPGMAstNodePtr& result,
@@ -1165,7 +1168,6 @@ bool PA18TemplateExpander::PreserveDependentStaticDeclarator(
 	*promoted_name = string();
 	return true;
 }
-
 CPPGMAstNodePtr PA18TemplateExpander::RewriteRegularNodeValue(
 	const CPPGMAstNodePtr& input, const string& context,
 	const map<string, string>& substitutions,
@@ -1176,12 +1178,26 @@ CPPGMAstNodePtr PA18TemplateExpander::RewriteRegularNodeValue(
 		promoted_name)) return CPPGMAstNodePtr();
 	const bool type_spelling = input->kind == "decl-specifier" ||
 		input->kind == "type-name" || input->kind == "type-specifier";
-	// Preserve macro string spelling during template replay.
 	if(input->kind == "literal" && input->value.size() >= 2 &&
 		input->value[0] == '"' && input->value[input->value.size() - 1] == '"')
 		result->value = input->value;
 	else result->value = RewriteText(input->value, context, substitutions, &template_replaced,
 		!type_spelling, true, defer_type_only_class_definitions_ != 0);
+	if((input->kind == "special-member-definition" ||
+		input->kind == "special-member-declaration" || input->kind == "identifier") &&
+		result->value.compare(0, 8, "operator") == 0) {
+		const string target = result->value.substr(8);
+		if(!target.empty() && IsIdentifierCharacter(target[0]) && target.find('<') != string::npos) {
+			const string rewritten_target = RewriteText(target, context, substitutions, 0,
+				true, true, defer_type_only_class_definitions_ != 0);
+			if(!rewritten_target.empty()) result->value = "operator" + rewritten_target;
+		}
+	}
+	if(input->kind == "id-expression") {
+		const string name = RemoveMarker(result->value);
+		const string promoted_local = PromotedLocalClass(name, context);
+		if(!promoted_local.empty()) result->value = promoted_local;
+	}
 	if(PreserveEvaluatedDecltype(input, substitutions, result)) return result;
 	if((input->kind == "special-member-definition" ||
 		input->kind == "special-member-declaration") &&
@@ -1190,19 +1206,11 @@ CPPGMAstNodePtr PA18TemplateExpander::RewriteRegularNodeValue(
 	if(type_spelling && (result->value.find('[') != string::npos ||
 		result->value.find("(&") != string::npos ||
 		result->value.find("(*") != string::npos)) {
-		// A typedef such as `char (&type)[N]` is a valid return type, but its
-		// expanded spelling cannot be installed as a declaration-specifier
-		// (`char(&)[N]` would make the following function declarator invalid).
-		// Keep the concrete generated alias as the AST type and reserve the
-		// expanded spelling for typed expression queries such as sizeof.
 		bool preserved_template = false;
 			const string preserved = RewriteText(input->value, context, substitutions,
 				&preserved_template, false, false, defer_type_only_class_definitions_ != 0);
 		if(!preserved.empty()) result->value = preserved;
 	}
-		// Non-type template substitutions are semantic values, not names.  Keep
-		// them as literal AST nodes so PA11/lowering resolve the same typed fact
-		// that selected the specialization.
 		if(input->kind == "id-expression") {
 			map<string, PA19IntegralValue>::const_iterator typed =
 				active_integral_substitutions_.find(RemoveMarker(input->value));
@@ -1261,13 +1269,11 @@ CPPGMAstNodePtr PA18TemplateExpander::RewriteRegularNodeValue(
 					qualified.find('&') != string::npos || qualified.find('[') != string::npos))
 				result->value = "TT_IDENTIFIER:" + qualified;
 		}
-		string promoted_local_class;
-		if((input->kind == "class-specifier" || input->kind == "class-forward-declaration") &&
-			function_contexts_.find(context) != function_contexts_.end()) {
-			map<string, string>::const_iterator local = local_class_names_.find(
-				JoinPath(context, LastComponent(input->value)));
-			if(local != local_class_names_.end()) {
-				promoted_local_class = LastComponent(local->second);
+	string promoted_local_class;
+	if(input->kind == "class-specifier" || input->kind == "class-forward-declaration") {
+		const string promoted_local = PromotedLocalClass(LastComponent(input->value), context);
+		if(!promoted_local.empty()) {
+				promoted_local_class = LastComponent(promoted_local);
 				result->value = promoted_local_class;
 			}
 		}
@@ -1303,7 +1309,6 @@ CPPGMAstNodePtr PA18TemplateExpander::FinishRegularNode(
 			if(!function_name.empty() && LastComponent(context) == function_name)
 				function_context = context;
 		}
-	// Seed typed parameter scope before replaying generated member bodies.
 		if(input->kind == "function-definition") {
 			const CPPGMAstNodePtr source_declarator = FunctionDeclarator(input);
 			const CPPGMAstNodePtr source_parameters = DescendantOfKind(
@@ -1342,11 +1347,6 @@ CPPGMAstNodePtr PA18TemplateExpander::FinishRegularNode(
 			RewriteOperatorFunctionArgument(result, context, substitutions);
 		}
 		if(!promoted_local_class.empty()) {
-			// A local class is promoted into a translation-unit class so the
-			// later semantic pass can name it.  Its constructor declaration must
-			// follow that promoted identity as well; retaining the source-local
-			// `pair_like` name makes the generated class appear to have no viable
-			// constructor when it is initialized.
 			map<string, string> promoted_substitution;
 			promoted_substitution[LastComponent(input->value)] = promoted_local_class;
 			function<void(const CPPGMAstNodePtr&)> rewrite_promoted_types =
@@ -1372,14 +1372,18 @@ CPPGMAstNodePtr PA18TemplateExpander::FinishRegularNode(
 				RenameParameterIdentifier(declarator, promoted_local_class);
 				rewrite_promoted_types(member);
 			}
-			const map<string, string>::const_iterator owner = function_owners_.find(context);
-			generated_by_owner_[owner == function_owners_.end() ? PrefixComponent(context) :
-				owner->second].push_back(result);
-			return CPPGMAstNodePtr();
-		}
+			const string promoted_local_name = PromotedLocalClass(promoted_local_class, context);
+			string generated_owner = promoted_local_name.empty() ? string() :
+				PrefixComponent(promoted_local_name);
+			if(promoted_local_name.empty()) {
+				const map<string, string>::const_iterator owner = function_owners_.find(context);
+				generated_owner = owner == function_owners_.end() ? PrefixComponent(context) : owner->second;
+			}
+			generated_by_owner_[generated_owner].push_back(result);
+		return CPPGMAstNodePtr();
+	}
 	return result;
 }
-
 bool PA18TemplateExpander::TransformExplicitSpecialization(
 	const CPPGMAstNodePtr& input, const string& context,
 	const map<string, string>&)
@@ -1410,7 +1414,6 @@ bool PA18TemplateExpander::TransformExplicitSpecialization(
 		base, explicit_arguments->second, context);
 	if(!specialization) return false;
 	string owner_local;
-	// TemplateDefinition::owner is the enclosing class specialization here.
 	string owner_base = specialization->owner;
 	const size_t owner_angle = owner_base.find('<');
 	if(owner_angle != string::npos) owner_base.erase(owner_angle);
@@ -1423,7 +1426,6 @@ bool PA18TemplateExpander::TransformExplicitSpecialization(
 		&owner_local);
 	return true;
 }
-
 CPPGMAstNodePtr PA18TemplateExpander::TransformRegularNode(
 	const CPPGMAstNodePtr& input, const string& context,
 	const map<string, string>& substitutions)
@@ -1495,6 +1497,4 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformRegularNode(
 		input, context, substitutions, result, &promoted_local_class);
 	if(rewritten) return rewritten;
 	const bool defer_type_only_classes = input->kind == "alias-declaration" || (input->kind == "simple-declaration" && !input->children.empty() && SpellNode(input->children[0]).find("typedef") != string::npos);
-	return FinishRegularNode(input, context, substitutions, result, promoted_local_class, defer_type_only_classes);
-}
-} // namespace pa18_templates_internal
+	return FinishRegularNode(input, context, substitutions, result, promoted_local_class, defer_type_only_classes); } } // namespace pa18_templates_internal

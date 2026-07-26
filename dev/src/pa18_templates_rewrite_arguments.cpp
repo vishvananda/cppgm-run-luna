@@ -102,20 +102,19 @@ void PA18TemplateExpander::ResolveTemplateArguments(const TemplateDefinition& de
 			}
 			continue;
 		}
-		string argument;
-		string source_type_argument;
-		PA19IntegralValue integral_value;
-		if(raw_index < raw_args.size() && !raw_args[raw_index].empty())
-			source_type_argument = argument = raw_args[raw_index++];
+		string argument, source_type_argument;
+		PA19IntegralValue integral_value; bool from_default = false;
+		if(raw_index < raw_args.size() && !raw_args[raw_index].empty()) source_type_argument = argument = raw_args[raw_index++];
 		else if(!parameter.name.empty()) {
 			map<string, string>::const_iterator substituted = substitutions->find(parameter.name);
 			if(substituted != substitutions->end()) argument = substituted->second;
-			map<string, PA19IntegralValue>::const_iterator integral =
-				integral_substitutions->find(parameter.name);
-			if(argument.empty() && integral != integral_substitutions->end())
-				argument = TemplateIntegralValueSpelling(integral->second);
+			map<string, PA19IntegralValue>::const_iterator integral = integral_substitutions->find(parameter.name);
+			if(argument.empty() && integral != integral_substitutions->end()) argument = TemplateIntegralValueSpelling(integral->second);
 		}
-		if(argument.empty()) argument = parameter.default_type;
+		if(argument.empty()) { argument = parameter.default_type; from_default = !argument.empty(); }
+		if(!parameter.default_type.empty() && argument == parameter.default_type)
+			from_default = true;
+		const string argument_context = from_default && !definition.owner.empty() ? definition.owner : context;
 		if(parameter.template_template) {
 			string normalized;
 			if(!CompatibleTemplateTemplateArgument(parameter, argument, context,
@@ -138,8 +137,14 @@ void PA18TemplateExpander::ResolveTemplateArguments(const TemplateDefinition& de
 			if(!function_pointer_alias.empty()) argument = function_pointer_alias;
 		} else {
 			try {
-				argument = ResolveIntegralArgument(parameter, argument, context, *substitutions,
-					&integral_value);
+				try {
+					argument = ResolveIntegralArgument(parameter, argument, argument_context,
+						*substitutions, &integral_value);
+				} catch(const PA18SubstitutionFailure&) {
+					if(definition.owner.empty() || definition.owner == context) throw;
+					argument = ResolveIntegralArgument(parameter, argument, definition.owner,
+						*substitutions, &integral_value);
+				}
 			} catch(const PA18SubstitutionFailure& error) { throw PA18SubstitutionFailure("definition=" + definition.qualified_name + " " + error.what());
 			} catch(const logic_error& error) { throw logic_error("definition=" + definition.qualified_name + " " + error.what()); }
 			if(!parameter.name.empty()) (*integral_substitutions)[parameter.name] = integral_value;
@@ -151,8 +156,7 @@ void PA18TemplateExpander::ResolveTemplateArguments(const TemplateDefinition& de
 		args->push_back(argument);
 		metadata_args->push_back(TemplateArgumentMetadata(parameter, argument,
 			integral_value, context, *substitutions));
-		if(!parameter.name.empty()) (*substitutions)[parameter.name] = argument;
-	}
+		if(!parameter.name.empty()) (*substitutions)[parameter.name] = argument; }
 	if(raw_index != raw_args.size()) throw logic_error("too many template arguments");
 }
 

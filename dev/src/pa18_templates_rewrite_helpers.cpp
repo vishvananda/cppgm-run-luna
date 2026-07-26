@@ -3,6 +3,24 @@
 
 namespace pa18_templates_internal {
 
+string PA18TemplateExpander::PromotedLocalClass(const string& name,
+	const string& context) const
+{
+	map<string, string>::const_iterator local = local_class_names_.find(
+		JoinPath(context, name));
+	if(local != local_class_names_.end()) return local->second;
+	const string function_component = LastComponent(context);
+	map<string, string>::const_iterator candidate = local_class_names_.end();
+	for(map<string, string>::const_iterator entry = local_class_names_.begin();
+		entry != local_class_names_.end(); ++entry) {
+		if(LastComponent(entry->first) != name && entry->second != name ||
+			LastComponent(PrefixComponent(entry->first)) != function_component) continue;
+		if(candidate != local_class_names_.end()) return string();
+		candidate = entry;
+	}
+	return candidate == local_class_names_.end() ? string() : candidate->second;
+}
+
 string PA18TemplateExpander::ArrayPatternElement(const string& raw) const
 {
 	string result = CanonicalSpelling(raw);
@@ -200,7 +218,7 @@ bool PA18TemplateExpander::MatchTrailingTypePack(const vector<string>& pattern_p
 int PA18TemplateExpander::MatchGeneratedBaseTypePattern(
 	const string& pattern, const string& actual, const string& pattern_base,
 	const set<string>& parameter_names, map<string, string>* inferred,
-	const string& context, bool class_pattern) const
+	const string& context, bool class_pattern, set<string>* active) const
 {
 	string actual_class = actual;
 	string pointer_suffix;
@@ -219,6 +237,136 @@ int PA18TemplateExpander::MatchGeneratedBaseTypePattern(
 			cv_prefix += "volatile ";
 			actual_class = CanonicalSpelling(actual_class.substr(9));
 		} else break;
+	}
+	set<string> local_active;
+	if(!active) active = &local_active;
+	const string active_key = pattern + "|" + actual_class;
+	if(!active->insert(active_key).second) return -1;
+	const size_t source_open = actual_class.find('<');
+	if(source_open != string::npos) {
+		string source_arguments;
+		size_t source_close = string::npos;
+		if(!TemplateRange(actual_class, source_open, &source_arguments, &source_close)) return -1;
+		const string source_base = actual_class.substr(0, source_open);
+		const TemplateDefinition* primary = FindDefinition(source_base, context);
+		if(!primary || !primary->class_template || !primary->declaration) return -1;
+		vector<string> arguments = SplitTemplateArguments(source_arguments);
+		map<string, string> defaults;
+		for(size_t parameter = 0; parameter < primary->parameters.size(); ++parameter) {
+			if(parameter < arguments.size()) {
+				if(!primary->parameters[parameter].name.empty())
+					defaults[primary->parameters[parameter].name] = arguments[parameter];
+				continue;
+			}
+			if(primary->parameters[parameter].pack) continue;
+			if(primary->parameters[parameter].default_type.empty()) break;
+			arguments.push_back(CanonicalSpelling(ReplaceIdentifiers(
+				primary->parameters[parameter].default_type, defaults)));
+			if(!primary->parameters[parameter].name.empty())
+				defaults[primary->parameters[parameter].name] = arguments.back();
+		}
+		const TemplateDefinition* selected = SelectClassTemplateDefinition(
+			primary, arguments, context);
+		if(!selected || !selected->declaration) return -1;
+		map<string, string> substitutions;
+		map<string, vector<string> > packs;
+		if(selected->partial_specialization) {
+			if(!MatchClassSpecializationPattern(*selected, arguments, &substitutions, context))
+				return -1;
+			for(size_t pack = 0; pack < selected->specialization_pack_names.size(); ++pack) {
+				const string& name = selected->specialization_pack_names[pack];
+				map<string, string>::const_iterator value = substitutions.find(name);
+				packs[name] = value == substitutions.end() || value->second.empty() ?
+					vector<string>() : SplitTemplateArguments(value->second);
+			}
+		} else {
+			size_t argument = 0;
+			for(size_t parameter = 0; parameter < selected->parameters.size(); ++parameter) {
+				const TemplateParameter& item = selected->parameters[parameter];
+				if(item.pack) {
+					size_t trailing_fixed = 0;
+					for(size_t later = parameter + 1; later < selected->parameters.size(); ++later)
+						if(!selected->parameters[later].pack) ++trailing_fixed;
+					const size_t available = arguments.size() > argument ?
+						arguments.size() - argument : 0;
+					const size_t count = available > trailing_fixed ? available - trailing_fixed : 0;
+					if(!item.name.empty()) packs[item.name] = vector<string>(
+						arguments.begin() + argument, arguments.begin() + argument + count);
+					argument += count;
+					continue;
+				}
+				if(argument < arguments.size()) {
+					if(!item.name.empty()) substitutions[item.name] = arguments[argument];
+					++argument;
+				}
+			}
+		}
+		const auto expand_base = [&](string raw) {
+			for(map<string, vector<string> >::const_iterator pack = packs.begin();
+				pack != packs.end(); ++pack) {
+				const string token = pack->first + "...";
+				string expansion;
+				for(size_t value = 0; value < pack->second.size(); ++value) {
+					if(!expansion.empty()) expansion += ',';
+					expansion += pack->second[value];
+				}
+				for(size_t at = raw.find(token); at != string::npos; ) {
+					if(expansion.empty()) {
+						if(at > 0 && raw[at - 1] == ',') {
+							raw.erase(at - 1, token.size() + 1);
+							at = at == 0 ? 0 : at - 1;
+						} else if(at + token.size() < raw.size() && raw[at + token.size()] == ',')
+							raw.erase(at, token.size() + 1);
+						else raw.erase(at, token.size());
+					} else {
+						raw.replace(at, token.size(), expansion);
+						at += expansion.size();
+					}
+					at = raw.find(token, at);
+				}
+			}
+			return CanonicalSpelling(ReplaceIdentifiers(raw, substitutions));
+		};
+		const TemplateDefinition* base_definition = FindDefinition(source_base, context);
+		for(size_t child = 0; child < selected->declaration->children.size(); ++child) {
+			const CPPGMAstNodePtr clause = selected->declaration->children[child];
+			if(!clause || clause->kind != "base-clause") continue;
+			for(size_t base_index = 0; base_index < clause->children.size(); ++base_index) {
+				const CPPGMAstNodePtr base_name = ChildOfKindLocal(
+					clause->children[base_index], "base-name");
+				if(!base_name) continue;
+				string concrete_base = expand_base(base_name->value);
+				const size_t base_open = concrete_base.find('<');
+				if(base_definition && base_open != string::npos) {
+					string base_arguments;
+					size_t base_close = string::npos;
+					const string base_name_text = concrete_base.substr(0, base_open);
+					const TemplateDefinition* definition = FindDefinition(base_name_text, context);
+					if(definition && TemplateRange(concrete_base, base_open, &base_arguments, &base_close)) {
+						vector<string> parts = SplitTemplateArguments(base_arguments);
+						for(size_t part = 0; part < parts.size() && part < definition->parameters.size(); ++part)
+							if(!definition->parameters[part].type) {
+								PA19IntegralValue value;
+								if(const_cast<PA18TemplateExpander*>(this)->EvaluateIntegralText(
+									parts[part], context, substitutions, &value))
+									parts[part] = IntegralValueSpelling(value);
+							}
+						concrete_base = base_name_text + "<";
+						for(size_t part = 0; part < parts.size(); ++part) {
+							if(part) concrete_base += ',';
+							concrete_base += parts[part];
+						}
+						concrete_base += '>';
+					}
+				}
+				concrete_base = cv_prefix + concrete_base + pointer_suffix;
+				if(MatchTypePattern(pattern, concrete_base, parameter_names, inferred,
+					context, class_pattern)) return 1;
+				if(MatchGeneratedBaseTypePattern(pattern, concrete_base, pattern_base,
+					parameter_names, inferred, context, class_pattern, active) > 0) return 1;
+			}
+		}
+		return -1;
 	}
 	map<string, vector<string> >::const_iterator specialization =
 		specialization_arguments_.find(LastComponent(actual_class));
@@ -247,6 +395,8 @@ int PA18TemplateExpander::MatchGeneratedBaseTypePattern(
 				ReplaceIdentifiers(base_name->value, substitutions)) + pointer_suffix;
 			if(MatchTypePattern(pattern, concrete_base, parameter_names, inferred,
 				context, class_pattern)) return 1;
+			if(MatchGeneratedBaseTypePattern(pattern, concrete_base, pattern_base,
+				parameter_names, inferred, context, class_pattern, active) > 0) return 1;
 		}
 	}
 	return -1;

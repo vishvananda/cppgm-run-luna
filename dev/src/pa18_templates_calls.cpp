@@ -465,6 +465,7 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 	stable_sort(candidates.begin(), candidates.end(), [this](const TemplateDefinition* left,
 		const TemplateDefinition* right) { const int left_score = MemberTemplatePatternScore(left);
 		const int right_score = MemberTemplatePatternScore(right); if(left_score != right_score) { return left_score > right_score; } if(left->parameters.size() != right->parameters.size()) { return left->parameters.size() < right->parameters.size(); } return false; }); if(candidates.empty()) return false;
+	RankMemberCandidatesByClassExactness(&candidates, call, member_substitutions, context);
 	map<const TemplateDefinition*, size_t> candidate_occurrences;
 	for(size_t candidate_index = 0; candidate_index < candidates.size();
 		++candidate_index) {
@@ -1496,5 +1497,4 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 	}
 	return result;
 }
-
 } // namespace pa18_templates_internal

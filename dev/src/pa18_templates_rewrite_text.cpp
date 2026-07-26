@@ -865,6 +865,17 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 					search = close + 1;
 					continue;
 				}
+				bool missing_required_template_argument = false;
+				for(size_t i = args.size(); i < definition->parameters.size(); ++i)
+					if(!definition->parameters[i].pack &&
+						definition->parameters[i].default_type.empty()) {
+						missing_required_template_argument = true;
+						break;
+					}
+				if(missing_required_template_argument) {
+					search = close + 1;
+					continue;
+				}
 				// A type template-id may be encountered while forming the signature of
 				// another dependent call.  Its argument is not a concrete type until the
 				// enclosing replay installs the bindings; materializing it here would
