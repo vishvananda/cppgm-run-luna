@@ -15,7 +15,9 @@ bool Parser::ParseIdentifierName(string* value)
 bool Parser::ParseTemplateSuffix(string* value)
 {
 	if (!Is("<")) return false;
-	if (value_names_.find(*value) != value_names_.end()) return false;
+	if (value_names_.find(*value) != value_names_.end()) {
+		return false;
+	}
 	if (CloseAngleBlocked() && value->find("::") != string::npos)
 	{
 		const size_t separator = value->rfind("::");
@@ -52,7 +54,12 @@ bool Parser::ParseTemplateSuffix(string* value)
 			tokens_[i - 1].text == "template")) raw += " ";
 		raw += tokens_[i].text;
 	}
-	if (ordinary_depth_ != 0 &&
+	// A class or namespace member declaration can legitimately use a boolean
+	// expression in a template argument (`enable_if_t<A || B, T>`).  The
+	// ambiguity guard is only needed once an ordinary expression is nested
+	// inside a function/body construct; at class scope treating the complete
+	// template-id as a name is the declaration grammar's unambiguous choice.
+	if ((function_body_depth_ != 0 || ordinary_depth_ > 1) &&
 		value->find("::") == string::npos && raw.find("||") != string::npos &&
 		Peek().text != "{" && Peek().text != ";" && Peek().text != "," &&
 		Peek().text != ">" && Peek().text != ")" && Peek().text != "::")
@@ -139,6 +146,16 @@ bool Parser::ParseOperatorName(string* value, bool allow_template)
 	}
 	else
 	{
+		// Normalize() splits a shift-right token while a template argument
+		// list is open.  An operator-function-id still needs the two token
+		// spelling to be recognized as one `operator>>` name.
+		if (Peek().kind == AST_RSHIFT_1 && Peek(1).kind == AST_RSHIFT_2)
+		{
+			result += ">>";
+			TakeShiftRight();
+		}
+		else
+		{
 		const string op = Peek().text;
 		static const char* const operators[] = {"+", "-", "*", "/", "%", "^", "&", "|",
 			"~", "!", "=", "<", ">", "+=", "-=", "*=", "/=", "%=", "^=", "&=", "|=",
@@ -154,6 +171,7 @@ bool Parser::ParseOperatorName(string* value, bool allow_template)
 		}
 		result += op;
 		++position_;
+		}
 	}
 	if (allow_template) ParseTemplateSuffix(&result);
 	*value = result;
@@ -208,7 +226,9 @@ bool Parser::ParseName(string* value, bool allow_operator, bool allow_template)
 				return false;
 			}
 			result += "template " + identifier;
-			if (allow_template) ParseTemplateSuffix(&result);
+			if (allow_template && Is("<")) {
+				ParseTemplateSuffix(&result);
+			}
 			any = true;
 		}
 		else if (Take("~"))
@@ -227,7 +247,9 @@ bool Parser::ParseName(string* value, bool allow_operator, bool allow_template)
 			string identifier;
 			if (!ParseIdentifierName(&identifier)) break;
 			result += identifier;
-			if (allow_template) ParseTemplateSuffix(&result);
+			if (allow_template && Is("<")) {
+				ParseTemplateSuffix(&result);
+			}
 			any = true;
 		}
 		if (!Take("::")) break;

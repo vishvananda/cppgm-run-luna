@@ -153,9 +153,8 @@ inline CPPGMAstNodePtr CloneNode(const CPPGMAstNodePtr& node)
 	result->initializer_form = node->initializer_form;
 	result->template_instantiation = node->template_instantiation;
 	result->explicit_specialization = node->explicit_specialization;
-	result->explicit_instantiation = node->explicit_instantiation;
-	result->extern_instantiation = node->extern_instantiation;
-	result->dependent_base_lookup = node->dependent_base_lookup;
+	result->explicit_instantiation = node->explicit_instantiation; result->extern_instantiation = node->extern_instantiation;
+	result->synthetic_namespace_forward = node->synthetic_namespace_forward; result->dependent_base_lookup = node->dependent_base_lookup;
 	result->materialize_object_address = node->materialize_object_address;
 	result->materialize_object_name = node->materialize_object_name;
 	result->inferred_type = node->inferred_type;
@@ -723,9 +722,10 @@ private:
 		}
 		if(parts.empty() || parts[0].empty()) return CPPGMAstNodePtr();
 		CPPGMAstNodePtr root(new CPPGMAstNode("namespace-definition", parts[0]));
+		root->synthetic_namespace_forward = true;
 		CPPGMAstNodePtr current = root;
 		for(size_t i = 1; i < parts.size(); ++i) {
-			CPPGMAstNodePtr nested(new CPPGMAstNode("namespace-definition", parts[i]));
+			CPPGMAstNodePtr nested(new CPPGMAstNode("namespace-definition", parts[i])); nested->synthetic_namespace_forward = true;
 			current->children.push_back(nested);
 			current = nested;
 		}

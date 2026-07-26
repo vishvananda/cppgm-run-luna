@@ -80,23 +80,28 @@ void PA18TemplateExpander::MaterializeInitializerConstructor(
 		transformed_list->children.size() != 1) return;
 	const CPPGMAstNodePtr original_item = original_list->children[0];
 	const CPPGMAstNodePtr transformed_item = transformed_list->children[0];
-	if(!original_item || !transformed_item || original_item->children.size() < 2 ||
-		transformed_item->children.size() < 2) return;
-	const CPPGMAstNodePtr original_initializer = original_item->children[1];
-	const CPPGMAstNodePtr transformed_initializer = transformed_item->children[1];
-	if(!original_initializer || !transformed_initializer) return;
+	if(!original_item || !transformed_item || original_item->children.empty() ||
+		transformed_item->children.empty()) return;
+	const CPPGMAstNodePtr original_initializer = original_item->children.size() > 1 ?
+		original_item->children[1] : CPPGMAstNodePtr();
+	const CPPGMAstNodePtr transformed_initializer = transformed_item->children.size() > 1 ?
+		transformed_item->children[1] : CPPGMAstNodePtr();
 	vector<CPPGMAstNodePtr> arguments;
-	CPPGMAstNodePtr initializer_expression = transformed_initializer;
-	if(initializer_expression->kind == "initializer" &&
-		initializer_expression->children.size() == 1)
-		initializer_expression = initializer_expression->children[0];
-	if(initializer_expression->kind == "paren-initializer" ||
-		initializer_expression->kind == "braced-init-list")
-		arguments = initializer_expression->children;
-	else if(initializer_expression->kind != "initializer")
-		arguments.push_back(initializer_expression);
-	if(arguments.empty() && original_initializer->kind != "paren-initializer" &&
-		original_initializer->kind != "braced-init-list") return;
+	if(transformed_initializer) {
+		CPPGMAstNodePtr initializer_expression = transformed_initializer;
+		if(initializer_expression->kind == "initializer" &&
+			initializer_expression->children.size() == 1)
+			initializer_expression = initializer_expression->children[0];
+		if(initializer_expression->kind == "paren-initializer" ||
+			initializer_expression->kind == "braced-init-list")
+			arguments = initializer_expression->children;
+		else if(initializer_expression->kind != "initializer")
+			arguments.push_back(initializer_expression);
+		if(arguments.empty() && original_initializer &&
+			original_initializer->kind != "paren-initializer" &&
+			original_initializer->kind != "braced-init-list") return;
+	}
+	if(original_initializer && !transformed_initializer) return;
 	if(input->children.empty()) return;
 	const CPPGMAstNodePtr declarator = original_item->children[0];
 	string target = DeclaratorTypeSpelling(NodeTypeSpelling(input->children[0]),

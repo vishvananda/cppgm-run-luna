@@ -366,9 +366,9 @@ bool PA14Lowerer::EmitObjectConstructor(VariablePlan* variable,
            (!raw_arguments.empty() ||
             !HasDefaultInitializationEffects(object_type) || empty_base_only_default))) {
         has_constructor = true;
-        break;
+		break;
       }
-    if(!has_constructor) return false;
+	if(!has_constructor) return false;
     string address;
     if(!variable->initialization_address.empty()) {
       address = variable->initialization_address;

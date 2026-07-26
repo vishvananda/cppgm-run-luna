@@ -270,10 +270,12 @@ CPPGMAstNodePtr Parser::ParseLinkageSpecification()
 CPPGMAstNodePtr Parser::ParseTemplateDeclaration(bool member_context)
 {
 	Mark mark = Save();
+	const set<string> saved_value_names = value_names_;
 	if (!Take("template")) return CPPGMAstNodePtr();
 	CPPGMAstNodePtr parameters = ParseTemplateParameterClause();
 	if (!parameters)
 	{
+		value_names_ = saved_value_names;
 		Restore(mark);
 		return CPPGMAstNodePtr();
 	}
@@ -283,6 +285,7 @@ CPPGMAstNodePtr Parser::ParseTemplateDeclaration(bool member_context)
 	in_template_declaration_ = previous_template_declaration;
 	if (!declaration)
 	{
+		value_names_ = saved_value_names;
 		Restore(mark);
 		return CPPGMAstNodePtr();
 	}
@@ -297,23 +300,32 @@ CPPGMAstNodePtr Parser::ParseTemplateDeclaration(bool member_context)
 		const size_t separator = name.rfind("::");
 		if (separator != string::npos) name.erase(0, separator + 2);
 		RegisterTemplate(name);
-	} else if (declaration->kind == "simple-declaration" ||
+	} else if (declaration->kind == "alias-declaration" ||
+		declaration->kind == "simple-declaration" ||
 		declaration->kind == "function-definition") {
 		// Qualified variable and function template-ids must remain parseable
 		// while they occur inside another template argument list.  Class
 		// templates are registered above; register the other template names in
 		// the parser's template set as well, without making variable templates
 		// type names.
-		string name = FirstIdentifier(declaration);
+		string name = declaration->kind == "alias-declaration" ?
+			declaration->value : FirstIdentifier(declaration);
 		const size_t open = name.find('<');
 		if (open != string::npos) name.erase(open);
 		const size_t separator = name.rfind("::");
 		if (separator != string::npos) name.erase(0, separator + 2);
-		if (!name.empty()) templates_.insert(name);
+		if (!name.empty()) {
+			templates_.insert(name);
+			if (declaration->kind == "alias-declaration") {
+				types_.insert(name);
+				alias_templates_.insert(name);
+			}
+		}
 	}
 	CPPGMAstNodePtr result = Node("template-declaration");
 	Add(result, parameters);
 	Add(result, declaration);
+	value_names_ = saved_value_names;
 	return result;
 }
 

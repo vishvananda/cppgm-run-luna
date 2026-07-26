@@ -1,6 +1,5 @@
 #include "pa18_templates_collection.h"
 #include "pa18_templates_rewrite.h"
-
 using namespace std;
 
 namespace pa18_templates_internal {
@@ -751,6 +750,21 @@ bool ValidationBuiltinTypeName(const string& raw)
 		value == "wchar_t";
 }
 
+string ValidationTopLevelPrefix(const string& raw)
+{
+	int angle_depth = 0;
+	size_t separator = string::npos;
+	for(size_t position = 0; position + 1 < raw.size(); ++position) {
+		if(raw[position] == '<' && (position + 1 >= raw.size() || raw[position + 1] != '='))
+			++angle_depth;
+		else if(raw[position] == '>' && angle_depth > 0 &&
+			(position + 1 >= raw.size() || raw[position + 1] != '=')) --angle_depth;
+		if(angle_depth == 0 && raw.compare(position, 2, "::") == 0)
+			separator = position;
+	}
+	return separator == string::npos ? string() : raw.substr(0, separator);
+}
+
 void PA18TemplateExpander::ValidateTemplateNode(const CPPGMAstNodePtr& node,
 	const set<string>& parameters, const set<string>& known_names,
 	const string& current_class, bool in_function,
@@ -774,7 +788,11 @@ void PA18TemplateExpander::ValidateTemplateNode(const CPPGMAstNodePtr& node,
 				sibling_typename = true;
 				break;
 			}
-		const string dependent_qualifier = PrefixComponent(raw_type);
+		// A qualified value used inside a template argument, such as
+		// `enable_if_t<Pred::value, int>`, is not a dependent qualified type-id
+		// and does not require `typename`.  Find the separator only outside the
+		// template argument angle brackets.
+		const string dependent_qualifier = ValidationTopLevelPrefix(raw_type);
 		const string dependent_base = LastComponent(StripTemplateArgumentsForValidation(
 			dependent_qualifier));
 		const string current_base = LastComponent(StripTemplateArgumentsForValidation(

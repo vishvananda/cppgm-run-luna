@@ -5,6 +5,7 @@
 class Analyzer {
 public:
 	Analyzer(); void Analyze(const CPPGMAstNodePtr& tree);
+	void PredeclareGeneratedScopes(const CPPGMAstNodePtr& tree);
 	void Print(ostream& out) const;
 	void PrintSemantics(const CPPGMAstNodePtr& tree, ostream& out);
 	unique_ptr<Scope> global_;
@@ -616,7 +617,9 @@ public:
 			if (!type->complete) throw logic_error("sizeof incomplete enum");
 			return type->underlying ? TypeSize(type->underlying) : 4;
 		case TYPE_CLASS:
-			if (!type->complete || !type->layout_complete) throw logic_error("sizeof incomplete class");
+			if (!type->complete || !type->layout_complete) {
+				throw logic_error("sizeof incomplete class");
+			}
 			return type->object_size;
 		case TYPE_TEMPLATE_PARAMETER:
 		case TYPE_TEMPLATE_TEMPLATE_PARAMETER: return 0;

@@ -88,11 +88,14 @@ CPPGMAstNodePtr Parser::ParseBinaryExpression(int level)
 		else if (level == 5 && (Is("==") || Is("!=") || Is("not_eq"))) op = Peek().text;
 		else if (level == 6 && (Is("<") || Is(">") || Is("<=") || Is(">=")))
 		{
-			if ((Is(">") || Is(">=")) && CloseAngleBlocked()) break;
+			// `>=` is a single comparison token and cannot close a template
+			// argument list.  Only a standalone `>` is ambiguous here.
+			if (Is(">") && CloseAngleBlocked()) break;
 			op = Peek().text;
 		}
 		else if (level == 7 && Is("<<")) op = Peek().text;
-		else if (level == 7 && Peek().kind == AST_RSHIFT_1 && Peek(1).kind == AST_RSHIFT_2)
+		else if (level == 7 && Peek().kind == AST_RSHIFT_1 &&
+			Peek(1).kind == AST_RSHIFT_2 && !CloseAngleBlocked())
 			op = ">>";
 		else if (level == 8 && (Is("+") || Is("-"))) op = Peek().text;
 		else if (level == 9 && (Is("*") || Is("/") || Is("%"))) op = Peek().text;
@@ -276,12 +279,64 @@ CPPGMAstNodePtr Parser::ParseDependentTypeConstruction()
 	Mark typename_mark = Save();
 	++position_;
 	string type_name;
-	if(ParseName(&type_name, false) && Is("(")) {
-		CPPGMAstNodePtr call = ParseCallSuffix(Node("id-expression", type_name), false);
-		if(call) return call;
+	if (ParseName(&type_name, false)) {
+		if (Is("(")) {
+			CPPGMAstNodePtr call = ParseCallSuffix(Node("id-expression", type_name), false);
+			if(call) return call;
+		}
+		if (Is("{")) {
+			CPPGMAstNodePtr list = ParseBracedInitList();
+			if (list) {
+				CPPGMAstNodePtr arguments = Node("argument-list");
+				Add(arguments, list);
+				CPPGMAstNodePtr call = Node("call-expression", "braced-construction");
+				Add(call, Node("id-expression", type_name));
+				Add(call, arguments);
+				return call;
+			}
+		}
 	}
 	Restore(typename_mark);
 	return CPPGMAstNodePtr();
+}
+
+CPPGMAstNodePtr Parser::ParseAliasFunctionalCast()
+{
+	if (Peek().kind != AST_IDENTIFIER || !IsNamedTypeStart()) return CPPGMAstNodePtr();
+	Mark mark = Save();
+	string name;
+	if (!ParseName(&name) || !Is("(")) {
+		Restore(mark);
+		return CPPGMAstNodePtr();
+	}
+	string base = name;
+	const size_t open = base.find('<');
+	if (open != string::npos) base.erase(open);
+	const size_t separator = base.rfind("::");
+	if (separator != string::npos) base.erase(0, separator + 2);
+	if (alias_templates_.find(base) == alias_templates_.end()) {
+		Restore(mark);
+		return CPPGMAstNodePtr();
+	}
+	Restore(mark);
+	CPPGMAstNodePtr type = ParseTypeId();
+	if (!type || !Take("(")) {
+		Restore(mark);
+		return CPPGMAstNodePtr();
+	}
+	++ordinary_depth_;
+	CPPGMAstNodePtr argument;
+	if (!Is(")")) argument = ParseExpression();
+	if (!Take(")")) {
+		--ordinary_depth_;
+		Restore(mark);
+		return CPPGMAstNodePtr();
+	}
+	--ordinary_depth_;
+	CPPGMAstNodePtr result = Node("cast-expression");
+	Add(result, type);
+	Add(result, argument);
+	return result;
 }
 
 CPPGMAstNodePtr Parser::ParsePrimaryExpression()
@@ -357,6 +412,8 @@ CPPGMAstNodePtr Parser::ParsePrimaryExpression()
 		++position_;
 		return Node("id-expression", keyword);
 	}
+	CPPGMAstNodePtr alias_cast = ParseAliasFunctionalCast();
+	if (alias_cast) return alias_cast;
 	if (Is("["))
 	{
 		CPPGMAstNodePtr lambda = ParseLambdaExpression();

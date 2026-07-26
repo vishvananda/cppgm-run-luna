@@ -207,15 +207,61 @@ const TemplateDefinition* PA18TemplateExpander::FindExplicitFunctionTemplate(
 	return visible.empty() ? 0 : visible[0];
 }
 
+void PA18TemplateExpander::ExpandExplicitFunctionArguments(const string& raw,
+	const string& context, const map<string, string>& substitutions,
+	vector<string>* result)
+{
+	if(!result) return;
+	const vector<string> explicit_arguments = SplitTemplateArguments(raw);
+	vector<string> expanded;
+	for(size_t i = 0; i < explicit_arguments.size(); ++i) {
+		string argument = explicit_arguments[i];
+		const bool pack_expansion = argument.size() >= 3 &&
+			argument.compare(argument.size() - 3, 3, "...") == 0;
+		if(pack_expansion) {
+			argument.erase(argument.size() - 3);
+			argument = CanonicalSpelling(argument);
+			const vector<string>* values = 0;
+			for(map<string, vector<string> >::const_iterator pack =
+				active_pack_substitutions_.begin();
+				pack != active_pack_substitutions_.end() && !values; ++pack) {
+				map<string, string>::const_iterator substitution = substitutions.find(pack->first);
+				if(argument == pack->first || (substitution != substitutions.end() &&
+					argument == CanonicalSpelling(substitution->second)) ||
+					(!pack->second.empty() && argument == CanonicalSpelling(pack->second[0])))
+					values = &pack->second;
+			}
+			for(map<string, vector<string> >::const_iterator pack =
+				active_function_pack_substitutions_.begin();
+				pack != active_function_pack_substitutions_.end() && !values; ++pack)
+				if(argument == pack->first || (!pack->second.empty() &&
+					argument == CanonicalSpelling(pack->second[0]))) values = &pack->second;
+			if(values) {
+				for(size_t value = 0; value < values->size(); ++value) {
+					string expanded_value = RewriteText((*values)[value], context,
+						substitutions, 0);
+					expanded.push_back(ResolveAlias(NormalizeTypeArgument(
+						ReplaceIdentifiers(expanded_value, substitutions)), context));
+				}
+				continue;
+			}
+		}
+		argument = RewriteText(argument, context, substitutions, 0);
+		argument = NormalizeTypeArgument(ReplaceIdentifiers(argument, substitutions));
+		expanded.push_back(ResolveAlias(argument, context));
+	}
+	result->swap(expanded);
+}
+
 bool PA18TemplateExpander::ResolveCallableTemporaryCallResult(
 	const string& callee, const string& function_context, const string& context,
 	const map<string, string>& substitutions, const vector<string>& actual_types,
-	string* result)
+	string* result, const string* known_object_type)
 {
 	if(!result) return false;
-	string object_type;
-	if(!FunctionCallResultType(callee, function_context, substitutions, &object_type))
-		return false;
+	string object_type = known_object_type ? *known_object_type : string();
+	if(!known_object_type && !FunctionCallResultType(callee, function_context,
+		substitutions, &object_type)) return false;
 	string normalized_object = NormalizeTypeArgument(ResolveAlias(
 		ReplaceIdentifiers(object_type, substitutions), context));
 	while(!normalized_object.empty() &&
@@ -225,9 +271,29 @@ bool PA18TemplateExpander::ResolveCallableTemporaryCallResult(
 	normalized_object = CanonicalSpelling(normalized_object);
 	const CPPGMAstNodePtr declaration = FindClassDeclaration(normalized_object, context);
 	if(!declaration) return false;
+	const vector<const TemplateDefinition*> call_operators =
+		FindFunctionDefinitions("operator()", normalized_object);
+	for(size_t candidate = 0; candidate < call_operators.size(); ++candidate) {
+		vector<string> arguments;
+		if(!InferFunctionTypeArguments(*call_operators[candidate], actual_types,
+			&arguments, substitutions, function_context)) continue;
+		const string callable_result = FunctionResultType(*call_operators[candidate],
+			arguments, function_context, &substitutions);
+		if(!callable_result.empty()) {
+			*result = callable_result;
+			return true;
+		}
+	}
 	for(size_t member = 0; member < declaration->children.size(); ++member) {
-		const CPPGMAstNodePtr candidate = declaration->children[member];
+		CPPGMAstNodePtr candidate = declaration->children[member];
 		if(!candidate || (candidate->kind != "simple-declaration" &&
+			candidate->kind != "template-declaration" &&
+			candidate->kind != "special-member-declaration" &&
+			candidate->kind != "special-member-definition")) continue;
+		if(candidate->kind == "template-declaration" && candidate->children.size() > 1)
+			candidate = candidate->children[1];
+		if(!candidate || (candidate->kind != "simple-declaration" &&
+			candidate->kind != "function-definition" &&
 			candidate->kind != "special-member-declaration" &&
 			candidate->kind != "special-member-definition")) continue;
 		const string name = candidate->kind == "simple-declaration" ?

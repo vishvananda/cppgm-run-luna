@@ -318,10 +318,13 @@
 	const TemplateDefinition* FindExplicitFunctionTemplate(const string& base,
 		const string& context) const;
 	bool ResolveCallableTemporaryCallResult(const string& callee, const string& function_context, const string& context,
-		const map<string, string>& substitutions, const vector<string>& actual_types, string* result);
+		const map<string, string>& substitutions, const vector<string>& actual_types, string* result,
+		const string* known_object_type = 0);
 	bool ResolveCallableVariableCallResult(const string& callee, const string& function_context, const string& context, const map<string, string>& substitutions, const vector<string>& actual_types, string* result);
 	bool ResolveConstructedCallResult(const string& callee, const string& context,
 		const map<string, string>& substitutions, const vector<string>& actual_types, string* result);
+	void ExpandExplicitFunctionArguments(const string& raw, const string& context,
+		const map<string, string>& substitutions, vector<string>* result);
 	bool FunctionCallResultType(string expression, const string& context,
 		const map<string, string>& substitutions, string* result)
 	{
@@ -331,10 +334,14 @@
 		callee = StripTextParentheses(callee);
 		if(callee.empty()) return false;
 		const string function_context = FunctionLookupContext(context);
+		string nested_object_type;
+		bool has_nested_object_type = false;
 		if(callee[callee.size() - 1] == ')') {
 			string returned;
 			if(FunctionCallResultType(callee, function_context, substitutions, &returned)) {
 				returned = ResolveAlias(CollapseReferenceSpelling(returned), context);
+				nested_object_type = returned;
+				has_nested_object_type = true;
 				while(!returned.empty() && returned[returned.size() - 1] == '&') {
 					returned.erase(returned.size() - 1);
 					returned = CanonicalSpelling(returned);
@@ -359,15 +366,18 @@
 					!TemplateRange(callee, template_open, &base_arguments, &template_close)) return false;
 				explicit_base_name = base;
 				explicit_definition = FindExplicitFunctionTemplate(base, function_context);
+			if(!explicit_definition) {
+				vector<const TemplateDefinition*> inherited;
+				set<string> active;
+				map<const TemplateDefinition*, string> concrete_owners;
+				CollectInheritedMemberTemplates(context, base, substitutions,
+					function_context, &inherited, &active, &concrete_owners);
+				if(!inherited.empty()) explicit_definition = inherited[0];
+			}
 				if(!explicit_definition || explicit_definition->class_template) return false;
 			explicit_arguments = SplitTemplateArguments(base_arguments);
-			for(size_t i = 0; i < explicit_arguments.size(); ++i) {
-				explicit_arguments[i] = RewriteText(explicit_arguments[i], function_context,
-					substitutions, 0);
-				explicit_arguments[i] = NormalizeTypeArgument(ReplaceIdentifiers(
-					explicit_arguments[i], substitutions));
-				explicit_arguments[i] = ResolveAlias(explicit_arguments[i], function_context);
-			}
+			ExpandExplicitFunctionArguments(base_arguments, function_context,
+				substitutions, &explicit_arguments);
 		}
 		vector<string> actual_types;
 		const vector<string> actual_expressions = SplitTemplateArguments(argument_text);
@@ -426,7 +436,9 @@
 			if(actual.empty()) return false;
 			actual_types.push_back(actual);
 		}
-		if(callee[callee.size() - 1] == ')' && ResolveCallableTemporaryCallResult(callee, function_context, context, substitutions, actual_types, result)) return true;
+		if(callee[callee.size() - 1] == ')' && ResolveCallableTemporaryCallResult(callee,
+			function_context, context, substitutions, actual_types, result,
+			has_nested_object_type ? &nested_object_type : 0)) return true;
 		string callable_type, callable_operand;
 		if(SplitStaticCast(callee, &callable_type, &callable_operand)) {
 			string function_result;
@@ -466,6 +478,12 @@
 			if(candidates.empty()) candidates.push_back(explicit_definition);
 		}
 		else candidates = FindFunctionDefinitions(callee, function_context);
+		if(candidates.empty()) {
+			set<string> active;
+			map<const TemplateDefinition*, string> concrete_owners;
+			CollectInheritedMemberTemplates(context, callee, substitutions,
+				function_context, &candidates, &active, &concrete_owners);
+		}
 		string selected_result;
 		bool selected_ellipsis = true;
 		for(size_t i = 0; i < candidates.size(); ++i) {
@@ -480,8 +498,12 @@
 			}
 			try {
 				if(!FunctionArgumentsViable(definition, arguments, actual_types,
-					function_context)) continue;
+					function_context)) {
+					continue;
+				}
 			} catch(const PA18SubstitutionFailure&) {
+				continue;
+			} catch(const exception&) {
 				continue;
 			}
 			const string candidate_result = FunctionResultType(definition, arguments,
@@ -1133,11 +1155,37 @@
 			arguments[i] = NormalizeTypeArgument(ReplaceIdentifiers(arguments[i], substitutions));
 		}
 		if(arguments.size() != definition->parameters.size()) return CPPGMAstNodePtr();
-		const string local_name = Instantiate(*definition, arguments, context); string qualifier = PrefixComponent(base);
+		const string local_name = Instantiate(*definition, arguments, context);
+		string callee_name = local_name;
+		if (definition->alias_template) {
+			const string resolved = ResolveAlias(local_name, context);
+			if (!resolved.empty() && resolved != local_name) {
+				vector<CPPGMAstNodePtr> raw_arguments;
+				CollectCallArguments(input->children[1], &raw_arguments);
+				if (raw_arguments.size() == 1 && IsBuiltinArithmeticType(resolved))
+					return TransformNode(raw_arguments[0], context, substitutions);
+				if (raw_arguments.size() <= 1) {
+					CPPGMAstNodePtr type_id(new CPPGMAstNode("type-id"));
+					CPPGMAstNodePtr specs(new CPPGMAstNode("decl-specifier-seq"));
+					specs->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
+						"decl-specifier", "TT_IDENTIFIER:" + resolved)));
+					type_id->children.push_back(specs);
+					CPPGMAstNodePtr cast(new CPPGMAstNode("cast-expression"));
+					cast->children.push_back(type_id);
+					if (!raw_arguments.empty()) {
+						CPPGMAstNodePtr argument = TransformNode(raw_arguments[0],
+							context, substitutions);
+						if (argument) cast->children.push_back(argument);
+					}
+					return cast;
+				}
+			}
+		}
+		string qualifier = PrefixComponent(base);
 		if(qualifier.empty() && !definition->owner.empty() && definition->owner.find("<unnamed>") == string::npos && class_contexts_.find(definition->owner) == class_contexts_.end()) qualifier = definition->owner;
 		CPPGMAstNodePtr result(new CPPGMAstNode("call-expression"));
 		result->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("id-expression",
-			qualifier.empty() ? local_name : qualifier + "::" + local_name)));
+			qualifier.empty() ? callee_name : qualifier + "::" + callee_name)));
 		CPPGMAstNodePtr call_arguments(new CPPGMAstNode("argument-list"));
 		vector<CPPGMAstNodePtr> raw_arguments;
 		CollectCallArguments(input->children[1], &raw_arguments);

@@ -931,29 +931,6 @@ vector<CPPGMAstNodePtr> PA18TemplateExpander::OrderGeneratedClasses(
 	return result;
 }
 
-bool PA18TemplateExpander::HasExternalCompleteDependency(
-	const CPPGMAstNodePtr& node, const string& owner, set<string>* dependencies) const
-{
-	if(!node || !dependencies) return false;
-	for(map<string, CPPGMAstNodePtr>::const_iterator declaration =
-		class_declarations_.begin(); declaration != class_declarations_.end(); ++declaration) {
-		const CPPGMAstNodePtr& source = declaration->second;
-		if(!source || source->kind != "class-specifier" || source->children.size() <= 1)
-			continue;
-		const string qualified = declaration->first;
-		map<string, TemplateDefinition>::const_iterator source_template =
-			definitions_.find(qualified);
-		if(source_template != definitions_.end() && source_template->second.class_template)
-			continue;
-		if(!PrefixComponent(qualified).empty() &&
-			PrefixComponent(qualified) == owner) continue;
-		if(specialization_bases_.find(LastComponent(qualified)) != specialization_bases_.end()) continue;
-		const string name = LastComponent(qualified);
-		if(!name.empty() && ContainsName(node, name)) dependencies->insert(name);
-	}
-	return !dependencies->empty();
-}
-
 bool PA18TemplateExpander::DeclaresSourceType(const CPPGMAstNodePtr& node,
 	const set<string>& names) const
 {
@@ -973,14 +950,19 @@ void PA18TemplateExpander::InsertDeferredGenerated(const CPPGMAstNodePtr& node)
 		deferred_generated_by_owner_.begin(); deferred != deferred_generated_by_owner_.end(); ++deferred) {
 		vector<CPPGMAstNodePtr> generated = OrderGeneratedClasses(deferred->second);
 		if(generated.empty()) continue;
+		// Deferred class shells are appended after the normal recursive injection
+		// pass.  Replay their owned generated members before insertion so a
+		// complete specialization retains its typed member declarations.
+		for(size_t child = 0; child < generated.size(); ++child)
+			InjectGenerated(generated[child], deferred->first, deferred->first);
 		CPPGMAstNodePtr wrapper = MakeNamespaceForward(deferred->first, generated);
-		if(!wrapper) continue;
 		set<string> dependencies = deferred_generated_dependencies_[deferred->first];
 		size_t position = 0;
 		for(size_t child = 0; child < node->children.size(); ++child)
 			if(DeclaresSourceType(node->children[child], dependencies))
 				position = child + 1;
-		insertions[position].push_back(wrapper);
+		if(wrapper) insertions[position].push_back(wrapper);
+		else insertions[position].insert(insertions[position].end(), generated.begin(), generated.end());
 	}
 	vector<CPPGMAstNodePtr> reordered;
 	reordered.reserve(node->children.size() + insertions.size());
@@ -999,13 +981,31 @@ void PA18TemplateExpander::InsertGenerated(vector<CPPGMAstNodePtr>* children,
 	if(!children) return;
 	map<string, vector<CPPGMAstNodePtr> >::iterator found = generated_by_owner_.find(owner);
 	if(found == generated_by_owner_.end() || found->second.empty()) return;
-	if(!owner.empty() && class_contexts_.find(owner) == class_contexts_.end()) {
+	if(owner.empty() || class_contexts_.find(owner) == class_contexts_.end()) {
+		set<string> deferred_names;
+		map<string, set<string> > dependencies_by_name;
+		for(size_t i = 0; i < found->second.size(); ++i) {
+			const CPPGMAstNodePtr& generated = found->second[i];
+			if(!generated || generated->kind != "class-specifier") continue;
+			set<string> dependencies;
+			if(HasExternalCompleteDependency(generated, owner, &dependencies)) {
+				const string name = LastComponent(generated->value);
+				if(!name.empty()) {
+					deferred_names.insert(name);
+					dependencies_by_name[name] = dependencies;
+				}
+			}
+		}
 		vector<CPPGMAstNodePtr> retained;
 		for(size_t i = 0; i < found->second.size(); ++i) {
 			const CPPGMAstNodePtr& generated = found->second[i];
 			set<string> dependencies;
-			if(generated && generated->kind == "class-specifier" &&
-				HasExternalCompleteDependency(generated, owner, &dependencies)) {
+			const string generated_name = generated ? LastComponent(generated->value) : string();
+			if(generated && deferred_names.find(generated_name) != deferred_names.end()) {
+				map<string, set<string> >::const_iterator dependency =
+					dependencies_by_name.find(generated_name);
+				if(dependency != dependencies_by_name.end())
+					dependencies = dependency->second;
 				vector<CPPGMAstNodePtr>& deferred = deferred_generated_by_owner_[owner];
 				deferred.push_back(generated);
 				deferred_generated_dependencies_[owner].insert(dependencies.begin(), dependencies.end());

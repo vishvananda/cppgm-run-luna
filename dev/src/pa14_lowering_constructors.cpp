@@ -41,13 +41,7 @@ PA14Lowerer::Value PA14Lowerer::EmitObjectValueArgument(
     const string slot = new_special_slot("argobj", low_type(object_type));
     const string address = new_temp();
     AddInstruction(address + " = addr $" + slot);
-    bool empty_storage = !object_type->direct_base;
-    for(size_t i = 0; i < object_type->class_members.size(); ++i)
-      if(!object_type->class_members[i].is_static &&
-         !object_type->class_members[i].name.empty()) {
-        empty_storage = false;
-        break;
-      }
+    const bool empty_storage = IsEmptyBaseStorage(object_type);
     if(empty_storage && IsTrivialValueStorage(object_type)) {
       const ExprInfo source_info = Infer(node, scope);
       const TypePtr source_type = expression_value_type(source_info);

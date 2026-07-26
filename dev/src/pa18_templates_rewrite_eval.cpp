@@ -16,6 +16,18 @@ bool PA18TemplateExpander::EvaluateSourceArrayFunction(
 	if(!SplitTextCall(raw, &callee, &arguments_text)) return false;
 	const vector<string> source_arguments = SplitTemplateArguments(arguments_text);
 	CPPGMAstNodePtr function = FindSourceConstantFunction(callee, context);
+	if(!function) {
+		const string generated_name = LastComponent(callee);
+		for(map<string, vector<CPPGMAstNodePtr> >::const_iterator owner =
+			generated_by_owner_.begin(); owner != generated_by_owner_.end() && !function; ++owner)
+			for(size_t generated = 0; generated < owner->second.size(); ++generated) {
+				const CPPGMAstNodePtr candidate = owner->second[generated];
+				if(candidate && DeclarationName(candidate) == generated_name) {
+					function = candidate;
+					break;
+				}
+			}
+	}
 	// The source evaluator sees constexpr overloads before ordinary lowering.
 	// Select a template overload whose function parameter clause can accept the
 	// current arity; otherwise a same-named zero-argument base case can be
@@ -230,6 +242,83 @@ bool PA18TemplateExpander::EvaluateSourceArrayFunction(
 		return value;
 	};
 
+	const auto source_noexcept = [&](const CPPGMAstNodePtr& expression) {
+		string raw = CanonicalSpelling(ReplaceIdentifiers(
+			ConstantExpressionSpelling(expression), substitutions));
+		string callee, arguments_text;
+		if(!SplitTextCall(raw, &callee, &arguments_text)) return false;
+		vector<string> argument_text = SplitTemplateArguments(arguments_text);
+		size_t arity = argument_text.size();
+		const size_t declval_open = callee.find("declval<");
+		string object_type;
+		string member_name = "operator()";
+		if(declval_open != string::npos) {
+			const size_t type_begin = declval_open + 8;
+			const size_t type_close = callee.rfind('>');
+			if(type_close == string::npos || type_close <= type_begin) return false;
+			object_type = CanonicalSpelling(callee.substr(type_begin,
+				type_close - type_begin));
+		} else {
+			// Generated replay names encode an unevaluated `declval<T>()` as
+			// `declval__inst_T_ref()`, and a member call as
+			// `declval__inst_T_ref().operator()__inst_...`.
+			const size_t dot = callee.rfind('.');
+			if(dot == string::npos) return false;
+			const string object = callee.substr(0, dot);
+			const size_t object_open = object.find('(');
+			const string prefix = object_open == string::npos ? object :
+				object.substr(0, object_open);
+			if(prefix.compare(0, 14, "declval__inst_") != 0) return false;
+			object_type = prefix.substr(14);
+			if(object_type.compare(0, 6, "const_") == 0)
+				object_type.erase(0, 6);
+			if(object_type.size() > 5 && object_type.compare(object_type.size() - 5,
+				5, "_rref") == 0)
+				object_type.erase(object_type.size() - 5);
+			else if(object_type.size() > 4 && object_type.compare(object_type.size() - 4,
+				4, "_ref") == 0)
+				object_type.erase(object_type.size() - 4);
+			else if(object_type.size() > 4 && object_type.compare(object_type.size() - 4,
+				4, "_ptr") == 0)
+				object_type.erase(object_type.size() - 4);
+			member_name = callee.substr(dot + 1);
+			const size_t generated_suffix = member_name.find("__inst_");
+			if(generated_suffix != string::npos) member_name.erase(generated_suffix);
+		}
+		if(!object_type.empty()) {
+			object_type = ResolveAlias(object_type, context);
+			while(!object_type.empty() && (object_type[object_type.size() - 1] == '&' ||
+				object_type[object_type.size() - 1] == '*'))
+				object_type = CanonicalSpelling(object_type.substr(0, object_type.size() - 1));
+			while(object_type.compare(0, 6, "const ") == 0)
+				object_type = CanonicalSpelling(object_type.substr(6));
+			while(object_type.compare(0, 9, "volatile ") == 0)
+				object_type = CanonicalSpelling(object_type.substr(9));
+			const CPPGMAstNodePtr declaration = FindClassDeclaration(object_type, context);
+			if(!declaration) return false;
+			for(size_t child = 0; child < declaration->children.size(); ++child) {
+				CPPGMAstNodePtr candidate = declaration->children[child];
+				if(!candidate) continue;
+				if(candidate->kind == "template-declaration" && candidate->children.size() > 1)
+					candidate = candidate->children[1];
+				if(candidate->kind != "function-definition" &&
+					candidate->kind != "simple-declaration" &&
+					candidate->kind != "special-member-declaration" &&
+					candidate->kind != "special-member-definition") continue;
+				if(DeclarationName(candidate) != member_name) continue;
+				const CPPGMAstNodePtr parameters = DescendantOfKind(
+					FunctionDeclarator(candidate), "parameter-clause");
+				size_t total = 0, required = 0;
+				if(!FunctionParameterCounts(parameters, &total, &required) ||
+					arity < required || arity > total) continue;
+				return ValidationHasNoexcept(candidate);
+			}
+			return false;
+		}
+		const CPPGMAstNodePtr function = FindSourceConstantFunction(callee, context);
+		return function && ValidationHasNoexcept(function);
+	};
+
 	evaluate = [&](const CPPGMAstNodePtr& node) {
 		SourceValue value;
 		if(!node) return value;
@@ -243,6 +332,13 @@ bool PA18TemplateExpander::EvaluateSourceArrayFunction(
 			const string spelling = RemoveMarker(node->value);
 			if(spelling == "true" || spelling == "false")
 				value.integral = PA19IntegralValue::Signed(spelling == "true", "bool", 1);
+			return value;
+		}
+		if(node->kind == "type-trait-expression" &&
+			RemoveMarker(node->value).find("noexcept") != string::npos &&
+			!node->children.empty()) {
+			value.integral = PA19IntegralValue::Signed(
+				source_noexcept(node->children[0]) ? 1 : 0, "bool", 1);
 			return value;
 		}
 		if(node->kind == "id-expression") return lookup(node->value);

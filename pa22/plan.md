@@ -2392,3 +2392,94 @@ Next checkpoint group: the 25 general/300 fixtures, starting with shared
 dependent lookup/substitution and SFINAE candidate viability.  Validation for
 this checkpoint remains the four focused tests, the full PA22 report,
 through-PA21, and the PA22 source audit.
+
+## Checkpoint 89 scope — 2026-07-26 (before implementation)
+
+The current baseline is **158/250**, with **92** failures and no timeout
+failures.  The complete residual set remains grouped as **general/300: 25**
+(19 status, 6 LowIR), **general/400: 15** (12 status, 3 LowIR),
+**general/500: 23** (20 status, 3 LowIR), **spec/100: 5** (2 status,
+3 LowIR), **spec/200: 7** (3 status, 4 LowIR), **spec/300: 6** (4 status,
+2 LowIR), **spec/400: 2** (1 status, 1 LowIR), and **spec/500: 9** (8
+status, 1 LowIR).  The detailed fixture names are listed in the remaining
+work map above.
+
+Selected scope: the shared general/300 parser and typed-replay behavior for
+non-type template-parameter scope, alias-template registration, alias-template
+functional casts, and alias-template result typing during function-template
+deduction.  The focused behavior is represented by
+`general/300-function-template-nested-alias-explicit-call`, with adjacent
+parser/SFINAE checks `general/300-alias-bool-explicit-pack-call-dependent-tag`,
+`general/300-hidden-friend-dependent-return-specialization-scope`,
+`general/300-internal-remove-cvref-alias-sfinae`,
+`general/300-recursive-streamable-sfinae-guard`, and
+`general/300-structured-enable-if-sizeof-pack-value`.  Validation covers this
+parser cluster, the complete PA22 report, through-PA21, and the source audit;
+the other 86 fixtures remain grouped for the next typed-substitution and
+candidate-viability checkpoints.
+
+## Checkpoint 89 result — 2026-07-26
+
+The selected parser and typed-replay scope is complete.  Alias templates are
+registered in parser type state and template-parameter scopes, alias
+functional casts retain their typed result during deduction, explicit packs
+consume trailing arguments correctly, and dependent `typename T(...)` and
+`sizeof...(Pack)` forms replay through the same typed substitution path.  The
+checkpoint also preserves callable/noexcept result facts, avoids spurious
+empty-base `copyobj` lowering, and handles normalized `operator>>`/`>=`
+template-angle ambiguity.
+
+The six focused fixtures all pass in both exit status and LowIR comparison:
+
+- `general/300-function-template-nested-alias-explicit-call`
+- `general/300-alias-bool-explicit-pack-call-dependent-tag`
+- `general/300-hidden-friend-dependent-return-specialization-scope`
+- `general/300-internal-remove-cvref-alias-sfinae`
+- `general/300-recursive-streamable-sfinae-guard`
+- `general/300-structured-enable-if-sizeof-pack-value`
+
+The generated dependency namespace wrapper is now an explicit AST fact.  PA11
+merges such a wrapper into an existing class scope when its owner is a class,
+predeclares source classes in named namespaces, and keeps same-spelled source
+nested classes distinct from generated shells.  This closes the three
+through-PA21 regressions found during the checkpoint while retaining the
+local-class early-layout rule.
+
+The authoritative PA22 report improved from **158/250** at checkpoint start
+to **163/250** (**87** residual fixtures, no timeout).  The required
+through-PA21 report passes **1850/1850**, and the PA22 source audit passes with
+repository-structure warnings only.
+
+### Remaining Work Map
+
+- **General/100–200 deduction and LowIR parity (2):**
+  `general/100-template-array-reference-cv-default-arg` (status) and
+  `general/200-inherited-constructor-template-forwarding` (LowIR).
+- **General/300 dependent substitution and SFINAE (18; 12 status, 6
+  LowIR):** abstract-array and inherited-value SFINAE; qualified/base value
+  arguments; enable-if and constructor viability; empty packs; transitive
+  base deduction; local/qualified aliases; variable/static member templates;
+  using-declaration/directive lookup; and the remaining detector idioms.
+  The exact residual fixtures are the 18 `general/300-*` entries in the
+  current report, beginning with `abstract-array-parameter-sfinae` and ending
+  with `variable-template-detected-idiom-direct-arg`.
+- **General/400 typed aliases, constructors, conversions, and NTTPs (14;
+  12 status, 2 LowIR):** alias argument cv, constructor parameter shadowing
+  and pack/default handling, conversion ranking, template-template deduction,
+  pointer/enum NTTPs, pack mismatch, inherited constructors, and static data.
+- **General/500 owner/ADL, alias, pack, conversion, and dependent-result
+  replay (24; 20 status, 4 LowIR):** owner rebinding, alias-pack and
+  template-template SFINAE, conversion/constructor replay, dependent member
+  results, enum/pack NTTPs, and short-circuit/sizeof viability.
+- **Specification bands (29):** spec/100 has 5 array/specialization cases
+  (2 status, 3 LowIR), spec/200 has 7 default/ordering/member-pack cases
+  (3 status, 4 LowIR), spec/300 has 6 constructor/conversion/decltype cases
+  (4 status, 2 LowIR), spec/400 has 2 dependent-decltype/reference cases
+  (1 status, 1 LowIR), and spec/500 has 9 owner/template-template/pack cases
+  (8 status, 1 LowIR).
+
+Next checkpoint group: the remaining 18 general/300 fixtures bundled with
+the two small general/100–200 cases, focusing on shared dependent lookup,
+substitution-failure candidate viability, and deferred constructor replay.
+Validation remains the focused cluster, the full PA22 report, through-PA21,
+and the PA22 source audit.

@@ -29,6 +29,9 @@ struct CPPGMAstNode
 	bool explicit_specialization;
 	bool explicit_instantiation;
 	bool extern_instantiation;
+	// PA18 marks namespace wrappers that carry generated dependency forwards.
+	// They are compiler-owned structure, not source namespace declarations.
+	bool synthetic_namespace_forward;
 	// PA18 preserves this source-level lookup fact on a materialized class
 	// specialization so PA14 can distinguish a dependent base from an
 	// ordinary concrete base during unqualified lookup.
@@ -118,6 +121,7 @@ private:
 	std::vector<int> angle_floors_;
 	std::set<std::string> types_;
 	std::set<std::string> templates_;
+	std::set<std::string> alias_templates_;
 	std::set<std::string> namespaces_;
 	std::set<std::string> value_names_;
 	std::string current_class_;
@@ -212,6 +216,7 @@ private:
 	CPPGMAstNodePtr ParsePostfixSuffix(const CPPGMAstNodePtr& expression);
 	CPPGMAstNodePtr ParseDependentTypeConstruction();
 	CPPGMAstNodePtr ParsePrimaryExpression();
+	CPPGMAstNodePtr ParseAliasFunctionalCast();
 	CPPGMAstNodePtr ParseCallSuffix(const CPPGMAstNodePtr& callee,
 		bool builtin_style);
 	CPPGMAstNodePtr ParseLambdaExpression();

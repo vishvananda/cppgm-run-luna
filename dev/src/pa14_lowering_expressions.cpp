@@ -692,9 +692,13 @@ PA14Lowerer::Value PA14Lowerer::EmitBinary(const CPPGMAstNodePtr& node, Scope* s
         Value right = EmitValue(node->children[1], scope);
         const string difference = new_temp();
         AddInstruction(difference + " = binary sub ptr " + left.operand + ", " + right.operand);
-        const string result = new_temp();
-        AddInstruction(result + " = binary div i64 " + difference + ", " +
-          integer_text(static_cast<long long>(type_size(left_type->child))));
+        string result = difference;
+        const size_t element_size = type_size(left_type->child);
+        if(element_size != 1) {
+          result = new_temp();
+          AddInstruction(result + " = binary div i64 " + difference + ", " +
+            integer_text(static_cast<long long>(element_size)));
+        }
         Value value;
         // Pointer subtraction yields ptrdiff_t even when the analyzer has
         // retained the pointer-shaped expression type for a dependent AST.

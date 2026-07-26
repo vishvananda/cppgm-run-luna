@@ -481,6 +481,48 @@ bool PA18TemplateExpander::InferCallArgument(const CPPGMAstNodePtr& expression,
 	return InferCallIdentifierArgument(expression, result, substitutions, context);
 }
 
+bool PA18TemplateExpander::InferCastArgument(const CPPGMAstNodePtr& expression,
+	string* result, const map<string, string>& substitutions,
+	const string& context) const
+{
+	if(!expression || expression->kind != "cast-expression" ||
+		expression->children.empty()) return false;
+	const CPPGMAstNodePtr type_id = expression->children[0];
+	if(!type_id || type_id->kind != "type-id") return false;
+	string spelling = NormalizeTypeArgument(TypeIdSpelling(type_id));
+	if (spelling.find('<') != string::npos) {
+		string rewritten = const_cast<PA18TemplateExpander*>(this)->RewriteText(
+			spelling, context, substitutions, 0);
+		if (!rewritten.empty()) spelling = NormalizeTypeArgument(rewritten);
+		spelling = NormalizeTypeArgument(ResolveAlias(spelling, context));
+	}
+	const CPPGMAstNodePtr specs = ChildOfKindLocal(type_id, "type-specifier-seq");
+	bool expanded_function_pointer = false;
+	if(specs) for(size_t child = 0; child < specs->children.size(); ++child) {
+		const CPPGMAstNodePtr item = specs->children[child];
+		if(item && item->kind == "type-name" &&
+			RemoveMarker(item->value).find("(*)") != string::npos) {
+			expanded_function_pointer = true;
+			break;
+		}
+	}
+	if(expanded_function_pointer && spelling.compare(0, 6, "const ") == 0) {
+		spelling.erase(0, 6);
+		if(!spelling.empty() && spelling[spelling.size() - 1] == '*') {
+			spelling.erase(spelling.size() - 1);
+			spelling = CanonicalSpelling(spelling + " const*");
+		} else spelling = CanonicalSpelling(spelling + " const");
+	} else if(expanded_function_pointer && spelling.compare(0, 9, "volatile ") == 0) {
+		spelling.erase(0, 9);
+		if(!spelling.empty() && spelling[spelling.size() - 1] == '*') {
+			spelling.erase(spelling.size() - 1);
+			spelling = CanonicalSpelling(spelling + " volatile*");
+		} else spelling = CanonicalSpelling(spelling + " volatile");
+	}
+	*result = spelling;
+	return !result->empty();
+}
+
 bool PA18TemplateExpander::InferArgument(const CPPGMAstNodePtr& expression,
 	string* result, const map<string, string>& substitutions,
 	const string& context, FunctionSignature* function_signature) const
@@ -523,38 +565,7 @@ bool PA18TemplateExpander::InferArgument(const CPPGMAstNodePtr& expression,
 		}
 		if(expression->kind == "member-expression")
 			return InferMemberArgument(expression, result, substitutions, context);
-		if(expression->kind == "cast-expression" && !expression->children.empty()) {
-			const CPPGMAstNodePtr type_id = expression->children[0];
-			if(type_id && type_id->kind == "type-id") {
-				string spelling = NormalizeTypeArgument(TypeIdSpelling(type_id));
-				const CPPGMAstNodePtr specs = ChildOfKindLocal(type_id,
-					"type-specifier-seq");
-				bool expanded_function_pointer = false;
-				if(specs) for(size_t child = 0; child < specs->children.size(); ++child) {
-					const CPPGMAstNodePtr item = specs->children[child];
-					if(item && item->kind == "type-name" &&
-						RemoveMarker(item->value).find("(*)") != string::npos) {
-						expanded_function_pointer = true;
-						break;
-					}
-				}
-				if(expanded_function_pointer && spelling.compare(0, 6, "const ") == 0) {
-					spelling.erase(0, 6);
-					if(!spelling.empty() && spelling[spelling.size() - 1] == '*') {
-						spelling.erase(spelling.size() - 1);
-						spelling = CanonicalSpelling(spelling + " const*");
-					} else spelling = CanonicalSpelling(spelling + " const");
-				} else if(expanded_function_pointer && spelling.compare(0, 9, "volatile ") == 0) {
-					spelling.erase(0, 9);
-					if(!spelling.empty() && spelling[spelling.size() - 1] == '*') {
-						spelling.erase(spelling.size() - 1);
-						spelling = CanonicalSpelling(spelling + " volatile*");
-					} else spelling = CanonicalSpelling(spelling + " volatile");
-				}
-				*result = spelling;
-				return !result->empty();
-			}
-		}
+	if(InferCastArgument(expression, result, substitutions, context)) return true;
 		if(expression->kind == "id-expression")
 			return InferIdentifierArgument(expression, result, substitutions, context,
 				function_signature);
@@ -1164,20 +1175,21 @@ bool PA18TemplateExpander::InferFunctionArguments(const TemplateDefinition& defi
 		const TemplateParameter& template_parameter = definition.parameters[parameter];
 		if(template_parameter.pack) {
 			bool pack_precedes_fixed = false;
-			for(size_t later = parameter + 1; later < definition.parameters.size(); ++later)
+			for(size_t later = parameter + 1; later < definition.parameters.size(); ++later) {
 				if(!definition.parameters[later].pack) {
 					pack_precedes_fixed = true;
 					break;
 				}
-				if(pack_precedes_fixed || explicit_index < explicit_prefix->size()) {
-					vector<string>& values = inferred_packs[template_parameter.name];
-					while(explicit_index < explicit_prefix->size())
-						values.push_back((*explicit_prefix)[explicit_index++]);
-					if(!template_parameter.name.empty())
-						fixed_template_parameters.insert(template_parameter.name);
-					if(pack_precedes_fixed) explicit_pack_consumed = true;
-				}
-			} else if(!explicit_pack_consumed && explicit_index < explicit_prefix->size() &&
+			}
+			if(pack_precedes_fixed || explicit_index < explicit_prefix->size()) {
+				vector<string>& values = inferred_packs[template_parameter.name];
+				while(explicit_index < explicit_prefix->size())
+					values.push_back((*explicit_prefix)[explicit_index++]);
+				if(!template_parameter.name.empty())
+					fixed_template_parameters.insert(template_parameter.name);
+				if(pack_precedes_fixed) explicit_pack_consumed = true;
+			}
+		} else if(!explicit_pack_consumed && explicit_index < explicit_prefix->size() &&
 				!template_parameter.name.empty()) {
 				inferred[template_parameter.name] = (*explicit_prefix)[explicit_index++];
 				fixed_template_parameters.insert(template_parameter.name);

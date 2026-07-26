@@ -273,6 +273,13 @@ CPPGMAstNodePtr Parser::ParseSpecialMember(bool definition, bool member_context)
 		}
 		else
 		{
+			if (Peek().kind == AST_RSHIFT_1 && Peek(1).kind == AST_RSHIFT_2)
+			{
+				name = "operator>>";
+				TakeShiftRight();
+			}
+			else
+			{
 			static const char* const operators[] = {"+", "-", "*", "/", "%", "^", "&", "|",
 				"~", "!", "=", "<", ">", "+=", "-=", "*=", "/=", "%=", "^=", "&=", "|=",
 				"<<", ">>", "<<=", ">>=", "==", "!=", "<=", ">=", "&&", "||", "++", "--",
@@ -311,6 +318,7 @@ CPPGMAstNodePtr Parser::ParseSpecialMember(bool definition, bool member_context)
                 }
 				name = "operator" + type;
 			}
+			}
 		}
 	}
 	else if (!member_context && Peek().kind == AST_IDENTIFIER)
@@ -343,6 +351,13 @@ CPPGMAstNodePtr Parser::ParseSpecialMember(bool definition, bool member_context)
 			}
 			else
 			{
+				if (Peek().kind == AST_RSHIFT_1 && Peek(1).kind == AST_RSHIFT_2)
+				{
+					name = prefix + "operator>>";
+					TakeShiftRight();
+				}
+				else
+				{
 				static const char* const operators[] = {"+", "-", "*", "/", "%", "^", "&", "|",
 					"~", "!", "=", "<", ">", "+=", "-=", "*=", "/=", "%=", "^=", "&=", "|=",
 					"<<", ">>", "<<=", ">>=", "==", "!=", "<=", ">=", "&&", "||", "++", "--",
@@ -375,6 +390,7 @@ CPPGMAstNodePtr Parser::ParseSpecialMember(bool definition, bool member_context)
 						return CPPGMAstNodePtr();
 					}
 					name = prefix + "operator" + type;
+				}
 				}
 			}
 		}
