@@ -1021,6 +1021,16 @@ bool PA18TemplateExpander::InferFunctionParameter(
 				inferred_argument = true;
 			}
 		}
+		// A pointer to a dependent member typedef is an expected function
+		// signature, not an ordinary object type.  Its overload-set argument
+		// cannot be checked until later parameters have deduced the owner of
+		// that typedef (for example `equality<TypeA>::type*` before `TypeA&`).
+		if(inferred_argument && signature.result_specifiers && signature.parameters &&
+			pattern.find("::type") != string::npos && pattern.find('*') != string::npos) {
+			deferred_patterns->push_back(deduction_pattern);
+			deferred_arguments->push_back(argument);
+			inferred_argument = false;
+		}
 		if(inferred_argument && pattern.size() > 2 && pattern.compare(pattern.size() - 2, 2, "&&") == 0 &&
 			argument && (argument->kind == "id-expression" || argument->kind == "member-expression" ||
 				argument->kind == "subscript-expression") && !enumerator_prvalue) {
@@ -1101,9 +1111,40 @@ bool PA18TemplateExpander::CompleteFunctionArguments(
 	const map<string, vector<string> >* forwarding_pack_values) const
 {
 	for(size_t deferred = 0; deferred < deferred_patterns.size(); ++deferred) {
-		const vector<string> function_types = FunctionExpressionTypes(deferred_arguments[deferred], context);
 		bool matched = false;
+		map<string, string> expected_substitutions = *inferred;
+		string expected_pattern = ReplaceIdentifiersPreservingPackSizes(
+			deferred_patterns[deferred], expected_substitutions);
+		try {
+			expected_pattern = CanonicalSpelling(ResolveAlias(
+				const_cast<PA18TemplateExpander*>(this)->RewriteText(
+					expected_pattern, context, expected_substitutions, 0), context));
+		} catch(const PA18SubstitutionFailure&) {
+			expected_pattern.clear();
+		}
+		if(expected_pattern.find("(*") != string::npos &&
+			!expected_pattern.empty() && expected_pattern[expected_pattern.size() - 1] == '*')
+			expected_pattern = CanonicalSpelling(expected_pattern.substr(0,
+			expected_pattern.size() - 1));
+		CPPGMAstNodePtr function_argument = deferred_arguments[deferred];
+		if(function_argument && function_argument->kind == "unary-expression" &&
+			RemoveMarker(function_argument->value) == "&" &&
+			!function_argument->children.empty())
+			function_argument = function_argument->children[0];
+		if(!expected_pattern.empty() && function_argument &&
+			function_argument->kind == "id-expression") {
+			const vector<const TemplateDefinition*> candidates =
+				FindFunctionDefinitions(function_argument->value, context);
+			for(size_t candidate = 0; candidate < candidates.size() && !matched; ++candidate) {
+				vector<string> ignored;
+				if(InferFunctionFromExpected(*candidates[candidate], expected_pattern,
+					&ignored, context)) matched = true;
+			}
+		}
+		const vector<string> function_types = FunctionExpressionTypes(
+			deferred_arguments[deferred], context);
 		for(size_t candidate = 0; candidate < function_types.size(); ++candidate) {
+			if(matched) break;
 			map<string, string> one = *inferred;
 			if(!MatchTypePattern(deferred_patterns[deferred], function_types[candidate],
 				parameter_names, &one, context)) continue;

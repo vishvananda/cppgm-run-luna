@@ -32,38 +32,72 @@ bool PA18TemplateExpander::IsKnownMemberTemplateId(const string& raw) const
 
 bool PA18TemplateExpander::HasViableOrdinaryCallableMember(
 	const CPPGMAstNodePtr& call, const string& object_type, const string& member_name,
-	const string& context, const map<string, string>& substitutions)
+	const string& context, const map<string, string>& substitutions,
+	bool object_const, bool object_volatile)
 {
-	const CPPGMAstNodePtr ordinary_class = FindClassDeclaration(object_type, context);
-	if(!ordinary_class || call->children.size() <= 1 || !call->children[1]) return false;
+	if(!call || call->children.size() <= 1 || !call->children[1]) return false;
 	const CPPGMAstNodePtr arguments = call->children[1]->kind == "argument-list" ?
 		call->children[1] : ChildOfKindLocal(call->children[1], "argument-list");
 	if(!arguments) return false;
-	for(size_t member = 0; member < ordinary_class->children.size(); ++member) {
-		const CPPGMAstNodePtr declaration = ordinary_class->children[member];
-		if(!declaration || (declaration->kind != "function-definition" &&
-			declaration->kind != "simple-declaration") ||
-			LastComponent(DeclarationName(declaration)) != member_name) continue;
-		const CPPGMAstNodePtr parameters = DescendantOfKind(
-			FunctionDeclarator(declaration), "parameter-clause");
-		if(!parameters || parameters->children.size() != arguments->children.size()) continue;
-		bool callable_argument = false, viable = true;
-		for(size_t argument = 0; argument < arguments->children.size(); ++argument) {
-			const CPPGMAstNodePtr parameter = parameters->children[argument];
-			if(!parameter || parameter->kind != "parameter-declaration") { viable = false; break; }
-			string actual;
-			FunctionSignature actual_signature;
-			if(!InferArgument(arguments->children[argument], &actual, substitutions,
-				context, &actual_signature)) { viable = false; break; }
-			if(actual_signature.result_specifiers && actual_signature.parameters)
-				callable_argument = true;
-			map<string, string> ignored;
-			if(!MatchTypePattern(FunctionTypeSpelling(parameter), actual,
-				set<string>(), &ignored, context)) { viable = false; break; }
+	set<string> active;
+	function<bool(const string&)> scan = [&](const string& class_name) {
+		if(class_name.empty() || !active.insert(class_name).second) return false;
+		const CPPGMAstNodePtr declaration = FindClassDeclaration(class_name, context);
+		if(!declaration) { active.erase(class_name); return false; }
+		bool imports_member = false;
+		for(size_t child = 0; child < declaration->children.size(); ++child) {
+			const CPPGMAstNodePtr using_declaration = declaration->children[child];
+			if(!using_declaration || using_declaration->kind != "using-declaration") continue;
+			const CPPGMAstNodePtr target = ChildOfKindLocal(using_declaration, "target");
+			if(target && LastComponent(target->value) == member_name) imports_member = true;
 		}
-		if(viable && callable_argument) return true;
-	}
-	return false;
+		for(size_t child = 0; child < declaration->children.size(); ++child) {
+			const CPPGMAstNodePtr candidate = declaration->children[child];
+			if(!candidate || (candidate->kind != "function-definition" &&
+				candidate->kind != "simple-declaration") ||
+				LastComponent(DeclarationName(candidate)) != member_name) continue;
+			const CPPGMAstNodePtr parameters = DescendantOfKind(
+				FunctionDeclarator(candidate), "parameter-clause");
+			if(!parameters || parameters->children.size() != arguments->children.size()) continue;
+			const bool static_member = !candidate->children.empty() &&
+				HasDeclarationSpecifier(candidate->children[0], "static");
+			const string qualifiers = DeclaratorSuffix(FunctionDeclarator(candidate));
+			if(!static_member && ((object_const && qualifiers.find("const") == string::npos) ||
+				(object_volatile && qualifiers.find("volatile") == string::npos))) continue;
+			bool callable_argument = false, viable = true;
+			for(size_t argument = 0; argument < arguments->children.size(); ++argument) {
+				const CPPGMAstNodePtr parameter = parameters->children[argument];
+				if(!parameter || parameter->kind != "parameter-declaration") { viable = false; break; }
+				string actual;
+				FunctionSignature actual_signature;
+				if(!InferArgument(arguments->children[argument], &actual, substitutions,
+					context, &actual_signature)) { viable = false; break; }
+				if(actual_signature.result_specifiers && actual_signature.parameters)
+					callable_argument = true;
+				map<string, string> ignored;
+				if(!MatchTypePattern(FunctionTypeSpelling(parameter), actual,
+					set<string>(), &ignored, context)) { viable = false; break; }
+			}
+			if(viable && (callable_argument || arguments->children.empty())) {
+				active.erase(class_name);
+				return true;
+			}
+		}
+		if(imports_member) for(size_t child = 0; child < declaration->children.size(); ++child) {
+			const CPPGMAstNodePtr clause = declaration->children[child];
+			if(!clause || clause->kind != "base-clause") continue;
+			for(size_t base = 0; base < clause->children.size(); ++base) {
+				const CPPGMAstNodePtr base_name = ChildOfKindLocal(clause->children[base], "base-name");
+				if(!base_name) continue;
+				string base_spelling = CanonicalSpelling(ResolveAlias(RewriteText(
+					base_name->value, context, substitutions, 0), context));
+				if(scan(base_spelling)) { active.erase(class_name); return true; }
+			}
+		}
+		active.erase(class_name);
+		return false;
+	};
+	return scan(object_type);
 }
 
 bool PA18TemplateExpander::TransformQualifiedMemberTemplateCall(

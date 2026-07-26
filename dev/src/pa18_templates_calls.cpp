@@ -229,7 +229,7 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 	}
 	const vector<const TemplateDefinition*> direct_member_candidates = candidates;
 	if(HasViableOrdinaryCallableMember(call, object_type, member_name,
-		context, substitutions)) return false;
+		context, substitutions, object_const, object_volatile)) return false;
 	vector<const TemplateDefinition*> inherited_candidates;
 	set<string> inherited_active;
 	map<const TemplateDefinition*, string> inherited_owners;
@@ -506,8 +506,12 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 			string result_type = NodeTypeSpelling(definition.declaration->children[0]);
 			const CPPGMAstNodePtr result_declarator = FunctionDeclarator(definition.declaration);
 			result_type += ReturnDeclaratorSuffix(result_declarator);
-			result_type = CanonicalSpelling(ResolveAlias(RewriteText(result_type, context,
-				result_substitutions, 0), context));
+			try {
+				result_type = CanonicalSpelling(ResolveAlias(RewriteText(result_type, context,
+					result_substitutions, 0), context));
+			} catch(const logic_error&) {
+				continue;
+			}
 			call->inferred_type = result_type;
 		}
 	const bool static_member = definition.static_member;
@@ -1267,6 +1271,30 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 					result->template_arguments = inferred;
 					result_callee->value = qualifier.empty() ? emitted_name : qualifier +
 						"::" + emitted_name;
+					// A function-template argument whose expected type is supplied by
+					// this selected call (for example `check_partial(f, ...)`) is
+					// still an overload-set spelling in the source AST.  Resolve it
+					// against the concrete parameter types before lowering, so the
+					// address names the same materialized specialization that deduction
+					// used.
+					if(selected_definition->declaration &&
+						!selected_definition->declaration->children.empty()) {
+						FunctionSignature selected_signature;
+						selected_signature.result_specifiers =
+							selected_definition->declaration->children[0];
+						selected_signature.declarator = FunctionDeclarator(
+							selected_definition->declaration);
+						selected_signature.parameters = DescendantOfKind(
+							selected_signature.declarator, "parameter-clause");
+						map<string, string> selected_substitutions = substitutions;
+						for(size_t parameter = 0; parameter < selected_definition->parameters.size() &&
+							parameter < inferred.size(); ++parameter)
+							if(!selected_definition->parameters[parameter].name.empty())
+								selected_substitutions[selected_definition->parameters[parameter].name] =
+									inferred[parameter];
+						ResolveFunctionArguments(result, &selected_signature, context,
+							&selected_substitutions);
+					}
 					break;
 				} catch(const PA18SubstitutionFailure&) { continue; }
 			}

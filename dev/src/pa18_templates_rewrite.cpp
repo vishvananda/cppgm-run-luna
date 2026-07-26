@@ -3,6 +3,51 @@
 #include <functional>
 using namespace std;
 namespace pa18_templates_internal {
+void PA18TemplateExpander::ResolveFunctionArguments(const CPPGMAstNodePtr& result,
+	const FunctionSignature* signature, const string& context,
+	const map<string, string>* substitutions)
+{
+	if(!signature || !signature->parameters || result->children.size() < 2 ||
+		!result->children[1] || result->children[1]->kind != "argument-list") return;
+	const CPPGMAstNodePtr result_arguments = result->children[1];
+	size_t argument = 0;
+	for(size_t parameter = 0; parameter < signature->parameters->children.size() &&
+		argument < result_arguments->children.size(); ++parameter) {
+		const CPPGMAstNodePtr parameter_node = signature->parameters->children[parameter];
+		if(!parameter_node || parameter_node->kind != "parameter-declaration") continue;
+		string expected = FunctionTypeSpelling(parameter_node);
+		if(substitutions && !expected.empty()) try {
+			expected = RewriteText(expected, context, *substitutions, 0);
+		} catch(const logic_error&) {
+			++argument;
+			continue;
+		}
+		expected = CanonicalSpelling(ResolveAlias(expected, context));
+		if(expected.find("(*") != string::npos && !expected.empty() &&
+			expected[expected.size() - 1] == '*')
+			expected = CanonicalSpelling(expected.substr(0, expected.size() - 1));
+		CPPGMAstNodePtr argument_node = result_arguments->children[argument];
+		if(argument_node && argument_node->kind == "unary-expression" &&
+			RemoveMarker(argument_node->value) == "&" && !argument_node->children.empty())
+			argument_node = argument_node->children[0];
+		if(argument_node && argument_node->kind == "id-expression") {
+			const vector<const TemplateDefinition*> function_candidates =
+				FindFunctionDefinitions(argument_node->value, context);
+			for(size_t candidate = 0; candidate < function_candidates.size(); ++candidate) {
+				vector<string> inferred;
+				if(!InferFunctionFromExpected(*function_candidates[candidate], expected,
+					&inferred, context)) continue;
+				try {
+					const string local_name = Instantiate(*function_candidates[candidate],
+						inferred, context);
+					result_arguments->children[argument]->value = local_name;
+					break;
+				} catch(const logic_error&) {}
+			}
+		}
+		++argument;
+	}
+}
 CPPGMAstNodePtr PA18TemplateExpander::TransformSubscriptExpression(
 	const CPPGMAstNodePtr& input, const string& context,
 	const map<string, string>& substitutions)
@@ -561,7 +606,10 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 		(*inferred)[pattern] = actual;
 		return true;
 	}
-	if(!class_pattern && !direct_pattern_function && !direct_actual_function && pattern.size() > 1 && pattern[pattern.size() - 1] == '*' && pattern.find(")(") == string::npos && MatchNestedFunctionPointerPattern(pattern, actual, parameter_names, inferred, context, class_pattern)) return true;
+	if(!class_pattern && !direct_pattern_function && pattern.size() > 1 &&
+		pattern[pattern.size() - 1] == '*' && pattern.find(")(") == string::npos &&
+		MatchNestedFunctionPointerPattern(pattern, actual, parameter_names, inferred,
+			context, class_pattern)) return true;
 	if(direct_actual_function && !actual_function_converted) return false;
 	const auto trailing_cv_kind = [](const string& spelling) {
 		if(spelling.size() >= 9 && spelling.compare(spelling.size() - 8, 8,
@@ -1017,9 +1065,6 @@ void PA18TemplateExpander::RecordUsingDirective(const CPPGMAstNodePtr& original_
 		map<string, TemplateDefinition>::const_iterator definition = definitions_.find(
 			indexed->second[index].second);
 		if(definition == definitions_.end()) continue;
-		if(!definition->second.class_template &&
-			!definition->second.alias_template &&
-			!definition->second.variable_template) continue;
 		if(definition->second.qualified_name != qualified_prefix) continue;
 		if(variable_types_.find(visible) != variable_types_.end()) continue;
 		if(local_substitutions->find(visible) == local_substitutions->end())

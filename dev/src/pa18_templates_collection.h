@@ -600,7 +600,7 @@ private:
 		map<const TemplateDefinition*, string>* concrete_owners);
 	bool HasViableOrdinaryCallableMember(const CPPGMAstNodePtr& call,
 		const string& object_type, const string& member_name,
-		const string& context, const map<string, string>& substitutions);
+		const string& context, const map<string, string>& substitutions, bool object_const = false, bool object_volatile = false);
 	bool InstantiateMemberCall(const CPPGMAstNodePtr& call,
 		const CPPGMAstNodePtr& callee, const string& original_member,
 		const string& context,

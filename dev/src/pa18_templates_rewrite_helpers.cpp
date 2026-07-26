@@ -70,6 +70,62 @@ bool PA18TemplateExpander::MatchNestedFunctionPointerPattern(
 	const string& pattern, const string& actual, const set<string>& parameter_names,
 	map<string, string>* inferred, const string& context, bool class_pattern) const
 {
+	// A parameter can spell a pointer to a dependent member typedef, such as
+	// `typename equality<T>::type*`.  The concrete alias table cannot resolve
+	// that member before T is known, but its class-template declaration carries
+	// the typed alias body needed for deduction.  Expand that body while keeping
+	// the formal owner arguments intact; the normal function-pointer matcher can
+	// then deduce T from the selected function overload.
+	const size_t member_separator = pattern.rfind("::");
+	if(member_separator != string::npos && member_separator + 2 < pattern.size()) {
+		string owner = CanonicalSpelling(pattern.substr(0, member_separator));
+		const string member = pattern.substr(member_separator + 2,
+			pattern.find_first_of("*&", member_separator + 2) - member_separator - 2);
+		const size_t owner_open = owner.find('<');
+		string owner_arguments;
+		size_t owner_close = string::npos;
+		string owner_base;
+		size_t owner_begin = 0;
+		if(owner_open != string::npos && TemplateBase(owner, owner_open, &owner_begin,
+			&owner_base) && TemplateRange(owner, owner_open, &owner_arguments, &owner_close)) {
+			const TemplateDefinition* owner_definition = FindDefinition(owner_base, context);
+			if(owner_definition && owner_definition->class_template &&
+				owner_definition->declaration) {
+				const vector<string> owner_parts = SplitTemplateArguments(owner_arguments);
+				map<string, string> owner_substitutions;
+				for(size_t parameter = 0; parameter < owner_definition->parameters.size() &&
+					parameter < owner_parts.size(); ++parameter)
+					if(!owner_definition->parameters[parameter].name.empty())
+						owner_substitutions[owner_definition->parameters[parameter].name] =
+							owner_parts[parameter];
+				for(size_t child = 0; child < owner_definition->declaration->children.size(); ++child) {
+					const CPPGMAstNodePtr declaration = owner_definition->declaration->children[child];
+					if(!declaration || declaration->kind != "simple-declaration" ||
+						declaration->children.empty() ||
+						SpellNode(declaration->children[0]).find("typedef") == string::npos) continue;
+					const CPPGMAstNodePtr list = ChildOfKindLocal(declaration,
+						"init-declarator-list");
+					if(!list) continue;
+					for(size_t item = 0; item < list->children.size(); ++item) {
+						const CPPGMAstNodePtr entry = list->children[item];
+						if(!entry || entry->children.empty() ||
+							LastComponent(FirstIdentifierLocal(entry->children[0])) != member) continue;
+						string expanded = DeclaratorTypeSpelling(
+							NodeTypeSpelling(declaration->children[0]), entry->children[0]);
+						expanded = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(
+							expanded, owner_substitutions));
+						const size_t alias_end = member_separator + 2 + member.size();
+						const string suffix = pattern.substr(alias_end);
+						if(expanded.find("(*") == string::npos || suffix != "*")
+							expanded = CanonicalSpelling(expanded + suffix);
+						if(!expanded.empty() && expanded != pattern)
+							return MatchTypePattern(expanded, actual, parameter_names,
+								inferred, context, class_pattern);
+					}
+				}
+			}
+		}
+	}
 	string result;
 	vector<string> parameters;
 	if(!SplitFunctionPointerType(actual, &result, &parameters)) return false;

@@ -2564,3 +2564,64 @@ then cleared while the checkpoint fixtures remained green.
 Next checkpoint group: the 14 remaining general/300 fixtures, beginning with
 the shared dependent lookup and substitution-failure candidate-viability
 cases, while preserving the now-green variable/static member replay paths.
+
+## Checkpoint 91 scope — 2026-07-26 (before implementation)
+
+The refreshed authoritative report remains **169/250**, with **81** residual
+fixtures and no timeout failures.  The complete residual set is the grouped
+map immediately above: general/100/200 has 2, general/300 has 14,
+general/400 has 14, general/500 has 23, and the specification bands have
+28.  Through-PA21 remains 1850/1850 and the worktree is clean.
+
+Selected scope: repair typed lookup and candidate viability for using-imported
+members and namespace-directed overloaded function-template arguments.  The
+focused fixtures are:
+
+- `general/300-using-declaration-imports-member-template-sfinae-shadow`
+- `general/300-using-directive-overloaded-function-template-arg`
+- `general/300-using-member-template-implicit-object-cv-overload`
+
+This scope covers inherited member-template visibility beside a using-imported
+non-template, dependent enable-if substitution while forming the imported
+candidate set, namespace using-directive lookup for an overloaded function
+address, and implicit-object cv ranking.  Validation is the three focused
+fixtures in exit-status and LowIR modes, the full PA22 report,
+through-PA21, and the PA22 source audit.
+
+## Checkpoint 91 result — 2026-07-26
+
+The selected using-lookup and candidate-viability scope is complete.  Typed
+using-directive exports now include namespace function templates, dependent
+using-imported member templates are omitted from concrete replay while their
+typed definitions remain available for lookup, deferred member-typedef
+function-pointer deduction is replayed after enclosing arguments are known,
+and ordinary imported-member viability accounts for the implicit object's cv
+qualification.  Selected function-template arguments are materialized with
+the selected substitution map before lowering.
+
+All three focused fixtures pass in exit-status and LowIR modes.  The
+authoritative PA22 report improved from **169/250** to **172/250**; **78**
+fixtures remain, with no timeout failures.  Through-PA21 passes **1850/1850**,
+and the PA22 source audit passes with the repository's existing 11 structural
+warnings.
+
+### Remaining Work Map
+
+- **General/100–200 (2):** array-reference/default deduction and inherited
+  constructor forwarding.
+- **General/300 (11):** dependent array and alias SFINAE, qualified/base
+  non-type lookup, constructor viability, empty-pack replay, transitive-base
+  deduction, and remaining detector/alias cases.
+- **General/400 (14):** typed aliases, constructor parameter/pack/default
+  handling, conversion ranking, template-template deduction, pointer/enum
+  NTTPs, pack mismatch, inherited constructors, and static data.
+- **General/500 (23):** owner/ADL rebinding, alias packs and
+  template-template SFINAE, constructor/conversion replay, dependent member
+  results, enum/pack NTTPs, and short-circuit/sizeof viability.
+- **Specification bands (28):** spec/100 has 5, spec/200 has 7, spec/300
+  has 6, spec/400 has 2, and spec/500 has 8 remaining deduction, ordering,
+  constructor, conversion, decltype, reference, and pack cases.
+
+Next checkpoint group: the remaining general/300 dependent lookup and
+substitution-failure cases, starting with the alias/qualified-value and
+detector fixtures, while preserving the now-green using-lookup paths.

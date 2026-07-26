@@ -329,7 +329,37 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 		map<string, string> inferred;
 		const string result_pattern = NodeTypeSpelling(definition.declaration->children[0]) +
 			DeclaratorSuffix(declarator);
-		if(!MatchTypePattern(result_pattern, expected_result, parameter_names, &inferred, context)) return false;
+		const bool result_matched = MatchTypePattern(result_pattern, expected_result,
+			parameter_names, &inferred, context);
+		if(!result_matched) {
+			// A SFINAE return type can only be resolved after the function
+			// parameters have supplied the template arguments.  Match those
+			// parameters first, replay the return spelling in that typed map,
+			// and require the resolved result to agree with the expected pointer.
+			map<string, string> parameter_inferred = inferred;
+			size_t parameter_index = 0;
+			for(size_t i = 0; i < parameter_clause->children.size(); ++i) {
+				const CPPGMAstNodePtr parameter = parameter_clause->children[i];
+				if(!parameter || parameter->kind != "parameter-declaration") continue;
+				if(parameter_index >= expected_parameters.size()) return false;
+				if(!MatchTypePattern(ParameterTypeSpelling(parameter),
+					expected_parameters[parameter_index++], parameter_names,
+					&parameter_inferred, context))
+					return false;
+			}
+			if(parameter_index != expected_parameters.size()) return false;
+			string resolved_result;
+		try {
+				resolved_result = const_cast<PA18TemplateExpander*>(this)->RewriteText(
+					ReplaceIdentifiersPreservingPackSizes(result_pattern, parameter_inferred),
+					context, parameter_inferred, 0);
+		} catch(const logic_error&) {
+				return false;
+			}
+			if(!MatchTypePattern(resolved_result, expected_result, parameter_names,
+				&parameter_inferred, context)) return false;
+			inferred = parameter_inferred;
+		}
 		size_t expected_index = 0;
 		for(size_t i = 0; i < parameter_clause->children.size(); ++i) {
 			const CPPGMAstNodePtr parameter = parameter_clause->children[i];
@@ -592,37 +622,8 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 		const TemplateDefinition* definition, const vector<string>& args,
 		bool* template_replaced, size_t* search);
 	void ResolveFunctionArguments(const CPPGMAstNodePtr& result,
-		const FunctionSignature* signature, const string& context)
-	{
-		if(!signature || !signature->parameters || result->children.size() < 2 ||
-			!result->children[1] || result->children[1]->kind != "argument-list") return;
-		const CPPGMAstNodePtr result_arguments = result->children[1];
-		size_t argument = 0;
-		for(size_t parameter = 0; parameter < signature->parameters->children.size() &&
-			argument < result_arguments->children.size(); ++parameter) {
-			const CPPGMAstNodePtr parameter_node = signature->parameters->children[parameter];
-			if(!parameter_node || parameter_node->kind != "parameter-declaration") continue;
-			const string expected = FunctionTypeSpelling(parameter_node);
-			CPPGMAstNodePtr argument_node = result_arguments->children[argument];
-			if(argument_node && argument_node->kind == "unary-expression" &&
-				RemoveMarker(argument_node->value) == "&" && !argument_node->children.empty())
-				argument_node = argument_node->children[0];
-			if(argument_node && argument_node->kind == "id-expression") {
-				const vector<const TemplateDefinition*> function_candidates =
-					FindFunctionDefinitions(argument_node->value, context);
-				for(size_t candidate = 0; candidate < function_candidates.size(); ++candidate) {
-					vector<string> inferred;
-					if(InferFunctionFromExpected(*function_candidates[candidate],
-						expected, &inferred, context)) {
-						const string local_name = Instantiate(*function_candidates[candidate], inferred, context);
-						result_arguments->children[argument]->value = local_name;
-						break;
-					}
-				}
-			}
-			++argument;
-		}
-	}
+		const FunctionSignature* signature, const string& context,
+		const map<string, string>* substitutions = 0);
 	void ResolveClassConstructorFunctionArguments(const CPPGMAstNodePtr& result,
 		const string& context)
 	{
@@ -1137,7 +1138,8 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 			if(input->children.size() > 1 && input->children[1] &&
 				input->children[1]->kind == "function-definition" && !context.empty()) {
 				const string member = LastComponent(DeclarationName(input->children[1]));
-				if(using_member_template_names_.find(member) != using_member_template_names_.end()) {
+				if(active_instantiation_name_.empty() &&
+					using_member_template_names_.find(member) != using_member_template_names_.end()) {
 					// PA11 needs the template entity for using-declaration lookup. Keep the real dependent signature, but expose it as a declaration so
 					// PA14 never lowers the source body; concrete calls use Instantiate().
 					CPPGMAstNodePtr declaration = CloneNode(input);
