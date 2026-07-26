@@ -138,6 +138,9 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 		const TemplateDefinition* candidate_parent = FindDefinition(source_owner, context);
 		if(candidate_parent && candidate_parent->class_template) parent = candidate_parent;
 	}
+	const vector<TemplateParameter>* enclosing_parameters = parent ?
+		(parent->partial_specialization && !parent->specialization_parameter_details.empty() ?
+			&parent->specialization_parameter_details : &parent->parameters) : 0;
 	if(parent) {
 		// A member template-id in the definition of a function template still
 		// needs the dependent-name `template` disambiguator.  Do not turn a
@@ -158,10 +161,11 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 				}
 			}
 		}
-		for(size_t parameter = 0; parameter < parent->parameters.size() &&
+		for(size_t parameter = 0; parameter < enclosing_parameters->size() &&
 			parameter < parent_arguments.size(); ++parameter)
-			if(!parent->parameters[parameter].name.empty())
-				member_substitutions[parent->parameters[parameter].name] =
+			if(!(*enclosing_parameters)[parameter].name.empty() &&
+				!(*enclosing_parameters)[parameter].pack)
+				member_substitutions[(*enclosing_parameters)[parameter].name] =
 					parent_arguments[parameter];
 		if(!parent->name.empty()) member_substitutions[parent->name] = object_type;
 	}
@@ -269,9 +273,9 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 			if(!definition.parameters[parameter].name.empty())
 				body_bindings.insert(definition.parameters[parameter].name);
 		if(parent) {
-			for(size_t parameter = 0; parameter < parent->parameters.size(); ++parameter)
-				if(!parent->parameters[parameter].name.empty())
-					body_bindings.insert(parent->parameters[parameter].name);
+			for(size_t parameter = 0; parameter < enclosing_parameters->size(); ++parameter)
+				if(!(*enclosing_parameters)[parameter].name.empty())
+					body_bindings.insert((*enclosing_parameters)[parameter].name);
 			if(!parent->name.empty()) body_bindings.insert(parent->name);
 		}
 		for(map<string, string>::iterator binding = candidate_substitutions.begin();
@@ -373,14 +377,14 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 		if(parent) {
 			size_t parent_argument = 0;
 			for(size_t parent_parameter_index = 0;
-				parent_parameter_index < parent->parameters.size(); ++parent_parameter_index) {
+				parent_parameter_index < enclosing_parameters->size(); ++parent_parameter_index) {
 				const TemplateParameter& parent_parameter =
-					parent->parameters[parent_parameter_index];
+					(*enclosing_parameters)[parent_parameter_index];
 				if(parent_parameter.pack) {
 					size_t trailing_fixed = 0;
 					for(size_t later = parent_parameter_index + 1;
-						later < parent->parameters.size(); ++later)
-						if(!parent->parameters[later].pack) ++trailing_fixed;
+						later < enclosing_parameters->size(); ++later)
+						if(!(*enclosing_parameters)[later].pack) ++trailing_fixed;
 					const size_t available = parent_arguments.size() > parent_argument ?
 						parent_arguments.size() - parent_argument : 0;
 					const size_t count = available > trailing_fixed ?

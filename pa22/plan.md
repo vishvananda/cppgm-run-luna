@@ -2220,3 +2220,175 @@ The next substantial checkpoint bundles the four residual general/100+200
 LowIR parity fixtures.  It will normalize the already-semantic output’s
 constant-index, temporary-numbering, and synthetic virtual-constructor
 presentation without reopening the completed deduction or timeout paths.
+
+## Checkpoint 88 scope — 2026-07-26 (before implementation)
+
+### Current failure audit
+
+The required `make test-report ACTIVE_TEST_REPORT_PAS='pa22'` report is
+**154/250**, with **96** failures and no timeouts.  Through-PA21 is passing and
+the worktree is clean.  The complete current-PA failure set is grouped below
+by primary shared compiler behavior; the four general/100+200 entries in the
+first group are the selected checkpoint.
+
+- **Residual LowIR replay/materialization parity (4):**
+  `general/100-explicit-template-id-user-conversion-deduction`,
+  `general/100-function-parameter-empty-middle-pack-alias`,
+  `general/100-function-template-fixed-over-trailing-pack-fallback`,
+  `general/200-partial-order-synthetic-virtual-member-emission`.
+- **Dependent substitution, lookup, and deferred instantiation (25):**
+  `general/300-abstract-array-parameter-sfinae`,
+  `general/300-alias-bool-explicit-pack-call-dependent-tag`,
+  `general/300-alias-sfinae-inherited-member-value`,
+  `general/300-base-qualified-template-value-arg-syntax`,
+  `general/300-boost-enable-if-type-condition-static-keyword-overload`,
+  `general/300-constructor-template-keeps-ctor-refinement-viable`,
+  `general/300-defaulted-sfinae-ctor-candidate-drop`,
+  `general/300-empty-pack-unknown-bound-array-lowir`,
+  `general/300-explicit-template-call-transitive-base-deduction`,
+  `general/300-function-template-nested-alias-explicit-call`,
+  `general/300-hidden-friend-dependent-return-specialization-scope`,
+  `general/300-inherited-variable-template-enable-if-return`,
+  `general/300-internal-remove-cvref-alias-sfinae`,
+  `general/300-local-alias-explicit-template-pack-decltype`,
+  `general/300-pack-expanded-enable-if-member-value`,
+  `general/300-qualified-alias-sfinae-function-pointer-deduction-key`,
+  `general/300-qualified-rebind-detected-type-arg`,
+  `general/300-recursive-streamable-sfinae-guard`,
+  `general/300-single-element-detector-idiom-sfinae-false`,
+  `general/300-static-member-template-function-pointer-nttp`,
+  `general/300-structured-enable-if-sizeof-pack-value`,
+  `general/300-using-declaration-imports-member-template-sfinae-shadow`,
+  `general/300-using-directive-overloaded-function-template-arg`,
+  `general/300-using-member-template-implicit-object-cv-overload`,
+  `general/300-variable-template-detected-idiom-direct-arg`.
+- **Typed aliases, constructors, conversions, and non-type arguments (15):**
+  `general/400-alias-template-function-argument-cv`,
+  `general/400-bad-constructor-template-parameter-shadowing-target-aware`,
+  `general/400-constructor-template-pack-before-defaulted-nontype`,
+  `general/400-conversion-function-template-prefers-nontemplate`,
+  `general/400-defaulted-pointer-nontype-cstyle-null`,
+  `general/400-enum-nttp-cstyle-cast-default-rebind`,
+  `general/400-function-assignment-invocable-and-helper`,
+  `general/400-member-alias-template-template-partial-deduction-owner`,
+  `general/400-object-pointer-nttp-address`,
+  `general/400-object-pointer-nttp-rebound-member-template`,
+  `general/400-pack-expansion-size-mismatch-sfinae`,
+  `general/400-partial-specialization-inherited-constructor-template`,
+  `general/400-static-data-nttp-pack-sizeof-bound`,
+  `general/400-template-template-alias-default-arity-sfinae`,
+  `general/400-unnamed-nontype-pack-static-enable-if-default`.
+- **Owner, ADL, alias, pack, conversion, and dependent-result replay (23):**
+  `general/500-adl-alias-return-operator-template`,
+  `general/500-alias-pack-enable-if-constexpr-constructor`,
+  `general/500-alias-rebind-forwarding-nondependent-param`,
+  `general/500-alias-template-template-defaulted-sfinae-canonical-args`,
+  `general/500-async-initiate-dependent-return-sfinae`,
+  `general/500-bool-alias-function-template-result-metadata`,
+  `general/500-boost-mp11-conditional-alias-reference-set`,
+  `general/500-constructor-pack-default-rewritten-pointer`,
+  `general/500-constructor-sfinae-member-template-value`,
+  `general/500-current-specialization-nontype-default-dependent`,
+  `general/500-defaulted-nontype-qualified-alias-value`,
+  `general/500-defaulted-pack-bool-short-circuit-sfinae`,
+  `general/500-dependent-result-sizeof-sfinae-base`,
+  `general/500-explicit-pack-deduced-pack-member-result`,
+  `general/500-index-sequence-alias-constructor-deduction`,
+  `general/500-inherited-constructor-template-member-alias-pack`,
+  `general/500-member-template-dependent-owner-defaulted-sfinae`,
+  `general/500-member-template-retained-dependent-param-candidate-drop`,
+  `general/500-owner-enum-nontype-result-sfinae`,
+  `general/500-partial-specialization-cv-qualifier-subset`,
+  `general/500-short-circuit-alias-member-sfinae`,
+  `general/500-sizeof-void-sfinae-fallback`,
+  `general/500-weak-ptr-shared-ptr-template-ctor`.
+- **Specification-band array and specialization edges (5):**
+  `spec/100-constructor-template-braced-array-bound-deduction`,
+  `spec/100-explicit-specialization-dependent-param-typedef`,
+  `spec/100-explicit-template-argument-overload-rejects-short-candidate`,
+  `spec/100-function-template-array-bound-braced-empty-argument`,
+  `spec/100-function-template-array-parameter-string-literal`.
+- **Specification-band defaults, ordering, and member packs (7):**
+  `spec/200-constructor-template-qualified-nested-id-partial-ordering`,
+  `spec/200-defaulted-class-template-argument-prefix-deduction`,
+  `spec/200-dependent-specialized-default-arg-deduction`,
+  `spec/200-member-operator-fixed-tag-default-partial-order`,
+  `spec/200-member-template-explicit-pack-forward-call`,
+  `spec/200-member-template-nontype-param-shadows-inherited-value-sum`,
+  `spec/200-overload-set-address-nondeduced-bad`.
+- **Specification-band substitution, conversion, and decltype (6):**
+  `spec/300-constructor-forwarding-lvalue-beats-const-ref`,
+  `spec/300-constructor-template-const-ref-conversion`,
+  `spec/300-conversion-function-template-owner-result-copy-init`,
+  `spec/300-cross-specialization-converting-ctor-operator-template`,
+  `spec/300-qualified-member-function-value-fallback-sfinae`,
+  `spec/300-template-id-direct-parameter-same-name-deduction`.
+- **Specification-band dependent decltype and reference NTTPs (2):**
+  `spec/400-dependent-decltype-member-template-conversion-operator`,
+  `spec/400-nontype-reference-argument`.
+- **Specification-band final owner/template-template/pack cases (9):**
+  `spec/500-conversion-function-template-reference-conditional-auto-ref`,
+  `spec/500-conversion-function-template-same-name-target`,
+  `spec/500-defaulted-rebind-constructor-deduction`,
+  `spec/500-function-result-template-id-shadowed-argument`,
+  `spec/500-hidden-friend-query-free-decltype-noexcept`,
+  `spec/500-template-template-conversion-operator-reference-target`,
+  `spec/500-template-template-piecewise-partial-ordering`,
+  `spec/500-type-pack-qualified-static-member-expansion`,
+  `spec/500-unqualified-member-template-local-alias-deduction`.
+
+### Checkpoint Scope
+
+Complete the four-fixture residual general/100+200 parity band using typed
+compiler behavior.  Preserve the already selected template candidates and
+their semantic facts while making replay emit the expected fixed/default pack
+specializations, constant array indices, and synthetic constructor/vtable
+dependencies.  The scope covers explicit-template conversion helper
+materialization, empty-middle-pack function replay, fixed-over-trailing-pack
+array indexing, and partial-ordering-driven virtual member construction.  It
+must not edit fixtures or compare against an external compiler.  Validation is
+the four focused fixtures, the full PA22 report, through-PA21, and the PA22
+source audit; the remaining 92 fixtures stay grouped above for follow-up
+substitution and typed-owner checkpoints.
+
+## Checkpoint 88 result — 2026-07-26
+
+The selected four-fixture parity scope is complete.  The compiler now reuses
+typed constant offsets for byte-sized pointer arithmetic, materializes the
+member base at the required assignment evaluation boundary while retaining
+constant-expression facts, maps partial-class member replay through its full
+specialization parameter details (including empty enclosing packs), preserves
+forwarding-reference lvalue deduction, canonicalizes top-level cv-qualified
+class specialization identities, and collects implicit constructors from
+replayed default-construction effects before lifecycle lowering.
+
+All four focused fixtures pass:
+
+- `general/100-explicit-template-id-user-conversion-deduction`
+- `general/100-function-parameter-empty-middle-pack-alias`
+- `general/100-function-template-fixed-over-trailing-pack-fallback`
+- `general/200-partial-order-synthetic-virtual-member-emission`
+
+The authoritative PA22 report improved from **154/250** to **158/250** with
+no timeout failures, and the constructor-template regression found during
+the checkpoint was removed by retaining typed unary constant facts for
+assignment ordering.  The remaining **92** fixtures are grouped below.
+
+The required through-PA21 report passes **1850/1850**, and the PA22 source
+audit passes (with repository-structure warnings only).
+
+- **general/300 — 25:** dependent substitution, qualified lookup, alias and
+  SFINAE, constructor viability, and deferred owner replay (19 status, 6
+  LowIR parity).
+- **general/400 — 15:** typed aliases, constructors, conversions, template-
+  template arguments, and non-type arguments (12 status, 3 LowIR parity).
+- **general/500 — 23:** owner/ADL, aliases, packs, conversions, and
+  dependent-result replay (20 status, 3 LowIR parity).
+- **spec/100 — 5; spec/200 — 7; spec/300 — 6; spec/400 — 2; spec/500 — 9:**
+  remaining array and specialization, default/ordering, conversion/SFINAE,
+  dependent-decltype/reference, and final template-template/non-type edges.
+
+Next checkpoint group: the 25 general/300 fixtures, starting with shared
+dependent lookup/substitution and SFINAE candidate viability.  Validation for
+this checkpoint remains the four focused tests, the full PA22 report,
+through-PA21, and the PA22 source audit.

@@ -542,6 +542,8 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
       }
       if(field_type && field_type->kind == TYPE_CLASS &&
          !type_is_reference(field->type) && arguments.empty()) {
+        if(HasDefaultConstructionEffects(field_type))
+          CollectImplicitConstructor(field_type, field_type->owned_scope, true);
         const vector<Binding*> constructors =
           MemberBindings(field_type, LastComponent(field_type->name));
         if(field_type->is_union && constructors.empty()) continue;

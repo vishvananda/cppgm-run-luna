@@ -1075,6 +1075,27 @@
 						argument_spelling.find('(') != string::npos &&
 						argument_spelling.find('*') == string::npos &&
 						argument_spelling.find('&') == string::npos;
+					// Class specialization identities use the typed canonical spelling
+					// for an unqualified cv-qualified argument (`int const`), while
+					// function specialization names preserve the source declarator
+					// spelling.  Keep pointee/reference cv qualifiers in place; only
+					// move top-level leading qualifiers after the complete type.
+					if(definition.class_template && argument_spelling.find('*') == string::npos &&
+						argument_spelling.find('&') == string::npos &&
+						argument_spelling.find('[') == string::npos &&
+						argument_spelling.find('(') == string::npos) {
+						bool leading_const = false, leading_volatile = false;
+						while(argument_spelling.compare(0, 6, "const ") == 0) {
+							leading_const = true;
+							argument_spelling = CanonicalSpelling(argument_spelling.substr(6));
+						}
+						while(argument_spelling.compare(0, 9, "volatile ") == 0) {
+							leading_volatile = true;
+							argument_spelling = CanonicalSpelling(argument_spelling.substr(9));
+						}
+						if(leading_const) argument_spelling += " const";
+						if(leading_volatile) argument_spelling += " volatile";
+					}
 					local_name += TypeSuffix(argument_spelling, plain_function_type);
 				if(i + 1 == args.size()) {
 					const bool trailing_pack = !definition.parameters.empty() &&

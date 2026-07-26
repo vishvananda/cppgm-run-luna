@@ -681,6 +681,21 @@ bool PA18TemplateExpander::MergeInferredFunctionArgument(
 		match_pattern = NormalizeTypeArgument(ReplaceIdentifiers(match_pattern,
 			pattern_substitutions));
 		match_pattern = ResolveAlias(match_pattern, context);
+		// A fixed enclosing-class binding can itself be an lvalue reference.  When
+		// that binding fills a forwarding-reference parameter, textual substitution
+		// produces `T& &&`; collapse the two reference layers before matching the
+		// already typed call argument.
+		bool fixed_lvalue_reference = false;
+		for(map<string, string>::const_iterator substitution = pattern_substitutions.begin();
+			substitution != pattern_substitutions.end(); ++substitution)
+			if(!substitution->second.empty() &&
+				substitution->second[substitution->second.size() - 1] == '&') {
+				fixed_lvalue_reference = true;
+				break;
+			}
+		if(fixed_lvalue_reference && match_pattern.size() >= 2 &&
+			match_pattern.compare(match_pattern.size() - 2, 2, "&&") == 0)
+			match_pattern.erase(match_pattern.size() - 1);
 	}
 	set<string> matching_parameter_names = parameter_names;
 	string matching_pattern = match_pattern;
@@ -872,7 +887,13 @@ bool PA18TemplateExpander::InferFunctionParameter(
 			"parameter-declaration" && !IsFunctionParameterPack(parameter_list->children[later])) ++trailing_fixed;
 	const size_t pack_count = pack_parameter && arguments->children.size() >=
 		*argument_index + trailing_fixed ? arguments->children.size() - *argument_index - trailing_fixed : 0;
-	const size_t visits = pack_parameter ? pack_count :
+	size_t bound_pack_count = pack_count;
+	if(pack_parameter && !bound_pack_names.empty() && bound_pack_values) {
+		map<string, vector<string> >::const_iterator bound = bound_pack_values->find(
+			bound_pack_names[0]);
+		if(bound != bound_pack_values->end()) bound_pack_count = bound->second.size();
+	}
+	const size_t visits = pack_parameter ? bound_pack_count :
 		(*argument_index < arguments->children.size() ? 1 : 0);
 	if(explicit_pack_values && visits != explicit_pack_values->size()) return false;
 	for(size_t visit = 0; visit < visits; ++visit) {
@@ -1032,10 +1053,10 @@ bool PA18TemplateExpander::InferFunctionParameter(
 			if(!MatchTypePattern(explicit_pattern, type, explicit_parameter_names,
 				&ignored, context)) return false;
 		} else if(inferred_argument) {
-			if(!MergeInferredFunctionArgument(definition, deduction_pattern, deduction_type, signature,
-				parameter_substitutions, context, parameter_names, inferred, inferred_packs,
-				inferred_functions, bound_pack_values, fixed_template_parameters))
-				return false;
+			if(!MergeInferredFunctionArgument(definition, deduction_pattern,
+				deduction_type, signature, parameter_substitutions, context, parameter_names,
+				inferred, inferred_packs, inferred_functions, bound_pack_values,
+				fixed_template_parameters)) return false;
 		}
 		++*argument_index;
 	}

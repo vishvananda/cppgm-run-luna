@@ -44,6 +44,12 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
     const size_t temporary_mark = state_ ? state_->temporary_objects.size() : 0;
     TypePtr object_type = type_value(raw_object_type);
     if(!object_type || object_type->kind != TYPE_CLASS) return false;
+    // Default construction is normally collected while walking a class body,
+    // but a replayed specialization can first become observable through a
+    // local whose only source use is unevaluated.  Materialize the implicit
+    // lifecycle entry from the typed effect fact before constructor lookup.
+    if(raw_arguments.empty() && HasDefaultConstructionEffects(object_type))
+      CollectImplicitConstructor(object_type, object_type->owned_scope, true);
     // An aggregate's implicit default constructor has no lowered action when
     // the aggregate is a concrete (non-template) class with no construction
     // effects.  Keep materialized template specializations on the normal path:
@@ -329,6 +335,8 @@ bool PA14Lowerer::EmitObjectConstructor(VariablePlan* variable,
     if(!variable) return false;
     TypePtr object_type = type_value(raw_object_type);
     if(!object_type || object_type->kind != TYPE_CLASS) return false;
+    if(raw_arguments.empty() && HasDefaultConstructionEffects(object_type))
+      CollectImplicitConstructor(object_type, object_type->owned_scope, true);
     const vector<Binding*> candidates = MemberBindings(object_type, LastComponent(object_type->name));
     const bool empty_base_only_default = object_type->direct_base &&
       IsEmptyBaseStorage(object_type->direct_base) &&

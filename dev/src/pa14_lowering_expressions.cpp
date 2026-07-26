@@ -334,6 +334,8 @@ PA14Lowerer::Value PA14Lowerer::EmitAssignment(const CPPGMAstNodePtr& node, Scop
     ExprInfo left_info = Infer(node->children[0], scope);
     TypePtr left_type = expression_value_type(left_info);
     if(!left_type) throw logic_error("assignment has no target type");
+    ExprInfo right_order_info;
+    if(op == "=") right_order_info = Infer(node->children[1], scope, left_type);
     Binding* target_binding = node->children[0] &&
       node->children[0]->kind == "member-expression" ?
       MemberBinding(node->children[0], scope) : left_info.binding;
@@ -347,9 +349,24 @@ PA14Lowerer::Value PA14Lowerer::EmitAssignment(const CPPGMAstNodePtr& node, Scop
       target_binding->member_owner->is_union;
     const bool byte_array_element = node->children[0] &&
       node->children[0]->kind == "subscript-expression";
+    const bool unqualified_member_rhs = op == "=" && node->children[0] &&
+      node->children[0]->kind == "member-expression" && node->children[1] &&
+      node->children[1]->kind == "id-expression" && right_order_info.binding &&
+      right_order_info.binding->is_member && !right_order_info.binding->is_static &&
+      right_order_info.binding->member_owner &&
+      right_order_info.binding->member_owner->template_specialization;
+    if(unqualified_member_rhs) {
+      // A dependent unqualified member on the right has a typed implicit
+      // object.  Materialize the target base before that object is evaluated;
+      // StoreLValue still emits the final member projection after the value.
+      if(PA12Operator(node->children[0]->value) == ".")
+        (void)EmitAddress(node->children[0]->children[0], scope);
+      else
+        (void)EmitValue(node->children[0]->children[0], scope);
+    }
     Value right;
     if(op == "=") {
-      ExprInfo right_info = Infer(node->children[1], scope, left_type);
+      const ExprInfo& right_info = right_order_info;
       if(ConversionRank(right_info, left_type) < 0)
         throw logic_error("invalid assignment conversion");
       right = EmitValue(node->children[1], scope, left_type);

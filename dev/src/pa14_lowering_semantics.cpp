@@ -1005,6 +1005,13 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferUnary(const CPPGMAstNodePtr& node, Scope
       result.type = PointerTo(value->child);
     else result.type = IntegralPromotion(value);
     if(op != "*") result.category = op == "++" || op == "--" ? "lvalue" : "prvalue";
+    if(child.known_constant && (op == "+" || op == "-" || op == "~" || op == "!")) {
+      result.known_constant = true;
+      if(op == "+") result.constant = child.constant;
+      else if(op == "-") result.constant = -child.constant;
+      else if(op == "~") result.constant = ~child.constant;
+      else result.constant = !child.constant;
+    }
     return result;
   }
 
