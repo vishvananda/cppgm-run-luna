@@ -14,6 +14,21 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 		raw.find("::") == string::npos && raw.find('<') == string::npos &&
 		raw.compare(0, 14, "TT_IDENTIFIER:") == 0) {
 		const string member_name = RemoveMarker(raw);
+		// A replayed class body records local typedefs in its substitution map
+		// before transforming later members.  Prefer that exact typed alias over
+		// looking up the same spelling in the source class: the source lookup can
+		// see the primary's dependent member and collapse a function-pointer alias
+		// to its return type before the concrete pack expansion is applied.
+		bool local_type_alias = false;
+		for(string current = context; !current.empty() && !local_type_alias; ) {
+			if(type_aliases_.find(JoinPath(current, member_name)) != type_aliases_.end())
+				local_type_alias = true;
+			const size_t separator = current.rfind("::");
+			if(separator == string::npos) current.clear();
+			else current.erase(separator);
+		}
+		map<string, string>::const_iterator local_alias = substitutions.find(member_name);
+		if(local_type_alias && local_alias != substitutions.end()) return local_alias->second;
 		for(string current = context; !current.empty(); ) {
 			string member_type;
 			set<string> active;
@@ -150,8 +165,17 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 		while(end < raw.size() && IsIdentifierCharacter(raw[end])) ++end;
 			if(end == at + token.size()) break;
 			const string member = raw.substr(at + token.size(), end - at - token.size());
-			const string member_type = TemplateMemberType(*definition, arguments->second,
-				member, context);
+			string member_type;
+			set<string> member_active;
+			// The generated nested specialization carries the enclosing class's
+			// bindings (for example `BaseHook` in `base_hook<Hook>::pack<Base>`).
+			// Prefer that typed declaration over replaying the source nested
+			// definition, whose own argument list cannot represent the outer
+			// binding.
+			FindClassMemberType(current->second, member, substitutions, context,
+				&member_type, &member_active, true);
+			if(member_type.empty()) member_type = TemplateMemberType(*definition,
+				arguments->second, member, context);
 			if(member_type.empty()) {
 				// A generated specialization can be used through a nested class
 				// (`Owner_T::traits::fn`) even when that nested class was omitted
@@ -418,12 +442,24 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			// physical generated owner is typed state, not a source definition
 			// name, so recover its primary/selected owner before looking up the
 			// nested definition.
-			if(base.rfind("::") != string::npos) {
-				const size_t nested_separator = base.rfind("::");
-				if(nested_separator != string::npos) {
-					const string source_owner = base.substr(0, nested_separator);
-					string concrete_owner = ResolveAlias(source_owner, context);
-					if(concrete_owner.empty()) concrete_owner = source_owner;
+				if(base.rfind("::") != string::npos) {
+					const size_t nested_separator = base.rfind("::");
+					if(nested_separator != string::npos) {
+						const string source_owner = base.substr(0, nested_separator);
+						// A dependent qualified-id is commonly spelled
+						// `Owner::member` while `Owner` is itself bound in the
+						// replay substitution map (for example
+						// `FactorySpecifier::apply`).  ResolveAlias only knows
+						// registered aliases, so consult the typed binding first;
+						// otherwise the nested definition is replayed under its
+						// source owner and enclosing non-type bindings are lost.
+						string concrete_owner;
+						map<string, string>::const_iterator owner_binding =
+							substitutions.find(source_owner);
+						if(owner_binding != substitutions.end())
+							concrete_owner = owner_binding->second;
+						else concrete_owner = ResolveAlias(source_owner, context);
+						if(concrete_owner.empty()) concrete_owner = source_owner;
 					map<string, string>::const_iterator generated_owner =
 						specialization_bases_.find(LastComponent(concrete_owner));
 					map<string, vector<string> >::const_iterator owner_arguments =
@@ -435,11 +471,11 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 						if(owner_source_open != string::npos) owner_source.erase(owner_source_open);
 						const TemplateDefinition* owner_definition = FindDefinition(
 							owner_source, context);
-						if(!owner_definition)
-							owner_definition = FindDefinition(LastComponent(owner_source), context);
-						if(owner_definition && owner_definition->class_template) {
-							const TemplateDefinition* selected_owner = SelectClassTemplateDefinition(
-								owner_definition, owner_arguments->second, context);
+							if(!owner_definition)
+								owner_definition = FindDefinition(LastComponent(owner_source), context);
+							if(owner_definition && owner_definition->class_template) {
+								const TemplateDefinition* selected_owner = SelectClassTemplateDefinition(
+									owner_definition, owner_arguments->second, context);
 							if(selected_owner) {
 								const TemplateDefinition* nested = FindNestedDefinition(*selected_owner,
 									LastComponent(base));
@@ -501,7 +537,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 					}
 				}
 			}
-			if(!definition) continue;
+				if(!definition) continue;
 			vector<string> raw_template_args = SplitTemplateArguments(arguments_text);
 				// A pack expansion inside a template-id can leave a synthetic
 				// trailing empty component (`F<T, Pack...>` with an empty pack).
@@ -584,8 +620,8 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 					}
 					}
 				args.push_back(source_argument);
-				}
-			if(deferred_pack_argument) {
+					}
+					if(deferred_pack_argument) {
 				search = close + 1;
 				continue;
 			}
@@ -593,12 +629,12 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			const string source_argument = args[i];
 			const string substituted_source_argument = CanonicalSpelling(
 				ReplaceIdentifiersPreservingPackSizes(source_argument, substitutions));
-				if(i < definition->parameters.size() &&
-					definition->parameters[i].template_template) {
-					string normalized;
-					if(!CompatibleTemplateTemplateArgument(definition->parameters[i], args[i],
-						context, substitutions, &normalized))
-						throw PA18SubstitutionFailure("template-template argument does not match");
+					if(i < definition->parameters.size() &&
+						definition->parameters[i].template_template) {
+						string normalized;
+						if(!CompatibleTemplateTemplateArgument(definition->parameters[i], args[i],
+							context, substitutions, &normalized))
+							throw PA18SubstitutionFailure("template-template argument does not match");
 					args[i] = normalized;
 					continue;
 				}
@@ -643,8 +679,9 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 								"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") ==
 								string::npos && args[i] != "true" && args[i] != "false" &&
 							substitutions.find(args[i]) == substitutions.end() &&
-							active_integral_substitutions_.find(args[i]) ==
-								active_integral_substitutions_.end() &&
+								active_integral_substitutions_.find(args[i]) ==
+									active_integral_substitutions_.end() &&
+								variable_types_.find(args[i]) == variable_types_.end() &&
 							constant_values_.find(args[i]) == constant_values_.end();
 						if(bare_dependent_argument) unresolved_scope = true;
 							if(unresolved_scope &&
@@ -707,9 +744,10 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 					args[i].find_first_not_of(
 					"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") ==
 					string::npos && args[i] != "true" && args[i] != "false" &&
-					constant_values_.find(args[i]) == constant_values_.end() &&
-					active_integral_substitutions_.find(args[i]) ==
-					active_integral_substitutions_.end())
+						constant_values_.find(args[i]) == constant_values_.end() &&
+						active_integral_substitutions_.find(args[i]) ==
+						active_integral_substitutions_.end() &&
+						variable_types_.find(args[i]) == variable_types_.end())
 					dependent_name = true;
 				// A constexpr member call in a class-template body is dependent even
 				// when the call's spelling is not itself a template parameter.  Defer
@@ -814,6 +852,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 					search = close + 1;
 					continue;
 				}
+				const size_t supplied_template_arguments = args.size();
 				bool default_substitution_failure = false;
 				if(args.size() < definition->parameters.size()) {
 				map<string, string> default_substitutions = substitutions;
@@ -864,17 +903,24 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 					}
 				}
 					if(default_substitution_failure) {
-					search = close + 1;
-					continue;
-				}
-				bool missing_required_template_argument = false;
+						// Keep an explicit function-template-id alive long enough for
+						// overload replay to try the next declaration.  A failed default
+						// is SFINAE on this candidate, not a failure of the whole call.
+						args.resize(supplied_template_arguments);
+						if(definition->class_template || definition->alias_template ||
+							definition->variable_template) {
+							search = close + 1;
+							continue;
+						}
+					}
+					bool missing_required_template_argument = false;
 				for(size_t i = args.size(); i < definition->parameters.size(); ++i)
 					if(!definition->parameters[i].pack &&
 						definition->parameters[i].default_type.empty()) {
 						missing_required_template_argument = true;
 						break;
 					}
-				if(missing_required_template_argument) {
+					if(missing_required_template_argument) {
 					search = close + 1;
 					continue;
 				}
@@ -892,7 +938,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 						unresolved_type_argument = true;
 						break;
 					}
-				if(unresolved_type_argument) {
+					if(unresolved_type_argument) {
 					search = close + 1;
 					continue;
 				}
@@ -901,10 +947,24 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				// argument (including a type pack such as `get<0>(tuple<T...>&)`), so
 				// preserve the template-id for the call replay instead of registering
 				// a declaration with only the explicit prefix bound.
-				if(!definition->class_template && args.size() < definition->parameters.size()) {
+			const bool unresolved_template_arguments = HasUnresolvedTemplateParameter(
+				arguments_text, context, substitutions);
+				if(!default_substitution_failure && !definition->class_template &&
+					!definition->alias_template &&
+				!definition->variable_template && args.size() < definition->parameters.size()) {
 					search = close + 1;
 					continue;
 				}
+			// Keep an alias/variable template with an unresolved pack as a deduction
+			// pattern.  Materializing its target with an empty pack changes
+			// `index_sequence<I...>` into a concrete zero-element class and loses the
+			// non-type pack before the actual argument is matched.  Omitted concrete
+			// defaults still take the normal alias-expansion path.
+			if((definition->alias_template || definition->variable_template) &&
+				args.size() < definition->parameters.size() && unresolved_template_arguments) {
+				search = close + 1;
+				continue;
+			}
 				// Resolve non-type arguments in the surrounding substitution scope
 			// before Instantiate creates its fresh local map.  This preserves
 			// member constants such as `num` while materializing a nested
@@ -1026,15 +1086,35 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				const vector<const TemplateDefinition*> overloads = FindFunctionDefinitions(
 					base, context);
 				for(size_t overload = 0; overload < overloads.size(); ++overload) {
-					if(!overloads[overload] || overloads[overload]->qualified_name !=
-						definition->qualified_name || overloads[overload]->parameters.size() !=
-						definition->parameters.size()) continue;
-					if(find(instantiation_candidates.begin(), instantiation_candidates.end(),
-						overloads[overload]) == instantiation_candidates.end())
-						instantiation_candidates.push_back(overloads[overload]);
+					if(!overloads[overload] || overloads[overload]->class_template ||
+						overloads[overload]->alias_template ||
+						overloads[overload]->variable_template ||
+						args.size() > overloads[overload]->parameters.size()) continue;
+						if(find(instantiation_candidates.begin(), instantiation_candidates.end(),
+							overloads[overload]) == instantiation_candidates.end())
+							instantiation_candidates.push_back(overloads[overload]);
+					}
+					if(default_substitution_failure) {
+						// The compact registry can give same-spelled function templates
+						// the same qualified name while retaining distinct declaration
+						// keys.  Only use the expanded declaration set after a dependent
+						// default has actually failed; doing this for every function call
+						// would replay recursive probes more than once.
+						const string base_owner = PrefixComponent(base);
+						for(map<string, TemplateDefinition>::const_iterator candidate = definitions_.begin();
+							candidate != definitions_.end(); ++candidate) {
+							if(candidate->second.class_template || candidate->second.alias_template ||
+								candidate->second.variable_template || candidate->second.name != LastComponent(base) ||
+								(!base_owner.empty() && candidate->second.owner != base_owner) ||
+								(base_owner.empty() && !candidate->second.owner.empty()) ||
+								args.size() > candidate->second.parameters.size()) continue;
+							if(find(instantiation_candidates.begin(), instantiation_candidates.end(),
+								&candidate->second) == instantiation_candidates.end())
+								instantiation_candidates.push_back(&candidate->second);
+						}
+					}
 				}
-			}
-			if(instantiation_candidates.empty()) instantiation_candidates.push_back(definition);
+				if(instantiation_candidates.empty()) instantiation_candidates.push_back(definition);
 			const ConcreteOwnerContext previous_concrete_owner = active_concrete_owner_;
 			if(!concrete_owner_for_instantiation.empty())
 				SetActiveConcreteOwner(concrete_owner_for_instantiation, context);
@@ -1050,15 +1130,44 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 							bool selected_candidate = false;
 							for(size_t candidate = 0; candidate < instantiation_candidates.size(); ++candidate) {
 								try {
+									// Validate the substituted function result before replaying
+									// the body.  A non-type result such as `sizeof(T)` is a
+									// substitution boundary; instantiating it first can recurse
+									// through the same unevaluated call instead of selecting the
+									// fallback overload.
+									const TemplateDefinition* candidate_definition =
+										instantiation_candidates[candidate];
+									CPPGMAstNodePtr candidate_declaration = candidate_definition->declaration;
+								while(candidate_declaration && candidate_declaration->kind == "template-declaration" &&
+									candidate_declaration->children.size() > 1)
+									candidate_declaration = candidate_declaration->children[1];
+									const bool named_constructor = !candidate_definition->owner.empty() &&
+										LastComponent(candidate_definition->name) ==
+										LastComponent(candidate_definition->owner);
+									const bool constructor_candidate = named_constructor ||
+										(candidate_declaration &&
+											(candidate_declaration->kind == "special-member-definition" ||
+											 candidate_declaration->kind == "special-member-declaration"));
+									// A class-template rewrite reaches this loop as well when a
+									// class object is formed without a function overload.  It has
+									// no function result type to substitute; only function
+									// candidates need the expression-SFINAE result check.
+									const bool type_candidate = candidate_definition->class_template ||
+										candidate_definition->alias_template || candidate_definition->variable_template;
+									const string candidate_result = constructor_candidate || type_candidate ? "candidate" :
+										FunctionResultType(*candidate_definition, args, context,
+											&instantiation_substitutions);
+					if(candidate_result.empty())
+										throw PA18SubstitutionFailure("function result substitution failed");
 									local_name = Instantiate(*instantiation_candidates[candidate], args, context, false,
 										inferred_nested_parent_packs.empty() ? 0 : &inferred_nested_parent_packs,
 										&instantiation_substitutions, requested_owner, 0, 0,
 										defer_class_definition);
 									definition = instantiation_candidates[candidate];
-									selected_candidate = true;
-									break;
-								} catch(const PA18SubstitutionFailure& error) {
-									last_candidate_failure = error.what();
+							selected_candidate = true;
+							break;
+							} catch(const PA18SubstitutionFailure& error) {
+							last_candidate_failure = error.what();
 								}
 							}
 							if(!selected_candidate)

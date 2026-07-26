@@ -10,10 +10,23 @@ namespace {
 bool SameTemplateOwner(const string& definition_owner, const string& source_owner)
 {
 	if(source_owner.empty()) return true;
-	if(definition_owner == source_owner) return true;
-	if(PrefixComponent(definition_owner) == source_owner) return true;
-	return LastComponent(definition_owner) == LastComponent(source_owner) &&
-		PrefixComponent(definition_owner) == PrefixComponent(source_owner);
+	auto strip_template_arguments = [](string value) {
+		int depth = 0;
+		for(size_t i = 0; i < value.size(); ++i) {
+			if(value[i] == '<') {
+				if(depth == 0) value.erase(i);
+				else ++depth;
+				if(depth == 0) break;
+			} else if(value[i] == '>' && depth > 0) --depth;
+		}
+		return value;
+	};
+	const string definition_base = strip_template_arguments(definition_owner);
+	const string source_base = strip_template_arguments(source_owner);
+	if(definition_base == source_base) return true;
+	if(PrefixComponent(definition_base) == source_base) return true;
+	return LastComponent(definition_base) == LastComponent(source_base) &&
+		PrefixComponent(definition_base) == PrefixComponent(source_base);
 }
 
 } // namespace
@@ -23,14 +36,23 @@ void PA18TemplateExpander::MaterializeInitializerConstructor(
 	const string& context, const map<string, string>& substitutions)
 {
 	if(!input || !result) return;
-	if(input->kind == "special-member-definition") {
+	CPPGMAstNodePtr constructor_input = input;
+	CPPGMAstNodePtr constructor_result = result;
+	while(constructor_input && constructor_input->kind == "template-declaration" &&
+		constructor_input->children.size() > 1 && constructor_result &&
+		constructor_result->kind == "template-declaration" &&
+		constructor_result->children.size() > 1) {
+		constructor_input = constructor_input->children[1];
+		constructor_result = constructor_result->children[1];
+	}
+	if(constructor_input->kind == "special-member-definition") {
 		// A constructor mem-initializer is the same semantic event as a direct
 		// initializer, but the parser keeps it under `ctor-initializer` instead
 		// of a simple-declaration.  Materialize member-template constructors here
 		// so the lowering pass can emit the selected forwarding constructor body.
-		const CPPGMAstNodePtr original_ctor = ChildOfKindLocal(input,
+		const CPPGMAstNodePtr original_ctor = ChildOfKindLocal(constructor_input,
 			"ctor-initializer");
-		const CPPGMAstNodePtr transformed_ctor = ChildOfKindLocal(result,
+		const CPPGMAstNodePtr transformed_ctor = ChildOfKindLocal(constructor_result,
 			"ctor-initializer");
 		if(!original_ctor || !transformed_ctor) return;
 		for(size_t initializer = 0; initializer < original_ctor->children.size();
@@ -50,23 +72,49 @@ void PA18TemplateExpander::MaterializeInitializerConstructor(
 			if(!transformed_arguments) continue;
 			string member_type;
 			set<string> active;
-			if(!FindClassMemberType(context, LastComponent(member_id->value),
-				substitutions, context, &member_type, &active)) continue;
+			string constructor_member_name = LastComponent(member_id->value);
+		const string current_constructor = CanonicalSpelling(RemoveMarker(
+			result->value));
+		const size_t current_separator = current_constructor.rfind("::");
+		string current_owner = current_separator == string::npos ?
+			current_constructor : current_constructor.substr(0, current_separator);
+		if(current_separator == string::npos) {
+			map<string, string>::const_iterator generated = specialization_bases_.find(
+				LastComponent(current_constructor));
+			if(generated != specialization_bases_.end()) current_owner = LastComponent(
+				current_constructor);
+			else if(class_contexts_.find(context) != class_contexts_.end()) current_owner = context;
+		}
+		map<string, string>::const_iterator current_base = specialization_bases_.find(
+			LastComponent(current_owner));
+		const string current_source_owner = current_base == specialization_bases_.end() ?
+			LastComponent(current_owner) : LastComponent(current_base->second);
+		const bool delegating = !current_owner.empty() &&
+			(current_source_owner == constructor_member_name ||
+			 LastComponent(current_owner) == constructor_member_name);
+			if(delegating) {
+				member_type = current_owner;
+				map<string, string>::const_iterator base = specialization_bases_.find(
+					LastComponent(member_type));
+				constructor_member_name = base == specialization_bases_.end() ?
+					LastComponent(member_type) : LastComponent(base->second);
+			} else if(!FindClassMemberType(context, LastComponent(member_id->value),
+				 substitutions, context, &member_type, &active)) continue;
 			member_type = CanonicalSpelling(ResolveAlias(RewriteText(member_type,
 				context, substitutions, 0), context));
-			if(member_type.empty() || !FindClassDeclaration(member_type, context)) continue;
+			if(member_type.empty() || (!delegating && !FindClassDeclaration(member_type, context))) continue;
 			CPPGMAstNodePtr object(new CPPGMAstNode("id-expression"));
 			object->inferred_type = member_type;
 			CPPGMAstNodePtr member(new CPPGMAstNode("member-expression", "."));
 			member->children.push_back(object);
 			member->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
-				"identifier", LastComponent(member_type))));
+				"identifier", constructor_member_name)));
 			CPPGMAstNodePtr call(new CPPGMAstNode("call-expression"));
 			call->children.push_back(member);
 			CPPGMAstNodePtr arguments(new CPPGMAstNode("argument-list"));
 			arguments->children = transformed_arguments->children;
 			call->children.push_back(arguments);
-			InstantiateMemberCall(call, member, LastComponent(member_type), context,
+			InstantiateMemberCall(call, member, constructor_member_name, context,
 				substitutions);
 		}
 		return;
@@ -264,8 +312,7 @@ void PA18TemplateExpander::MaterializeInitializerConstructor(
 	CPPGMAstNodePtr argument_list(new CPPGMAstNode("argument-list"));
 	argument_list->children = arguments;
 	call->children.push_back(argument_list);
-	InstantiateMemberCall(call, member, source_constructor_name, context,
-		substitutions);
+	InstantiateMemberCall(call, member, source_constructor_name, context, substitutions);
 }
 
 } // namespace pa18_templates_internal

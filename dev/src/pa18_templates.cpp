@@ -326,6 +326,106 @@ size_t PA18TemplateExpander::EstimateTypeSize(string raw, const string& context)
 		if(separator == string::npos) current.clear();
 		else current.erase(separator);
 	}
+	// A dependent call can produce a class template type before that class has
+	// been replayed as a concrete generated declaration.  `sizeof` still needs
+	// the source class layout in that situation.  Reconstruct the ordinary
+	// non-static data-member layout from the typed template definition rather
+	// than treating the unresolved class as an unknown-size expression.
+	const size_t template_open = raw.find('<');
+	if(template_open != string::npos && raw[raw.size() - 1] == '>') {
+		string template_base;
+		size_t template_begin = 0, template_close = string::npos;
+		string argument_text;
+		if(TemplateBase(raw, template_open, &template_begin, &template_base) &&
+			TemplateRange(raw, template_open, &argument_text, &template_close) &&
+			template_close + 1 == raw.size()) {
+			const TemplateDefinition* primary = FindDefinition(template_base, context);
+			if(!primary) primary = FindDefinition(LastComponent(template_base), context);
+			if(!primary) {
+				string source_context = context;
+				map<string, string>::const_iterator generated_context =
+					specialization_bases_.find(LastComponent(context));
+				if(generated_context != specialization_bases_.end() &&
+					!generated_context->second.empty()) source_context = generated_context->second;
+				const string repeated_context = JoinPath(source_context,
+					LastComponent(source_context));
+				for(map<string, TemplateDefinition>::const_iterator candidate = definitions_.begin();
+					candidate != definitions_.end(); ++candidate) {
+					if(candidate->second.name != LastComponent(template_base)) continue;
+					if(candidate->second.owner != source_context &&
+						candidate->second.owner != repeated_context) continue;
+					if(primary) { primary = 0; break; }
+					primary = &candidate->second;
+				}
+			}
+			if(primary && primary->class_template) {
+				const vector<string> arguments = SplitTemplateArguments(argument_text);
+				const TemplateDefinition* selected = SelectClassTemplateDefinition(
+					primary, arguments, context);
+				if(!selected) selected = primary;
+				CPPGMAstNodePtr declaration = selected->declaration;
+				while(declaration && declaration->kind == "template-declaration" &&
+					declaration->children.size() > 1)
+					declaration = declaration->children[1];
+				if(declaration && declaration->kind == "class-specifier") {
+					map<string, string> substitutions;
+					for(size_t parameter = 0; parameter < selected->parameters.size() &&
+						parameter < arguments.size(); ++parameter)
+						if(!selected->parameters[parameter].name.empty())
+							substitutions[selected->parameters[parameter].name] = arguments[parameter];
+					function<size_t(const string&)> estimate_member = [&](const string& source) -> size_t {
+						string spelling = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(
+							source, substitutions));
+						const size_t array = spelling.find('[');
+						if(array != string::npos) {
+							const size_t close = spelling.find(']', array);
+							if(close == string::npos) return 0;
+							const string bound_text = CanonicalSpelling(ReplaceIdentifiers(
+								spelling.substr(array + 1, close - array - 1), substitutions));
+							PA19ConstantExpressionParser parser(constant_values_, substitutions,
+								constant_type_sizes_, constant_type_alignments_, type_aliases_);
+							PA19IntegralValue bound;
+							if(!parser.Evaluate(bound_text, &bound) || !bound.known || PA19Signed(bound) < 0)
+								return 0;
+							const string element = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(
+								spelling.substr(0, array), substitutions));
+							return estimate_member(element) * static_cast<size_t>(PA19Signed(bound));
+						}
+						const string resolved = CanonicalSpelling(ResolveAlias(
+							ReplaceIdentifiers(spelling, substitutions), context));
+						return EstimateTypeSize(resolved, context);
+					};
+					size_t offset = 0, alignment = 1;
+					for(size_t child = 0; child < declaration->children.size(); ++child) {
+						const CPPGMAstNodePtr member = declaration->children[child];
+						if(!member || member->kind != "simple-declaration" ||
+							member->children.empty()) continue;
+						const string specifiers = SpellNode(member->children[0]);
+						if(specifiers.find("typedef") != string::npos ||
+							specifiers.find("static") != string::npos) continue;
+						const string base = NodeTypeSpelling(member->children[0]);
+						const CPPGMAstNodePtr list = ChildOfKindLocal(member,
+							"init-declarator-list");
+						if(!list) continue;
+						for(size_t item = 0; item < list->children.size(); ++item) {
+							const CPPGMAstNodePtr declarator = list->children[item];
+							if(!declarator || declarator->children.empty() ||
+								DescendantOfKind(declarator->children[0], "parameter-clause")) continue;
+							const size_t size = estimate_member(DeclaratorTypeSpelling(base,
+								declarator->children[0]));
+							if(!size) continue;
+							const size_t member_alignment = size > 8 ? 8 : size;
+							alignment = max(alignment, member_alignment);
+							offset = (offset + member_alignment - 1) / member_alignment *
+								member_alignment;
+							offset += size;
+						}
+					}
+					if(offset) return (offset + alignment - 1) / alignment * alignment;
+				}
+			}
+		}
+	}
 	return 0;
 }
 
@@ -760,7 +860,8 @@ void PA18TemplateExpander::InsertGenerated(vector<CPPGMAstNodePtr>* children,
 		const auto known_context_entity = [&](const string& value) {
 			if(constant_values_.find(value) != constant_values_.end() ||
 				class_contexts_.find(value) != class_contexts_.end() ||
-				named_type_contexts_.find(value) != named_type_contexts_.end()) return true;
+				named_type_contexts_.find(value) != named_type_contexts_.end() ||
+				variable_types_.find(value) != variable_types_.end()) return true;
 			const auto matches_owner = [&](const string& candidate) {
 				if(owner.empty() || candidate == JoinPath(owner, value)) return true;
 				string logical_owner = owner;
@@ -1060,6 +1161,31 @@ void PA18TemplateExpander::InjectGenerated(const CPPGMAstNodePtr& node,
 	}
 	if(node->kind == "class-specifier" || node->kind == "class-forward-declaration") {
 		const string class_context = JoinPath(context, LastComponent(node->value));
+		// Constructor templates are retained long enough for typed constructor
+		// replay, but their dependent wrappers must not be emitted as members of
+		// the concrete specialization.  PA11 would otherwise analyze defaults
+		// such as `typename U::missing` before a candidate is selected.  The
+		// generated concrete constructor is a separate special-member node and
+		// remains in the class.
+		if(node->kind == "class-specifier" && specialization_bases_.find(
+			LastComponent(node->value)) != specialization_bases_.end()) {
+			for(size_t child = 0; child < node->children.size();) {
+				CPPGMAstNodePtr declaration = node->children[child];
+				bool templated = false;
+				while(declaration && declaration->kind == "template-declaration" &&
+					declaration->children.size() > 1) {
+					if(!declaration->children.empty() && declaration->children[0] &&
+						!Parameters(declaration->children[0]).empty()) templated = true;
+					declaration = declaration->children[1];
+				}
+				if(node->children[child] && declaration &&
+					templated &&
+					(declaration->kind == "special-member-definition" ||
+					 declaration->kind == "special-member-declaration"))
+					node->children.erase(node->children.begin() + child);
+				else ++child;
+			}
+		}
 		map<string, vector<CPPGMAstNodePtr> >::iterator found =
 			generated_by_owner_.find(class_context);
 		if(node->kind == "class-specifier" &&
@@ -1204,14 +1330,22 @@ void PA18TemplateExpander::CollectVariables(const CPPGMAstNodePtr& node,
 			const CPPGMAstNodePtr item = list->children[i];
 			if(!item || item->children.empty()) continue;
 			const string name = FirstIdentifierLocal(item->children[0]);
-			if(!name.empty() && !type.empty())
+			if(!name.empty() && !type.empty()) {
 				variable_types_[name] = DeclaratorTypeSpelling(type, item->children[0]);
+				if(!context.empty()) variable_qualified_names_[name] = JoinPath(context, name);
+			}
 		}
 	}
 	for(size_t i = 0; i < node->children.size(); ++i) {
-		const string child_context = node->kind == "function-definition" &&
-			node->children[i] && node->children[i]->kind == "compound-statement" ?
-			function_context : context;
+		string child_context = context;
+		if(node->kind == "namespace-definition")
+			child_context = node->value.empty() ? context : JoinPath(context, node->value);
+		else if((node->kind == "class-specifier" ||
+			node->kind == "class-forward-declaration") && !node->value.empty())
+			child_context = JoinPath(context, LastComponent(node->value));
+		else if(node->kind == "function-definition" &&
+			node->children[i] && node->children[i]->kind == "compound-statement")
+			child_context = function_context;
 		CollectVariables(node->children[i], child_context);
 	}
 }

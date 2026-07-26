@@ -8,6 +8,7 @@ CPPGMAstNode::CPPGMAstNode(const string& kind, const string& value)
 	  explicit_instantiation(false), extern_instantiation(false),
 	  synthetic_namespace_forward(false), dependent_base_lookup(false),
 	  materialize_object_address(false),
+	  has_deferred_constructor(false),
 	  materialize_object_name(),
 	 inferred_type(),
 	 explicit_typename(false),

@@ -689,6 +689,8 @@ void PA14Lowerer::CollectClassMembers(const CPPGMAstNodePtr& node, Scope* scope)
       analyzer_.class_types_.find(node.get());
     if(type_found == analyzer_.class_types_.end() || !type_found->second ||
        !type_found->second->owned_scope) return;
+	  type_found->second->has_deferred_constructor =
+	    type_found->second->has_deferred_constructor || node->has_deferred_constructor;
     Scope* class_scope = type_found->second->owned_scope;
     bool has_inheriting_constructor_using = false;
     for(size_t i = 0; i < node->children.size(); ++i) {

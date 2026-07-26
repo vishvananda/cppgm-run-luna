@@ -320,12 +320,28 @@
 			candidates.insert(JoinPath(current, raw_name));
 			if(!current.empty()) candidates.insert(JoinPath(current,
 				JoinPath(current, raw_name)));
-			if(current.empty()) break;
-			const size_t separator = current.rfind("::");
-			if(separator == string::npos) current.clear();
-			else current.erase(separator);
+		if(current.empty()) break;
+		const size_t separator = current.rfind("::");
+		if(separator == string::npos) current.clear();
+		else current.erase(separator);
+	}
+	// A replayed class body keeps its concrete generated owner in `context`,
+	// while member function templates remain indexed under the source class
+	// owner.  Carry that typed specialization mapping into lookup so unevaluated
+	// calls such as `sizeof(test<T>(0))` see the source overload set.
+	map<string, string>::const_iterator generated_owner =
+		specialization_bases_.find(LastComponent(context));
+	if(generated_owner != specialization_bases_.end()) {
+		string source_owner = generated_owner->second;
+		const size_t source_open = source_owner.find('<');
+		if(source_open != string::npos) source_owner.erase(source_open);
+		if(!source_owner.empty()) {
+			candidates.insert(JoinPath(source_owner, raw_name));
+			candidates.insert(JoinPath(source_owner,
+				JoinPath(LastComponent(source_owner), raw_name)));
 		}
-		candidates.insert(raw_name);
+	}
+	candidates.insert(raw_name);
 		const string short_name = LastComponent(raw_name);
 		map<string, vector<string> >::const_iterator indexed =
 			definitions_by_name_.find(short_name);

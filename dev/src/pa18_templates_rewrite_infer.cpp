@@ -563,6 +563,10 @@ bool PA18TemplateExpander::InferArgument(const CPPGMAstNodePtr& expression,
 			*result = "bool";
 			return true;
 		}
+		if(expression->kind == "parenthesized-expression" &&
+			!expression->children.empty())
+			return InferArgument(expression->children[0], result, substitutions,
+				context, function_signature);
 		if(expression->kind == "member-expression")
 			return InferMemberArgument(expression, result, substitutions, context);
 	if(InferCastArgument(expression, result, substitutions, context)) return true;
@@ -800,8 +804,17 @@ bool PA18TemplateExpander::MergeInferredFunctionArgument(
 			[&](const TemplateParameter& candidate) { return candidate.name == it->first; }) -
 			definition.parameters.begin();
 		if(template_index < definition.parameters.size() && definition.parameters[template_index].pack) {
-			const vector<string> values = SplitTemplateArguments(it->second);
-			if(!it->second.empty())
+			string packed = it->second;
+			if(packed.size() > 3 && packed.compare(packed.size() - 3, 3, "...") == 0) {
+				const string prefix = CanonicalSpelling(packed.substr(0, packed.size() - 3));
+				const bool dependent_pack = !prefix.empty() &&
+					prefix.find_first_not_of(
+						"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") == string::npos &&
+					template_pack_names_.find(prefix) != template_pack_names_.end();
+				if(!dependent_pack) packed = prefix;
+			}
+			const vector<string> values = SplitTemplateArguments(packed);
+			if(!packed.empty())
 				(*inferred_packs)[it->first].insert((*inferred_packs)[it->first].end(),
 					values.begin(), values.end());
 		} else {
@@ -1141,21 +1154,31 @@ bool PA18TemplateExpander::CompleteFunctionArguments(
 				FindFunctionDefinitions(function_argument->value, context);
 			for(size_t candidate = 0; candidate < candidates.size() && !matched; ++candidate) {
 				vector<string> ignored;
-				if(InferFunctionFromExpected(*candidates[candidate], expected_pattern,
-					&ignored, context)) matched = true;
+				const bool viable = InferFunctionFromExpected(*candidates[candidate], expected_pattern,
+					&ignored, context);
+				if(viable) matched = true;
 			}
 		}
 		if(!matched) {
 			const vector<string> function_types = FunctionExpressionTypes(
 				deferred_arguments[deferred], context);
+			map<string, string> selected_inferred;
 			for(size_t candidate = 0; candidate < function_types.size(); ++candidate) {
 				map<string, string> one = *inferred;
 				if(!MatchTypePattern(deferred_patterns[deferred], function_types[candidate],
 					parameter_names, &one, context)) continue;
-				*inferred = one;
-				matched = true;
-				break;
+				if(!matched) {
+					selected_inferred = one;
+					matched = true;
+				} else if(one != selected_inferred) {
+					// An overload set used as a function-template argument is
+					// viable only when deduction identifies one unambiguous
+					// template argument set.  Accepting the first overload turns
+					// a nondeduced call into an arbitrary specialization.
+					return false;
+				}
 			}
+			if(matched) *inferred = selected_inferred;
 		}
 		if(!matched) return false;
 	}

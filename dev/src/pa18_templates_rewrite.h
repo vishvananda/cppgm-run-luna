@@ -198,7 +198,14 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 		const string& context, string* result) const;
 	bool IsFunctionParameterPack(const CPPGMAstNodePtr& parameter) const
 	{
-		return parameter && DescendantOfKind(parameter, "parameter-pack");
+		if(!parameter) return false;
+		if(parameter->kind == "parameter-pack") return true;
+		const CPPGMAstNodePtr declarator = ChildOfKindLocal(parameter, "declarator");
+		if(!declarator) return false;
+		for(size_t child = 0; child < declarator->children.size(); ++child)
+			if(declarator->children[child] &&
+				declarator->children[child]->kind == "parameter-pack") return true;
+		return false;
 	}
 	string FunctionSignatureType(const FunctionSignature& signature) const
 	{
@@ -1127,6 +1134,11 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 				!input->children[1]->children.empty() &&
 				HasFriendSpecifier(input->children[1]->children[0]) &&
 				DescendantOfKind(input->children[1], "parameter-clause"))
+				return TransformRegularNode(input, context, substitutions);
+			if(!active_instantiation_name_.empty() && input->children.size() > 1 &&
+				input->children[1] &&
+				(input->children[1]->kind == "special-member-definition" ||
+				 input->children[1]->kind == "special-member-declaration"))
 				return TransformRegularNode(input, context, substitutions);
 			if(input->children.size() > 1 && input->children[1] &&
 				(input->children[1]->kind == "class-specifier" ||

@@ -367,8 +367,8 @@ PA14Lowerer::Value PA14Lowerer::EmitAssignment(const CPPGMAstNodePtr& node, Scop
     Value right;
     if(op == "=") {
       const ExprInfo& right_info = right_order_info;
-      if(ConversionRank(right_info, left_type) < 0)
-        throw logic_error("invalid assignment conversion");
+		if(ConversionRank(right_info, left_type) < 0)
+			throw logic_error("invalid assignment conversion");
       right = EmitValue(node->children[1], scope, left_type);
       // A constant scalar assignment already has its final value; retaining
       // the literal avoids manufacturing a widening/truncation instruction

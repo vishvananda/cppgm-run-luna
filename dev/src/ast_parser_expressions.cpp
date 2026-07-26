@@ -265,10 +265,19 @@ bool Parser::LooksLikeNamedCastType()
 	Mark name_mark = Save();
 	string name;
 	bool result = false;
-	if (ParseName(&name, false))
+	// A C-style cast may name a qualified class template, such as
+	// `(boost::intrusive::algo_types)5`.  The non-template probe used to stop at
+	// the first `<`, misclassify the cast as a parenthesized expression, and
+	// leave the following typedef at the translation-unit boundary.
+	if (ParseName(&name, false, true)) {
+		Mark close_mark = Save();
+		const bool qualified_cast = Take(")") && !Is("(");
+		Restore(close_mark);
 		result = name.find('<') != string::npos || types_.find(name) != types_.end() ||
-			templates_.find(name) != templates_.end() || Is("*") || Is("&") ||
+			templates_.find(name) != templates_.end() || qualified_cast ||
+			Is("*") || Is("&") ||
 			Is("&&") || Is("[") || IsCv(Peek().text);
+	}
 	Restore(name_mark);
 	return result;
 }

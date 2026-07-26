@@ -39,6 +39,11 @@ struct CPPGMAstNode
 	// PA18 records that an unevaluated callable type expression still requires
 	// the local object address to be materialized by PA14.
 	bool materialize_object_address;
+	// PA18 records a constructor template retained only in the typed lookup
+	// registry while a class specialization is materialized.  Such a class is
+	// not an aggregate even when no specialization of that constructor is
+	// viable for the current call.
+	bool has_deferred_constructor;
 	std::string materialize_object_name;
 	// PA18 records the concrete result type of a materialized member-template
 	// call so a surrounding deduction step can use the same typed fact.

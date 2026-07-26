@@ -16,14 +16,18 @@ const TemplateDefinition* PA18TemplateExpander::FindNestedDefinition(
 		for(map<string, TemplateDefinition>::const_iterator it = definitions_.begin();
 			it != definitions_.end(); ++it) {
 			const TemplateDefinition& candidate = it->second;
-			if(!candidate.class_template && !candidate.alias_template &&
-				!candidate.variable_template) continue;
-			if(candidate.name != nested_name) continue;
+				if(!candidate.class_template && !candidate.alias_template &&
+					!candidate.variable_template) continue;
+				if(candidate.name != nested_name) continue;
 			const size_t angle = candidate.owner.find('<');
 			const string owner_prefix = angle == string::npos ? candidate.owner :
 				candidate.owner.substr(0, angle);
+			// Some parser paths retain the enclosing class name twice when a
+			// nested member template is indexed (`Owner::Owner::member`).  Match
+			// that typed owner spelling without duplicating the whole qualified
+			// namespace path.
 			if(owner_prefix != current.qualified_name && owner_prefix !=
-				JoinPath(current.qualified_name, current.qualified_name)) continue;
+				JoinPath(current.qualified_name, LastComponent(current.qualified_name))) continue;
 			if(!fallback) fallback = &candidate;
 			if(candidate.class_template && candidate.declaration &&
 				candidate.declaration->kind == "class-specifier" &&

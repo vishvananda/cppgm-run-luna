@@ -67,8 +67,8 @@ namespace pa18_templates_internal {
 		vector<string> explicit_arguments;
 		const TemplateDefinition* explicit_definition = 0;
 		string explicit_base_name;
-		const size_t template_open = callee.find('<');
-		const bool callee_is_static_cast = callee.compare(0, 12, "static_cast<") == 0;
+	const size_t template_open = callee.find('<');
+	const bool callee_is_static_cast = callee.compare(0, 12, "static_cast<") == 0;
 		if(template_open != string::npos && !callee_is_static_cast) {
 			string base_arguments, base;
 			size_t template_close = string::npos, begin = 0;
@@ -84,7 +84,7 @@ namespace pa18_templates_internal {
 					function_context, &inherited, &active, &concrete_owners);
 				if(!inherited.empty()) explicit_definition = inherited[0];
 			}
-				if(!explicit_definition || explicit_definition->class_template) return false;
+		if(!explicit_definition || explicit_definition->class_template) return false;
 			explicit_arguments = SplitTemplateArguments(base_arguments);
 			ExpandExplicitFunctionArguments(base_arguments, function_context,
 				substitutions, &explicit_arguments);
@@ -205,14 +205,11 @@ namespace pa18_templates_internal {
 				explicit_arguments.size() == definition.parameters.size();
 			if(complete) arguments = explicit_arguments;
 			else if(!InferFunctionTypeArguments(definition, actual_types, &arguments,
-				substitutions, function_context, explicit_definition ? &explicit_arguments : 0)) {
+					substitutions, function_context, explicit_definition ? &explicit_arguments : 0))
 				continue;
-			}
 			try {
 				if(!FunctionArgumentsViable(definition, arguments, actual_types,
-					function_context)) {
-					continue;
-				}
+					function_context)) continue;
 				if(HasAbstractFunctionParameter(definition, arguments,
 					function_context, substitutions)) continue;
 			} catch(const PA18SubstitutionFailure&) {
@@ -222,9 +219,7 @@ namespace pa18_templates_internal {
 			try {
 				candidate_result = FunctionResultType(definition, arguments,
 					function_context, &substitutions);
-			} catch(const PA18SubstitutionFailure&) {
-				continue;
-			}
+				} catch(const PA18SubstitutionFailure&) { continue; }
 			if(candidate_result.empty()) continue;
 			bool candidate_ellipsis = false;
 			const CPPGMAstNodePtr candidate_clause = DescendantOfKind(

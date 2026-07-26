@@ -901,8 +901,23 @@ string PA18TemplateExpander::Instantiate(const TemplateDefinition& definition,
 	AddConcreteOwnerSubstitutions(concrete_owner, context, &substitutions);
 	map<string, PA19IntegralValue> integral_substitutions;
 	map<string, vector<string> > pack_substitutions;
-	ResolveTemplateArguments(definition, raw_args, context, &args, &metadata_args,
-		&substitutions, &integral_substitutions, &pack_substitutions, pack_hints);
+	// Default non-type arguments can contain sizeof...(Pack).  Argument
+	// resolution happens before TransformInstantiatedNode installs the replay
+	// packs, so expose the caller's typed pack hints for this boundary and
+	// restore the surrounding replay state afterward.
+	const map<string, vector<string> > previous_argument_packs =
+		active_pack_substitutions_;
+	if(pack_hints) for(map<string, vector<string> >::const_iterator hint =
+		pack_hints->begin(); hint != pack_hints->end(); ++hint)
+		if(!hint->first.empty()) active_pack_substitutions_[hint->first] = hint->second;
+	try {
+		ResolveTemplateArguments(definition, raw_args, context, &args, &metadata_args,
+			&substitutions, &integral_substitutions, &pack_substitutions, pack_hints);
+	} catch(...) {
+		active_pack_substitutions_ = previous_argument_packs;
+		throw;
+	}
+	active_pack_substitutions_ = previous_argument_packs;
 	// A dependent member lookup can reach a class template's primary
 	// definition after the matching partial specialization has already been
 	// selected elsewhere.  Re-entering the primary would reuse the same nominal

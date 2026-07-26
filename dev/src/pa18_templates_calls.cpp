@@ -161,12 +161,14 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 				}
 			}
 		}
-		for(size_t parameter = 0; parameter < enclosing_parameters->size() &&
-			parameter < parent_arguments.size(); ++parameter)
-			if(!(*enclosing_parameters)[parameter].name.empty() &&
-				!(*enclosing_parameters)[parameter].pack)
-				member_substitutions[(*enclosing_parameters)[parameter].name] =
-					parent_arguments[parameter];
+		if(!parent->partial_specialization) {
+			for(size_t parameter = 0; parameter < enclosing_parameters->size() &&
+				parameter < parent_arguments.size(); ++parameter)
+				if(!(*enclosing_parameters)[parameter].name.empty() &&
+					!(*enclosing_parameters)[parameter].pack)
+					member_substitutions[(*enclosing_parameters)[parameter].name] =
+						parent_arguments[parameter];
+		}
 		if(!parent->name.empty()) member_substitutions[parent->name] = object_type;
 	}
 	string qualified_owner;
@@ -375,6 +377,27 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 			deduction_substitutions.erase(parent->name);
 		map<string, vector<string> > bound_pack_values;
 		if(parent) {
+			if(parent->partial_specialization) {
+				// The concrete owner is keyed by the primary class's raw argument
+				// list (for `Box<R(Args...)>` that is one function type), while a
+				// member body needs the partial pattern's typed bindings.
+				map<string, string> specialized;
+				if(MatchClassSpecializationPattern(*parent, parent_arguments,
+					&specialized, context)) {
+					for(map<string, string>::const_iterator binding = specialized.begin();
+						binding != specialized.end(); ++binding)
+						if(!binding->second.empty())
+							member_substitutions[binding->first] = binding->second;
+					for(size_t pack = 0; pack < parent->specialization_pack_names.size();
+						++pack) {
+						const string& name = parent->specialization_pack_names[pack];
+						if(name.empty()) continue;
+						map<string, string>::const_iterator binding = specialized.find(name);
+						if(binding == specialized.end() || binding->second.empty()) continue;
+						bound_pack_values[name] = SplitTemplateArguments(binding->second);
+					}
+				}
+			} else {
 			size_t parent_argument = 0;
 			for(size_t parent_parameter_index = 0;
 				parent_parameter_index < enclosing_parameters->size(); ++parent_parameter_index) {
@@ -393,6 +416,7 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 					for(size_t element = 0; element < count; ++element)
 						values.push_back(parent_arguments[parent_argument++]);
 				} else if(parent_argument < parent_arguments.size()) ++parent_argument;
+			}
 			}
 		}
 	map<string, vector<string> > forwarding_pack_values;
@@ -435,7 +459,30 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 					if(left && right) { dependent_member_arguments = true; break; }
 				}
 		}
-		if(dependent_member_arguments) continue;
+		// Constructor templates commonly carry dependent default template
+		// arguments (for example a pack-size predicate and an enable-if alias).
+		// Once the object type and call arguments are concrete, those defaults are
+		// resolved by Instantiate; their source spelling must not discard the
+		// otherwise viable constructor before replay reaches that substitution
+		// boundary.
+		const bool constructor_template = !definition.owner.empty() &&
+			LastComponent(definition.name) == LastComponent(definition.owner);
+		if(dependent_member_arguments && !constructor_template) continue;
+		vector<string> instantiation_member_arguments = member_arguments;
+		if(constructor_template && explicit_arguments.empty()) {
+			size_t supplied = 0;
+			for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter) {
+				const TemplateParameter& formal = definition.parameters[parameter];
+				if(!formal.default_type.empty()) break;
+				if(formal.pack) {
+					map<string, vector<string> >::const_iterator values =
+						inferred_pack_values.find(formal.name);
+					if(values != inferred_pack_values.end()) supplied += values->second.size();
+				} else ++supplied;
+			}
+			if(supplied < instantiation_member_arguments.size())
+				instantiation_member_arguments.resize(supplied);
+		}
 
 		string requested_owner = object_type;
 		if(!active_instantiation_name_.empty()) {
@@ -465,7 +512,7 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 		const ConcreteOwnerContext previous_concrete_owner = active_concrete_owner_;
 		if(requested_owner_pointer) SetActiveConcreteOwner(requested_owner, context);
 		try {
-		generated_name = Instantiate(definition, member_arguments, context,
+		generated_name = Instantiate(definition, instantiation_member_arguments, context,
 			explicit_instantiation,
 				&instantiation_pack_hints, &candidate_substitutions,
 				requested_owner_pointer, &inferred_function_values,
@@ -476,7 +523,7 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 		}
 		active_concrete_owner_ = previous_concrete_owner;
 		call->template_primary = definition.qualified_name;
-		call->template_arguments = member_arguments;
+		call->template_arguments = instantiation_member_arguments;
 		map<string, string> result_substitutions = candidate_substitutions;
 		for(size_t parameter = 0; parameter < definition.parameters.size() &&
 			parameter < member_arguments.size(); ++parameter)

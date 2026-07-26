@@ -112,6 +112,98 @@ bool PA18TemplateExpander::IsValidFunctionAddressTemplateArgument(
 	return false;
 }
 
+bool PA18TemplateExpander::ResolvePointerOrReferenceArgument(
+	const TemplateParameter& parameter, const string& raw, const string& context,
+	const map<string, string>& substitutions, string* result) const
+{
+	if(!result) return false;
+	string declared_type = CanonicalSpelling(ReplaceIdentifiers(
+		parameter.non_type_type, substitutions));
+	declared_type = CanonicalSpelling(ResolveAlias(declared_type, context));
+	bool pointer_or_reference = false;
+	int angle = 0, parentheses = 0;
+	for(size_t position = 0; position < declared_type.size(); ++position) {
+		const char ch = declared_type[position];
+		if(ch == '<' && IsTemplateAngleOpen(declared_type, position)) ++angle;
+		else if(ch == '>' && angle > 0 && IsTemplateAngleClose(declared_type, position)) --angle;
+		else if(ch == '(') ++parentheses;
+		else if(ch == ')' && parentheses > 0) --parentheses;
+		else if(angle == 0 && parentheses == 0 && (ch == '*' || ch == '&')) {
+			pointer_or_reference = true;
+			break;
+		}
+	}
+	if(!pointer_or_reference) return false;
+	const bool source_explicit_pointer = parameter.non_type_type.find('*') != string::npos ||
+		parameter.non_type_type.find('&') != string::npos;
+	string raw_shape = CanonicalSpelling(RemoveMarker(raw));
+	while(!raw_shape.empty() && raw_shape[0] == '=')
+		raw_shape = CanonicalSpelling(raw_shape.substr(1));
+	bool raw_identifier = !raw_shape.empty() &&
+		(isalpha(static_cast<unsigned char>(raw_shape[0])) || raw_shape[0] == '_');
+	for(size_t position = 1; raw_identifier && position < raw_shape.size(); ++position)
+		if(!IsIdentifierCharacter(raw_shape[position])) raw_identifier = false;
+	const bool raw_address_expression = raw_shape == "0" || raw_shape == "nullptr" ||
+		raw_shape == "__nullptr" || (!raw_shape.empty() && raw_shape[0] == '&') ||
+		raw_shape.find("static_cast<") == 0 || raw_shape.find("reinterpret_cast<") == 0 ||
+		raw_shape.find("const_cast<") == 0 || raw_shape.find("dynamic_cast<") == 0 ||
+		raw_shape.find("*)") != string::npos;
+	const bool raw_address = raw_address_expression || (raw_identifier &&
+		variable_types_.find(raw_shape) != variable_types_.end() &&
+		CanonicalSpelling(variable_types_.find(raw_shape)->second) != "bool");
+	if(!source_explicit_pointer && !raw_address) return false;
+	string pointer_argument = raw_shape;
+	try {
+		const string rewritten = const_cast<PA18TemplateExpander*>(this)->RewriteText(
+			pointer_argument, context, substitutions, 0);
+		if(!rewritten.empty()) pointer_argument = CanonicalSpelling(rewritten);
+	} catch(const PA18SubstitutionFailure&) {
+	}
+	if(raw_identifier) {
+		map<string, string>::const_iterator qualified = variable_qualified_names_.find(raw_shape);
+		if(qualified != variable_qualified_names_.end()) pointer_argument = qualified->second;
+	} else if(pointer_argument.size() > 1 && pointer_argument[0] == '&' &&
+		IsIdentifierCharacter(pointer_argument[1])) {
+		const string target = pointer_argument.substr(1);
+		map<string, string>::const_iterator qualified = variable_qualified_names_.find(target);
+		if(qualified != variable_qualified_names_.end()) pointer_argument = "&" + qualified->second;
+	}
+	const bool null_pointer_constant = raw_shape == "0" || raw_shape == "nullptr" ||
+		raw_shape == "__nullptr";
+	const bool address_constant = raw_address_expression && !null_pointer_constant;
+	const bool reference_parameter = declared_type.find('&') != string::npos &&
+		declared_type.find('*') == string::npos;
+	if(reference_parameter ? (!raw_identifier || null_pointer_constant || address_constant) :
+		(!null_pointer_constant && !address_constant && !raw_identifier))
+		throw PA18SubstitutionFailure("invalid pointer or reference non-type argument: " + raw);
+	*result = pointer_argument;
+	return true;
+}
+
+string PA18TemplateExpander::NormalizeIntegralArgumentExpression(
+	const string& raw, const string& context) const
+{
+	string evaluator_raw = raw;
+	if(!evaluator_raw.empty() && evaluator_raw[0] == '(') {
+		int depth = 0;
+		size_t close = string::npos;
+		for(size_t position = 0; position < evaluator_raw.size(); ++position) {
+			if(evaluator_raw[position] == '(') ++depth;
+			else if(evaluator_raw[position] == ')' && --depth == 0) {
+				close = position;
+				break;
+			}
+		}
+		if(close != string::npos && close + 1 < evaluator_raw.size()) {
+			const string cast_type = CanonicalSpelling(evaluator_raw.substr(1, close - 1));
+			const bool type_like = cast_type.find("::") != string::npos ||
+				IsKnownEnumType(cast_type, context);
+			if(type_like) evaluator_raw = evaluator_raw.substr(close + 1);
+		}
+	}
+	return evaluator_raw;
+}
+
 void PA18TemplateExpander::ResolveTemplateArguments(const TemplateDefinition& definition,
 	const vector<string>& raw_args, const string& context,
 	vector<string>* args, vector<string>* metadata_args,

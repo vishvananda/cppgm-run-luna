@@ -155,7 +155,7 @@ inline CPPGMAstNodePtr CloneNode(const CPPGMAstNodePtr& node)
 	result->explicit_specialization = node->explicit_specialization;
 	result->explicit_instantiation = node->explicit_instantiation; result->extern_instantiation = node->extern_instantiation;
 	result->synthetic_namespace_forward = node->synthetic_namespace_forward; result->dependent_base_lookup = node->dependent_base_lookup;
-	result->materialize_object_address = node->materialize_object_address;
+	result->materialize_object_address = node->materialize_object_address; result->has_deferred_constructor = node->has_deferred_constructor;
 	result->materialize_object_name = node->materialize_object_name;
 	result->inferred_type = node->inferred_type;
 	result->explicit_typename = node->explicit_typename;
@@ -217,6 +217,7 @@ inline string TemplateArgumentSpelling(const CPPGMAstNodePtr& node)
 		!node->children.empty())
 		return (node->kind == "sizeof-expression" ? "sizeof(" : "alignof(") +
 			SpellNode(node->children[0]) + ")";
+	if(node->kind == "sizeof-pack-expression" && !node->children.empty()) return "sizeof...(" + TemplateArgumentSpelling(node->children[0]) + ")";
 	if(node->kind == "delete-expression" && !node->children.empty())
 		return "delete " + TemplateArgumentSpelling(node->children[0]);
 	if(node->kind == "cast-expression" && node->children.size() >= 2)
@@ -492,7 +493,7 @@ private:
 	map<string, string> function_owners_;
 	map<string, string> local_class_names_; map<string, CPPGMAstNodePtr> class_declarations_; map<string, set<string> > static_members_by_class_; map<string, vector<const TemplateDefinition*> > using_member_template_targets_;
 	map<string, vector<string> > constant_member_owners_;
-	set<string> named_type_contexts_; map<string, string> enumerator_types_; map<string, string> variable_types_;
+	set<string> named_type_contexts_; map<string, string> enumerator_types_; map<string, string> variable_types_; map<string, string> variable_qualified_names_;
 	map<string, vector<string> > class_paths_by_name_;
 	map<string, map<string, string> > function_parameter_types_;
 	map<string, PA19IntegralValue> constant_values_;

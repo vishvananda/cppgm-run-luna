@@ -129,6 +129,24 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
     TypePtr best_function;
     int best_worst = 1000000;
     int best_total = 1000000;
+    const auto better_lvalue_reference_binding = [](const TypePtr& candidate,
+                                                    const TypePtr& current,
+                                                    const vector<ExprInfo>& infos) {
+      if(!candidate || !current) return false;
+      const size_t count = min(infos.size(), min(candidate->parameters.size(),
+        current->parameters.size()));
+      for(size_t argument = 0; argument < count; ++argument) {
+        if(infos[argument].category != "lvalue" ||
+           candidate->parameters[argument]->kind != TYPE_LVALUE_REFERENCE ||
+           current->parameters[argument]->kind != TYPE_LVALUE_REFERENCE) continue;
+        const TypePtr candidate_referred = candidate->parameters[argument]->child;
+        const TypePtr current_referred = current->parameters[argument]->child;
+        if(candidate_referred && current_referred &&
+           candidate_referred->is_const != current_referred->is_const)
+          return !candidate_referred->is_const && current_referred->is_const;
+      }
+      return false;
+    };
     for(size_t i = 0; i < candidates.size(); ++i) {
       Binding* binding = candidates[i];
       if(!binding->is_member || binding->is_static || binding->kind != BIND_FUNCTION)
@@ -166,26 +184,29 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
             }
           }
         }
-        if(!braced_class_handled)
-          rank = a < function->parameters.size() ?
-            ConversionRank(argument_infos[a], function->parameters[a]) : 2;
-        if(rank < 0) { viable = false; break; }
+		if(!braced_class_handled)
+			rank = a < function->parameters.size() ?
+				ConversionRank(argument_infos[a], function->parameters[a]) : 2;
+		if(rank < 0) { viable = false; break; }
         worst = max(worst, rank);
         total += rank;
       }
       if(!viable) continue;
+      const bool better_reference = worst == best_worst && total == best_total &&
+        better_lvalue_reference_binding(function, best_function, argument_infos);
       if(!best_binding || worst < best_worst ||
-         (worst == best_worst && total < best_total)) {
+         (worst == best_worst && (total < best_total || better_reference))) {
         best_binding = binding;
         best_function = function;
         best_worst = worst;
         best_total = total;
       } else if(worst == best_worst && total == best_total &&
-                !PA12SameType(best_function, function, false)) {
-        throw logic_error("ambiguous constructor overload");
-      }
-    }
-    if(!best_binding) {
+                !PA12SameType(best_function, function, false) &&
+                !better_lvalue_reference_binding(best_function, function, argument_infos)) {
+		throw logic_error("ambiguous constructor overload");
+		}
+	}
+	if(!best_binding) {
       bool has_nonstatic_data = false;
       for(size_t i = 0; i < object_type->class_members.size(); ++i)
         if(!object_type->class_members[i].is_static &&

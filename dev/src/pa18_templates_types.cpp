@@ -90,18 +90,43 @@ string PA18TemplateExpander::FunctionTypeSpelling(const CPPGMAstNodePtr& paramet
 		return ParameterTypeSpelling(parameter);
 	const CPPGMAstNodePtr declarator = parameter->children[1];
 	const string base = NodeTypeSpelling(parameter->children[0]);
+	const auto append_parameters = [this](const CPPGMAstNodePtr& clause,
+		string* result) {
+		if(!clause || !result) return;
+		for(size_t i = 0; i < clause->children.size(); ++i) {
+			const CPPGMAstNodePtr item = clause->children[i];
+			if(!item || item->kind != "parameter-declaration") continue;
+			const string pack_name = IsFunctionParameterPack(item) ?
+				PackExpansionIdentifier(item) : string();
+			map<string, vector<string> >::const_iterator pack =
+				active_pack_substitutions_.find(pack_name);
+			vector<string> values;
+			if(!pack_name.empty() && pack != active_pack_substitutions_.end())
+				values = pack->second;
+			if(values.empty() && (pack_name.empty() ||
+				pack == active_pack_substitutions_.end()))
+				values.push_back(ParameterTypeSpelling(item));
+			for(size_t value = 0; value < values.size(); ++value) {
+				string spelling = values[value];
+				if(!pack_name.empty()) {
+					map<string, string> one;
+					one[pack_name] = spelling;
+					spelling = ReplaceIdentifiersPreservingPackSizes(
+						ParameterTypeSpelling(item), one);
+				}
+				if(result->size() > 0 && result->at(result->size() - 1) != '(')
+					*result += ',';
+				*result += spelling;
+			}
+		}
+	};
 	const CPPGMAstNodePtr nested = ChildOfKindLocal(declarator, "nested-declarator");
 	const CPPGMAstNodePtr clause = ChildOfKindLocal(declarator, "parameter-clause");
 	if(!nested || !clause) return ParameterTypeSpelling(parameter);
 	const CPPGMAstNodePtr inner = nested->children.empty() ? CPPGMAstNodePtr() : nested->children[0];
 	string result = base + DeclaratorSuffix(declarator);
 	result += inner && DeclaratorSuffix(inner).find('&') != string::npos ? "(&)(" : "(*)(";
-	for(size_t i = 0; i < clause->children.size(); ++i) {
-		const CPPGMAstNodePtr item = clause->children[i];
-		if(!item || item->kind != "parameter-declaration") continue;
-		if(result[result.size() - 1] != '(') result += ',';
-		result += ParameterTypeSpelling(item);
-	}
+	append_parameters(clause, &result);
 	result += ')';
 	return CanonicalSpelling(result);
 }
@@ -109,6 +134,36 @@ string PA18TemplateExpander::DeclaratorTypeSpelling(const string& base,
 	const CPPGMAstNodePtr& declarator) const
 {
 	if(!declarator) return base;
+	const auto append_parameters = [this](const CPPGMAstNodePtr& clause,
+		string* result) {
+		if(!clause || !result) return;
+		for(size_t i = 0; i < clause->children.size(); ++i) {
+			const CPPGMAstNodePtr item = clause->children[i];
+			if(!item || item->kind != "parameter-declaration") continue;
+			const string pack_name = IsFunctionParameterPack(item) ?
+				PackExpansionIdentifier(item) : string();
+			map<string, vector<string> >::const_iterator pack =
+				active_pack_substitutions_.find(pack_name);
+			vector<string> values;
+			if(!pack_name.empty() && pack != active_pack_substitutions_.end())
+				values = pack->second;
+			if(values.empty() && (pack_name.empty() ||
+				pack == active_pack_substitutions_.end()))
+				values.push_back(ParameterTypeSpelling(item));
+			for(size_t value = 0; value < values.size(); ++value) {
+				string spelling = values[value];
+				if(!pack_name.empty()) {
+					map<string, string> one;
+					one[pack_name] = spelling;
+					spelling = ReplaceIdentifiersPreservingPackSizes(
+						ParameterTypeSpelling(item), one);
+				}
+				if(result->size() > 0 && result->at(result->size() - 1) != '(')
+					*result += ',';
+				*result += spelling;
+			}
+		}
+	};
 	const CPPGMAstNodePtr nested = ChildOfKindLocal(declarator, "nested-declarator");
 	const CPPGMAstNodePtr clause = ChildOfKindLocal(declarator, "parameter-clause");
 	if(nested && !clause) {
@@ -131,12 +186,7 @@ string PA18TemplateExpander::DeclaratorTypeSpelling(const string& base,
 		// pointer-shaped partial specialization can bind the typedef as a
 		// type, instead of reducing it to only R.
 		string result = base + "(";
-		for(size_t i = 0; i < clause->children.size(); ++i) {
-			const CPPGMAstNodePtr item = clause->children[i];
-			if(!item || item->kind != "parameter-declaration") continue;
-			if(result[result.size() - 1] != '(') result += ',';
-			result += ParameterTypeSpelling(item);
-		}
+		append_parameters(clause, &result);
 		result += ')';
 		return CanonicalSpelling(result);
 	}
@@ -145,12 +195,7 @@ string PA18TemplateExpander::DeclaratorTypeSpelling(const string& base,
 	const CPPGMAstNodePtr inner = nested->children.empty() ? CPPGMAstNodePtr() : nested->children[0];
 	string result = base + DeclaratorSuffix(declarator);
 	result += inner && DeclaratorSuffix(inner).find('&') != string::npos ? "(&)(" : "(*)(";
-	for(size_t i = 0; i < clause->children.size(); ++i) {
-		const CPPGMAstNodePtr item = clause->children[i];
-		if(!item || item->kind != "parameter-declaration") continue;
-		if(result[result.size() - 1] != '(') result += ',';
-		result += ParameterTypeSpelling(item);
-	}
+	append_parameters(clause, &result);
 	result += ')';
 	return CanonicalSpelling(result);
 }

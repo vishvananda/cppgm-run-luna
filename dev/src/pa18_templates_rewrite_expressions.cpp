@@ -12,6 +12,26 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformUnaryExpression(
 	if(!input || input->children.empty()) return CPPGMAstNodePtr();
 	const string operation = RemoveMarker(input->value);
 	if(operation.empty()) return CPPGMAstNodePtr();
+	// A non-type pointer parameter is represented in the typed substitution map
+	// by its address constant (for example `&ns::flag`).  It is an ordinary
+	// built-in dereference in the instantiated body, not a call to a user
+	// supplied `operator*`.  Build the small expression tree explicitly so the
+	// LowIR semantic pass sees an address operand rather than an identifier whose
+	// spelling happens to contain `&`.
+	if(operation == "*" && input->children[0] &&
+		input->children[0]->kind == "id-expression") {
+		map<string, string>::const_iterator pointer = substitutions.find(
+			RemoveMarker(input->children[0]->value));
+		if(pointer != substitutions.end() && pointer->second.size() > 1 &&
+			pointer->second[0] == '&' && pointer->second[1] != '&') {
+			CPPGMAstNodePtr address(new CPPGMAstNode("unary-expression", "OP_AMP:&"));
+			address->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
+				"id-expression", pointer->second.substr(1))));
+			CPPGMAstNodePtr result(new CPPGMAstNode("unary-expression", input->value));
+			result->children.push_back(address);
+			return result;
+		}
+	}
 	const bool preserve_qualified_template_address = operation == "&" &&
 		input->children[0] && input->children[0]->kind == "id-expression" &&
 		input->children[0]->value.find("::") != string::npos &&

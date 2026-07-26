@@ -417,7 +417,7 @@ bool PA18TemplateExpander::ExpandIntegralPackExpression(const string& raw,
 		// handled by the active-pack size path and its operand must remain
 		// untouched while this expression is replayed.
 		if(ellipsis + 3 < raw.size() && raw[ellipsis + 3] == '(' &&
-			ellipsis >= 6 && raw.substr(ellipsis - 6, 6) == "sizeof") continue;
+			ellipsis >= 6 && raw.substr(ellipsis - 6, 6) == "sizeof") continue; int template_angle = 0; for(size_t position = 0; position < ellipsis; ++position) if(raw[position] == '<' && IsTemplateAngleOpen(raw, position)) ++template_angle; else if(raw[position] == '>' && template_angle > 0 && IsTemplateAngleClose(raw, position)) --template_angle; if(template_angle > 0) continue;
 		int angle = 0, parentheses = 0, brackets = 0, braces = 0;
 		size_t begin = ellipsis;
 		while(begin > 0) {

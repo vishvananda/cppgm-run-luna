@@ -647,6 +647,13 @@ public:
 			if (!binding && expression->value.find('<') != string::npos) {
 				try { return ResolveType(scope, expression->value); }
 				catch (const logic_error&) {}
+				// A call expression stores an explicitly specialized function
+				// template as an id-expression child (`test<T>`).  It is not a
+				// type-id, so recover the ordinary function binding after the
+				// template-id type probe fails.
+				const size_t open = expression->value.find('<');
+				if (open != string::npos)
+					binding = ResolveBinding(scope, expression->value.substr(0, open));
 			}
 			if (!binding) throw logic_error("unknown expression name");
 			return binding->type;

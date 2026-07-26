@@ -888,7 +888,8 @@ void PA18TemplateExpander::ValidateTemplateNode(const CPPGMAstNodePtr& node,
 			current_class));
 		const bool current_specialization = !current_class.empty() &&
 			dependent_base == current_base;
-		if(!has_typename && !sibling_typename && !current_specialization &&
+		const bool decltype_specifier = raw_type.compare(0, 9, "decltype(") == 0;
+		if(!decltype_specifier && !has_typename && !sibling_typename && !current_specialization &&
 			!dependent_qualifier.empty() &&
 			ValidationDependentName(dependent_qualifier, parameters)) {
 			throw logic_error("dependent qualified type requires typename");

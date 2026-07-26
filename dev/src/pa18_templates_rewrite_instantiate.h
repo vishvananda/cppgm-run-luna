@@ -643,10 +643,16 @@
 	bool IsValidFunctionAddressTemplateArgument(const string& raw,
 		const string& expected, const string& context,
 		const map<string, string>& substitutions) const;
+	bool ResolvePointerOrReferenceArgument(const TemplateParameter& parameter,
+		const string& raw, const string& context, const map<string, string>& substitutions, string* result) const;
+	string NormalizeIntegralArgumentExpression(const string& raw, const string& context) const;
 	string ResolveIntegralArgument(const TemplateParameter& parameter,
 		string raw, const string& context, const map<string, string>& substitutions,
 		PA19IntegralValue* typed_result = 0)
 	{
+		string pointer_argument;
+		if(ResolvePointerOrReferenceArgument(parameter, raw, context, substitutions, &pointer_argument)) { if(typed_result) *typed_result = PA19IntegralValue(); return pointer_argument; }
+		if(HasReplayContext(substitutions)) RewriteText(parameter.non_type_type, context, substitutions, 0);
 		const string source_raw = raw;
 		string expanded_pack;
 		if(ExpandIntegralPackExpression(source_raw, context, substitutions,
@@ -697,7 +703,7 @@
 		while(raw.size() >= 2 && raw[raw.size() - 1] == '>' &&
 			raw[raw.size() - 2] == ')') raw.erase(raw.size() - 1);
 		PA19IntegralValue value;
-		bool evaluated = EvaluateIntegralText(raw, context, substitutions, &value);
+		bool evaluated = EvaluateIntegralText(NormalizeIntegralArgumentExpression(raw, context), context, substitutions, &value);
 		if(!evaluated && EvaluateQualifiedConstantMember(raw, substitutions,
 			&value)) evaluated = true;
 		string expected = RewriteText(parameter.non_type_type, context, substitutions, 0);
@@ -972,6 +978,11 @@
 		const string& raw, const string& context,
 		const map<string, string>& substitutions, string* normalized) const
 	{
+		const string dependent_argument = CanonicalSpelling(ReplaceIdentifiers(raw, substitutions));
+		if(!dependent_argument.empty() && HasUnresolvedTemplateParameter(dependent_argument, context, substitutions)) {
+			if(normalized) *normalized = dependent_argument;
+			return true;
+		}
 		const string argument = NormalizeTemplateTemplateArgument(raw, context, substitutions);
 		if(argument.empty()) return false;
 		const TemplateDefinition* definition = FindDefinition(argument, context);

@@ -186,6 +186,71 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 	while(class_key.size() > 9 && class_key.compare(class_key.size() - 9, 9,
 		" volatile") == 0)
 		class_key = CanonicalSpelling(class_key.substr(0, class_key.size() - 9));
+	// A member of a concrete template-id may be queried before the generated
+	// class has been substituted into the spelling.  Match that source
+	// template-id against the typed specialization registry and use the
+	// materialized declaration as the lookup owner.
+	const size_t source_template_open = class_key.find('<');
+	if(source_template_open != string::npos) {
+		string source_template_base, source_argument_text;
+		size_t source_template_begin = 0, source_template_close = string::npos;
+		if(TemplateBase(class_key, source_template_open, &source_template_begin,
+			&source_template_base) && TemplateRange(class_key, source_template_open,
+			&source_argument_text, &source_template_close)) {
+			const auto collapse_repeated_paths = [](string value) {
+				bool changed = false;
+				do {
+					changed = false;
+					for(size_t start = 0; !changed && start < value.size(); ++start)
+						for(size_t separator = value.find("::", start);
+							separator != string::npos; separator = value.find("::", separator + 2)) {
+							const size_t prefix_size = separator + 2 - start;
+							if(separator + 2 + prefix_size > value.size() ||
+								value.compare(separator + 2, prefix_size, value, start,
+									prefix_size) != 0) continue;
+							value.erase(separator + 2, prefix_size);
+							changed = true;
+							break;
+						}
+				} while(changed);
+				return value;
+			};
+			const vector<string> raw_requested_arguments = SplitTemplateArguments(source_argument_text);
+			vector<string> requested_arguments = raw_requested_arguments;
+			for(size_t argument = 0; argument < requested_arguments.size(); ++argument)
+				requested_arguments[argument] = collapse_repeated_paths(CollapseRepeatedQualifier(
+					NormalizeTypeArgument(RestoreSpecializationSpelling(requested_arguments[argument]))));
+			for(map<string, string>::const_iterator generated = specialization_bases_.begin();
+				generated != specialization_bases_.end(); ++generated) {
+				string generated_source = generated->second;
+				const size_t generated_source_open = generated_source.find('<');
+				if(generated_source_open != string::npos) generated_source.erase(generated_source_open);
+				if(generated_source != source_template_base &&
+					(LastComponent(generated_source) != LastComponent(source_template_base) ||
+						PrefixComponent(generated_source) != PrefixComponent(source_template_base))) continue;
+				map<string, vector<string> >::const_iterator concrete_arguments =
+					specialization_arguments_.find(generated->first);
+				if(concrete_arguments == specialization_arguments_.end() ||
+					concrete_arguments->second.size() < requested_arguments.size()) continue;
+				bool same_arguments = true;
+				for(size_t argument = 0; argument < requested_arguments.size(); ++argument) {
+					if(collapse_repeated_paths(CollapseRepeatedQualifier(NormalizeTypeArgument(
+						RestoreSpecializationSpelling(concrete_arguments->second[argument])))) !=
+						requested_arguments[argument]) {
+						same_arguments = false; break;
+					}
+				}
+				if(!same_arguments) continue;
+				for(map<string, CPPGMAstNodePtr>::const_iterator declaration =
+					class_declarations_.begin(); declaration != class_declarations_.end(); ++declaration)
+					if(LastComponent(declaration->first) == generated->first) {
+						class_key = declaration->first;
+						break;
+					}
+				if(class_declarations_.find(class_key) != class_declarations_.end()) break;
+			}
+		}
+	}
 	// A member replay can leave the source argument list attached to an
 	// already materialized generated name (`expr_<...><Tag,Args>`).  The
 	// generated name is the nominal class key; discard only that redundant
@@ -600,8 +665,8 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 			if(aliases_only && DescendantOfKind(init->children[0], "parameter-clause"))
 				continue;
 			if(LastComponent(FirstIdentifierLocal(init->children[0])) != member) continue;
-			*result = CanonicalSpelling(ReplaceIdentifiers(
-				DeclaratorTypeSpelling(base, init->children[0]), class_substitutions));
+				*result = CanonicalSpelling(ReplaceIdentifiers(
+					DeclaratorTypeSpelling(base, init->children[0]), class_substitutions));
 			if(result->find("::") != string::npos && result->find('<') != string::npos)
 				*result = NormalizeTypeArgument(const_cast<PA18TemplateExpander*>(this)->RewriteText(
 					*result, context, class_substitutions, 0));

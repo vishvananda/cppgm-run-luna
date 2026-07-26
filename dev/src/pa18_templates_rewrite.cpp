@@ -413,6 +413,10 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 	const string& context, bool class_pattern) const
 {
 	pattern = NormalizeTypeArgument(pattern);
+	if(pattern.find('<') != string::npos) {
+		set<string> active_aliases;
+		pattern = ExpandAliasPattern(pattern, context, &active_aliases);
+	}
 	bool dependent_pattern = false;
 	for(size_t position = 0; position < pattern.size();) {
 		if(!IsIdentifierCharacter(pattern[position])) {
@@ -1294,6 +1298,23 @@ CPPGMAstNodePtr PA18TemplateExpander::FinishRegularNode(
 		map<string, string> local_substitutions = substitutions;
 		struct TypeOnlyScope { size_t& depth; const size_t saved; TypeOnlyScope(size_t& d, bool active) : depth(d), saved(d) { if(active) ++depth; } ~TypeOnlyScope() { depth = saved; } } type_only_scope(defer_type_only_class_definitions_, defer_type_only_classes);
 		TransformRegularChildren(input, child_context, function_context, substitutions, &local_substitutions, result);
+		if(input->kind == "class-specifier" || input->kind == "class-forward-declaration") {
+			string class_name = LastComponent(input->value);
+			const size_t class_angle = class_name.find('<');
+			if(class_angle != string::npos) class_name.erase(class_angle);
+			for(size_t child = 0; child < input->children.size(); ++child) {
+				CPPGMAstNodePtr declaration = input->children[child];
+				while(declaration && declaration->kind == "template-declaration" &&
+					declaration->children.size() > 1)
+					declaration = declaration->children[1];
+				if(declaration && (declaration->kind == "special-member-definition" ||
+					declaration->kind == "special-member-declaration") &&
+					LastComponent(declaration->value) == class_name) {
+					result->has_deferred_constructor = true;
+					break;
+				}
+			}
+		}
 		if(ConsumeMaterializedStaticAssert(input, result, child_context,
 			local_substitutions)) return CPPGMAstNodePtr();
 		if(input->kind == "array-suffix" && !result->children.empty() && result->children[0]) { PA19IntegralValue bound;
@@ -1444,6 +1465,7 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformRegularNode(
 		result->explicit_instantiation = input->explicit_instantiation;
 		result->extern_instantiation = input->extern_instantiation;
 		result->dependent_base_lookup = input->dependent_base_lookup;
+		result->has_deferred_constructor = input->has_deferred_constructor;
 		result->materialize_object_address = input->materialize_object_address;
 		result->source_token_begin = input->source_token_begin;
 		result->source_token_end = input->source_token_end;

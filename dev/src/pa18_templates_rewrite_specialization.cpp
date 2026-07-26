@@ -1,6 +1,7 @@
 #include "pa18_templates_collection.h"
 #include "pa18_templates_rewrite.h"
 
+
 using namespace std;
 
 namespace pa18_templates_internal {
@@ -231,6 +232,12 @@ string PA18TemplateExpander::ExpandAliasPattern(string pattern, const string& co
 				if(!combined.empty()) combined += ',';
 				combined += arguments[argument++];
 			}
+			// The alias body already contains the pack expansion marker.  A
+			// dependent alias argument such as `I...` therefore substitutes the
+			// element spelling `I`, not `I...`, or the marker would be duplicated.
+			if(combined.size() > 3 &&
+				combined.compare(combined.size() - 3, 3, "...") == 0)
+				combined.erase(combined.size() - 3);
 			if(combined != item.name + "...") substitutions[item.name] = combined;
 		} else if(argument < arguments.size())
 			substitutions[item.name] = arguments[argument++];
