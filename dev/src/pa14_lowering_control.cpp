@@ -262,9 +262,14 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
          HasUserProvidedConstructor(object_type))
         record->needed = true;
       const TypePtr first_parameter = record->source_type && !record->source_type->parameters.empty() ? record->source_type->parameters[0] : TypePtr();
-      if(record->template_instantiation && !raw_arguments.empty() &&
+      const bool inherited_constructor_wrapper = state_ && state_->record &&
+        state_->record->inherited_constructor_wrapper;
+      const bool out_of_class_template_constructor = record->node &&
+        record->node->value.find("::") != string::npos;
+      if(record->template_instantiation &&
+         (!raw_arguments.empty() || out_of_class_template_constructor) &&
          (record->value_special_member || !type_is_reference(first_parameter) ||
-          raw_arguments.size() > 1))
+          raw_arguments.size() > 1) && !inherited_constructor_wrapper)
         record->needed = true;
       const string original_qname = record->qualified_name;
       const TypePtr original_type = record->type;
@@ -879,7 +884,7 @@ void PA14Lowerer::EmitReturn(const CPPGMAstNodePtr& node, Scope* scope)
       Terminate("return " + low_type(return_type) + " " + integer_text(value.constant));
       return;
     }
-    value = ConvertValue(value, return_type, false, true);
+    value = ConvertValue(value, return_type, true, true);
     EmitLiveDestructors(scope);
     Terminate("return " + low_type(return_type) + " " + value.operand);
   }

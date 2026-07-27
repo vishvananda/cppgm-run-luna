@@ -906,6 +906,7 @@ void PA14Lowerer::CollectInheritedConstructors(const TypePtr& raw_owner, Scope* 
       record->member = true;
       record->static_member = false;
       record->constructor = true;
+      record->inherited_constructor_wrapper = true;
       record->explicit_constructor = explicit_constructor;
       record->definition = true;
       record->unwind_no = unwind_no;

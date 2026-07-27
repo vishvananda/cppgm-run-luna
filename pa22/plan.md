@@ -3678,3 +3678,68 @@ Take the remaining general/400 alias, conversion, and partial-order status
 group as one coherent increment, bundling the smaller specification
 partial-order/conversion status cases.  Validate the focused group, the full
 PA22 report, through-PA21, and the PA22 file audit.
+
+## Checkpoint 100 result — 2026-07-27
+
+The recorded eight-fixture owner/constructor/result scope is now complete:
+the focused check passes **8/8**, the current PA22 report is **208/250**
+(42 failures, up from the turn-start baseline of 200), through-PA21 passes
+**1850/1850**, and the PA22 file audit passes.  The final scope fixes retain
+the typed inherited-constructor wrapper boundary, keep a required out-of-class
+template constructor entry while suppressing uncalled inherited duplicates,
+and preserve the signedness conversion copy at a dependent alias return.
+
+### Remaining Work Map
+
+- **General exit-status deduction/replay (10):**
+  `general/100-template-deduction-rejects-value-base-argument`,
+  `general/200-constructor-template-rvalue-beats-const-ref`,
+  `general/300-alias-bool-explicit-pack-call-dependent-tag`,
+  `general/300-hidden-friend-sfinae-use-scope-shadowing`,
+  `general/300-using-member-template-implicit-object-cv-overload`,
+  `general/400-alias-template-function-argument-cv`,
+  `general/400-conversion-function-template-prefers-nontemplate`,
+  `general/400-member-alias-template-template-partial-deduction-owner`,
+  `general/400-pack-expansion-size-mismatch-sfinae`, and
+  `general/400-partial-specialization-inherited-constructor-template`.
+- **General LowIR replay/materialization (7):**
+  `general/100-fixed-over-empty-trailing-pack-index-sequence`,
+  `general/100-function-parameter-empty-middle-pack-alias`,
+  `general/200-function-template-partial-order-class-template-cv`,
+  `general/200-partial-order-synthetic-virtual-member-emission`,
+  `general/400-function-assignment-invocable-and-helper`,
+  `general/400-static-data-nttp-pack-sizeof-bound`, and
+  `general/400-template-template-alias-default-arity-sfinae`.
+- **Specification exit-status deduction/conversion (14):**
+  `spec/100-constructor-template-braced-array-bound-deduction`,
+  `spec/100-function-template-array-bound-braced-empty-argument`,
+  `spec/200-function-template-class-template-param-partial-order`,
+  `spec/200-member-operator-fixed-tag-default-partial-order`,
+  `spec/300-constructor-template-const-ref-conversion`,
+  `spec/300-conversion-function-template-owner-result-copy-init`,
+  `spec/300-template-id-direct-parameter-same-name-deduction`,
+  `spec/500-conversion-function-template-reference-conditional-auto-ref`,
+  `spec/500-conversion-function-template-same-name-target`,
+  `spec/500-defaulted-rebind-constructor-deduction`,
+  `spec/500-function-result-template-id-shadowed-argument`,
+  `spec/500-hidden-friend-query-free-decltype-noexcept`,
+  `spec/500-template-template-conversion-operator-reference-target`, and
+  `spec/500-template-template-piecewise-partial-ordering`.
+- **Specification LowIR replay (11):**
+  `spec/100-explicit-specialization-dependent-param-typedef`,
+  `spec/100-explicit-template-argument-overload-rejects-short-candidate`,
+  `spec/100-function-template-array-parameter-string-literal`,
+  `spec/200-constructor-template-qualified-nested-id-partial-ordering`,
+  `spec/200-defaulted-class-template-argument-prefix-deduction`,
+  `spec/200-dependent-specialized-default-arg-deduction`,
+  `spec/200-member-template-nontype-param-shadows-inherited-value-sum`,
+  `spec/300-cross-specialization-converting-ctor-operator-template`,
+  `spec/300-qualified-member-function-value-fallback-sfinae`,
+  `spec/400-dependent-decltype-member-template-conversion-operator`, and
+  `spec/500-type-pack-qualified-static-member-expansion`.
+
+### Next Checkpoint Scope
+
+Take the remaining general/400 alias, conversion, and inherited-constructor
+status group together with its three general LowIR materialization cases,
+then bundle the smaller specification partial-order/conversion status group.

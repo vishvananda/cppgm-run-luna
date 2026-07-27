@@ -104,6 +104,7 @@ class PA14Lowerer
     bool unwind_no;
     bool noreturn;
     bool base_entry;
+    bool inherited_constructor_wrapper;
     bool indirect_result;
     string effects;
     string object_name;
@@ -129,6 +130,7 @@ class PA14Lowerer
         defaulted(false), deleted(false),
 		destructor(false), deleting_entry(false), needed(false),
         emitted(false), variadic(false), unwind_no(false), noreturn(false), base_entry(false),
+        inherited_constructor_wrapper(false),
         indirect_result(false), effects(), object_name(), template_primary(), template_arguments(),
         base_entry_for(), parameter_metadata(),
         indirect_parameters(), special_initializer(), default_arguments() {}
