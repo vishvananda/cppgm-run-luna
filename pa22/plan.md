@@ -4077,3 +4077,75 @@ removed before this checkpoint was closed.
 The next checkpoint remains the bundled call/partial-ordering plus
 substitution/pack-SFINAE group, followed by the alias/owner/template-template
 and typed-LowIR group listed in the remaining map.
+
+## Checkpoint 103 scope — 2026-07-27 (before implementation)
+
+### Remaining Work Map
+
+The complete current-PA failure set is **26 fixtures** (the report baseline
+for this checkpoint was **214/250**):
+
+- **Candidate viability, lookup, and pack-SFINAE (11):**
+  `general/100-template-deduction-rejects-value-base-argument`,
+  `general/300-alias-bool-explicit-pack-call-dependent-tag`,
+  `general/300-hidden-friend-sfinae-use-scope-shadowing`,
+  `general/300-using-member-template-implicit-object-cv-overload`,
+  `general/400-member-alias-template-template-partial-deduction-owner`,
+  `general/400-pack-expansion-size-mismatch-sfinae`,
+  `spec/200-member-operator-fixed-tag-default-partial-order`,
+  `spec/300-conversion-function-template-owner-result-copy-init`,
+  `spec/500-function-result-template-id-shadowed-argument`,
+  `spec/500-hidden-friend-query-free-decltype-noexcept`, and
+  `general/400-partial-specialization-inherited-constructor-template`.
+- **Typed LowIR, alias, owner, and template-template replay (15):**
+  `general/100-function-parameter-empty-middle-pack-alias`,
+  `general/400-alias-template-function-argument-cv`,
+  `general/400-function-assignment-invocable-and-helper`,
+  `general/400-static-data-nttp-pack-sizeof-bound`,
+  `general/400-template-template-alias-default-arity-sfinae`,
+  `spec/100-explicit-specialization-dependent-param-typedef`,
+  `spec/100-explicit-template-argument-overload-rejects-short-candidate`,
+  `spec/100-function-template-array-parameter-string-literal`,
+  `spec/200-defaulted-class-template-argument-prefix-deduction`,
+  `spec/200-dependent-specialized-default-arg-deduction`,
+  `spec/200-member-template-nontype-param-shadows-inherited-value-sum`,
+  `spec/300-cross-specialization-converting-ctor-operator-template`,
+  `spec/300-qualified-member-function-value-fallback-sfinae`,
+  `spec/400-dependent-decltype-member-template-conversion-operator`, and
+  `spec/500-type-pack-qualified-static-member-expansion`.
+
+### Checkpoint Scope
+
+Complete the coherent call-ordering and value-transfer increment: keep local
+declaration types scoped in typed compiler state; order fixed and trailing
+function packs; compare cv-qualified pointers, references, and nested class
+template patterns during function partial ordering; apply the same ordering
+to explicit and member-template candidates; avoid synthesizing a constructor
+for an empty aggregate specialization; preserve pointer zero-initialization;
+and propagate the selected free-function specialization's return type into
+class-valued initialization.  The scope covers the repaired ordering,
+constructor, aggregate, and dijkstra class-template-parameter fixtures plus
+the restored const-pointer/reference cases.  Validation is the focused group,
+the full PA22 report, through-PA21, and the PA22 file audit.
+
+## Checkpoint 103 result — 2026-07-27
+
+The scope is complete.  The current PA22 report is **224/250**, ten above the
+214/250 turn-start baseline, with no timeout.  The increment fixes the fixed
+versus trailing-pack and longer-prefix ordering cases, nested class-template
+partial ordering, member constructor ordering, aggregate specialization
+value-initialization, pointer aggregate zeroing, and the selected free
+function's class-valued result fact.  It also retains the correct reference
+conversion tie-break when two candidates have the same reference shape while
+allowing a structurally more specialized class-template pattern to win.
+
+Focused validation passes for the repaired fixed/trailing-pack, class-template
+cv, synthetic virtual, constructor nested-id, template-template, const-pointer,
+reference, and dijkstra fixtures.  The exact 26-fixture residual is the map
+above.  The final through-PA21 report passes **1850/1850**; the PA19 stale
+function-template LowIR regression exposed during validation was corrected by
+retaining empty-list constructor emission for aggregate specializations with
+inherited bases.  The PA22 file audit passes with the repository's 12 existing
+warnings.  The next checkpoint is the candidate-status/SFINAE group, bundled
+with the remaining typed LowIR replay cases where the status failures are
+small.

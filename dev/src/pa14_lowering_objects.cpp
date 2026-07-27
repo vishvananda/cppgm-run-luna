@@ -1269,7 +1269,8 @@ void PA14Lowerer::EmitAggregateClassDefaults(const string& base, const TypePtr& 
         value = ConvertValue(value, member.type);
         emit_store(member.type, value.operand, field);
       } else if(!member_type || member_type->kind != TYPE_CLASS) {
-        emit_store(member.type, "0", field);
+        emit_store(member.type,
+          member_type && member_type->kind == TYPE_POINTER ? "nullptr" : "0", field);
       }
     }
   }

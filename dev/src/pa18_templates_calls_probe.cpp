@@ -74,8 +74,8 @@ bool PA18TemplateExpander::FunctionTemplateMoreSpecialized(
 	// deduction-insensitive match.
 	if(FunctionTemplateCvPointerTie(lhs, rhs)) return false;
 	const auto parameter_patterns = [this](const TemplateDefinition& definition,
-		vector<string>* result, set<string>* names) {
-		if(!result || !names || !definition.declaration) return false;
+		vector<string>* result, vector<bool>* packs, set<string>* names) {
+		if(!result || !packs || !names || !definition.declaration) return false;
 		const CPPGMAstNodePtr parameters = DescendantOfKind(
 			FunctionDeclarator(definition.declaration), "parameter-clause");
 		if(!parameters) return false;
@@ -86,20 +86,39 @@ bool PA18TemplateExpander::FunctionTemplateMoreSpecialized(
 			const CPPGMAstNodePtr item = parameters->children[parameter];
 			if(!item || item->kind != "parameter-declaration") continue;
 			string pattern = ParameterTypeSpelling(item);
-			if(IsFunctionParameterPack(item) && pattern.size() >= 3 &&
+			const bool pack = IsFunctionParameterPack(item);
+			if(pack && pattern.size() >= 3 &&
 				pattern.compare(pattern.size() - 3, 3, "...") == 0)
 				pattern.erase(pattern.size() - 3);
 			result->push_back(CanonicalSpelling(pattern));
+			packs->push_back(pack);
 		}
 		return true;
 	};
+	vector<string> lhs_patterns, rhs_patterns;
+	vector<bool> lhs_packs, rhs_packs;
+	set<string> ordering_names;
+	if(!parameter_patterns(lhs, &lhs_patterns, &lhs_packs, &ordering_names) ||
+		!parameter_patterns(rhs, &rhs_patterns, &rhs_packs, &ordering_names)) return false;
+	const bool lhs_trailing_pack = !lhs_packs.empty() && lhs_packs.back();
+	const bool rhs_trailing_pack = !rhs_packs.empty() && rhs_packs.back();
+	// A function parameter pack broadens the callable's arity.  Preserve
+	// that ordering fact before comparing the type patterns: a fixed-arity
+	// template beats the corresponding trailing-pack fallback, and between
+	// two trailing packs the template with the longer fixed prefix is more
+	// specialized.
+	if(lhs_trailing_pack != rhs_trailing_pack) return !lhs_trailing_pack;
+	if(lhs_trailing_pack && rhs_trailing_pack &&
+		lhs_patterns.size() != rhs_patterns.size())
+		return lhs_patterns.size() > rhs_patterns.size();
 	const auto can_deduce = [this, &context, &parameter_patterns](
 		const TemplateDefinition& pattern_definition,
 		const TemplateDefinition& argument_definition) {
 		vector<string> patterns, arguments;
+		vector<bool> pattern_packs, argument_packs;
 		set<string> names;
-		if(!parameter_patterns(pattern_definition, &patterns, &names) ||
-			!parameter_patterns(argument_definition, &arguments, &names)) return false;
+		if(!parameter_patterns(pattern_definition, &patterns, &pattern_packs, &names) ||
+			!parameter_patterns(argument_definition, &arguments, &argument_packs, &names)) return false;
 		map<string, string> placeholders;
 		size_t placeholder = 0;
 		for(size_t parameter = 0; parameter < argument_definition.parameters.size(); ++parameter) {
@@ -111,11 +130,30 @@ bool PA18TemplateExpander::FunctionTemplateMoreSpecialized(
 		}
 		for(size_t argument = 0; argument < arguments.size(); ++argument)
 			arguments[argument] = CanonicalSpelling(ReplaceIdentifiers(arguments[argument], placeholders));
+		// A trailing function-parameter pack in the pattern can absorb zero
+		// parameters during partial ordering.  The reverse direction remains
+		// non-viable when a fixed pattern would have to match the argument
+		// template's extra pack, which makes a fixed-arity overload more
+		// specialized than an otherwise identical trailing-pack overload.
+		if(patterns.size() > arguments.size()) {
+			if(patterns.size() != arguments.size() + 1 || pattern_packs.empty() ||
+				!pattern_packs.back()) return false;
+			patterns.resize(arguments.size());
+			pattern_packs.resize(arguments.size());
+		}
+		if(patterns.size() < arguments.size()) return false;
 		for(size_t parameter = 0; parameter < patterns.size(); ++parameter) {
 			if(parameter >= arguments.size()) return false;
 			map<string, string> ignored;
-			if(!MatchTypePattern(patterns[parameter], arguments[parameter], names,
-				&ignored, context)) return false;
+			const bool cv_qualified = patterns[parameter].find("const") != string::npos ||
+				patterns[parameter].find("volatile") != string::npos ||
+				arguments[parameter].find("const") != string::npos ||
+				arguments[parameter].find("volatile") != string::npos;
+			const bool matched = cv_qualified ? MatchOrderingTypePattern(
+				patterns[parameter], arguments[parameter], names, &ignored) :
+				MatchTypePattern(patterns[parameter], arguments[parameter], names,
+					&ignored, context);
+			if(!matched) return false;
 		}
 		return patterns.size() == arguments.size();
 	};
@@ -170,6 +208,8 @@ void PA18TemplateExpander::RankFunctionTemplateCandidatesForCall(
 	// with those typed facts before materialization.
 	map<const TemplateDefinition*, bool> call_viable;
 	map<const TemplateDefinition*, int> call_score;
+	map<const TemplateDefinition*, int> call_conversion_score;
+	map<const TemplateDefinition*, int> call_reference_score;
 	map<const TemplateDefinition*, int> call_non_dependent;
 	map<const TemplateDefinition*, int> call_fixedness;
 	const CPPGMAstNodePtr call_arguments = call->children.size() > 1 &&
@@ -184,7 +224,8 @@ void PA18TemplateExpander::RankFunctionTemplateCandidatesForCall(
 		catch(const PA18SubstitutionFailure&) { viable = false; }
 		call_viable[definition] = viable;
 		if(!viable) { call_score[definition] = 1000000; continue; }
-		int score = 0, non_dependent = 0, fixedness = 0;
+		int score = 0, conversion_score = 0, reference_score = 0;
+		int non_dependent = 0, fixedness = 0;
 		for(size_t parameter = 0; parameter < definition->parameters.size(); ++parameter)
 			if(!definition->parameters[parameter].pack) ++fixedness;
 		const CPPGMAstNodePtr parameter_clause = DescendantOfKind(
@@ -225,7 +266,7 @@ void PA18TemplateExpander::RankFunctionTemplateCandidatesForCall(
 			for(size_t visit = 0; visit < visits && argument_index < call_arguments->children.size(); ++visit) {
 				string actual;
 				if(!InferArgument(call_arguments->children[argument_index], &actual,
-					substitutions, context)) { score += 100; ++argument_index; continue; }
+					substitutions, context)) { conversion_score += 100; ++argument_index; continue; }
 				// A derived tag object is viable for a base-tag parameter, but the
 				// exact tag overload wins ordinary overload resolution.  Preserve that
 				// conversion rank before template partial-ordering compares otherwise
@@ -237,18 +278,40 @@ void PA18TemplateExpander::RankFunctionTemplateCandidatesForCall(
 					const string actual_object = FunctionArgumentObjectType(actual, context);
 					if(!expected_object.empty() && !actual_object.empty() &&
 						expected_object != actual_object)
-						score += HasClassConversion(expected_object, actual_object, context) ? 1 : 4;
+						conversion_score += HasClassConversion(expected_object, actual_object, context) ? 1 : 4;
 				} catch(const PA18SubstitutionFailure&) {}
 				const bool actual_const = CanonicalSpelling(actual).compare(0, 6, "const ") == 0;
 				const bool reference = !pattern.empty() && pattern[pattern.size() - 1] == '&' &&
 					(pattern.size() < 2 || pattern[pattern.size() - 2] != '&');
-				const bool const_reference = reference && (pattern.find("const ") != string::npos ||
-					pattern.find(" const") != string::npos);
-				if(reference && const_reference != actual_const) ++score;
+				const auto has_top_level_const = [this](const string& spelling) {
+					int angle_depth = 0;
+					for(size_t position = 0; position < spelling.size();) {
+						if(spelling[position] == '<' && IsTemplateAngleOpen(spelling, position)) {
+							++angle_depth; ++position; continue;
+						}
+						if(spelling[position] == '>' && angle_depth > 0 &&
+							IsTemplateAngleClose(spelling, position)) {
+							--angle_depth; ++position; continue;
+						}
+						if(angle_depth == 0 && IsIdentifierCharacter(spelling[position])) {
+							size_t end = position + 1;
+							while(end < spelling.size() && IsIdentifierCharacter(spelling[end])) ++end;
+							if(spelling.substr(position, end - position) == "const") return true;
+							position = end; continue;
+						}
+						++position;
+					}
+					return false;
+				};
+				const bool const_reference = reference && has_top_level_const(pattern);
+				if(reference && const_reference != actual_const) ++reference_score;
 				++argument_index;
 			}
 		}
+		score = conversion_score + reference_score;
 		call_score[definition] = score;
+		call_conversion_score[definition] = conversion_score;
+		call_reference_score[definition] = reference_score;
 		call_non_dependent[definition] = non_dependent;
 		call_fixedness[definition] = fixedness;
 	}
@@ -261,14 +324,43 @@ void PA18TemplateExpander::RankFunctionTemplateCandidatesForCall(
 			throw logic_error("ambiguous function template overload");
 		}
 	}
+	const auto same_reference_shape = [this](const TemplateDefinition* lhs,
+		const TemplateDefinition* rhs) {
+		if(!lhs || !rhs || !lhs->declaration || !rhs->declaration) return false;
+		const CPPGMAstNodePtr lhs_parameters = DescendantOfKind(
+			FunctionDeclarator(lhs->declaration), "parameter-clause");
+		const CPPGMAstNodePtr rhs_parameters = DescendantOfKind(
+			FunctionDeclarator(rhs->declaration), "parameter-clause");
+		if(!lhs_parameters || !rhs_parameters ||
+			lhs_parameters->children.size() != rhs_parameters->children.size()) return false;
+		for(size_t parameter = 0; parameter < lhs_parameters->children.size(); ++parameter) {
+			const CPPGMAstNodePtr lhs_item = lhs_parameters->children[parameter];
+			const CPPGMAstNodePtr rhs_item = rhs_parameters->children[parameter];
+			if(!lhs_item || !rhs_item || lhs_item->kind != "parameter-declaration" ||
+				rhs_item->kind != "parameter-declaration") return false;
+			const bool lhs_reference = ParameterTypeSpelling(lhs_item).find('&') != string::npos;
+			const bool rhs_reference = ParameterTypeSpelling(rhs_item).find('&') != string::npos;
+			if(lhs_reference != rhs_reference) return false;
+		}
+		return true;
+	};
 	stable_sort(candidates->begin(), candidates->end(),
-		[this, &context, &call_viable, &call_score, &call_non_dependent, &call_fixedness](
+		[this, &context, &call_viable, &call_score, &call_conversion_score,
+		 &call_reference_score, &call_non_dependent, &call_fixedness,
+		 &same_reference_shape](
 			const TemplateDefinition* lhs, const TemplateDefinition* rhs) {
 			if(call_viable[lhs] != call_viable[rhs]) return call_viable[lhs];
-			if(call_score[lhs] != call_score[rhs]) return call_score[lhs] < call_score[rhs];
+			if(call_conversion_score[lhs] != call_conversion_score[rhs])
+				return call_conversion_score[lhs] < call_conversion_score[rhs];
 			const bool lhs_more = FunctionTemplateMoreSpecialized(*lhs, *rhs, context);
 			const bool rhs_more = FunctionTemplateMoreSpecialized(*rhs, *lhs, context);
+			const bool same_shape = same_reference_shape(lhs, rhs);
+			if(same_shape && call_reference_score[lhs] != call_reference_score[rhs])
+				return call_reference_score[lhs] < call_reference_score[rhs];
 			if(lhs_more != rhs_more) return lhs_more;
+			if(!same_shape && call_reference_score[lhs] != call_reference_score[rhs])
+				return call_reference_score[lhs] < call_reference_score[rhs];
+			if(call_score[lhs] != call_score[rhs]) return call_score[lhs] < call_score[rhs];
 			if(call_non_dependent[lhs] != call_non_dependent[rhs])
 				return call_non_dependent[lhs] > call_non_dependent[rhs];
 			if(call_fixedness[lhs] != call_fixedness[rhs])

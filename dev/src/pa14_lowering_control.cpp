@@ -556,7 +556,9 @@ void PA14Lowerer::EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr&
       }
       if(aggregate_type->template_specialization && expression &&
          expression->kind == "braced-init-list" && expression->children.empty() &&
-         HasConstructor(aggregate_type)) {
+         HasConstructor(aggregate_type) &&
+         (HasDefaultConstructionEffects(aggregate_type) ||
+          aggregate_type->direct_base || !aggregate_type->direct_bases.empty())) {
         string address;
         if(!variable->initialization_address.empty()) {
           address = variable->initialization_address;

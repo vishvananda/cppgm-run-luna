@@ -110,6 +110,37 @@ bool PA18TemplateExpander::MatchOrderingTypePattern(const string& raw_pattern,
 		}
 		return ReplaceIdentifiers(bound, *inferred) == actual_bound;
 	}
+	// For a pointer pattern, an unqualified pointee parameter absorbs the
+	// pointee cv-qualification during deduction (`T*` from `const U*`).  A
+	// qualified structural pattern (`const T*`) remains strict below, making
+	// it more specialized for a const-pointee argument.
+	if(!pattern.empty() && pattern[pattern.size() - 1] == '*' &&
+		!actual.empty() && actual[actual.size() - 1] == '*') {
+		const string pattern_pointee = CanonicalSpelling(
+			pattern.substr(0, pattern.size() - 1));
+		const string actual_pointee = CanonicalSpelling(
+			actual.substr(0, actual.size() - 1));
+		if(parameter_names.find(pattern_pointee) != parameter_names.end()) {
+			map<string, string>::const_iterator prior = inferred->find(pattern_pointee);
+			if(prior != inferred->end() && prior->second != actual_pointee) return false;
+			(*inferred)[pattern_pointee] = actual_pointee;
+			return true;
+		}
+	}
+	// A by-value template parameter is compared against the referred-to type
+	// when the synthesized argument pattern carries an lvalue reference.  This
+	// is the partial-ordering form of parameter adjustment (`ColorMap` versus
+	// `const named_params<...>&`).
+	if(parameter_names.find(pattern) != parameter_names.end() &&
+		pattern.find('&') == string::npos && pattern.find('*') == string::npos) {
+		while(!actual.empty() && actual[actual.size() - 1] == '&')
+			actual.erase(actual.size() - 1);
+		actual = CanonicalSpelling(actual);
+		map<string, string>::const_iterator prior = inferred->find(pattern);
+		if(prior != inferred->end() && prior->second != actual) return false;
+		(*inferred)[pattern] = actual;
+		return true;
+	}
 	const bool pattern_rvalue = pattern.size() > 1 &&
 		pattern.compare(pattern.size() - 2, 2, "&&") == 0;
 	const bool actual_rvalue = actual.size() > 1 &&
@@ -129,6 +160,16 @@ bool PA18TemplateExpander::MatchOrderingTypePattern(const string& raw_pattern,
 	}
 	pattern = CanonicalSpelling(pattern);
 	actual = CanonicalSpelling(actual);
+	// A bare template parameter absorbs the cv-qualification of the type it
+	// is deduced from.  Check it before the strict cv comparison below; the
+	// comparison is for qualified structural patterns such as `const T`, not
+	// for the unconstrained `T` itself.
+	if(parameter_names.find(pattern) != parameter_names.end()) {
+		map<string, string>::const_iterator prior = inferred->find(pattern);
+		if(prior != inferred->end() && prior->second != actual) return false;
+		(*inferred)[pattern] = actual;
+		return true;
+	}
 	const bool pattern_const = pattern.compare(0, 6, "const ") == 0;
 	const bool actual_const = actual.compare(0, 6, "const ") == 0;
 	const bool pattern_volatile = pattern.compare(0, 9, "volatile ") == 0;

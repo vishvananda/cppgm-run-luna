@@ -120,9 +120,16 @@ ExplicitCallSelection PA18TemplateExpander::SelectExplicitCallDefinition(
 							const bool valid_explicit = ValidateExplicitFunctionCandidate(*overloads[overload], explicit_deduction_input, context,
 								substitutions, raw_explicit_args, &trial_arguments);
 							if(valid_explicit) {
-								const bool prefer = !selected_overload ||
-								overloads[overload]->parameters.size() >
-									selected_overload->parameters.size();
+								bool prefer = !selected_overload;
+								if(selected_overload) {
+									const bool candidate_more = FunctionTemplateMoreSpecialized(
+										*overloads[overload], *selected_overload, context);
+									const bool selected_more = FunctionTemplateMoreSpecialized(
+										*selected_overload, *overloads[overload], context);
+									if(candidate_more != selected_more) prefer = candidate_more;
+									else prefer = overloads[overload]->parameters.size() >
+										selected_overload->parameters.size();
+								}
 								if(prefer) {
 									selected_overload = overloads[overload];
 								}
@@ -668,42 +675,45 @@ bool PA18TemplateExpander::MaterializeFreeFunctionCandidates(
 						&inferred_pack_values, 0, requested_owner, &inferred_function_values,
 						&forwarding_pack_values);
 					string inferred_result_type;
-						if(!selected_definition->owner.empty() && selected_definition->declaration &&
-							!selected_definition->declaration->children.empty()) {
-							map<string, string> return_substitutions = substitutions;
-							for(size_t parameter = 0; parameter < selected_definition->parameters.size() &&
-								parameter < inferred.size(); ++parameter)
-								if(!selected_definition->parameters[parameter].name.empty())
-									return_substitutions[selected_definition->parameters[parameter].name] =
-										inferred[parameter];
-							string return_type = NodeTypeSpelling(
-								selected_definition->declaration->children[0]);
-							return_type += ReturnDeclaratorSuffix(
-								FunctionDeclarator(selected_definition->declaration));
-							// Return-type inference replays the source declaration outside
-							// EmitInstantiation's pack scope.  Install the typed function-pack
-							// bindings here as well, so `holder<T...>` is expanded before a
-							// dependent alias such as `alt_t<I, holder<T...>>` is resolved.
-							const map<string, vector<string> > previous_return_packs =
-								active_pack_substitutions_;
-							for(map<string, vector<string> >::const_iterator pack =
-								inferred_pack_values.begin(); pack != inferred_pack_values.end(); ++pack)
-								if(!pack->first.empty()) active_pack_substitutions_[pack->first] =
-									pack->second;
-							try {
-								inferred_result_type = CanonicalSpelling(ResolveAlias(RewriteText(
-									return_type, context, return_substitutions, 0), context));
-							} catch(...) {
-								active_pack_substitutions_ = previous_return_packs;
-								throw;
-							}
+					if(selected_definition->declaration &&
+						!selected_definition->declaration->children.empty()) {
+						map<string, string> return_substitutions = substitutions;
+						for(size_t parameter = 0; parameter < selected_definition->parameters.size() &&
+							parameter < inferred.size(); ++parameter)
+							if(!selected_definition->parameters[parameter].name.empty())
+								return_substitutions[selected_definition->parameters[parameter].name] =
+									inferred[parameter];
+						string return_type = NodeTypeSpelling(
+							selected_definition->declaration->children[0]);
+						return_type += ReturnDeclaratorSuffix(
+							FunctionDeclarator(selected_definition->declaration));
+						// Return-type inference replays the source declaration outside
+						// EmitInstantiation's pack scope.  Install the typed function-pack
+						// bindings here as well, so `holder<T...>` is expanded before a
+						// dependent alias such as `alt_t<I, holder<T...>>` is resolved.
+						const map<string, vector<string> > previous_return_packs =
+							active_pack_substitutions_;
+						for(map<string, vector<string> >::const_iterator pack =
+							inferred_pack_values.begin(); pack != inferred_pack_values.end(); ++pack)
+							if(!pack->first.empty()) active_pack_substitutions_[pack->first] =
+								pack->second;
+						try {
+							inferred_result_type = CanonicalSpelling(ResolveAlias(RewriteText(
+								return_type, context, return_substitutions, 0), context));
+						} catch(...) {
 							active_pack_substitutions_ = previous_return_packs;
+							throw;
 						}
+						active_pack_substitutions_ = previous_return_packs;
+					}
 					const string qualifier = concrete_member_owner ? requested_owner_name :
 						GeneratedFunctionQualifier(*definition, callee_name, context);
 					const string emitted_name = concrete_member_owner ?
 						LastComponent(selected_definition->name) : local_name;
-					result->inferred_type = inferred_result_type;
+					// A selected free-function specialization owns the call's result type;
+					// retain the earlier fact only when return spelling could not be
+					// reconstructed from the declaration.
+					if(!inferred_result_type.empty()) result->inferred_type = inferred_result_type;
 					result->template_primary = definition->qualified_name;
 					result->template_arguments = inferred;
 					result_callee->value = qualifier.empty() ? emitted_name : qualifier +

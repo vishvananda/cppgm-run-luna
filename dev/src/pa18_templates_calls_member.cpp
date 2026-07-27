@@ -463,9 +463,21 @@ bool PA18TemplateExpander::CollectMemberCallCandidates(MemberCallState* state)
 		if(find(candidates.begin(), candidates.end(), inherited_candidates[inherited]) ==
 			candidates.end() || inherited_owners.find(inherited_candidates[inherited]) !=
 			inherited_owners.end()) candidates.push_back(inherited_candidates[inherited]);
-	stable_sort(candidates.begin(), candidates.end(), [this](const TemplateDefinition* left,
-		const TemplateDefinition* right) { const int left_score = MemberTemplatePatternScore(left);
-		const int right_score = MemberTemplatePatternScore(right); if(left_score != right_score) { return left_score > right_score; } if(left->parameters.size() != right->parameters.size()) { return left->parameters.size() < right->parameters.size(); } return false; }); if(candidates.empty()) return false;
+	stable_sort(candidates.begin(), candidates.end(), [this, &context](const TemplateDefinition* left,
+		const TemplateDefinition* right) {
+		const bool left_more = left && right && FunctionTemplateMoreSpecialized(
+			*left, *right, context);
+		const bool right_more = left && right && FunctionTemplateMoreSpecialized(
+			*right, *left, context);
+		if(left_more != right_more) return left_more;
+		const int left_score = MemberTemplatePatternScore(left);
+		const int right_score = MemberTemplatePatternScore(right);
+		if(left_score != right_score) return left_score > right_score;
+		if(left->parameters.size() != right->parameters.size())
+			return left->parameters.size() < right->parameters.size();
+		return false;
+	});
+	if(candidates.empty()) return false;
 	RankMemberCandidatesByClassExactness(&candidates, call, member_substitutions, context);
 	state->inherited_owners = inherited_owners;
 
