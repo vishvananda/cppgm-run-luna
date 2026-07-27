@@ -104,6 +104,7 @@ class PA14Lowerer
     bool unwind_no;
     bool noreturn;
     bool base_entry;
+    bool out_of_class_definition;
     bool inherited_constructor_wrapper;
     bool indirect_result;
     string effects;
@@ -130,6 +131,7 @@ class PA14Lowerer
         defaulted(false), deleted(false),
 		destructor(false), deleting_entry(false), needed(false),
         emitted(false), variadic(false), unwind_no(false), noreturn(false), base_entry(false),
+        out_of_class_definition(false),
         inherited_constructor_wrapper(false),
         indirect_result(false), effects(), object_name(), template_primary(), template_arguments(),
         base_entry_for(), parameter_metadata(),
@@ -391,7 +393,8 @@ void CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, bool definition)
 void CollectLocalStatics(const CPPGMAstNodePtr& node, Scope* scope,
                          const string& function_name);
 
-  void CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope, bool definition);
+  void CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope,
+                            bool definition, bool out_of_class_member);
 
 void MarkHiddenFriendDependencies();
 

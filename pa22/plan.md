@@ -3743,3 +3743,20 @@ and preserve the signedness conversion copy at a dependent alias return.
 Take the remaining general/400 alias, conversion, and inherited-constructor
 status group together with its three general LowIR materialization cases,
 then bundle the smaller specification partial-order/conversion status group.
+
+## Checkpoint 100 audit result — 2026-07-27
+
+The checkpoint audit found and fixed a stringly out-of-class-definition test
+in constructor lowering and an avoidable duplicate base-entry scan.  The
+semantic fact now travels from typed collection records through base entries;
+the inherited-constructor wrapper boundary and dependent return conversion
+remain typed.  The eight-fixture focus is **8/8**, through-PA21 is
+**1850/1850**, and the PA22 file audit passes with the unchanged 12 warnings.
+
+The fresh active report remains **208/250**, above the turn-start baseline of
+**200/250**, with no timeout and no new failure name.  The Remaining Work Map
+above is refreshed against the complete 42-fixture report: 10 general
+exit-status, 7 general LowIR, 14 specification exit-status, and 11
+specification LowIR cases.  The next substantial checkpoint is the grouped
+general/400 alias, conversion, and inherited-constructor status/materialization
+slice, followed by the smaller specification partial-order/conversion group.

@@ -558,7 +558,7 @@ void PA14Lowerer::ClassifySpecialMember(FunctionRecord* record)
   }
 
 void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope,
-	bool definition)
+	bool definition, bool out_of_class_member)
 {
     if(!node || !scope || scope->kind != SCOPE_CLASS) return;
     CPPGMAstNodePtr declarator = ChildOfKind(node, "declarator");
@@ -621,9 +621,12 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
     record->source_type = function;
     record->type = FunctionOf(parameters, function->variadic, function->child, false);
     record->member_owner = owner;
-    record->qualified_name = qname;
+	record->qualified_name = qname;
 	record->member = true;
 	record->static_member = false;
+	const bool out_of_class_definition = definition && out_of_class_member;
+	record->out_of_class_definition = record->out_of_class_definition ||
+		out_of_class_definition;
 	record->template_instantiation = node->template_instantiation || owner->template_specialization ||
 		(owner->direct_base && type_value(owner->direct_base) &&
 		 type_value(owner->direct_base)->template_specialization);
@@ -632,7 +635,7 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
 	// when it is not a template.  Preserve that linkage fact so its emitted
 	// object uses the ABI constructor identity and receives the C2 alias.
 	record->inline_definition = record->inline_definition ||
-		(definition && node->value.find("::") == string::npos);
+		(definition && !out_of_class_member);
 	if(node->template_instantiation) {
 		record->template_primary = node->template_primary;
 		record->template_arguments = node->template_arguments;
@@ -661,7 +664,6 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
     ClassifySpecialMember(record);
 	if(record->defaulted && record->value_special_member)
       record->unwind_no = record->unwind_no || IsTrivialValueStorage(owner);
-    const bool out_of_class_definition = definition && node->value.find("::") != string::npos;
 	if(out_of_class_definition && (record->constructor || record->destructor) &&
 		!record->template_instantiation) {
 		record->needed = true;
@@ -671,7 +673,7 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
 	   (record->defaulted || (out_of_class_definition &&
 							  !record->template_instantiation))) {
       EnsureConstructorBaseEntry(record);
-      if(definition && node->value.find("::") != string::npos) {
+      if(out_of_class_definition) {
         FunctionRecord* base_entry = BaseEntryFor(record);
         if(base_entry) base_entry->needed = true;
       }

@@ -659,3 +659,77 @@ failure set rather than only the checkpoint fixtures.
   refreshed work map, not an execution or architecture shortcut.
 - `git diff --check` passes; the final commit will leave `git status --short`
   empty.
+
+## Checkpoint 100 Audit — 2026-07-27
+
+### Scope Reviewed
+
+Reviewed the latest Checkpoint 100 scope and result in [plan.md](plan.md),
+the PA22 contract in [README.md](README.md), commits `88c22be` and
+`ca62437` plus the immediately preceding constructor-replay work, the fresh
+primary report at
+`/home/vishvananda/work/.ralph/luna-gpt-5.6-luna-ultra/last-test.log`, and
+the changed lowering sources `pa14_lowering.h`, `pa14_lowering.cpp`,
+`pa14_lowering_collection.cpp`, and `pa14_lowering_control.cpp`.  The review
+covered all eight Checkpoint 100 fixtures, the complete 250-fixture PA22
+report, the PA1–PA21 through-report, and the PA22 file audit.
+
+The audit traced inherited-constructor wrapper ownership, out-of-class
+template-constructor materialization, dependent alias return conversion,
+constructor base-entry lookup, candidate emission, and the hot-path work
+performed after a constructor has been selected.
+
+### Findings
+
+- The landed constructor-emission change recovered the semantic fact
+  "out-of-class definition" from `record->node->value.find("::")` in
+  `EmitConstructorAt`.  That was a stringly downstream fact and was unsafe
+  for synthetic/materialized declarations.  It was replaced with a typed
+  `FunctionRecord::out_of_class_definition` fact set by the collection context
+  and propagated to constructor base entries.  The related defaulted-base
+  entry check now uses the same typed fact.
+- `EmitConstructorAt` also performed a second full `functions_` scan after
+  `BaseEntryFor` had already searched for the same entry.  The lookup now
+  reuses the first result and rescans only when `EnsureConstructorBaseEntry`
+  actually had to create an entry.  No new quadratic scan, full-suite walk,
+  repeated report invocation, excessive copy, or emitted-text reparse remains
+  in this checkpoint path.
+- The inherited-constructor boundary remains represented by the typed
+  `inherited_constructor_wrapper` record fact, and the signedness-preserving
+  return conversion remains on the ordinary typed `ConvertValue` path.  No
+  compiler phase was skipped; no fallback-success path, dummy output,
+  embedded payload, interpreter/VM/trampoline substitute, timeout workaround,
+  source/test-specific acceptance gate, weakened check, duplicated AST
+  ownership, or unchecked source path was found.
+- The implementation stays within the PA22 source set.  The file audit still
+  reports only the repository's 12 non-fatal structural warnings; no warning
+  or bypass was added by this checkpoint audit.
+
+### Changes Made
+
+- Added and propagated the typed out-of-class-definition fact through special
+  member collection and constructor base-entry materialization.
+- Removed the lowering-time AST spelling inspection and collapsed the
+  duplicate constructor base-entry scan.
+- Retained the typed inherited-wrapper guard and dependent return conversion
+  behavior from the landed checkpoint.
+- Changed no tests or reference fixtures; all changes remain in `dev/src`.
+
+### Validation
+
+- Checkpoint focus — **passed**: all eight Checkpoint 100 fixtures pass,
+  **8/8**.
+- Required prior-through check — **passed**:
+  `n=22; if [ "$n" -le 1 ]; then echo '===== ALL TESTS PASSED SUCCESSFULLY! (0/0) ====='; else make test-report-through-pa$((n - 1)); fi`
+  reported **1850/1850** through PA21.
+- Required file audit — **passed**:
+  `perl scripts/cppgm_file_audit.pl --stage pa22 --paths dev/src`, with the
+  unchanged 12 non-fatal warnings noted above.
+- Required active report — **passed for stage progress**:
+  `make test-report ACTIVE_TEST_REPORT_PAS='pa22'` reported **208/250**,
+  above the turn-start baseline of **200/250** and with **0 timeout failures**.
+  Earlier assignments remain green.  The complete residual is the 42-fixture
+  map in the latest Checkpoint 100 section of [plan.md](plan.md), rechecked
+  from the fresh report as 10 general exit-status, 7 general LowIR, 14
+  specification exit-status, and 11 specification LowIR cases.
+- `make build`, `git diff --check`, and the focused checkpoint check pass.

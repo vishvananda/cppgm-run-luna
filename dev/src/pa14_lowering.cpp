@@ -664,7 +664,7 @@ void PA14Lowerer::CollectTopLevel(const CPPGMAstNodePtr& node, Scope* scope)
       CPPGMAstNodePtr initializer = ChildOfKind(declarator, "special-initializer");
       const bool definition = node->kind == "special-member-definition" ||
         (initializer && initializer->value == "default");
-      CollectSpecialMember(node, owner_scope, definition);
+      CollectSpecialMember(node, owner_scope, definition, true);
       return;
     }
     if(node->kind == "simple-declaration" || node->kind == "bit-field-declaration") {
@@ -710,7 +710,7 @@ void PA14Lowerer::CollectClassMembers(const CPPGMAstNodePtr& node, Scope* scope)
           special_declarator, "special-initializer");
         const bool defaulted = special_initializer && special_initializer->value == "default";
         CollectSpecialMember(child, class_scope,
-          child->kind == "special-member-definition" || defaulted);
+          child->kind == "special-member-definition" || defaulted, false);
         continue;
       }
       if(child->kind == "using-declaration") {
@@ -1153,13 +1153,14 @@ void PA14Lowerer::EnsureConstructorBaseEntry(FunctionRecord* function)
       existing->deleted = function->deleted;
       existing->template_instantiation = function->template_instantiation;
       existing->weak_binding = function->weak_binding;
+      existing->out_of_class_definition = function->out_of_class_definition;
+      existing->inherited_constructor_wrapper = function->inherited_constructor_wrapper;
       existing->template_primary = function->template_primary;
       existing->template_arguments = function->template_arguments;
       return;
     }
     if(function->defaulted &&
-       (!function->definition || !function->node ||
-        function->node->value.find("::") == string::npos)) return;
+       (!function->definition || !function->out_of_class_definition)) return;
     FunctionRecord base_entry;
     base_entry.node = function->node;
     base_entry.scope = function->scope;
@@ -1194,6 +1195,8 @@ void PA14Lowerer::EnsureConstructorBaseEntry(FunctionRecord* function)
     base_entry.default_arguments = function->default_arguments;
     base_entry.template_instantiation = function->template_instantiation;
     base_entry.weak_binding = function->weak_binding;
+    base_entry.out_of_class_definition = function->out_of_class_definition;
+    base_entry.inherited_constructor_wrapper = function->inherited_constructor_wrapper;
     base_entry.template_primary = function->template_primary;
     base_entry.template_arguments = function->template_arguments;
     BuildFunctionABI(base_entry);

@@ -264,22 +264,17 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
       const TypePtr first_parameter = record->source_type && !record->source_type->parameters.empty() ? record->source_type->parameters[0] : TypePtr();
       const bool inherited_constructor_wrapper = state_ && state_->record &&
         state_->record->inherited_constructor_wrapper;
-      const bool out_of_class_template_constructor = record->node &&
-        record->node->value.find("::") != string::npos;
+      const bool out_of_class_template_constructor = record->out_of_class_definition;
       if(record->template_instantiation &&
          (!raw_arguments.empty() || out_of_class_template_constructor) &&
          (record->value_special_member || !type_is_reference(first_parameter) ||
           raw_arguments.size() > 1) && !inherited_constructor_wrapper)
         record->needed = true;
-      const string original_qname = record->qualified_name;
-      const TypePtr original_type = record->type;
-      if(!BaseEntryFor(record)) EnsureConstructorBaseEntry(record);
-      FunctionRecord* entry = 0;
-      for(size_t i = 0; i < functions_.size(); ++i)
-        if(functions_[i].base_entry && functions_[i].base_entry_for == original_qname && PA12SameType(functions_[i].type, original_type, false)) {
-          entry = &functions_[i];
-          break;
-        }
+      FunctionRecord* entry = BaseEntryFor(record);
+      if(!entry) {
+        EnsureConstructorBaseEntry(record);
+        entry = BaseEntryFor(record);
+      }
       if(entry) record = entry;
     }
     if(record) {
