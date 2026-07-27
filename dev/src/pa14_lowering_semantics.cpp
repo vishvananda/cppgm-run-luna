@@ -394,7 +394,7 @@ bool PA14Lowerer::IsAccessible(Binding* binding, Scope* scope) const
     map<const Type*, vector<TypePtr> >::const_iterator indexed_friends =
       friend_owner_index_.find(owner.get());
     if(indexed_friends != friend_owner_index_.end()) for(size_t owner_index = 0;
-        owner_index < indexed_friends->second.size(); ++owner_index) {
+      owner_index < indexed_friends->second.size(); ++owner_index) {
       const TypePtr& friend_owner = indexed_friends->second[owner_index];
       bool friend_match = false;
       for(size_t i = 0; i < friend_owner->friend_access.size(); ++i) {
@@ -410,6 +410,37 @@ bool PA14Lowerer::IsAccessible(Binding* binding, Scope* scope) const
       if(friend_match && (friend_owner == owner || IsDerivedFrom(friend_owner, owner)))
         return true;
     }
+    // PA18 materializes each class specialization as a distinct Type object.
+    // Its generated declaration may not retain a dependent friend edge even
+    // though the primary class's typed state does.  Match that primary class
+    // by template identity and reuse the recorded friend relation; this keeps
+    // access checking semantic and still requires the friend target to match
+    // the current member owner.
+    const auto same_template_class = [](const TypePtr& left, const TypePtr& right) {
+      if(!left || !right || left->kind != TYPE_CLASS || right->kind != TYPE_CLASS)
+        return false;
+      const string left_primary = left->template_primary.empty() ? left->name :
+        left->template_primary;
+      const string right_primary = right->template_primary.empty() ? right->name :
+        right->template_primary;
+      return last_component(left_primary) == last_component(right_primary);
+    };
+    for(map<const Type*, vector<TypePtr> >::const_iterator indexed =
+        friend_owner_index_.begin(); indexed != friend_owner_index_.end(); ++indexed)
+      for(size_t owner_index = 0; owner_index < indexed->second.size(); ++owner_index) {
+        const TypePtr& friend_owner = indexed->second[owner_index];
+        if(!same_template_class(friend_owner, owner)) continue;
+        bool friend_match = false;
+        for(size_t i = 0; i < friend_owner->friend_access.size(); ++i) {
+          const FriendAccess& access = friend_owner->friend_access[i];
+          if(access.kind == FriendAccess::FRIEND_CLASS && access.target &&
+             FriendTypeMatches(access.target, context)) {
+            friend_match = true;
+            break;
+          }
+        }
+        if(friend_match) return true;
+      }
     for(TypePtr current = context; current; current = type_value(current->enclosing_type))
       if(current == owner) return true;
     if(binding->access == "private") return false;
@@ -599,6 +630,7 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferIdentifier(const CPPGMAstNodePtr& node, 
       result.type = type_is_reference(local->type) ? local->type->child : local->type;
       result.category = "lvalue";
       result.binding = 0;
+      InferLocalIdentifierConstant(result.type, &result);
       return result;
     }
     Binding* decltype_member = ResolveDecltypeStaticMember(node->value, scope);

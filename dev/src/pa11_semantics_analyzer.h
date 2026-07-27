@@ -19,13 +19,11 @@ public:
 	vector<pair<CPPGMAstNodePtr, Scope*> > pending_using_declarations_; bool processing_pending_using_declarations_ = false;
 	map<const Binding*, ConstantValue> constant_binding_values_;
 	map<string, vector<Binding*> > constant_template_functions_;
-	vector<map<string, ConstantValue> > constant_frames_;
-	vector<map<string, vector<ConstantValue> > > constant_pack_frames_;
+	vector<map<string, ConstantValue> > constant_frames_; vector<map<string, vector<ConstantValue> > > constant_pack_frames_;
 	vector<TypePtr> constant_function_return_types_;
 	vector<ConstantValue> constant_receivers_;
 	map<const CPPGMAstNode*, unsigned> constant_function_depth_;
-	static const unsigned kConstantFunctionDepthLimit = 512;
-	static const unsigned kConstantLoopIterationLimit = 100000;
+	static const unsigned kConstantFunctionDepthLimit = 512; static const unsigned kConstantLoopIterationLimit = 100000;
 	struct ConstantFlow
 	{
 		enum Kind { NORMAL, RETURN, BREAK, CONTINUE };
@@ -1145,6 +1143,8 @@ public:
 		Scope* scope, const CPPGMAstNodePtr& parent = CPPGMAstNodePtr(),
 		size_t child_index = static_cast<size_t>(-1));
 	void ProcessTemplate(const CPPGMAstNodePtr& node, Scope* scope);
+	void ProcessTemplateFriendAccess(const CPPGMAstNodePtr& node, Scope* scope,
+		Scope* parameters);
 	void Process(const CPPGMAstNodePtr& node, Scope* scope)
 	{
 		if (!node) return;

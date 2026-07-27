@@ -491,8 +491,9 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
       string reference_source;
       if(!arguments.empty() && type_is_reference(field->type)) {
         reference_source = EmitReferenceArgument(arguments[0], scope, field->type);
-      } else if(!(field_type && field_type->kind == TYPE_CLASS && !arguments.empty()) &&
-                !arguments.empty()) {
+		} else if(!(field_type && field_type->kind == TYPE_CLASS && !arguments.empty()) &&
+				!(field_type && field_type->kind == TYPE_ARRAY && argument_node &&
+					argument_node->kind == "braced-init-list") && !arguments.empty()) {
         if(arguments.size() != 1) throw logic_error("member mem-initializer has too many arguments");
         if(type_is_reference(field->type))
           reference_source = EmitReferenceArgument(arguments[0], scope, field->type);
@@ -546,8 +547,13 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
           MemberBindings(field_type, LastComponent(field_type->name));
         if(field_type->is_union && constructors.empty()) continue;
       }
-      const string address = EmitMemberAddress(member, scope);
-      if(field_type && field_type->kind == TYPE_ARRAY && arguments.empty() &&
+		const string address = EmitMemberAddress(member, scope);
+		if(field_type && field_type->kind == TYPE_ARRAY && argument_node &&
+			argument_node->kind == "braced-init-list") {
+			EmitAggregateAt(address, field_type, argument_node, scope, member);
+			continue;
+		}
+		if(field_type && field_type->kind == TYPE_ARRAY && arguments.empty() &&
          field_type->bound >= 0 && field_type->child &&
          type_value(field_type->child) && type_value(field_type->child)->kind != TYPE_CLASS) {
         for(size_t element_index = 0;

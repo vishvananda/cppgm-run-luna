@@ -58,6 +58,7 @@ void Analyzer::ProcessTemplate(const CPPGMAstNodePtr& node, Scope* scope)
 		}
 	}
 	Process(node->children[1], parameters);
+	ProcessTemplateFriendAccess(node, scope, parameters);
 	// Keep a typed primary anchor in the enclosing scope for later concrete
 	// member replay.  It is semantic lookup state, not a second source binding,
 	// so the PA11 dump suppresses this synthetic anchor.
@@ -86,32 +87,6 @@ void Analyzer::ProcessTemplate(const CPPGMAstNodePtr& node, Scope* scope)
 			member.declaration = node->children[1];
 			scope->add(member);
 		}
-	// A friend function template declared inside a class template is a
-	// namespace-level entity whose declaration is nevertheless needed by the
-	// owning class for access checks.  Record its typed access fact here.
-	if (scope && scope->kind == SCOPE_CLASS && scope->owner_type &&
-		node->children[1] && node->children[1]->kind == "simple-declaration" &&
-		!node->children[1]->children.empty()) {
-		SpecFacts facts;
-		TypePtr friend_type = TypeFromSpecSeq(node->children[1]->children[0],
-			parameters, &facts);
-		const CPPGMAstNodePtr friend_list = ChildOfKind(node->children[1],
-			"init-declarator-list");
-		const CPPGMAstNodePtr friend_item = friend_list &&
-			!friend_list->children.empty() ? friend_list->children[0] :
-			CPPGMAstNodePtr();
-		const CPPGMAstNodePtr friend_declarator = friend_item &&
-			!friend_item->children.empty() ? friend_item->children[0] :
-			CPPGMAstNodePtr();
-		TypePtr friend_function = friend_declarator ? BuildDeclarator(
-			friend_declarator, friend_type, parameters) : TypePtr();
-		if (facts.is_friend && friend_function &&
-			friend_function->kind == TYPE_FUNCTION) {
-			const string friend_name = FirstIdentifier(node->children[1]);
-			if (!friend_name.empty()) scope->owner_type->friend_access.push_back(
-				FriendAccess(FriendAccess::FRIEND_FUNCTION, friend_name, friend_function));
-		}
-	}
 	if (node->children[1] && node->children[1]->kind == "function-definition" &&
 		node->children[1]->children.size() > 1)
 	{
@@ -119,5 +94,35 @@ void Analyzer::ProcessTemplate(const CPPGMAstNodePtr& node, Scope* scope)
 		Binding* function = parameters->local(function_name);
 		if (function && function->kind == BIND_FUNCTION)
 			constant_template_functions_[function_name].push_back(function);
+	}
+}
+
+void Analyzer::ProcessTemplateFriendAccess(const CPPGMAstNodePtr& node,
+	Scope* scope, Scope* parameters)
+{
+	if (!scope || scope->kind != SCOPE_CLASS || !scope->owner_type ||
+		!node || node->children.size() < 2 || !node->children[1] ||
+		node->children[1]->kind != "simple-declaration" ||
+		node->children[1]->children.empty()) return;
+	const CPPGMAstNodePtr declaration = node->children[1];
+	SpecFacts facts;
+	TypePtr friend_type = TypeFromSpecSeq(declaration->children[0], parameters, &facts);
+	if(!facts.is_friend || !friend_type) return;
+	if(friend_type->kind == TYPE_CLASS) {
+		const string friend_name = LastComponent(friend_type->name);
+		if(!friend_name.empty()) scope->owner_type->friend_access.push_back(
+			FriendAccess(FriendAccess::FRIEND_CLASS, friend_name, friend_type));
+	}
+	const CPPGMAstNodePtr friend_list = ChildOfKind(declaration, "init-declarator-list");
+	const CPPGMAstNodePtr friend_item = friend_list && !friend_list->children.empty() ?
+		friend_list->children[0] : CPPGMAstNodePtr();
+	const CPPGMAstNodePtr friend_declarator = friend_item &&
+		!friend_item->children.empty() ? friend_item->children[0] : CPPGMAstNodePtr();
+	TypePtr friend_function = friend_declarator ? BuildDeclarator(
+		friend_declarator, friend_type, parameters) : TypePtr();
+	if(friend_function && friend_function->kind == TYPE_FUNCTION) {
+		const string friend_name = FirstIdentifier(declaration);
+		if(!friend_name.empty()) scope->owner_type->friend_access.push_back(
+			FriendAccess(FriendAccess::FRIEND_FUNCTION, friend_name, friend_function));
 	}
 }

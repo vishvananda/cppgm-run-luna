@@ -2,15 +2,14 @@
 #include "pa18_templates_rewrite_lookup.h"
 #include "pa18_templates_rewrite_decltype.h"
 #include "pa18_templates_rewrite_instantiate.h"
-bool MatchOrderingTypePattern(const string& raw_pattern, const string& raw_actual,
-	const set<string>& parameter_names, map<string, string>* inferred) const;
+bool MatchOrderingTypePattern(const string& raw_pattern, const string& raw_actual, const set<string>& parameter_names, map<string, string>* inferred) const;
 bool MatchOrderingPatternList(const vector<string>& patterns,
 	const vector<string>& actual, const set<string>& parameter_names,
 	map<string, string>* inferred) const;
 bool ClassPartialMoreSpecialized(const TemplateDefinition& lhs,
 	const TemplateDefinition& rhs, const string& context) const;
 string ExpandAliasPattern(string pattern, const string& context,
-	set<string>* active) const;
+	set<string>* active, bool include_defaults = false) const;
 bool MatchClassSpecializationPattern(const TemplateDefinition& definition,
 	const vector<string>& arguments, map<string, string>* inferred,
 	const string& context) const;
@@ -1102,6 +1101,7 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 			return CPPGMAstNodePtr();
 		}
 		if(input->kind == "template-declaration") {
+			if(input->children.size() > 1 && input->children[1] && input->children[1]->kind == "simple-declaration" && !input->children[1]->children.empty() && HasFriendSpecifier(input->children[1]->children[0]) && !DescendantOfKind(input->children[1], "parameter-clause")) return TransformRegularNode(input, context, substitutions);
 			CheckExplicitSpecializationOrder(input, context);
 			if(TransformExplicitSpecialization(input, context, substitutions))
 				return CPPGMAstNodePtr();

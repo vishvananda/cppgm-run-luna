@@ -864,7 +864,7 @@ void PA14Lowerer::EmitReturn(const CPPGMAstNodePtr& node, Scope* scope)
       Terminate("return " + low_type(return_type) + " $" + slot);
       return;
     }
-    Value value = EmitValue(expression, scope, return_type);
+	Value value = EmitValue(expression, scope, return_type);
     const bool preserve_sizeof_type = expression->kind == "sizeof-expression" ||
       expression->kind == "sizeof-pack-expression" ||
       expression->kind == "type-trait-expression";

@@ -1,7 +1,5 @@
 #include "pa18_templates_collection.h"
 #include "pa18_templates_rewrite.h"
-
-
 using namespace std;
 
 namespace pa18_templates_internal {
@@ -220,7 +218,7 @@ bool PA18TemplateExpander::MatchOrderingPatternList(const vector<string>& patter
 }
 
 string PA18TemplateExpander::ExpandAliasPattern(string pattern, const string& context,
-	set<string>* active) const
+	set<string>* active, bool include_defaults) const
 {
 	pattern = CanonicalSpelling(pattern);
 	if(!active) return pattern;
@@ -260,6 +258,8 @@ string PA18TemplateExpander::ExpandAliasPattern(string pattern, const string& co
 			if(combined != item.name + "...") substitutions[item.name] = combined;
 		} else if(argument < arguments.size())
 			substitutions[item.name] = arguments[argument++];
+		else if(include_defaults && !item.default_type.empty())
+			substitutions[item.name] = ReplaceIdentifiers(item.default_type, substitutions);
 	}
 	string target = TypeIdSpelling(definition->declaration->children[0]);
 	if(target.empty()) {
@@ -267,7 +267,7 @@ string PA18TemplateExpander::ExpandAliasPattern(string pattern, const string& co
 		return pattern;
 	}
 	target = ReplaceIdentifiers(target, substitutions);
-	const string expanded = ExpandAliasPattern(target, context, active);
+	const string expanded = ExpandAliasPattern(target, context, active, include_defaults);
 	active->erase(active_key);
 	return expanded.empty() ? target : expanded;
 }
@@ -289,7 +289,7 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 		string pattern = CanonicalSpelling(
 			definition.specialization_pattern[pattern_index]);
 		set<string> active_aliases;
-		pattern = ExpandAliasPattern(pattern, context, &active_aliases);
+		pattern = ExpandAliasPattern(pattern, context, &active_aliases, true);
 		// A dependent qualified type is a substitution point.  RewriteText has
 		// deliberately permissive fallbacks for source declarations, but those
 		// fallbacks must not turn `typename T::missing` into a successful `void`
@@ -458,7 +458,17 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 			PA19IntegralValue normalized_value;
 			if(parser.Evaluate(pattern, &normalized_value))
 				pattern = TemplateIntegralValueSpelling(normalized_value);
+			else if((definition.name.find("enable_if") != string::npos ||
+				definition.name.find("disable_if") != string::npos) &&
+				const_cast<PA18TemplateExpander*>(this)->EvaluateIntegralText(
+					pattern, context, local, &normalized_value) && normalized_value.known)
+				pattern = TemplateIntegralValueSpelling(normalized_value);
 			if(parser.Evaluate(actual, &normalized_value))
+				actual = TemplateIntegralValueSpelling(normalized_value);
+			else if((definition.name.find("enable_if") != string::npos ||
+				definition.name.find("disable_if") != string::npos) &&
+				const_cast<PA18TemplateExpander*>(this)->EvaluateIntegralText(
+					actual, context, local, &normalized_value) && normalized_value.known)
 				actual = TemplateIntegralValueSpelling(normalized_value);
 		}
 		if(pattern.size() > 2 && pattern.compare(pattern.size() - 2, 2, "&&") == 0 &&

@@ -141,7 +141,10 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 	string* result, set<string>* active, bool aliases_only) const
 {
 	if(!result || !active) return false;
-	string class_key = CanonicalSpelling(raw_class);
+	const bool dependent_member_probe = raw_class.find("enable_if") != string::npos ||
+		raw_class.find("disable_if") != string::npos;
+	string class_key = CanonicalSpelling(dependent_member_probe ?
+		ReplaceIdentifiersPreservingPackSizes(raw_class, substitutions) : raw_class);
 	if(class_key.find("::") == string::npos) {
 		const string resolved_class_key = CanonicalSpelling(ResolveAlias(class_key, context));
 		if(!resolved_class_key.empty() && resolved_class_key != class_key)
@@ -560,6 +563,7 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 	const TemplateDefinition* specialization_definition =
 		specialization == specialization_bases_.end() ? 0 :
 		FindDefinition(specialization->second, context);
+	CPPGMAstNodePtr selected_specialization_declaration;
 	// Materialized class declarations are complete by this point, but member
 	// return types still use aliases from the source class template.  Carry the
 	// concrete class arguments into that lookup even when no forward shell is
@@ -605,6 +609,10 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 			SelectClassTemplateDefinition(specialization_definition,
 				specialization_arguments->second, context);
 		if(selected_specialization && selected_specialization->partial_specialization) {
+			if(specialization_definition &&
+				(specialization_definition->name.find("enable_if") != string::npos ||
+					specialization_definition->name.find("disable_if") != string::npos))
+				selected_specialization_declaration = selected_specialization->declaration;
 			map<string, string> specialized_bindings;
 			if(MatchClassSpecializationPattern(*selected_specialization,
 				specialization_arguments->second, &specialized_bindings, context))
@@ -617,7 +625,8 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 		class_key = specialization->second;
 	const string active_key = class_key + "|" + member;
 	if(!active->insert(active_key).second) return false;
-	CPPGMAstNodePtr declaration = FindClassDeclaration(class_key, context);
+	CPPGMAstNodePtr declaration = selected_specialization_declaration ?
+		selected_specialization_declaration : FindClassDeclaration(class_key, context);
 	if(!declaration) {
 		active->erase(active_key);
 		return false;

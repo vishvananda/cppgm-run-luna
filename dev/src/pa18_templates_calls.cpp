@@ -331,8 +331,8 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 				if(!entry || entry->children.empty()) continue;
 				const string alias = FirstIdentifierLocal(entry->children[0]);
 				if(alias.empty()) continue;
-				string alias_type = NodeTypeSpelling(declaration->children[0]) +
-					DeclaratorSuffix(entry->children[0]);
+				string alias_type = DeclaratorTypeSpelling(
+					NodeTypeSpelling(declaration->children[0]), entry->children[0]);
 				alias_type = CanonicalSpelling(ResolveAlias(ReplaceIdentifiers(
 					RewriteText(alias_type, concrete_candidate_owner,
 						candidate_substitutions, 0), candidate_substitutions), context));
@@ -429,35 +429,33 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 						values.push_back(parent_arguments[parent_argument++]);
 				} else if(parent_argument < parent_arguments.size()) ++parent_argument;
 			}
-			}
+		}
 		}
 	map<string, vector<string> > forwarding_pack_values;
 	TemplateDefinition materialization_definition = inference_definition;
 	const bool restored_function_defaults = RestoreFunctionParameterDefaults(
 		inference_definition, &materialization_definition);
-	try {
-		inferred = InferFunctionArguments(inference_definition, call, &member_arguments,
-				deduction_substitutions, context, explicit_prefix, &inferred_pack_values,
-				&inferred_function_values, &bound_pack_values, &forwarding_pack_values);
+		try {
+			inferred = InferFunctionArguments(inference_definition, call, &member_arguments,
+			deduction_substitutions, context, explicit_prefix, &inferred_pack_values,
+			&inferred_function_values, &bound_pack_values, &forwarding_pack_values);
 		} catch(const logic_error&) {
 			inferred = false;
 		}
-		// An explicit member-template-id already fixes every template parameter.
-		// Function-pointer expressions can still be intentionally deferred by the
-		// general deduction path (notably an address of an overloaded function),
-		// but that must not prevent the explicit specialization from being
-		// materialized under its concrete member owner.
-		if(!inferred && !explicit_arguments.empty() &&
-			explicit_arguments.size() == definition.parameters.size() &&
-			find_if(definition.parameters.begin(), definition.parameters.end(),
-				[](const TemplateParameter& parameter) { return parameter.pack; }) ==
-				definition.parameters.end()) {
-			member_arguments = explicit_arguments;
-			inferred = true;
-		}
-		if(!inferred) {
-			continue;
-		}
+	// An explicit member-template-id already fixes every template parameter.
+	// Function-pointer expressions can still be intentionally deferred by the
+	// general deduction path (notably an address of an overloaded function),
+	// but that must not prevent the explicit specialization from being
+	// materialized under its concrete member owner.
+	if(!inferred && !explicit_arguments.empty() &&
+		explicit_arguments.size() == definition.parameters.size() &&
+		find_if(definition.parameters.begin(), definition.parameters.end(),
+			[](const TemplateParameter& parameter) { return parameter.pack; }) ==
+		definition.parameters.end()) {
+		member_arguments = explicit_arguments;
+		inferred = true;
+	}
+		if(!inferred) continue;
 		bool dependent_member_arguments = false;
 		for(size_t parameter = 0; parameter < definition.parameters.size() &&
 			!dependent_member_arguments; ++parameter) {
@@ -523,15 +521,13 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 			instantiation_pack_hints[bound->first].insert(
 				instantiation_pack_hints[bound->first].end(), bound->second.begin(),
 				bound->second.end());
-		string generated_name;
-		const ConcreteOwnerContext previous_concrete_owner = active_concrete_owner_;
+	string generated_name;
+	const ConcreteOwnerContext previous_concrete_owner = active_concrete_owner_;
 		if(requested_owner_pointer) SetActiveConcreteOwner(requested_owner, context);
 		try {
-		generated_name = Instantiate(restored_function_defaults ? materialization_definition :
-			inference_definition,
-			instantiation_member_arguments, context,
-			explicit_instantiation,
-				&instantiation_pack_hints, &candidate_substitutions,
+			generated_name = Instantiate(restored_function_defaults ? materialization_definition :
+				inference_definition, instantiation_member_arguments, context,
+				explicit_instantiation, &instantiation_pack_hints, &candidate_substitutions,
 				requested_owner_pointer, &inferred_function_values,
 				&forwarding_pack_values);
 		} catch(const logic_error&) {
@@ -1001,9 +997,9 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 						const string local_name = Instantiate(*explicit_definition, complete_args, context,
 							false, inferred_pack_values.empty() ? 0 : &inferred_pack_values, 0,
 							requested_owner, &inferred_function_values);
-						result->template_primary = explicit_definition->qualified_name;
-						result->template_arguments = complete_args;
-						const string qualifier = PrefixComponent(base);
+					result->template_primary = explicit_definition->qualified_name;
+					result->template_arguments = complete_args;
+					const string qualifier = PrefixComponent(base);
 						CPPGMAstNodePtr callee(new CPPGMAstNode("id-expression",
 							qualifier.empty() ? local_name : qualifier + "::" + local_name));
 						result->children.push_back(callee);

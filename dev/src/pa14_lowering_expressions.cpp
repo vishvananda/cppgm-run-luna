@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
-#include <cstdlib>
 #include <iomanip>
 #include <limits>
 #include <map>
@@ -17,6 +16,29 @@
 using namespace std;
 
 namespace cppgm_pa14_lowering {
+
+void PA14Lowerer::InferLocalIdentifierConstant(const TypePtr& type,
+                                                ExprInfo* result) const
+{
+  if(!result) return;
+  TypePtr local_type = type_value(type);
+  if(!local_type || local_type->kind != TYPE_CLASS || !local_type->owned_scope ||
+     !FindContextConversionOperator(local_type, false, true)) return;
+  const vector<Binding*> value_members = MemberBindings(local_type, "value");
+  for(size_t member = 0; member < value_members.size(); ++member) {
+    Binding* value = value_members[member];
+    const TypePtr value_type = value ? type_value(value->type) : TypePtr();
+    const bool integral_value = value_type &&
+      (is_integral_type(value_type) ||
+       (value_type->kind == TYPE_FUNDAMENTAL && value_type->name == "bool"));
+    if(!value || value->kind != BIND_VARIABLE || !value->is_static ||
+       !value->has_value || !integral_value) continue;
+    result->known_constant = true;
+    result->constant = value->constant_value.known ?
+      PA19Signed(value->constant_value) : value->value;
+    return;
+  }
+}
 
 PA14Lowerer::Value PA14Lowerer::EmitUnary(const CPPGMAstNodePtr& node, Scope* scope,
                   const TypePtr& expected)
@@ -801,14 +823,28 @@ PA14Lowerer::Value PA14Lowerer::EmitConditionalValue(const CPPGMAstNodePtr& node
     ExprInfo info = Infer(node, scope, expected);
     TypePtr type = expression_value_type(info);
     if(expected) type = type_value(expected);
-    const string slot = new_special_slot("cond", low_type(type));
-    const string then_label = new_label("cond_then");
-    const string else_label = new_label("cond_else");
-    const string end_label = new_label("cond_end");
     // The condition of ?: is a value context.  Logical operators therefore
     // materialize their short-circuit result before selecting the arm; direct
     // statement conditions use EmitCondition and keep the branch-only form.
     ExprInfo condition_info = Infer(node->children[0], scope);
+    // Keep the established branch shape for qualified static trait members;
+    // their value is useful to semantic deduction but PA14 still materializes
+    // the conditional expression.  A local integral-constant object is the
+    // direct value-context case that must be folded (notably an aliased
+    // bool_constant result).
+    const bool local_constant = condition_info.known_constant &&
+      node->children[0] && node->children[0]->kind == "id-expression" &&
+      node->children[0]->value.find("::") == string::npos;
+    if(local_constant) {
+      const CPPGMAstNodePtr selected = condition_info.constant != 0 ?
+        node->children[1] : node->children[2];
+      Value result = EmitValue(selected, scope, type);
+      return ConvertValue(result, type);
+    }
+    const string slot = new_special_slot("cond", low_type(type));
+    const string then_label = new_label("cond_then");
+    const string else_label = new_label("cond_else");
+    const string end_label = new_label("cond_end");
     TypePtr condition_type = expression_value_type(condition_info);
     Value condition = condition_type && condition_type->kind == TYPE_CLASS &&
       FindContextConversionOperator(condition_type, true, true) ?
@@ -1335,8 +1371,23 @@ PA14Lowerer::Value PA14Lowerer::EmitValue(const CPPGMAstNodePtr& node, Scope* sc
         }
         return result;
       }
-      Value value = EmitValue(node->children[1], scope, target);
-      return ConvertValue(value, target);
+		// Keep the operand's source type visible to the explicit conversion.  An
+		// expected target passed into EmitValue can normalize a same-width signed
+		// operand before ConvertValue sees the cast boundary, losing the required
+		// signed-to-unsigned value copy.
+		Value value = EmitValue(node->children[1], scope);
+		// An explicit scalar cast is a value-producing conversion boundary.  In
+		// particular, a dependent alias can resolve from signed to unsigned
+		// types with the same LowIR width; retain the conversion copy instead of
+		// letting the later return path see only the already-normalized width.
+		const TypePtr source_type = type_value(value.type);
+		const TypePtr target_type = type_value(target);
+		const bool preserve_signedness_boundary = !value.known_constant &&
+			source_type && target_type &&
+			is_integral_type(source_type) && is_integral_type(target_type) &&
+			type_size(source_type) == type_size(target_type) &&
+			is_unsigned_type(source_type) != is_unsigned_type(target_type);
+		return ConvertValue(value, target, preserve_signedness_boundary);
     }
     if(node->kind == "sizeof-pack-expression" || node->kind == "sizeof-expression" ||
        node->kind == "type-trait-expression") {

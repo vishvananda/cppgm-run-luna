@@ -538,6 +538,8 @@ VariablePlan* FindLocalPlan(const string& name) const;
 ExprInfo InferIdentifier(const CPPGMAstNodePtr& node, Scope* scope,
                          const TypePtr& expected) const;
 
+void InferLocalIdentifierConstant(const TypePtr& type, ExprInfo* result) const;
+
 ExprInfo InferMember(const CPPGMAstNodePtr& node, Scope* scope) const;
 
 TypePtr IntegralPromotion(const TypePtr& raw) const;

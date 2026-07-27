@@ -725,6 +725,11 @@ bool PA18TemplateExpander::MergeInferredFunctionArgument(
 		match_pattern = NormalizeTypeArgument(ReplaceIdentifiers(match_pattern,
 			pattern_substitutions));
 		match_pattern = ResolveAlias(match_pattern, context);
+		// RewriteText may materialize a dependent class pattern while resolving
+		// enclosing bindings. Restore that generated spelling before deduction so
+		// a shadowing member parameter (for example `Y` in `shared_ptr<Y,A,D>`)
+		// remains a deducible formal rather than a concrete class name.
+		match_pattern = NormalizeTypeArgument(RestoreSpecializationSpelling(match_pattern));
 		// A fixed enclosing-class binding can itself be an lvalue reference.  When
 		// that binding fills a forwarding-reference parameter, textual substitution
 		// produces `T& &&`; collapse the two reference layers before matching the

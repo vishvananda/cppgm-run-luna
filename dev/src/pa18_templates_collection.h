@@ -471,12 +471,11 @@ private:
 	void ValidateTemplateArgumentKinds(const CPPGMAstNodePtr& node,
 		const string& inherited_context,
 		const map<string, bool>& inherited_parameters) const;
-	map<string, TemplateDefinition> definitions_;
+	map<string, TemplateDefinition> definitions_; map<const CPPGMAstNode*, TemplateDefinition> template_definitions_by_declaration_;
 	map<string, vector<string> > definitions_by_name_, pending_using_declarations_; map<string, vector<const TemplateDefinition*> > using_declaration_targets_, using_directive_exports_;
 	set<string> template_pack_names_, template_parameter_names_;
 	map<string, vector<TemplateDefinition> > class_specializations_;
-	map<const CPPGMAstNode*, string> lexical_contexts_;
-	set<string> lexical_namespace_paths_;
+	map<const CPPGMAstNode*, string> lexical_contexts_; set<string> lexical_namespace_paths_;
 	map<string, string> lexical_namespace_logical_;
 	map<string, string> specializations_;
 	set<string> active_specializations_;
@@ -933,6 +932,7 @@ private:
 		item.member_template = nested_member_template ||
 			(!item.class_template && class_declarations_.find(context) !=
 				class_declarations_.end());
+		template_definitions_by_declaration_[declaration.get()] = item;
 		bool has_non_type_parameter = false; for(size_t parameter = 0; parameter < item.parameters.size(); ++parameter) if(!item.parameters[parameter].type && !item.parameters[parameter].template_template) has_non_type_parameter = true;
 		if(!item.class_template && !item.alias_template && !item.variable_template && has_non_type_parameter && declaration && (declaration->kind == "function-definition" || declaration->kind == "simple-declaration" || declaration->kind == "special-member-definition" || declaration->kind == "special-member-declaration")) template_function_signatures_.insert(declaration.get());
 		// `template<>` function declarations are explicit specializations, not

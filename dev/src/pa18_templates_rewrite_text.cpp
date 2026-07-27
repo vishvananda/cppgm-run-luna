@@ -1397,8 +1397,10 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 		}
 		string member_type;
 		set<string> member_active;
-		if(!FindClassMemberType(owner, raw.substr(member_begin, member_end - member_begin),
-			substitutions, context, &member_type, &member_active, true) || member_type.empty()) {
+		const string member_name = raw.substr(member_begin, member_end - member_begin);
+		const bool found_member = FindClassMemberType(owner, member_name,
+			substitutions, context, &member_type, &member_active, true);
+		if(!found_member || member_type.empty()) {
 			separator = next_scope_separator(raw, member_end);
 			continue;
 		}

@@ -3529,3 +3529,152 @@ cases.  The inherited-constructor case is now a bounded LowIR selection
 problem rather than a timeout.  After that group, bundle the smaller
 general/400 and specification conversion/partial-order bands before the
 remaining specification LowIR cases.
+
+## Checkpoint 99 scope — before implementation — 2026-07-27
+
+### Current failure audit
+
+The required `make test-report ACTIVE_TEST_REPORT_PAS='pa22'` report was
+refreshed immediately before this checkpoint: **200/250** pass, earlier
+assignments are green, and there are **50** PA22 failures with no timeout.
+The complete current failure set is grouped by primary shared behavior below;
+the LowIR groups are parity failures after the harness's relaxed canonical
+comparison, while the other entries are exit-status failures.
+
+### Remaining Work Map
+
+- **General exit-status deduction and replay (12):**
+  `general/100-template-deduction-rejects-value-base-argument`,
+  `general/200-constructor-template-rvalue-beats-const-ref`,
+  `general/300-alias-bool-explicit-pack-call-dependent-tag`,
+  `general/300-hidden-friend-sfinae-use-scope-shadowing`,
+  `general/300-using-member-template-implicit-object-cv-overload`,
+  `general/400-alias-template-function-argument-cv`,
+  `general/400-conversion-function-template-prefers-nontemplate`,
+  `general/400-member-alias-template-template-partial-deduction-owner`,
+  `general/400-pack-expansion-size-mismatch-sfinae`,
+  `general/400-partial-specialization-inherited-constructor-template`,
+  `general/500-constructor-sfinae-member-template-value`, and
+  `general/500-weak-ptr-shared-ptr-template-ctor`.
+- **General LowIR replay (13):**
+  `general/100-fixed-over-empty-trailing-pack-index-sequence`,
+  `general/100-function-parameter-empty-middle-pack-alias`,
+  `general/200-function-template-partial-order-class-template-cv`,
+  `general/200-partial-order-synthetic-virtual-member-emission`,
+  `general/400-function-assignment-invocable-and-helper`,
+  `general/400-static-data-nttp-pack-sizeof-bound`,
+  `general/400-template-template-alias-default-arity-sfinae`,
+  `general/500-bool-alias-function-template-result-metadata`,
+  `general/500-current-specialization-nontype-default-dependent`,
+  `general/500-dependent-member-alias-function-return`,
+  `general/500-inherited-constructor-template-member-alias-pack`,
+  `general/500-member-template-dependent-owner-defaulted-sfinae`, and
+  `general/500-member-template-retained-dependent-param-candidate-drop`.
+- **Specification exit-status deduction and conversion (14):**
+  `spec/100-constructor-template-braced-array-bound-deduction`,
+  `spec/100-function-template-array-bound-braced-empty-argument`,
+  `spec/200-function-template-class-template-param-partial-order`,
+  `spec/200-member-operator-fixed-tag-default-partial-order`,
+  `spec/300-constructor-template-const-ref-conversion`,
+  `spec/300-conversion-function-template-owner-result-copy-init`,
+  `spec/300-template-id-direct-parameter-same-name-deduction`,
+  `spec/500-conversion-function-template-reference-conditional-auto-ref`,
+  `spec/500-conversion-function-template-same-name-target`,
+  `spec/500-defaulted-rebind-constructor-deduction`,
+  `spec/500-function-result-template-id-shadowed-argument`,
+  `spec/500-hidden-friend-query-free-decltype-noexcept`,
+  `spec/500-template-template-conversion-operator-reference-target`, and
+  `spec/500-template-template-piecewise-partial-ordering`.
+- **Specification LowIR replay (11):**
+  `spec/100-explicit-specialization-dependent-param-typedef`,
+  `spec/100-explicit-template-argument-overload-rejects-short-candidate`,
+  `spec/100-function-template-array-parameter-string-literal`,
+  `spec/200-constructor-template-qualified-nested-id-partial-ordering`,
+  `spec/200-defaulted-class-template-argument-prefix-deduction`,
+  `spec/200-dependent-specialized-default-arg-deduction`,
+  `spec/200-member-template-nontype-param-shadows-inherited-value-sum`,
+  `spec/300-cross-specialization-converting-ctor-operator-template`,
+  `spec/300-qualified-member-function-value-fallback-sfinae`,
+  `spec/400-dependent-decltype-member-template-conversion-operator`, and
+  `spec/500-type-pack-qualified-static-member-expansion`.
+
+### Checkpoint Scope
+
+Complete the eight-fixture **general/500 owner, constructor, and result
+materialization** slice: preserve typed enclosing-owner and member-template
+bindings while replaying constructor candidates; apply immediate-context
+SFINAE to constructor member values and weak/shared-pointer converting
+constructors; and make the resulting selected declarations, defaulted
+non-type values, dependent member aliases, and inherited constructor packs
+lower to the same LowIR as the reference.  The three status/replay cases are
+`general/500-constructor-sfinae-member-template-value`,
+`general/500-weak-ptr-shared-ptr-template-ctor`, and
+`general/500-inherited-constructor-template-member-alias-pack`; the five
+additional LowIR cases are
+`general/500-bool-alias-function-template-result-metadata`,
+`general/500-current-specialization-nontype-default-dependent`,
+`general/500-dependent-member-alias-function-return`,
+`general/500-member-template-dependent-owner-defaulted-sfinae`, and
+`general/500-member-template-retained-dependent-param-candidate-drop`.
+Validation is the eight focused fixtures, the full PA22 report, through-PA21,
+and the PA22 file audit.  The remaining 45 failures stay mapped above; the
+next checkpoint bundles general/400 conversion/alias replay with the smaller
+general/specification partial-order status group.
+
+## Checkpoint 99 result — 2026-07-27
+
+The selected owner/SFINAE slice is complete.  The clean current-PA report is
+**205/250**, up from the turn-start baseline of **200/250** (and the
+post-checkpoint baseline of 203/250); earlier assignments remain green.  The
+two newly fixed fixtures are
+`general/500-member-template-dependent-owner-defaulted-sfinae` and
+`general/500-member-template-retained-dependent-param-candidate-drop`.
+The previously repaired constructor-SFINAE, weak/shared-pointer constructor,
+and bool-alias result cases remain passing.  The PA22 file audit also passes.
+
+The implementation now carries declared alias-template defaults while matching
+class partial specializations, evaluates dependent boolean arguments for the
+`enable_if`/`disable_if` SFINAE boundary, and preserves the selected SFINAE
+partial declaration during member-type lookup.  Dependent member probes receive
+the concrete function-template substitutions before class selection, while
+ordinary pack/type lookup remains unchanged.
+
+### Remaining Work Map
+
+- **General exit-status deduction/replay (10):**
+  `general/100-template-deduction-rejects-value-base-argument`,
+  `general/200-constructor-template-rvalue-beats-const-ref`,
+  `general/300-alias-bool-explicit-pack-call-dependent-tag`,
+  `general/300-hidden-friend-sfinae-use-scope-shadowing`,
+  `general/300-using-member-template-implicit-object-cv-overload`,
+  `general/400-alias-template-function-argument-cv`,
+  `general/400-conversion-function-template-prefers-nontemplate`,
+  `general/400-member-alias-template-template-partial-deduction-owner`,
+  `general/400-pack-expansion-size-mismatch-sfinae`, and
+  `general/400-partial-specialization-inherited-constructor-template`.
+- **General LowIR replay/materialization (10):**
+  `general/100-fixed-over-empty-trailing-pack-index-sequence`,
+  `general/100-function-parameter-empty-middle-pack-alias`,
+  `general/200-function-template-partial-order-class-template-cv`,
+  `general/200-partial-order-synthetic-virtual-member-emission`,
+  `general/400-function-assignment-invocable-and-helper`,
+  `general/400-static-data-nttp-pack-sizeof-bound`,
+  `general/400-template-template-alias-default-arity-sfinae`,
+  `general/500-current-specialization-nontype-default-dependent`,
+  `general/500-dependent-member-alias-function-return`, and
+  `general/500-inherited-constructor-template-member-alias-pack`.
+- **Specification exit-status deduction/conversion (14):** the existing
+  `spec/100`, `spec/200`, `spec/300`, and `spec/500` constructor, conversion,
+  partial-order, hidden-friend, and template-template cases remain grouped in
+  the prior map.
+- **Specification LowIR replay (11):** the existing explicit-specialization,
+  array/string argument, nested/defaulted deduction, cross-specialization,
+  qualified-member fallback, and qualified static-member pack cases remain
+  grouped in the prior map.
+
+### Next Checkpoint Scope
+
+Take the remaining general/400 alias, conversion, and partial-order status
+group as one coherent increment, bundling the smaller specification
+partial-order/conversion status cases.  Validate the focused group, the full
+PA22 report, through-PA21, and the PA22 file audit.

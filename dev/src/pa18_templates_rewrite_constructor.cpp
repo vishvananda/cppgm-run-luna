@@ -246,6 +246,11 @@ void PA18TemplateExpander::MaterializeInitializerConstructor(
 	if(generated_base != specialization_bases_.end()) {
 		source_constructor_owner = generated_base->second;
 		source_constructor_name = LastComponent(source_constructor_owner);
+	} else if(specialization_arguments_.find(constructor_name) !=
+		specialization_arguments_.end()) {
+		// A concrete template owner may be registered without a separate base
+		// edge; retain its typed spelling for member-template lookup.
+		source_constructor_owner = constructor_name;
 	}
 	map<string, vector<string> >::const_iterator indexed_constructors =
 		definitions_by_name_.find(source_constructor_name);
@@ -260,10 +265,10 @@ void PA18TemplateExpander::MaterializeInitializerConstructor(
 				definition.member_template && LastComponent(definition.name) ==
 					source_constructor_name && SameTemplateOwner(definition.owner,
 						source_constructor_owner)) {
-				has_member_template_constructor = true;
-				break;
+					has_member_template_constructor = true;
+					break;
+				}
 			}
-		}
 	// An inherited constructor is selected through the derived class's
 	// initializer, but its member-template declaration belongs to the concrete
 	// base named by the derived class.  The specialization map for the derived

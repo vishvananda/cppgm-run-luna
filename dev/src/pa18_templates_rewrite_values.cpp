@@ -8,6 +8,28 @@ namespace pa18_templates_internal {
 const TemplateDefinition* PA18TemplateExpander::FindNestedDefinition(
 	const TemplateDefinition& parent, const string& nested_name) const
 {
+	// Nested member templates in distinct class partial specializations share
+	// one qualified name in the ordinary definition index.  The selected outer
+	// definition still owns the source declaration that must be replayed, so
+	// consult the declaration-identity index before the name-based fallback.
+	if(parent.partial_specialization && parent.declaration) for(size_t child = 0;
+		child < parent.declaration->children.size(); ++child) {
+		CPPGMAstNodePtr declaration = parent.declaration->children[child];
+		if(!declaration || declaration->kind != "template-declaration") continue;
+		while(declaration && declaration->kind == "template-declaration" &&
+			declaration->children.size() >= 2)
+			declaration = declaration->children[1];
+		const bool constructor_declaration = declaration &&
+			(declaration->kind == "special-member-definition" ||
+			 declaration->kind == "special-member-declaration") &&
+			(nested_name == LastComponent(parent.name) ||
+			 nested_name == LastComponent(parent.qualified_name));
+		if(constructor_declaration) continue;
+		if(!declaration || LastComponent(DeclarationName(declaration)) != nested_name) continue;
+		map<const CPPGMAstNode*, TemplateDefinition>::const_iterator found =
+			template_definitions_by_declaration_.find(declaration.get());
+		if(found != template_definitions_by_declaration_.end()) return &found->second;
+	}
 	set<string> active;
 	function<const TemplateDefinition*(const TemplateDefinition&)> search;
 	search = [&](const TemplateDefinition& current) -> const TemplateDefinition* {
