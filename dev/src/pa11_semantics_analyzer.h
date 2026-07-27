@@ -21,6 +21,7 @@ public:
 	map<string, vector<Binding*> > constant_template_functions_;
 	vector<map<string, ConstantValue> > constant_frames_;
 	vector<map<string, vector<ConstantValue> > > constant_pack_frames_;
+	vector<TypePtr> constant_function_return_types_;
 	vector<ConstantValue> constant_receivers_;
 	map<const CPPGMAstNode*, unsigned> constant_function_depth_;
 	static const unsigned kConstantFunctionDepthLimit = 512;
@@ -366,6 +367,7 @@ public:
 				spelling.erase(spelling.size() - 8);
 				continue;
 			}
+			if (spelling.size() >= 2 && spelling.compare(spelling.size() - 2, 2, "&&") == 0) { suffixes.push_back('R'); spelling.erase(spelling.size() - 2); continue; }
 			if (!spelling.empty() && (spelling[spelling.size() - 1] == '*' ||
 				spelling[spelling.size() - 1] == '&')) {
 				suffixes.push_back(spelling[spelling.size() - 1]);
@@ -416,7 +418,7 @@ public:
 		if (leading_volatile) base = CloneWithCv(base, false, true);
 		for (size_t i = suffixes.size(); i > 0; --i) {
 			if (suffixes[i - 1] == '*') base = PointerTo(base);
-			else base = ReferenceTo(TYPE_LVALUE_REFERENCE, base);
+			else base = ReferenceTo(suffixes[i - 1] == 'R' ? TYPE_RVALUE_REFERENCE : TYPE_LVALUE_REFERENCE, base);
 		}
 		for (size_t i = array_bounds.size(); i > 0; --i)
 			base = ArrayOf(array_bounds[i - 1], base);

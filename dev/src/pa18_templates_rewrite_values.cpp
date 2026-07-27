@@ -453,6 +453,57 @@ bool PA18TemplateExpander::EvaluateLogicalIntegralText(const string& raw,
 		const TemplateDefinition* definition = FindDefinition(specialized->second, context);
 		if(!definition || !definition->declaration) return false;
 		map<string,string> member_substitutions = substitutions;
+		// Recover the enclosing specialization's bindings before replaying a
+		// nested class value.  A local alias parameter named `T` must not shadow
+		// the enclosing `tuple<T...>` pack while evaluating `Enable<U...>::value`.
+		const map<string, vector<string> > previous_packs = active_pack_substitutions_;
+		const string nested_suffix = "::" + owner;
+		for(map<string, CPPGMAstNodePtr>::const_iterator declaration =
+			class_declarations_.begin(); declaration != class_declarations_.end(); ++declaration) {
+			if(declaration->first.size() <= nested_suffix.size() ||
+				declaration->first.compare(declaration->first.size() - nested_suffix.size(),
+					nested_suffix.size(), nested_suffix) != 0) continue;
+			const string concrete_parent = declaration->first.substr(0,
+				declaration->first.size() - nested_suffix.size());
+			map<string, string>::const_iterator parent_base = specialization_bases_.find(
+				LastComponent(concrete_parent));
+			map<string, vector<string> >::const_iterator parent_arguments =
+				specialization_arguments_.find(LastComponent(concrete_parent));
+			if(parent_base == specialization_bases_.end() ||
+				parent_arguments == specialization_arguments_.end()) continue;
+			const string source_parent = LastComponent(parent_base->second);
+			const string source_owner_prefix = PrefixComponent(definition->owner);
+			if(source_owner_prefix.empty() ||
+				LastComponent(source_owner_prefix) != source_parent) continue;
+			const TemplateDefinition* parent_definition = FindDefinition(
+				parent_base->second, context);
+			if(!parent_definition || !parent_definition->class_template) continue;
+			const TemplateDefinition* selected_parent = SelectClassTemplateDefinition(
+				parent_definition, parent_arguments->second, context);
+			if(selected_parent) parent_definition = selected_parent;
+			AddConcreteOwnerSubstitutions(concrete_parent, context,
+				&member_substitutions);
+			size_t parent_argument = 0;
+			for(size_t parameter = 0; parameter < parent_definition->parameters.size();
+				++parameter) {
+				const TemplateParameter& item = parent_definition->parameters[parameter];
+				if(item.pack) {
+					size_t trailing_fixed = 0;
+					for(size_t later = parameter + 1;
+						later < parent_definition->parameters.size(); ++later)
+						if(!parent_definition->parameters[later].pack) ++trailing_fixed;
+					const size_t available = parent_arguments->second.size() > parent_argument ?
+						parent_arguments->second.size() - parent_argument : 0;
+					const size_t count = available > trailing_fixed ? available - trailing_fixed : 0;
+					vector<string> values;
+					for(size_t value = 0; value < count; ++value)
+						values.push_back(parent_arguments->second[parent_argument++]);
+					if(!item.name.empty())
+						active_pack_substitutions_[item.name] = values;
+				} else if(parent_argument < parent_arguments->second.size()) ++parent_argument;
+			}
+			break;
+		}
 		map<string,vector<string> >::const_iterator member_arguments =
 			specialization_arguments_.find(LastComponent(owner));
 		if(member_arguments != specialization_arguments_.end()) {
@@ -460,10 +511,18 @@ bool PA18TemplateExpander::EvaluateLogicalIntegralText(const string& raw,
 				definition, member_arguments->second, context);
 			if(selected) definition = selected;
 			for(size_t parameter = 0; parameter < definition->parameters.size() &&
-				parameter < member_arguments->second.size(); ++parameter)
+				parameter < member_arguments->second.size(); ++parameter) {
 				if(!definition->parameters[parameter].name.empty())
 					member_substitutions[definition->parameters[parameter].name] =
 						member_arguments->second[parameter];
+				if(definition->parameters[parameter].pack &&
+					!definition->parameters[parameter].name.empty()) {
+					vector<string> values;
+					for(size_t value = parameter; value < member_arguments->second.size(); ++value)
+						values.push_back(member_arguments->second[value]);
+					active_pack_substitutions_[definition->parameters[parameter].name] = values;
+				}
+			}
 			if(definition->partial_specialization) {
 				map<string,string> partial_bindings;
 				if(MatchClassSpecializationPattern(*definition, member_arguments->second,
@@ -473,8 +532,10 @@ bool PA18TemplateExpander::EvaluateLogicalIntegralText(const string& raw,
 						member_substitutions[binding->first] = binding->second;
 			}
 		}
-		return EvaluateInheritedBaseValue(*definition, context,
+		const bool evaluated = EvaluateInheritedBaseValue(*definition, context,
 			member_substitutions, result);
+		active_pack_substitutions_ = previous_packs;
+		return evaluated;
 	}
 
 } // namespace pa18_templates_internal

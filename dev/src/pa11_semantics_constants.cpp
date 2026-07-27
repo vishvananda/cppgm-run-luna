@@ -1,4 +1,5 @@
 #include "pa11_semantics_analyzer.h"
+#include "pa11_semantics_constants_helpers.h"
 #include <cstdlib>
 namespace {
 
@@ -10,19 +11,16 @@ CPPGMAstNodePtr ConstantInitializer(const CPPGMAstNodePtr& node)
 		return node->children.empty() ? CPPGMAstNodePtr() : node->children[0];
 	return node;
 }
-
 CPPGMAstNodePtr FunctionParameterClause(const CPPGMAstNodePtr& declaration)
 {
 	if (!declaration || declaration->children.size() < 2)
 		return CPPGMAstNodePtr();
 	return DescendantOfKind(declaration->children[1], "parameter-clause");
 }
-
 CPPGMAstNodePtr FunctionBody(const CPPGMAstNodePtr& declaration)
 {
 	return ChildOfKind(declaration, "compound-statement");
 }
-
 CPPGMAstNodePtr ConstantReturnStatement(const CPPGMAstNodePtr& node)
 {
 	if (!node) return CPPGMAstNodePtr();
@@ -34,7 +32,6 @@ CPPGMAstNodePtr ConstantReturnStatement(const CPPGMAstNodePtr& node)
 	}
 	return CPPGMAstNodePtr();
 }
-
 bool ConstantTrue(const ConstantValue& value)
 {
 	if (value.integral.known) return PA19Raw(value.integral) != 0;
@@ -43,7 +40,6 @@ bool ConstantTrue(const ConstantValue& value)
 		return value.pointer && !value.pointer->null_pointer;
 	return value.kind == ConstantValue::CONSTANT_OBJECT && value.object;
 }
-
 bool IsFloatingLiteral(const string& raw)
 {
 	string spelling = raw;
@@ -60,7 +56,6 @@ bool IsFloatingLiteral(const string& raw)
 		spelling.find('E') != string::npos || spelling.find('p') != string::npos ||
 		spelling.find('P') != string::npos;
 }
-
 long double ParseFloatingLiteral(const string& raw, TypePtr* type)
 {
 	string spelling = raw;
@@ -82,13 +77,11 @@ long double ParseFloatingLiteral(const string& raw, TypePtr* type)
 		suffix == 'l' || suffix == 'L' ? Fundamental("long double") : Fundamental("double");
 	return result;
 }
-
 long double NumericValue(const ConstantValue& value)
 {
 	return value.floating_known ? value.floating :
 		static_cast<long double>(PA19Signed(value.integral));
 }
-
 bool NoexceptMemberCall(Analyzer& analyzer, const CPPGMAstNodePtr& call,
 	Scope* scope, const CPPGMAstNodePtr& callee)
 {
@@ -132,7 +125,6 @@ bool NoexceptMemberCall(Analyzer& analyzer, const CPPGMAstNodePtr& call,
 	}
 	return false;
 }
-
 bool NoexceptCall(Analyzer& analyzer, const CPPGMAstNodePtr& call, Scope* scope)
 {
 	if (!call || call->kind != "call-expression" || call->children.empty()) return false;
@@ -238,20 +230,17 @@ bool ConstantKnown(const ConstantValue& value)
 		(value.kind == ConstantValue::CONSTANT_OBJECT && value.object) ||
 		(value.kind == ConstantValue::CONSTANT_POINTER && value.pointer);
 }
-
 bool IsConstexprDeclaration(const CPPGMAstNodePtr& declaration)
 {
 	return Analyzer::HasNodeValue(declaration, "decl-specifier", "constexpr") ||
 		Analyzer::HasNodeValue(declaration, "specifier", "constexpr");
 }
-
 TypePtr UnwrapConstantType(TypePtr type)
 {
 	while (type && (type->kind == TYPE_LVALUE_REFERENCE ||
 		type->kind == TYPE_RVALUE_REFERENCE)) type = type->child;
 	return type;
 }
-
 string StringSpelling(const string& raw)
 {
 	string spelling = raw;
@@ -266,7 +255,6 @@ string StringSpelling(const string& raw)
 		spelling = spelling.substr(1, spelling.size() - 2);
 	return spelling;
 }
-
 vector<unsigned long long> DecodeString(const string& raw)
 {
 	const string spelling = StringSpelling(raw);
@@ -293,7 +281,6 @@ vector<unsigned long long> DecodeString(const string& raw)
 	}
 	return result;
 }
-
 string AssignmentOperator(const string& operation)
 {
 	if (operation == "+=") return "+";
@@ -649,6 +636,7 @@ ConstantValue Analyzer::EvaluateFunctionCall(Binding* function,
 	map<const CPPGMAstNode*, Scope*>::const_iterator body_scope_found =
 		compound_scopes_.find(body.get());
 	if (body_scope_found != compound_scopes_.end()) body_scope = body_scope_found->second;
+	PA11BeginConstantFunctionReturn(this, function);
 	ConstantFlow flow = EvaluateCompound(body, body_scope);
 	ConstantValue result = flow.kind == ConstantFlow::RETURN ? flow.value : ConstantValue();
 	if (flow.kind == ConstantFlow::RETURN && !ConstantKnown(result) && function->type && function->type->child && function->type->child->kind == TYPE_CLASS) { const CPPGMAstNodePtr returned = ConstantReturnStatement(body); if (returned && !returned->children.empty() && returned->children[0] && returned->children[0]->kind == "braced-init-list" && returned->children[0]->children.empty()) result = DefaultConstantValue(function->type->child, caller_scope); }
@@ -658,6 +646,7 @@ ConstantValue Analyzer::EvaluateFunctionCall(Binding* function,
 	--depth;
 	constant_frames_.pop_back();
 	constant_pack_frames_.pop_back();
+	PA11EndConstantFunctionReturn(this);
 	if (has_receiver) constant_receivers_.pop_back();
 	return result;
 }
@@ -821,6 +810,14 @@ ConstantValue Analyzer::EvaluateConstructor(const TypePtr& raw_type,
 				break;
 			}
 		}
+	}
+	if ((!selected || (selected->declaration &&
+		selected->declaration->kind == "special-member-declaration")) &&
+		!type->name.empty()) {
+		Binding* generated_constructor = PA11FindGeneratedConstructor(this, type,
+			arguments.size(), caller_scope);
+		if (generated_constructor)
+			selected = generated_constructor;
 	}
 	if (!selected)
 	{
@@ -991,7 +988,7 @@ ConstantValue Analyzer::EvaluateMemberCall(const CPPGMAstNodePtr& call, Scope* s
 	CPPGMAstNodePtr member = call->children[0];
 	if (member->children.size() < 2) return ConstantValue();
 	ConstantValue receiver = Evaluate(member->children[0], scope);
-	TypePtr object_type = receiver.object ? receiver.object->type : receiver.type;
+	TypePtr object_type = PA11FindMemberObjectType(this, member->children[0], receiver, scope);
 	object_type = UnwrapConstantType(object_type);
 	if (!object_type || object_type->kind != TYPE_CLASS) return ConstantValue();
 	const string name = member->children[1]->value;
@@ -1314,15 +1311,18 @@ ConstantValue Analyzer::Evaluate(const CPPGMAstNodePtr& expression, Scope* scope
 				function->type, scope);
 		if (function && function->kind == BIND_FUNCTION)
 		{
-			if (function->is_member && function->member_owner &&
-				function->member_owner->kind == TYPE_CLASS &&
-				LastComponent(function->member_owner->name) == function->name)
+			TypePtr constructor_owner = PA11FindGeneratedConstructorOwner(this, function, scope);
+			if (function->is_member && constructor_owner &&
+				constructor_owner->kind == TYPE_CLASS &&
+				(LastComponent(constructor_owner->name) == function->name ||
+					function->declaration->kind == "special-member-definition" ||
+					function->declaration->kind == "special-member-declaration"))
 			{
 				vector<ConstantValue> values;
 				if (arguments)
 					for (size_t i = 0; i < arguments->children.size(); ++i)
 						values.push_back(Evaluate(arguments->children[i], scope));
-				return EvaluateConstructor(function->member_owner, values, scope, expression);
+				return EvaluateConstructor(constructor_owner, values, scope, expression);
 			}
 			return EvaluateFunctionCall(function, expression, scope);
 		}

@@ -182,6 +182,26 @@ bool PA18TemplateExpander::LookupVariableType(const string& name,
 		if(separator == string::npos) current.clear();
 		else current.erase(separator);
 	}
+	// A replayed function-parameter pack gives later expanded identifiers
+	// (`arg__pack2`, and so on) no ordinary declaration binding.  Pair the
+	// generated identifier with its typed pack element before falling back to
+	// translation-unit variable facts; otherwise every expanded argument is
+	// inferred from the first pack element.
+	for(map<string, vector<string> >::const_iterator identifiers =
+		active_pack_identifier_substitutions_.begin();
+		identifiers != active_pack_identifier_substitutions_.end(); ++identifiers) {
+		const vector<string>& names = identifiers->second;
+		vector<string>::const_iterator name = find(names.begin(), names.end(), key);
+		if(name == names.end()) continue;
+		map<string, vector<string> >::const_iterator values =
+			active_function_pack_substitutions_.find(identifiers->first);
+		const size_t index = static_cast<size_t>(name - names.begin());
+		if(values != active_function_pack_substitutions_.end() &&
+			index < values->second.size()) {
+			*result = values->second[index];
+			return true;
+		}
+	}
 	map<string, string>::const_iterator found = variable_types_.find(key);
 	if(found != variable_types_.end()) { *result = found->second; return true; }
 	const string raw_name = RemoveMarker(name);
@@ -414,8 +434,17 @@ bool PA18TemplateExpander::InferIdentifierArgument(const CPPGMAstNodePtr& expres
 	for(map<string, vector<string> >::const_iterator pack =
 		active_pack_identifier_substitutions_.begin();
 		pack != active_pack_identifier_substitutions_.end(); ++pack) {
-		if(find(pack->second.begin(), pack->second.end(), expression->value) ==
-			pack->second.end()) continue;
+		vector<string>::const_iterator expanded_name = find(pack->second.begin(),
+			pack->second.end(), expression->value);
+		if(expanded_name == pack->second.end()) continue;
+		const size_t element = static_cast<size_t>(expanded_name - pack->second.begin());
+		map<string, vector<string> >::const_iterator typed_pack =
+			active_function_pack_substitutions_.find(pack->first);
+		if(typed_pack != active_function_pack_substitutions_.end() &&
+			element < typed_pack->second.size()) {
+			*result = typed_pack->second[element];
+			return !result->empty();
+		}
 		string source;
 		if(!LookupVariableType(pack->first, context, &source)) continue;
 		*result = ReplaceIdentifiers(ResolveAlias(source, context), substitutions);

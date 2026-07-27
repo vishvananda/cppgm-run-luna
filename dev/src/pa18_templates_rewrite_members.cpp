@@ -522,10 +522,11 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 								LastComponent(selected_class->qualified_name)) continue;
 							bool same_arguments = true;
 							for(size_t argument = 0; argument < class_arguments.size(); ++argument) {
-								const string actual = NormalizeTypeArgument(ResolveAlias(
-									ReplaceIdentifiers(class_arguments[argument], substitutions), context));
-								const string expected = NormalizeTypeArgument(CanonicalSpelling(
-									generated_arguments->second[argument]));
+								const string actual = CollapseRepeatedQualifier(NormalizeTypeArgument(
+									RestoreSpecializationSpelling(ResolveAlias(ReplaceIdentifiers(
+										class_arguments[argument], substitutions), context))));
+								const string expected = CollapseRepeatedQualifier(NormalizeTypeArgument(
+									RestoreSpecializationSpelling(generated_arguments->second[argument])));
 								if(actual != expected) {
 									same_arguments = false;
 									break;

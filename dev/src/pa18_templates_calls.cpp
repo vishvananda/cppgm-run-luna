@@ -954,12 +954,25 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 						has_parameter_pack = true;
 					else ++fixed_template_parameters;
 				const bool pack_precedes_fixed = HasPackBeforeFixed(*explicit_definition);
+				size_t template_pack_count = 0;
+				for(size_t parameter = 0; parameter < explicit_definition->parameters.size(); ++parameter)
+					if(explicit_definition->parameters[parameter].pack) ++template_pack_count;
 				const bool explicit_pack_elements = has_parameter_pack &&
-					explicit_args.size() > fixed_template_parameters;
+					explicit_args.size() > fixed_template_parameters &&
+					template_pack_count == 1;
 				bool complete = !pack_precedes_fixed && (explicit_pack_elements ||
 					(!has_parameter_pack && explicit_args.size() == explicit_definition->parameters.size()));
-				if(complete) complete_args = explicit_args;
-				else try { complete = InferFunctionArguments(*explicit_definition, explicit_deduction_input, &complete_args, substitutions, context, &explicit_args, 0, &inferred_function_values); }
+				map<string, vector<string> > inferred_pack_values;
+				map<string, vector<string> > explicit_pack_values;
+				if(complete) {
+					complete_args = explicit_args;
+					if(explicit_pack_elements) for(size_t parameter = 0;
+						parameter < explicit_definition->parameters.size(); ++parameter)
+						if(explicit_definition->parameters[parameter].pack &&
+							!explicit_definition->parameters[parameter].name.empty())
+							explicit_pack_values[explicit_definition->parameters[parameter].name] = explicit_args;
+				}
+				else try { complete = InferFunctionArguments(*explicit_definition, explicit_deduction_input, &complete_args, substitutions, context, &explicit_args, &inferred_pack_values, &inferred_function_values); }
 				catch(const PA18SubstitutionFailure&) { complete = false; }
 				if(complete && ValidateTemplateDefaults(*explicit_definition, complete_args,
 					context, substitutions)) {
@@ -967,8 +980,10 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 						const string requested_owner_name = explicit_definition->member_template ?
 							active_instantiation_name_ : string();
 						const string* requested_owner = requested_owner_name.empty() ? 0 : &requested_owner_name;
+						if(!explicit_pack_values.empty()) inferred_pack_values = explicit_pack_values;
 						const string local_name = Instantiate(*explicit_definition, complete_args, context,
-							false, 0, 0, requested_owner, &inferred_function_values);
+							false, inferred_pack_values.empty() ? 0 : &inferred_pack_values, 0,
+							requested_owner, &inferred_function_values);
 						result->template_primary = explicit_definition->qualified_name;
 						result->template_arguments = complete_args;
 						const string qualifier = PrefixComponent(base);

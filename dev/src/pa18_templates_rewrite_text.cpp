@@ -553,7 +553,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 					if(source_argument.size() > 3 &&
 					source_argument.compare(source_argument.size() - 3, 3, "...") == 0) {
 					const string prefix = source_argument.substr(0, source_argument.size() - 3);
-						string pack_name;
+						vector<string> pack_names;
 						bool known_pack = false;
 						// A pack expansion such as `(sizeof...(I1) + I2)...`
 						// mentions two packs, but only I2 is expanded by the
@@ -580,21 +580,24 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 						while(character < prefix.size() && IsIdentifierCharacter(prefix[character])) ++character;
 						const string word = prefix.substr(begin_name, character - begin_name);
 						if(active_pack_substitutions_.find(word) != active_pack_substitutions_.end()) {
-							pack_name = word;
-							break;
+							if(find(pack_names.begin(), pack_names.end(), word) == pack_names.end())
+								pack_names.push_back(word);
+							continue;
 						}
-						if(IsTemplatePackName(*definition, word)) {
-							pack_name = word;
-							known_pack = true;
-							break;
-						}
+						if(IsTemplatePackName(*definition, word)) known_pack = true;
 					}
-					map<string, vector<string> >::const_iterator pack =
-						active_pack_substitutions_.find(pack_name);
-						if(pack != active_pack_substitutions_.end()) {
-							for(size_t element = 0; element < pack->second.size(); ++element) {
+						if(!pack_names.empty()) {
+							const vector<string>& first_pack = active_pack_substitutions_.find(
+								pack_names[0])->second;
+							for(size_t pack_index = 1; pack_index < pack_names.size(); ++pack_index)
+								if(active_pack_substitutions_.find(pack_names[pack_index])->second.size() !=
+									first_pack.size())
+									throw PA18SubstitutionFailure("pack expansion length mismatch");
+							for(size_t element = 0; element < first_pack.size(); ++element) {
 								map<string, string> one = substitutions;
-								one[pack_name] = pack->second[element];
+								for(size_t pack_index = 0; pack_index < pack_names.size(); ++pack_index)
+									one[pack_names[pack_index]] = active_pack_substitutions_.find(
+										pack_names[pack_index])->second[element];
 								const string expanded_argument = CollapseReferenceSpelling(
 									ReplaceIdentifiersPreservingPackSizes(prefix, one));
 								// A pack binding can itself still be a dependent

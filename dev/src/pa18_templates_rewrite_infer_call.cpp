@@ -68,20 +68,22 @@ bool PA18TemplateExpander::InferCallIdentifierArgument(
 					} else if(argument_index < expression->template_arguments.size()) ++argument_index;
 				}
 				string resolved_return;
+				const string return_context = definition->owner.empty() ?
+					context : definition->owner;
 				try {
 					// Keep pack markers intact until the typed pack binding above has
 					// expanded them; scalar replacement would turn `T...` into the
 					// invalid spelling `int...`.
 					resolved_return = ReplaceIdentifiersPreservingPackSizes(return_type,
 						function_substitutions);
-					resolved_return = replay->RewriteText(resolved_return, context,
+					resolved_return = replay->RewriteText(resolved_return, return_context,
 						function_substitutions, 0);
 				} catch(...) {
 					replay->active_pack_substitutions_ = previous_packs;
 					throw;
 				}
 				replay->active_pack_substitutions_ = previous_packs;
-				*result = CanonicalSpelling(ResolveAlias(resolved_return, context));
+				*result = CanonicalSpelling(ResolveAlias(resolved_return, return_context));
 			if(!result->empty()) return true;
 		}
 	}

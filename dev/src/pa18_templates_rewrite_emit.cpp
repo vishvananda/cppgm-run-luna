@@ -414,12 +414,18 @@ void PA18TemplateExpander::RegisterGeneratedTypeEntity(
 	const string generated_path = JoinPath(definition.owner, local_name);
 	class_declarations_[generated_path] = generated;
 	RememberClassPath(generated_path);
+	// Generated nested class specializations have concrete array bounds and
+	// therefore a layout that was unavailable while collecting the dependent
+	// primary.  Record that typed layout under the generated identity so a
+	// later unevaluated call such as sizeof(test<T>(0)) can use its result.
+	RecordClassTypeSize(generated, generated_path, generated_path);
 	set<string> generated_static_members;
 	IndexStaticMembers(generated, generated_static_members);
 	static_members_by_class_[generated_path] = generated_static_members;
 	const string lexical_path = JoinPath(generated_owner, local_name);
 	class_declarations_[lexical_path] = generated;
 	RememberClassPath(lexical_path);
+	RecordClassTypeSize(generated, lexical_path, lexical_path);
 	static_members_by_class_[lexical_path] = generated_static_members;
 	const string previous_instantiation_name = active_instantiation_name_;
 	active_instantiation_name_.clear();
@@ -430,6 +436,7 @@ void PA18TemplateExpander::RegisterGeneratedTypeEntity(
 		class_declarations_[concrete_path] = generated;
 		static_members_by_class_[concrete_path] = generated_static_members;
 		RememberClassPath(concrete_path);
+		RecordClassTypeSize(generated, concrete_path, concrete_path);
 		active_instantiation_name_.clear();
 		RegisterGeneratedConstants(generated, concrete_path);
 		active_instantiation_name_ = previous_instantiation_name;

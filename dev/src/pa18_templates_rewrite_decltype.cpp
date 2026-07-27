@@ -25,6 +25,12 @@ bool PA18TemplateExpander::GeneratedFunctionCallResultType(
 			const CPPGMAstNodePtr declarator = FunctionDeclarator(declaration);
 			const CPPGMAstNodePtr clause = DescendantOfKind(declarator, "parameter-clause");
 			if(!declarator || !clause) continue;
+			// Generated free functions are stored by their lexical namespace, but
+			// their transformed type spellings are later queried from the caller's
+			// scope.  Replay the signature in the declaration owner so unqualified
+			// result types such as `fusion::map<...>` retain their namespace lookup.
+			const string declaration_context = owner->first.empty() ?
+				function_context : owner->first;
 			bool has_ellipsis = false;
 			size_t parameter_count = 0;
 			bool viable = true;
@@ -36,12 +42,12 @@ bool PA18TemplateExpander::GeneratedFunctionCallResultType(
 					continue;
 				}
 				if(item->kind != "parameter-declaration") continue;
-				if(IsAbstractObjectSpelling(ParameterTypeSpelling(item), function_context)) {
+				if(IsAbstractObjectSpelling(ParameterTypeSpelling(item), declaration_context)) {
 					viable = false;
 					break;
 				}
 				if(parameter_count >= actual_types.size() || !FunctionArgumentViable(
-					ParameterTypeSpelling(item), actual_types[parameter_count], function_context)) {
+					ParameterTypeSpelling(item), actual_types[parameter_count], declaration_context)) {
 					viable = false;
 					break;
 				}
@@ -58,7 +64,7 @@ bool PA18TemplateExpander::GeneratedFunctionCallResultType(
 				!declaration->template_arguments.empty()) {
 				const vector<const TemplateDefinition*> fallbacks =
 					FindFunctionDefinitions(LastComponent(declaration->template_primary),
-						function_context);
+						declaration_context);
 				for(size_t fallback = 0; fallback < fallbacks.size(); ++fallback) {
 					const TemplateDefinition* source = fallbacks[fallback];
 					if(!source || source->parameters.size() !=
@@ -76,7 +82,7 @@ bool PA18TemplateExpander::GeneratedFunctionCallResultType(
 					if(!source_ellipsis) continue;
 					try {
 						const string fallback_result = FunctionResultType(*source,
-							declaration->template_arguments, function_context, &substitutions);
+							declaration->template_arguments, declaration_context, &substitutions);
 						if(!fallback_result.empty()) {
 							generated_ellipsis_result = fallback_result;
 							break;
@@ -88,10 +94,12 @@ bool PA18TemplateExpander::GeneratedFunctionCallResultType(
 		}
 			string generated_result = NodeTypeSpelling(declaration->children.empty() ?
 				CPPGMAstNodePtr() : declaration->children[0]) + DeclaratorSuffix(declarator);
-			generated_result = RewriteText(generated_result, function_context,
+			// The generated declaration's return type is written relative to its
+			// lexical owner, not the call site.
+			generated_result = RewriteText(generated_result, declaration_context,
 				substitutions, 0);
 			generated_result = NormalizeTypeArgument(ResolveAlias(
-				ReplaceIdentifiers(generated_result, substitutions), function_context));
+				ReplaceIdentifiers(generated_result, substitutions), declaration_context));
 			if(generated_result.empty()) continue;
 			if(!has_ellipsis) {
 				*result = generated_result;

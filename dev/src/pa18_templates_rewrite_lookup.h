@@ -318,13 +318,24 @@
 		set<string> candidates;
 		for(string current = context; ; ) {
 			candidates.insert(JoinPath(current, raw_name));
+			// Member templates are collected with the class name repeated in their
+			// owner (`scope::Class::test`), while an unevaluated call inside the
+			// class is looked up from `scope::Class`.  Add that member scope before
+			// falling back to unrelated same-named namespace overloads.
+			const TemplateDefinition* current_class = FindDefinition(
+				LastComponent(current), PrefixComponent(current));
+			if(class_contexts_.find(current) != class_contexts_.end() ||
+				(current_class && current_class->class_template &&
+					current_class->qualified_name == current))
+				candidates.insert(JoinPath(current,
+					JoinPath(LastComponent(current), raw_name)));
 			if(!current.empty()) candidates.insert(JoinPath(current,
 				JoinPath(current, raw_name)));
-		if(current.empty()) break;
-		const size_t separator = current.rfind("::");
-		if(separator == string::npos) current.clear();
-		else current.erase(separator);
-	}
+			if(current.empty()) break;
+			const size_t separator = current.rfind("::");
+			if(separator == string::npos) current.clear();
+			else current.erase(separator);
+		}
 	// A replayed class body keeps its concrete generated owner in `context`,
 	// while member function templates remain indexed under the source class
 	// owner.  Carry that typed specialization mapping into lookup so unevaluated
