@@ -487,7 +487,9 @@ Binding* PA14Lowerer::MemberBinding(const CPPGMAstNodePtr& node, Scope* scope,
         node->children[1]->value, scope);
       if(conversion) candidates.push_back(conversion);
     }
-    if(candidates.empty()) return 0;
+	if(candidates.empty()) {
+		return 0;
+    }
     Binding* selected = 0;
     for(size_t i = 0; i < candidates.size(); ++i) {
       if(candidates[i]->kind != BIND_FUNCTION) return candidates[i];
@@ -746,9 +748,9 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferMember(const CPPGMAstNodePtr& node,
       result.category = "prvalue";
       return result;
     }
-    vector<Binding*> candidates = MemberBindings(object, node->children[1]->value);
-    if(candidates.empty()) {
-      throw logic_error("unknown member");
+	vector<Binding*> candidates = MemberBindings(object, node->children[1]->value);
+	if(candidates.empty()) {
+		throw logic_error("unknown member");
     }
     result.candidates = candidates;
     Binding* selected = 0;

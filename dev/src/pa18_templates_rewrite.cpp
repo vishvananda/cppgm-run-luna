@@ -1102,18 +1102,22 @@ void PA18TemplateExpander::TransformRegularChildren(const CPPGMAstNodePtr& input
 			const bool function_child_context = input->kind == "function-definition" && original_child && (original_child->kind == "compound-statement" || declarator_with_trailing_return || original_child->kind == "trailing-return-type");
 			const string node_context = function_child_context ? function_context : child_context;
 			const CPPGMAstNodePtr using_target = original_child && original_child->kind == "using-declaration" ? ChildOfKindLocal(original_child, "target") : CPPGMAstNodePtr();
+			const size_t using_separator = using_target ? using_target->value.rfind("::") : string::npos;
+			string using_owner = using_separator == string::npos ? string() : using_target->value.substr(0, using_separator);
+			const size_t using_owner_open = using_owner.find('<');
+			if(using_owner_open != string::npos) using_owner.erase(using_owner_open);
+			const bool constructor_using = using_target && using_separator != string::npos && LastComponent(using_owner) == LastComponent(using_target->value);
 			const bool drop_function_using = using_target && IsOrdinaryTemplateUsingTarget(using_target->value, node_context) && class_contexts_.find(node_context) == class_contexts_.end() &&
-				!IsGeneratedMemberTemplateUsingTarget(using_target->value, node_context, local_substitutions ? *local_substitutions : substitutions); CPPGMAstNodePtr child;
-			if(input->kind == "using-declaration" && original_child && original_child->kind == "target") {
-				child = CloneNode(original_child);
-				const string raw_target = original_child->value;
-				const size_t separator = raw_target.rfind("::");
-				if(separator != string::npos && raw_target.substr(0, separator) == raw_target.substr(separator + 2)) {
+				!IsGeneratedMemberTemplateUsingTarget(using_target->value, node_context, local_substitutions ? *local_substitutions : substitutions) && !constructor_using; CPPGMAstNodePtr child;
+				if(input->kind == "using-declaration" && original_child && original_child->kind == "target") {
+					child = CloneNode(original_child);
+					const string raw_target = original_child->value;
+				const size_t separator = raw_target.rfind("::"); if(separator != string::npos && raw_target.substr(0, separator) == raw_target.substr(separator + 2)) {
 					map<string, string>::const_iterator alias = local_substitutions->find(raw_target.substr(0, separator));
 					if(alias != local_substitutions->end() && !alias->second.empty())
 						child->value = alias->second + "::" + LastComponent(alias->second);
 						else child->value = RewriteText(raw_target, node_context, *local_substitutions, 0, false, false);
-				} else child->value = RewriteText(raw_target, node_context, *local_substitutions, 0, false, false);
+					} else child->value = RewriteText(raw_target, node_context, *local_substitutions, 0, false, false);
 					} else if(input->kind == "member-expression" && i == 1 && original_child && original_child->kind == "identifier" && IsKnownMemberTemplateId(original_child->value)) child = CloneNode(original_child);
 				else child = TransformNode(original_child, node_context, *local_substitutions);
 				if(child && input->kind == "array-suffix" && !child->children.empty() && child->children[0]) {
@@ -1123,8 +1127,7 @@ void PA18TemplateExpander::TransformRegularChildren(const CPPGMAstNodePtr& input
 						child->children[0] = CPPGMAstNodePtr(new CPPGMAstNode(
 							"literal", IntegralValueSpelling(bound)));
 				}
-			if(child && input->kind == "class-specifier" && child->kind == "simple-declaration" && HasReplayContext(substitutions))
-				RecordConstantDeclaration(child, child_context, *local_substitutions);
+			if(child && input->kind == "class-specifier" && child->kind == "simple-declaration" && HasReplayContext(substitutions)) RecordConstantDeclaration(child, child_context, *local_substitutions);
 			if(child && input->kind == "class-specifier" && child->kind == "simple-declaration")
 				RecordConstantArrayDeclaration(child, child_context, *local_substitutions);
 				if(!child && input->kind == "decl-specifier-seq" && original_child &&

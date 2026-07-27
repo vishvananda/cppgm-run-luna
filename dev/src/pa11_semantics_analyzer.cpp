@@ -120,6 +120,54 @@ size_t Analyzer::TypeAlignment(const TypePtr& type) const
 	return TypeSize(type);
 }
 
+TypePtr Analyzer::ExpressionCallType(const CPPGMAstNodePtr& expression,
+	Scope* scope, size_t arity)
+{
+	if (!expression || expression->children.empty()) return TypePtr();
+	const string name = expression->children[0]->value;
+	vector<Binding*> candidates;
+	for (Scope* current = scope; current; current = current->parent) {
+		vector<Binding*> local;
+		for (size_t i = 0; i < current->bindings.size(); ++i)
+			if (current->bindings[i].name == name && current->bindings[i].kind == BIND_FUNCTION)
+				local.push_back(&current->bindings[i]);
+		if (!local.empty()) { candidates = local; break; }
+	}
+	map<string, vector<Binding*> >::const_iterator templates =
+		constant_template_functions_.find(name);
+	if (templates != constant_template_functions_.end())
+		for (size_t i = 0; i < templates->second.size(); ++i)
+			if (find(candidates.begin(), candidates.end(), templates->second[i]) == candidates.end())
+				candidates.push_back(templates->second[i]);
+	Binding* selected = 0;
+	int selected_score = 1000000;
+	for (size_t i = 0; i < candidates.size(); ++i) {
+		Binding* candidate = candidates[i];
+		if (!candidate->type || candidate->type->kind != TYPE_FUNCTION) continue;
+		const TypePtr function = candidate->type;
+		if ((!function->variadic && function->parameters.size() != arity) ||
+			(function->variadic && function->parameters.size() > arity)) continue;
+		int score = function->variadic ? 4 : 0;
+		bool viable = true;
+		for (size_t argument = 0; argument < arity; ++argument) {
+			if (argument >= function->parameters.size()) { score += 8; continue; }
+			TypePtr actual = ExpressionType(expression->children[1]->children[argument], scope);
+			TypePtr formal = function->parameters[argument];
+			while (formal && (formal->kind == TYPE_LVALUE_REFERENCE || formal->kind == TYPE_RVALUE_REFERENCE)) formal = formal->child;
+			while (actual && (actual->kind == TYPE_LVALUE_REFERENCE || actual->kind == TYPE_RVALUE_REFERENCE)) actual = actual->child;
+			if (formal && formal->kind == TYPE_TEMPLATE_PARAMETER) score += 10;
+			else if (SameTypeIgnoringTopCv(actual, formal)) {}
+			else if (actual && formal && actual->kind == TYPE_FUNDAMENTAL && formal->kind == TYPE_FUNDAMENTAL) score += 2;
+			else { viable = false; break; }
+		}
+		if (viable && (!selected || score < selected_score)) {
+			selected = candidate;
+			selected_score = score;
+		}
+	}
+	return selected ? selected->type->child : TypePtr();
+}
+
 void Analyzer::Analyze(const CPPGMAstNodePtr& tree)
 {
 	if (!tree || tree->kind != "translation-unit") throw logic_error("invalid translation unit");

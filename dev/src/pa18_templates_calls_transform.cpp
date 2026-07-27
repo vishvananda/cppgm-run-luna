@@ -470,6 +470,25 @@ CPPGMAstNodePtr PA18TemplateExpander::MaterializeOperatorCallTargets(
 	CPPGMAstNodePtr result_callee, const string& context,
 	const map<string, string>& substitutions)
 {
+	if(result_callee && result_callee->kind == "member-expression" &&
+		result_callee->children.size() >= 2 && result_callee->children[0] &&
+		result_callee->children[1] &&
+		result_callee->children[1]->value != "operator()") {
+		// A data member whose class supplies a call operator is represented as a
+		// member-expression callee (`this->functor(args...)`).  PA14 lowers the
+		// eventual call through `operator()`, so instantiate a dependent member
+		// operator before semantic lookup loses the callable object's template
+		// arguments.
+		CPPGMAstNodePtr operator_member(new CPPGMAstNode("member-expression", "."));
+		operator_member->children.push_back(result_callee);
+		operator_member->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
+			"identifier", "operator()")));
+		if(InstantiateMemberCall(result, operator_member, "operator()", context,
+			substitutions)) {
+			result->children[0] = operator_member;
+			result_callee = operator_member;
+		}
+	}
 	if(result_callee && result_callee->kind == "call-expression") {
 		// A braced functional construction such as `identity{}(value)` has a
 		// call-expression as its callee.  Give member-template call operators the
@@ -591,7 +610,11 @@ bool PA18TemplateExpander::MaterializeImplicitMemberCall(
 		input_callee->children.size() >= 2 && input_callee->children[1])
 		original_member = input_callee->children[1]->value;
 	ResolveMemberFunctionArguments(result, context, substitutions);
-	if(result_callee && result_callee->kind == "member-expression")
+	const bool operator_target = result_callee && result_callee->kind == "member-expression" &&
+		result_callee->children.size() >= 2 && result_callee->children[1] &&
+		(result_callee->children[1]->value == "operator()" ||
+		 result_callee->children[1]->value.find("operator()__") == 0);
+	if(result_callee && result_callee->kind == "member-expression" && !operator_target)
 		InstantiateMemberCall(result, result_callee, original_member, context, substitutions);
 	ResolveMemberFunctionArguments(result, context, substitutions);
 	if(result_callee && result_callee->kind == "id-expression" &&
@@ -604,6 +627,7 @@ bool PA18TemplateExpander::MaterializeImplicitMemberCall(
 			for(string current = context; !current.empty(); ) {
 			const TemplateDefinition* current_definition = FindDefinition(current, context);
 			if(class_contexts_.find(current) != class_contexts_.end() ||
+				class_declarations_.find(current) != class_declarations_.end() ||
 				(current_definition && current_definition->class_template)) {
 				member_function_context = true;
 				break;

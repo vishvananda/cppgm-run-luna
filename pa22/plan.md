@@ -4149,3 +4149,98 @@ inherited bases.  The PA22 file audit passes with the repository's 12 existing
 warnings.  The next checkpoint is the candidate-status/SFINAE group, bundled
 with the remaining typed LowIR replay cases where the status failures are
 small.
+
+## Checkpoint 104 scope — 2026-07-27 (before implementation)
+
+### Remaining Work Map
+
+The authoritative report is still **224/250**, with the complete 26-fixture
+residual listed in Checkpoint 103.  The next shared behavior slice is the
+member-candidate subset:
+
+- imported base members must remain viable beside a derived member template,
+  including implicit-object cv ranking;
+- defaulted member-operator templates must prefer the fixed keyword/tag
+  overload over the generic fallback; and
+- constructor templates inherited through a class-template partial
+  specialization must be collected, deduced, and materialized under the
+  declaring owner.
+
+These three status fixtures are:
+`general/300-using-member-template-implicit-object-cv-overload`,
+`spec/200-member-operator-fixed-tag-default-partial-order`, and
+`general/400-partial-specialization-inherited-constructor-template`.
+The other 23 failures remain grouped by the complete map in Checkpoint 103:
+template-template/alias and pack SFINAE, hidden-friend lookup, conversion
+owner replay, and typed LowIR materialization.
+
+### Checkpoint Scope
+
+Repair the shared member lookup and candidate-ranking path so it preserves
+typed implicit-object cv facts, imported/inherited owner identity, defaulted
+member-template arguments, and partial-specialization constructor ownership.
+The scope is complete only when all three focused status fixtures pass without
+weakening ordinary overload resolution.  Validate the focused group, the full
+PA22 report, through-PA21, and the PA22 file audit.
+
+## Checkpoint 104 result — 2026-07-27
+
+The member increment is complete.  PA18 now identifies the concrete enclosing
+class for implicit `this` during member-template deduction, carries its typed
+substitutions into inherited callable members, and follows a partial base
+specialization without replacing its primary template name prematurely.  PA11
+accepts constructor-shaped template-id using-declarations, recovers the typed
+generated owner when the source specialization has no populated scope, and
+leaves namespace/operator using-declarations on the ordinary path.  PA14
+materializes callable data-member operator targets, preserves empty-class
+constructor base-entry behavior, and uses the argument temporary convention
+for binary operator results passed by reference.  Constant-call type probing
+was moved out of the analyzer header to keep the source audit within its
+limits.
+
+The three focused fixtures pass with authoritative LowIR comparison:
+`general/300-using-member-template-implicit-object-cv-overload`,
+`spec/200-member-operator-fixed-tag-default-partial-order`, and
+`general/400-partial-specialization-inherited-constructor-template`.
+The full PA22 report is **227/250**, up three from the 224/250 checkpoint
+baseline and thirteen from the 214/250 turn-start baseline.  The through-PA21
+report passes **1850/1850**, and the PA22 file audit passes with the normal 12
+warnings.
+
+### Remaining Work Map
+
+The authoritative residual is 23 fixtures, with no timeout:
+
+- **Candidate viability, deduction, and SFINAE (8):**
+  `general/100-template-deduction-rejects-value-base-argument`,
+  `general/300-alias-bool-explicit-pack-call-dependent-tag`,
+  `general/300-hidden-friend-sfinae-use-scope-shadowing`,
+  `general/400-member-alias-template-template-partial-deduction-owner`,
+  `general/400-pack-expansion-size-mismatch-sfinae`,
+  `spec/300-conversion-function-template-owner-result-copy-init`,
+  `spec/500-function-result-template-id-shadowed-argument`, and
+  `spec/500-hidden-friend-query-free-decltype-noexcept`.
+- **Typed LowIR and alias/template replay (15):**
+  `general/100-function-parameter-empty-middle-pack-alias`,
+  `general/400-alias-template-function-argument-cv`,
+  `general/400-function-assignment-invocable-and-helper`,
+  `general/400-static-data-nttp-pack-sizeof-bound`,
+  `general/400-template-template-alias-default-arity-sfinae`,
+  `spec/100-explicit-specialization-dependent-param-typedef`,
+  `spec/100-explicit-template-argument-overload-rejects-short-candidate`,
+  `spec/100-function-template-array-parameter-string-literal`,
+  `spec/200-defaulted-class-template-argument-prefix-deduction`,
+  `spec/200-dependent-specialized-default-arg-deduction`,
+  `spec/200-member-template-nontype-param-shadows-inherited-value-sum`,
+  `spec/300-cross-specialization-converting-ctor-operator-template`,
+  `spec/300-qualified-member-function-value-fallback-sfinae`,
+  `spec/400-dependent-decltype-member-template-conversion-operator`, and
+  `spec/500-type-pack-qualified-static-member-expansion`.
+
+### Next Checkpoint Group
+
+Take the eight-fixture candidate-viability/SFINAE group first, concentrating
+on hidden-friend scope lookup, template-template owner matching, pack-size
+discarding, and class-valued conversion candidate selection.  Then address
+the 15 typed LowIR alias/template replay cases as a separate materialization
+group.

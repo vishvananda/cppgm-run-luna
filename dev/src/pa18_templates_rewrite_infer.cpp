@@ -347,10 +347,21 @@ bool PA18TemplateExpander::InferMemberArgument(const CPPGMAstNodePtr& expression
 		map<string, string>::const_iterator function_owner = function_owners_.find(context);
 		if(function_owner != function_owners_.end()) object_type = function_owner->second;
 		for(string current = object_type.empty() ? context : string(); !current.empty(); ) {
-			const TemplateDefinition* current_definition = FindDefinition(current, context);
-			if(class_contexts_.find(current) != class_contexts_.end() ||
+			string class_candidate = current;
+			const string prefix = PrefixComponent(current);
+			if(!prefix.empty()) class_candidate = prefix;
+			string class_base = class_candidate;
+			const size_t class_open = class_base.find('<');
+			if(class_open != string::npos) class_base.erase(class_open);
+			const TemplateDefinition* current_definition = FindDefinition(class_candidate, context);
+			if(!current_definition && class_base != class_candidate)
+				current_definition = FindDefinition(class_base, context);
+			if(class_contexts_.find(class_candidate) != class_contexts_.end() ||
+				class_contexts_.find(class_base) != class_contexts_.end() ||
+				class_declarations_.find(class_candidate) != class_declarations_.end() ||
+				class_declarations_.find(class_base) != class_declarations_.end() ||
 				(current_definition && current_definition->class_template)) {
-				object_type = current;
+				object_type = class_candidate;
 				break;
 			}
 			const size_t separator = current.rfind("::");
@@ -369,7 +380,9 @@ bool PA18TemplateExpander::InferMemberArgument(const CPPGMAstNodePtr& expression
 		LastComponent(expression->children[1]->value) : string();
 	set<string> active;
 	if(!object_type.empty() && !member.empty() && FindClassMemberType(
-		object_type, member, substitutions, context, result, &active)) return true;
+		object_type, member, substitutions, context, result, &active)) {
+		return true;
+	}
 	if(!object_type.empty() && named_type_contexts_.find(
 		CanonicalSpelling(ResolveAlias(object_type, context))) !=
 		named_type_contexts_.end()) {
@@ -575,10 +588,21 @@ bool PA18TemplateExpander::InferArgument(const CPPGMAstNodePtr& expression,
 				map<string, string>::const_iterator function_owner = function_owners_.find(context);
 				if(function_owner != function_owners_.end()) object_type = function_owner->second;
 				for(string current = object_type.empty() ? context : string(); !current.empty(); ) {
-					const TemplateDefinition* current_definition = FindDefinition(current, context);
-					if(class_contexts_.find(current) != class_contexts_.end() ||
+					string class_candidate = current;
+					const string prefix = PrefixComponent(current);
+					if(!prefix.empty()) class_candidate = prefix;
+					string class_base = class_candidate;
+					const size_t class_open = class_base.find('<');
+					if(class_open != string::npos) class_base.erase(class_open);
+					const TemplateDefinition* current_definition = FindDefinition(class_candidate, context);
+					if(!current_definition && class_base != class_candidate)
+						current_definition = FindDefinition(class_base, context);
+					if(class_contexts_.find(class_candidate) != class_contexts_.end() ||
+						class_contexts_.find(class_base) != class_contexts_.end() ||
+						class_declarations_.find(class_candidate) != class_declarations_.end() ||
+						class_declarations_.find(class_base) != class_declarations_.end() ||
 						(current_definition && current_definition->class_template)) {
-						object_type = current;
+						object_type = class_candidate;
 						break;
 					}
 					const size_t separator = current.rfind("::");
@@ -586,6 +610,20 @@ bool PA18TemplateExpander::InferArgument(const CPPGMAstNodePtr& expression,
 					else current.erase(separator);
 				}
 				if(object_type.empty()) object_type = context;
+				if(!substitutions.empty()) {
+					string rewritten = ReplaceIdentifiersPreservingPackSizes(object_type, substitutions);
+					try {
+						rewritten = const_cast<PA18TemplateExpander*>(this)->RewriteText(
+							rewritten, context, substitutions, 0);
+					} catch(const PA18SubstitutionFailure&) {}
+					rewritten = CanonicalSpelling(ResolveAlias(rewritten, context));
+					const size_t generated_open = rewritten.find('<');
+					if(generated_open != string::npos &&
+						specialization_bases_.find(LastComponent(rewritten.substr(0,
+							generated_open))) != specialization_bases_.end())
+						rewritten.erase(generated_open);
+					if(!rewritten.empty()) object_type = rewritten;
+				}
 				*result = CanonicalSpelling(object_type);
 				return !result->empty();
 			}
@@ -1170,10 +1208,11 @@ bool PA18TemplateExpander::InferFunctionParameter(
 			if(!MatchTypePattern(explicit_pattern, type, explicit_parameter_names,
 				&ignored, context)) return false;
 		} else if(inferred_argument && !null_pointer_conversion) {
-			if(!MergeInferredFunctionArgument(definition, deduction_pattern,
+			const bool merged = MergeInferredFunctionArgument(definition, deduction_pattern,
 				deduction_type, signature, parameter_substitutions, context, parameter_names,
 				inferred, inferred_packs, inferred_functions, bound_pack_values,
-				fixed_template_parameters)) return false;
+				fixed_template_parameters);
+			if(!merged) return false;
 		}
 		++*argument_index;
 	}

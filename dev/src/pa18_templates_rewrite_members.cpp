@@ -696,12 +696,18 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 			const CPPGMAstNodePtr base_specifier = child->children[base_index];
 			const CPPGMAstNodePtr base_name = ChildOfKindLocal(base_specifier, "base-name");
 			if(!base_name) continue;
+			map<string, string> base_name_substitutions = class_substitutions;
+			const size_t raw_base_open = base_name->value.find('<');
+			if(raw_base_open != string::npos)
+				base_name_substitutions.erase(LastComponent(base_name->value.substr(0,
+					raw_base_open)));
 			string base_spelling = NormalizeElaboratedSpelling(
-				ReplaceIdentifiersPreservingPackSizes(base_name->value, class_substitutions),
+				ReplaceIdentifiersPreservingPackSizes(base_name->value, base_name_substitutions),
 				declaration_context);
 			base_spelling = CanonicalSpelling(base_spelling);
 			const size_t open = base_spelling.find('<');
 			const TemplateDefinition* base_definition = 0;
+			bool base_is_partial_specialization = false;
 			vector<string> base_arguments;
 			map<string, string> base_substitutions;
 			string base_lookup = base_spelling;
@@ -764,6 +770,7 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 					base_definition, base_arguments, declaration_context);
 				if(selected_base && selected_base != base_definition &&
 					selected_base->partial_specialization) {
+					base_is_partial_specialization = true;
 					string specialized_member = const_cast<PA18TemplateExpander*>(this)->TemplateMemberType(
 						*selected_base, base_arguments, member, declaration_context);
 					if(!specialized_member.empty()) {
@@ -773,7 +780,9 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 					}
 				}
 			}
-			if(base_definition) base_lookup = base_definition->qualified_name;
+			if(base_definition && base_is_partial_specialization && !base_arguments.empty())
+				base_lookup = base_spelling;
+			else if(base_definition) base_lookup = base_definition->qualified_name;
 			if(FindClassMemberType(base_lookup, member, base_substitutions,
 				declaration_context, result, active, aliases_only)) {
 				active->erase(active_key);

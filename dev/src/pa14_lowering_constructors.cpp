@@ -642,6 +642,7 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
       }
       if(field_type && field_type->kind == TYPE_CLASS &&
          !type_is_reference(field->type) && !arguments.empty()) {
+        if(function.base_entry && IsEmptyBaseStorage(field_type)) continue;
         if(arguments.size() == 1 && arguments[0] &&
            arguments[0]->kind != "braced-init-list" &&
            EmitObjectTransferAt(field_type, address, arguments[0], scope, true))

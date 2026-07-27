@@ -1268,7 +1268,7 @@ string PA14Lowerer::EmitMemberAddress(const CPPGMAstNodePtr& node, Scope* scope,
 {
     ExprInfo object_info;
     Binding* member = MemberBinding(node, scope, &object_info);
-    if(!member) throw logic_error("unknown member");
+	if(!member) throw logic_error("unknown member");
     if(member->kind == BIND_FUNCTION) {
       if(member->is_static) {
         FunctionRecord* function = RecordForBinding(member);

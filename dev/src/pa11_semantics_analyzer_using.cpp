@@ -1,5 +1,7 @@
 #include "pa11_semantics_analyzer.h"
 
+#include <cctype>
+
 using namespace std;
 
 void Analyzer::ProcessUsingDeclaration(const CPPGMAstNodePtr& node, Scope* scope)
@@ -10,9 +12,15 @@ void Analyzer::ProcessUsingDeclaration(const CPPGMAstNodePtr& node, Scope* scope
 	const string target_component = LastComponent(target_name);
 	const bool operator_name = target_component.compare(0, 8, "operator") == 0 &&
 		target_component.size() > 8 && target_component[8] != ' ';
-	if (target_name.find('<') != string::npos && !operator_name)
-		throw logic_error("using declaration cannot name template-id");
 	const size_t target_separator = target_name.rfind("::");
+	string target_owner_component = target_separator == string::npos ? string() :
+		LastComponent(target_name.substr(0, target_separator));
+	const size_t target_owner_open = target_owner_component.find('<');
+	if(target_owner_open != string::npos) target_owner_component.erase(target_owner_open);
+	const bool constructor_spelling = target_separator != string::npos &&
+		target_owner_component == target_component;
+	if (target_name.find('<') != string::npos && !operator_name && !constructor_spelling)
+		throw logic_error("using declaration cannot name template-id");
 	const string target_owner_name = target_separator == string::npos ? string() :
 		LastComponent(target_name.substr(0, target_separator));
 	vector<Binding*> targets;
@@ -21,6 +29,65 @@ void Analyzer::ProcessUsingDeclaration(const CPPGMAstNodePtr& node, Scope* scope
 		PathTarget owner = ResolvePath(scope, target_name.substr(0, target_separator));
 		Scope* owner_scope = owner.scope;
 		if (!owner_scope && owner.binding) owner_scope = ScopeForType(owner.binding->type);
+		TypePtr requested_owner;
+		if (!owner_scope && !operator_name) {
+			try {
+				requested_owner = ResolveType(scope, target_name.substr(0, target_separator));
+			} catch (const logic_error&) {
+				// Qualified using-declarations may name a namespace.  The typed owner
+				// recovery below is only for a class-template specialization; a
+				// namespace owner is already completely described by ResolvePath.
+			}
+		}
+		if (!owner_scope) owner_scope = ScopeForType(requested_owner);
+		if (owner_scope && owner_scope->bindings.empty()) owner_scope = 0;
+		// A dependent constructor using-declaration can retain the source
+		// template-id while PA18 has already materialized the concrete base under
+		// its generated type name.  ResolveType still describes the source
+		// specialization, whose template scope is intentionally empty; recover
+		// the typed generated specialization from the enclosing concrete class.
+		if ((!owner_scope || owner_scope->bindings.empty()) && requested_owner &&
+			scope && scope->owner_type) {
+			const string requested_primary = requested_owner->template_primary.empty() ?
+				target_owner_component : LastComponent(requested_owner->template_primary);
+			const vector<string>& concrete_arguments = scope->owner_type->template_arguments;
+			const size_t requested_arguments = requested_owner->template_arguments.size();
+			vector<string> expected_arguments;
+			for (size_t argument = 0; argument < requested_arguments; ++argument) {
+				TypePtr resolved;
+				try { resolved = ResolveType(scope, requested_owner->template_arguments[argument]); }
+				catch (const logic_error&) {}
+				expected_arguments.push_back(resolved ? resolved->name :
+					requested_owner->template_arguments[argument]);
+			}
+			const auto same_generated_argument = [](const string& left, const string& right) {
+				if (left == right) return true;
+				if (left.size() != right.size()) return false;
+				for (size_t character = 0; character < left.size(); ++character)
+					if (tolower(static_cast<unsigned char>(left[character])) !=
+						tolower(static_cast<unsigned char>(right[character]))) return false;
+				return true;
+			};
+			for (Scope* visible = scope; visible && !owner_scope; visible = visible->parent)
+				for (size_t binding = 0; binding < visible->bindings.size() && !owner_scope; ++binding) {
+					TypePtr candidate = visible->bindings[binding].type;
+					if (visible->bindings[binding].kind != BIND_TYPE || !candidate ||
+						candidate->kind != TYPE_CLASS || candidate->template_primary.empty() ||
+						LastComponent(candidate->template_primary) != requested_primary ||
+						candidate->template_arguments.size() != requested_arguments ||
+						concrete_arguments.size() < requested_arguments) continue;
+					bool same_arguments = true;
+					for (size_t argument = 0; argument < requested_arguments; ++argument) {
+						const string& expected = expected_arguments.empty() ? concrete_arguments[argument] :
+							expected_arguments[argument];
+						if (!same_generated_argument(candidate->template_arguments[argument], expected)) {
+							same_arguments = false;
+							break;
+						}
+					}
+					if (same_arguments) owner_scope = ScopeForType(candidate);
+				}
+		}
 		if (owner_scope)
 			for (size_t i = 0; i < owner_scope->bindings.size(); ++i)
 				if (owner_scope->bindings[i].name == LastComponent(target_name))

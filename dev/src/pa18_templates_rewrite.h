@@ -1175,8 +1175,8 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 			const CPPGMAstNodePtr target = ChildOfKindLocal(input, "target");
 			if(target && IsOrdinaryTemplateUsingTarget(target->value, context) &&
 				class_contexts_.find(context) != class_contexts_.end() &&
-				!IsGeneratedMemberTemplateUsingTarget(target->value, context, substitutions))
-				return CPPGMAstNodePtr();
+				!IsGeneratedMemberTemplateUsingTarget(target->value, context, substitutions) &&
+				!IsConstructorUsingTarget(target->value)) return CPPGMAstNodePtr();
 		}
 		if(input->kind == "parameter-declaration" && !input->children.empty() &&
 			input->children[0] && input->children[0]->kind == "decl-specifier-seq") {

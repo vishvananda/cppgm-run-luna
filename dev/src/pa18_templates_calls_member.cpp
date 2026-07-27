@@ -110,8 +110,8 @@ bool PA18TemplateExpander::TryMemberCandidate(MemberCallState* state,
 	size_t candidate_index)
 {
 	MemberCallCandidateState candidate(state, state->candidates[candidate_index]);
-	if(!PrepareMemberCandidate(state, candidate_index, &candidate) ||
-		!PrepareMemberCandidateArguments(&candidate)) return false;
+	if(!PrepareMemberCandidate(state, candidate_index, &candidate)) return false;
+	if(!PrepareMemberCandidateArguments(&candidate)) return false;
 	BindExpectedMemberConversion(&candidate);
 	if(!DeduceMemberCandidate(&candidate)) return false;
 	return EmitMemberCandidate(&candidate);
@@ -196,6 +196,7 @@ bool PA18TemplateExpander::ResolveMemberObject(MemberCallState* state)
 		for(string current = object_type.empty() ? context : string(); !current.empty(); ) {
 			const TemplateDefinition* current_definition = FindDefinition(current, context);
 			if(class_contexts_.find(current) != class_contexts_.end() ||
+				class_declarations_.find(current) != class_declarations_.end() ||
 				(current_definition && current_definition->class_template)) {
 				object_type = current;
 				break;
@@ -1002,7 +1003,7 @@ bool PA18TemplateExpander::EmitMemberCandidate(
 	string& generated_name = candidate->generated_name;
 	const ConcreteOwnerContext previous_concrete_owner = active_concrete_owner_;
 		if(requested_owner_pointer) SetActiveConcreteOwner(requested_owner, context);
-		try {
+	try {
 			generated_name = Instantiate(restored_function_defaults ? materialization_definition :
 				inference_definition, instantiation_member_arguments, context,
 				explicit_instantiation, &instantiation_pack_hints, &candidate_substitutions,

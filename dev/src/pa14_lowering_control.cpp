@@ -117,7 +117,7 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
           IsDerivedFrom(argument_type, object_type)))
         (void)EnsureImplicitCopyConstructor(object_type, false);
     }
-    if(!raw_arguments.empty()) (void)EnsureAggregateConstructor(object_type);
+	if(!raw_arguments.empty()) (void)EnsureAggregateConstructor(object_type);
     vector<Binding*> candidates = MemberBindings(object_type, constructor_name);
     vector<ExprInfo> argument_infos;
     for(size_t i = 0; i < raw_arguments.size(); ++i) {

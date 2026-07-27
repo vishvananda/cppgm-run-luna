@@ -20,6 +20,7 @@
 		}
 		return false;
 	}
+	bool IsConstructorUsingTarget(const string& raw_target) const { const size_t separator = raw_target.rfind("::"); if(separator == string::npos) return false; string owner = raw_target.substr(0, separator); const size_t open = owner.find('<'); if(open != string::npos) owner.erase(open); return LastComponent(owner) == LastComponent(raw_target); }
 	bool IsGeneratedMemberTemplateUsingTarget(const string& raw_target,
 		const string& context, const map<string, string>& substitutions) const
 	{

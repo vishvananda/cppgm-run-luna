@@ -603,6 +603,8 @@ public:
 	}
 	size_t TypeSize(const TypePtr& type) const;
 	size_t TypeAlignment(const TypePtr& type) const;
+	TypePtr ExpressionCallType(const CPPGMAstNodePtr& expression, Scope* scope,
+		size_t arity);
 	TypePtr ExpressionType(const CPPGMAstNodePtr& expression, Scope* scope,
 		size_t requested_arguments = static_cast<size_t>(-1))
 	{
@@ -677,12 +679,23 @@ public:
 			size_t arity = static_cast<size_t>(-1);
 			if (expression->children.size() > 1 && expression->children[1])
 				arity = expression->children[1]->children.size();
+			if (expression->children[0] && expression->children[0]->kind ==
+				"id-expression" && arity != static_cast<size_t>(-1)) {
+				TypePtr result = ExpressionCallType(expression, scope, arity);
+				if (result) return result;
+			}
 			TypePtr callee = ExpressionType(expression->children[0], scope, arity);
 			return callee && callee->kind == TYPE_FUNCTION ? callee->child : Fundamental("int");
 		}
 		if (expression->kind == "literal" || expression->kind == "keyword-literal") return Fundamental("int");
-		if (expression->kind == "binary-expression" && !expression->children.empty())
+		if (expression->kind == "binary-expression" && !expression->children.empty()) {
+			if (expression->value.find("COMMA") != string::npos ||
+				expression->value.find(":,") != string::npos ||
+				expression->value == ",")
+				return expression->children.size() > 1 ?
+					ExpressionType(expression->children[1], scope) : Fundamental("int");
 			return ExpressionType(expression->children[0], scope);
+		}
 		return Fundamental("int");
 	}
 	struct ParameterFacts

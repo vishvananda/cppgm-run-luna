@@ -87,10 +87,20 @@ void Analyzer::ProcessTemplate(const CPPGMAstNodePtr& node, Scope* scope)
 			member.declaration = node->children[1];
 			scope->add(member);
 		}
-	if (node->children[1] && node->children[1]->kind == "function-definition" &&
+	if (node->children[1] && (node->children[1]->kind == "function-definition" ||
+		node->children[1]->kind == "simple-declaration") &&
 		node->children[1]->children.size() > 1)
 	{
-		const string function_name = FirstIdentifier(node->children[1]->children[1]);
+		string function_name;
+		if (node->children[1]->kind == "function-definition")
+			function_name = FirstIdentifier(node->children[1]->children[1]);
+		else {
+			const CPPGMAstNodePtr list = ChildOfKind(node->children[1],
+				"init-declarator-list");
+			if (list && !list->children.empty() && list->children[0] &&
+				!list->children[0]->children.empty())
+				function_name = FirstIdentifier(list->children[0]->children[0]);
+		}
 		Binding* function = parameters->local(function_name);
 		if (function && function->kind == BIND_FUNCTION)
 			constant_template_functions_[function_name].push_back(function);

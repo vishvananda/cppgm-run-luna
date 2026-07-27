@@ -15,6 +15,14 @@ bool PA18TemplateExpander::InferBinaryArgument(const CPPGMAstNodePtr& expression
 	const bool have_operands = InferArgument(expression->children[0], &left,
 		substitutions, context) && InferArgument(expression->children[1], &right,
 		substitutions, context);
+	if (have_operands && operation == ",") {
+		// The built-in comma operator yields the right operand.  Treating it as
+		// the left operand hides overload viability in expressions such as
+		// `(probe(), 0)`, causing a class-specific overload to preempt the
+		// function-template fallback selected by the actual call.
+		*result = right;
+		return true;
+	}
 	if(have_operands && InferOperatorResult(operation, left, right, context, result)) return true;
 	if(have_operands && InferTemplateOperatorResult(operation, expression->children[0],
 		expression->children[1], substitutions, context, result)) return true;
@@ -108,6 +116,75 @@ bool PA18TemplateExpander::InferOperatorResult(const string& operation,
 			*result = NormalizeTypeArgument(NodeTypeSpelling(declaration->children[0]) +
 				DeclaratorSuffix(declaration->children[1]));
 			return !result->empty();
+		}
+	}
+	// A member operator template is stored in the template index separately
+	// from the materialized class declaration.  Recover the enclosing class
+	// arguments from the typed left operand, then use the ordinary function
+	// deduction path for the operator's explicit argument.  This keeps a
+	// binary operator's result type typed for later member-template deduction;
+	// falling back to the left operand would make `key | default` look like a
+	// keyword rather than a `default_<key, default_type>` object.
+	string left_base = left;
+	vector<string> left_arguments;
+	const size_t left_open = left_base.find('<');
+	if(left_open != string::npos) {
+		string argument_text;
+		size_t left_close = string::npos;
+		if(TemplateRange(left_base, left_open, &argument_text, &left_close)) {
+			left_arguments = SplitTemplateArguments(argument_text);
+			left_base = CanonicalSpelling(left_base.substr(0, left_open));
+		}
+	}
+	const TemplateDefinition* left_definition = FindDefinition(left_base, context);
+	map<string, string> enclosing_substitutions;
+	if(left_definition && left_definition->class_template)
+		for(size_t parameter = 0; parameter < left_definition->parameters.size() &&
+			parameter < left_arguments.size(); ++parameter)
+			if(!left_definition->parameters[parameter].name.empty())
+				enclosing_substitutions[left_definition->parameters[parameter].name] =
+					left_arguments[parameter];
+	if(left_definition && left_definition->class_template) {
+		const string operator_name = "operator" + operation;
+		for(map<string, TemplateDefinition>::const_iterator candidate = definitions_.begin();
+			candidate != definitions_.end(); ++candidate) {
+			const TemplateDefinition& definition = candidate->second;
+			if(!definition.member_template || definition.name.empty() ||
+				LastComponent(definition.name) != operator_name ||
+				LastComponent(definition.owner) != LastComponent(left_base) ||
+				!definition.declaration || definition.declaration->children.empty()) continue;
+			const CPPGMAstNodePtr parameters = DescendantOfKind(
+				FunctionDeclarator(definition.declaration), "parameter-clause");
+			if(!parameters || parameters->children.size() != 1 ||
+				!parameters->children[0] || parameters->children[0]->kind !=
+				"parameter-declaration") continue;
+			set<string> parameter_names;
+			for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter)
+				if(!definition.parameters[parameter].name.empty())
+					parameter_names.insert(definition.parameters[parameter].name);
+			map<string, string> inferred;
+			string pattern = ParameterTypeSpelling(parameters->children[0]);
+			pattern = NormalizeTypeArgument(ReplaceIdentifiers(pattern,
+				enclosing_substitutions));
+			if(!MatchTypePattern(pattern, right, parameter_names, &inferred, context)) {
+				// The argument type used for a reference parameter is the referred
+				// object type during ordinary call deduction.
+				if(pattern.empty() || pattern[pattern.size() - 1] != '&') continue;
+				pattern = NormalizeTypeArgument(pattern.substr(0, pattern.size() - 1));
+				if(!MatchTypePattern(pattern, right, parameter_names, &inferred,
+					context)) continue;
+			}
+			string return_type = NodeTypeSpelling(definition.declaration->children[0]);
+			return_type += DeclaratorSuffix(FunctionDeclarator(definition.declaration));
+		for(map<string, string>::const_iterator binding = inferred.begin();
+			binding != inferred.end(); ++binding)
+				enclosing_substitutions[binding->first] = binding->second;
+			return_type = NormalizeTypeArgument(ResolveAlias(ReplaceIdentifiers(
+				return_type, enclosing_substitutions), context));
+			if(!return_type.empty()) {
+				*result = return_type;
+				return true;
+			}
 		}
 	}
 	map<string, vector<string> >::const_iterator names = function_signatures_by_name_.find(name);
