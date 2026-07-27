@@ -3190,3 +3190,67 @@ Take the general/500 owner/alias/pack/result group as the next coherent
 increment, prioritizing dependent default-SFINAE boundaries, concrete-owner
 replay, and alias-pack expansion.  Validate its status and LowIR fixtures,
 then rerun the full PA22 report, through-PA21, and file audit.
+
+## Checkpoint 95 scope — before implementation — 2026-07-27
+
+- The current-PA report was revalidated at **186/250**; the complete 64-fixture
+  failure set remains grouped above.
+- **Remaining Work Map for this checkpoint:** select eight related general/500
+  failures: `boost-mp11-conditional-alias-reference-set`,
+  `alias-pack-enable-if-constexpr-constructor`,
+  `defaulted-nontype-qualified-alias-value`,
+  `dependent-result-sizeof-sfinae-base`,
+  `explicit-pack-deduced-pack-member-result`,
+  `owner-enum-nontype-result-sfinae`,
+  `short-circuit-alias-member-sfinae`, and
+  `sizeof-void-sfinae-fallback`. The remaining 56 failures stay in the
+  earlier deduction/ordering, general/400, remaining general/500, and
+  specification-band groups already listed above.
+- **Checkpoint Scope:** preserve dependent alias/member structure through
+  template substitution, evaluate dependent `sizeof`/enum/non-type defaults
+  only after owner arguments are concrete, and discard invalid alias/SFINAE
+  candidates without leaking dependent identifiers into ordinary lookup.
+- **Validation scope:** the selected fixtures, the full PA22 report,
+  through-PA21 regression, and the PA22 source file audit. The next checkpoint
+  group is the remaining general/500 owner/constructor/ADL replay.
+
+## Checkpoint 95 result — 2026-07-27
+
+The authoritative current-PA report is **187/250**, an improvement over the
+turn-start **178/250**.  The focused checkpoint fixtures that now pass are
+`general/500-dependent-result-sizeof-sfinae-base`,
+`general/500-short-circuit-alias-member-sfinae`, and
+`general/500-sizeof-void-sfinae-fallback`.
+
+The completed behavior is grouped as follows:
+
+- **Candidate-local default validation:** explicit and deduced function
+  candidates now validate defaulted logical `enable_if` non-type arguments
+  against their local type and pack bindings, dropping false or invalid
+  candidates without leaking those bindings into ordinary lookup.
+- **Dependent integral replay:** logical non-type arguments short-circuit
+  before evaluating an invalid right operand; dependent `sizeof` expressions
+  are expanded after substitution, while `void` and incomplete-class operands
+  remain substitution failures.  Generated class layout is available to the
+  typed size evaluator, and a legitimate overloaded call probe is not treated
+  as an invalid unresolved `sizeof`.
+- **Generated result lookup:** generated function result probes retain their
+  owner context, match the generated template primary, and use a recursion
+  guard for nested call-result deduction.
+
+The complete remaining **63** failures are grouped by the next shared
+behaviors: early deduction/pack/using and partial-order replay (11),
+general/400 alias/conversion/constructor and LowIR replay (9), general/500
+owner/alias/pack/conversion replay (16), and specification-band
+deduction/conversion/LowIR replay (27).  The five carried general/500 cases
+from this checkpoint are `boost-mp11-conditional-alias-reference-set`,
+`alias-pack-enable-if-constexpr-constructor`,
+`defaulted-nontype-qualified-alias-value`,
+`explicit-pack-deduced-pack-member-result`, and
+`owner-enum-nontype-result-sfinae`; the inherited-constructor timeout remains
+in the same group.
+
+Required validation passed: the exact through-PA21 report is **1850/1850**,
+and `cppgm_file_audit.pl --stage pa22 --paths dev/src` passed with warnings
+only.  The next checkpoint group is the remaining general/500 owner,
+constructor, alias-pack, and ADL replay, starting with the five carried cases.

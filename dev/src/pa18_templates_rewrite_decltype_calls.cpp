@@ -8,6 +8,11 @@ namespace pa18_templates_internal {
 	bool PA18TemplateExpander::FunctionCallResultType(string expression, const string& context, const map<string, string>& substitutions, string* result)
 	{
 		if(!result) return false;
+		const bool generated_callee = expression.find("__ov") != string::npos ||
+			expression.find("__inst_") != string::npos;
+		const string call_key = "call|" + expression + "@" + context;
+		if(!generated_callee && !active_function_results_.insert(call_key).second) return false;
+		ActiveFunctionResultScope call_scope(this, generated_callee ? string() : call_key);
 		// Expand a trailing function-parameter pack before splitting the
 		// unevaluated call's arguments.  Otherwise `declval<_Args>()...` is
 		// treated as one dependent operand and a valid return-type probe fails.
@@ -188,6 +193,8 @@ namespace pa18_templates_internal {
 			if(candidates.empty()) candidates.push_back(explicit_definition);
 		}
 		else candidates = FindFunctionDefinitions(callee, function_context);
+		if(generated_callee && GeneratedFunctionCallResultType(callee, function_context,
+			substitutions, actual_types, result)) return true;
 		if(candidates.empty()) {
 			set<string> active;
 			map<const TemplateDefinition*, string> concrete_owners;

@@ -266,6 +266,53 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformTranslationUnit(
 	return result;
 }
 
+bool PA18TemplateExpander::EvaluateExpandedSizeofText(const string& raw,
+	const string& context, const map<string, string>& substitutions,
+	PA19IntegralValue* result, string* expanded)
+{
+	string expanded_size = raw;
+	bool expanded_size_any = false;
+	for(size_t search = expanded_size.find("sizeof("); search != string::npos; ) {
+		const size_t open = search + 6;
+		int depth = 0; size_t close = string::npos;
+		for(size_t position = open; position < expanded_size.size(); ++position) {
+			if(expanded_size[position] == '(') ++depth;
+			else if(expanded_size[position] == ')' && --depth == 0) { close = position; break; }
+		}
+		if(close == string::npos) break;
+		const string operand = expanded_size.substr(open + 1, close - open - 1);
+		string type_operand = ResolveAlias(CanonicalSpelling(ReplaceIdentifiers(operand,
+			substitutions)), context);
+		map<string, CPPGMAstNodePtr>::const_iterator declaration =
+			class_declarations_.find(type_operand);
+		const bool incomplete = declaration != class_declarations_.end() && declaration->second &&
+			declaration->second->kind == "class-forward-declaration";
+		size_t size = incomplete ? 0 : EstimateTypeSize(type_operand, context);
+		string call_type;
+		if(!size && (operand.find('(') != string::npos || operand.find('{') != string::npos) &&
+			operand.find("**") == string::npos && FunctionCallResultType(operand, context,
+				substitutions, &call_type)) {
+			call_type = ResolveAlias(CanonicalSpelling(RemoveMarker(RewriteText(
+				call_type, context, substitutions, 0))), context);
+			size = EstimateTypeSize(call_type, context);
+		}
+		if(size) {
+			const string replacement = IntegralValueSpelling(PA19IntegralValue::Unsigned(
+				static_cast<unsigned long long>(size), "unsigned long", 64));
+			expanded_size.replace(search, close - search + 1, replacement);
+			expanded_size_any = true; search += replacement.size(); continue;
+		}
+		search = expanded_size.find("sizeof(", close + 1);
+	}
+	if(expanded_size_any && expanded_size != raw) {
+		PA19ConstantExpressionParser parser(constant_values_, substitutions,
+			constant_type_sizes_, constant_type_alignments_, type_aliases_);
+		if(parser.Evaluate(expanded_size, result)) return true;
+	}
+	if(expanded) *expanded = expanded_size;
+	return false;
+}
+
 size_t PA18TemplateExpander::EstimateTypeSize(string raw, const string& context) const
 {
 	raw = CanonicalSpelling(raw);
@@ -325,6 +372,34 @@ size_t PA18TemplateExpander::EstimateTypeSize(string raw, const string& context)
 		const size_t separator = current.rfind("::");
 		if(separator == string::npos) current.clear();
 		else current.erase(separator);
+	}
+	map<string, CPPGMAstNodePtr>::const_iterator generated = class_declarations_.find(raw);
+	if(generated != class_declarations_.end() && generated->second) {
+		size_t offset = 0, alignment = 1;
+		const CPPGMAstNodePtr& declaration = generated->second;
+		for(size_t child = 0; child < declaration->children.size(); ++child) {
+			const CPPGMAstNodePtr& member = declaration->children[child];
+			if(!member || member->kind != "simple-declaration" || member->children.empty()) continue;
+			const string specifiers = SpellNode(member->children[0]);
+			if(specifiers.find("typedef") != string::npos ||
+				specifiers.find("static") != string::npos) continue;
+			const string base = NodeTypeSpelling(member->children[0]);
+			const CPPGMAstNodePtr list = ChildOfKindLocal(member, "init-declarator-list");
+			if(!list) continue;
+			for(size_t item = 0; item < list->children.size(); ++item) {
+				const CPPGMAstNodePtr& declarator = list->children[item];
+				if(!declarator || declarator->children.empty() ||
+					DescendantOfKind(declarator->children[0], "parameter-clause")) continue;
+				const size_t size = EstimateTypeSize(DeclaratorTypeSpelling(base,
+					declarator->children[0]), context);
+				if(!size) continue;
+				const size_t member_alignment = size > 8 ? 8 : size;
+				alignment = max(alignment, member_alignment);
+				offset = (offset + member_alignment - 1) / member_alignment *
+					member_alignment + size;
+			}
+		}
+		if(offset) return (offset + alignment - 1) / alignment * alignment;
 	}
 	// A dependent call can produce a class template type before that class has
 	// been replayed as a concrete generated declaration.  `sizeof` still needs

@@ -12,13 +12,16 @@ bool PA18TemplateExpander::GeneratedFunctionCallResultType(
 {
 	if(!result) return false;
 	string generated_ellipsis_result;
+	const string callee_name = LastComponent(callee);
 	for(map<string, vector<CPPGMAstNodePtr> >::const_iterator owner =
 		generated_by_owner_.begin(); owner != generated_by_owner_.end(); ++owner)
 		for(size_t generated = 0; generated < owner->second.size(); ++generated) {
 			const CPPGMAstNodePtr declaration = owner->second[generated];
 			if(!declaration || (declaration->kind != "function-definition" &&
 				declaration->kind != "simple-declaration") ||
-				DeclarationName(declaration) != LastComponent(callee)) continue;
+				DeclarationName(declaration) != callee_name &&
+				(declaration->template_primary.empty() ||
+					LastComponent(declaration->template_primary) != callee_name)) continue;
 			const CPPGMAstNodePtr declarator = FunctionDeclarator(declaration);
 			const CPPGMAstNodePtr clause = DescendantOfKind(declarator, "parameter-clause");
 			if(!declarator || !clause) continue;

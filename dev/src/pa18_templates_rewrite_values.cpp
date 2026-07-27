@@ -159,7 +159,8 @@ bool PA18TemplateExpander::EvaluateLogicalIntegralText(const string& raw,
 	}
 	if(split_logical(raw, "&&", &left, &right)) {
 		PA19IntegralValue value;
-		if(!EvaluateIntegralText(left, context, substitutions, &value) || !value.known)
+		const bool left_evaluated = EvaluateIntegralText(left, context, substitutions, &value);
+		if(!left_evaluated || !value.known)
 			return true;
 		if(PA19Raw(value) == 0) *result = PA19IntegralValue::Signed(0, "int", 32);
 		else EvaluateIntegralText(right, context, substitutions, result);

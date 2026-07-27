@@ -141,18 +141,16 @@
 		PA19IntegralValue* result);
 	bool ExpandNamedIntegralOperands(const string& raw, const string& context,
 		const map<string, string>& substitutions, PA19IntegralValue* result);
-	string NormalizeIntegralExpression(string raw) const;
-	bool EvaluateActivePackSize(string raw, PA19IntegralValue* result) const;
+	string NormalizeIntegralExpression(string raw) const; bool EvaluateActivePackSize(string raw, PA19IntegralValue* result) const;
 	string RewriteActivePackSizes(string raw) const;
 	bool PrepareIntegralText(string* raw, const string& context,
 		const map<string, string>& substitutions);
 	void NormalizeIntegralText(string* raw, const map<string, string>& substitutions);
 	bool EvaluateIntegralTextSpecialForms(const string& raw, const string& context,
 		const map<string, string>& substitutions, PA19IntegralValue* result);
-	bool EvaluateIntegralTextKnownValues(const string& raw, const string& context,
-		const map<string, string>& substitutions, PA19IntegralValue* result);
-	bool EvaluateIntegralTextFallbacks(const string& raw, const string& context,
-		const map<string, string>& substitutions, PA19IntegralValue* result);
+	bool EvaluateExpandedSizeofText(const string& raw, const string& context, const map<string, string>& substitutions, PA19IntegralValue* result, string* expanded);
+	bool EvaluateIntegralTextKnownValues(const string& raw, const string& context, const map<string, string>& substitutions, PA19IntegralValue* result);
+	bool EvaluateIntegralTextFallbacks(const string& raw, const string& context, const map<string, string>& substitutions, PA19IntegralValue* result);
 	bool EvaluateLogicalIntegralText(const string& raw, const string& context,
 		const map<string, string>& substitutions, PA19IntegralValue* result);
 	bool EvaluateIntegralText(string raw, const string& context,
@@ -652,8 +650,14 @@
 	{
 		string pointer_argument;
 		if(ResolvePointerOrReferenceArgument(parameter, raw, context, substitutions, &pointer_argument)) { if(typed_result) *typed_result = PA19IntegralValue(); return pointer_argument; }
-		if(HasReplayContext(substitutions)) RewriteText(parameter.non_type_type, context, substitutions, 0);
 		const string source_raw = raw;
+		if(source_raw.find("sizeof(") != string::npos) { PA19IntegralValue early_value;
+			const bool early_evaluated = EvaluateIntegralText(NormalizeIntegralArgumentExpression(source_raw, context), context, substitutions, &early_value);
+			if(early_evaluated && early_value.known) { const PA19IntegralType early_type =
+				PA19Type(ResolveAlias(RewriteText(parameter.non_type_type, context, substitutions, 0), context));
+				if(early_type.integral) early_value = PA19Convert(early_value, early_type); if(typed_result) *typed_result = early_value;
+				return TemplateIntegralValueSpelling(early_value); }
+			throw PA18SubstitutionFailure("dependent sizeof is not a valid template argument"); }
 		string expanded_pack;
 		if(ExpandIntegralPackExpression(source_raw, context, substitutions,
 			&expanded_pack)) raw = expanded_pack;
@@ -676,12 +680,12 @@
 				}
 			raw = ReplaceIdentifiersPreservingPackSizes(raw, expression_substitutions);
 		}
-		raw = RemoveMarker(RewriteText(raw, context, substitutions, 0));
-		// RewriteText deliberately leaves a dependent template-id intact when
-		// one of its arguments still belongs to the enclosing replay.  Do not
-		// substitute that id's base name afterwards: replacing `matches_` with
-		// the enclosing generated class would manufacture `Generated_<Args>`
-		// and lose the nested specialization entirely.
+		PA19IntegralValue value; bool evaluated = false;
+		if(raw.find("&&") != string::npos || raw.find("||") != string::npos) {
+			try { evaluated = EvaluateIntegralText(NormalizeIntegralArgumentExpression(raw, context), context, substitutions, &value); } catch(...) { evaluated = false; }
+		}
+		if(!evaluated) raw = RemoveMarker(RewriteText(raw, context, substitutions, 0));
+		// Do not rebind a dependent template-id base after RewriteText.
 		map<string, string> resolved_substitutions = substitutions;
 		for(map<string, string>::const_iterator substitution = substitutions.begin();
 			substitution != substitutions.end(); ++substitution)
@@ -696,14 +700,10 @@
 				}
 			}
 		raw = ReplaceIdentifiersPreservingPackSizes(raw, resolved_substitutions);
-		// When a non-type expression contains a nested template-id followed by
-		// a parenthesized comparison, the compact PA10 spelling can retain the
-		// enclosing template delimiter (`(expr)>`).  The delimiter is not part
-		// of the integral expression once this argument is isolated.
+		// Strip a compact parser delimiter left after an isolated nested template-id.
 		while(raw.size() >= 2 && raw[raw.size() - 1] == '>' &&
 			raw[raw.size() - 2] == ')') raw.erase(raw.size() - 1);
-		PA19IntegralValue value;
-		bool evaluated = EvaluateIntegralText(NormalizeIntegralArgumentExpression(raw, context), context, substitutions, &value);
+		if(!evaluated) evaluated = EvaluateIntegralText(NormalizeIntegralArgumentExpression(raw, context), context, substitutions, &value);
 		if(!evaluated && EvaluateQualifiedConstantMember(raw, substitutions,
 			&value)) evaluated = true;
 		string expected = RewriteText(parameter.non_type_type, context, substitutions, 0);

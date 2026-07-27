@@ -479,6 +479,8 @@ bool PA18TemplateExpander::ValidateExplicitFunctionCandidate(
 			(*arguments)[parameter] = NormalizeTypeArgument(value);
 			if(!detail.name.empty()) bindings[detail.name] = (*arguments)[parameter];
 		}
+		if(!raw_explicit_args.empty() &&
+			!ValidateTemplateDefaults(definition, *arguments, context, substitutions)) return false;
 		try {
 			const string result = FunctionResultType(definition, *arguments, context, &substitutions);
 			string probe = result;

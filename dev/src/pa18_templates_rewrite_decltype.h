@@ -298,6 +298,7 @@
 			binding->second = value;
 		}
 		const CPPGMAstNodePtr declarator = FunctionDeclarator(definition.declaration);
+		const string result_context = definition.owner.empty() ? context : definition.owner;
 		string result;
 		const CPPGMAstNodePtr trailing_return = ChildOfKindLocal(declarator,
 			"trailing-return-type");
@@ -309,13 +310,13 @@
 			result += DeclaratorSuffix(declarator);
 		}
 		try {
-			result = RewriteText(result, context, local, 0);
+			result = RewriteText(result, result_context, local, 0);
 		} catch(...) {
 			active_pack_substitutions_ = previous_packs;
 			throw;
 		}
 		result = CollapseReferenceSpelling(ReplaceIdentifiers(result, local));
-		result = ResolveDecltypeTypeName(result, context, local);
+		result = ResolveDecltypeTypeName(result, result_context, local);
 		active_pack_substitutions_ = previous_packs;
 		return NormalizeTypeArgument(result);
 	}

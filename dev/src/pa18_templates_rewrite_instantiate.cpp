@@ -821,48 +821,8 @@ bool PA18TemplateExpander::EvaluateIntegralTextSpecialForms(const string& raw,
 		if(rewritten != raw && EvaluateIntegralText(rewritten, context,
 			substitutions, result)) return true;
 	}
-	string expanded_size = raw;
-	bool expanded_size_any = false;
-	for(size_t search = expanded_size.find("sizeof("); search != string::npos; ) {
-		const size_t open = search + 6;
-		int depth = 0;
-		size_t close = string::npos;
-		for(size_t position = open; position < expanded_size.size(); ++position) {
-			if(expanded_size[position] == '(') ++depth;
-			else if(expanded_size[position] == ')' && --depth == 0) {
-				close = position;
-				break;
-			}
-		}
-		if(close == string::npos) break;
-		const string operand = expanded_size.substr(open + 1, close - open - 1);
-		string call_type;
-		if(operand.find("**") != string::npos) {
-			search = expanded_size.find("sizeof(", close + 1);
-			continue;
-		}
-		if(FunctionCallResultType(operand, context, substitutions, &call_type)) {
-			call_type = CanonicalSpelling(RemoveMarker(RewriteText(
-				call_type, context, substitutions, 0)));
-			call_type = ResolveAlias(call_type, context);
-			const size_t size = EstimateTypeSize(call_type, context);
-			if(size) {
-				const string replacement = IntegralValueSpelling(
-					PA19IntegralValue::Unsigned(static_cast<unsigned long long>(size),
-						"unsigned long", 64));
-				expanded_size.replace(search, close - search + 1, replacement);
-				expanded_size_any = true;
-				search += replacement.size();
-				continue;
-			}
-		}
-		search = expanded_size.find("sizeof(", close + 1);
-	}
-	if(expanded_size_any && expanded_size != raw) {
-		PA19ConstantExpressionParser expanded_parser(constant_values_, substitutions,
-			constant_type_sizes_, constant_type_alignments_, type_aliases_);
-		if(expanded_parser.Evaluate(expanded_size, result)) return true;
-	}
+	string expanded_size;
+	if(EvaluateExpandedSizeofText(raw, context, substitutions, result, &expanded_size)) return true;
 	if(raw.compare(0, 7, "sizeof(") == 0 && !raw.empty() && raw[raw.size() - 1] == ')') {
 		const string operand = raw.substr(7, raw.size() - 8);
 		string call_type;
@@ -878,6 +838,31 @@ bool PA18TemplateExpander::EvaluateIntegralTextSpecialForms(const string& raw,
 			}
 		}
 	}
+	bool invalid_sizeof = false;
+	for(size_t search = expanded_size.find("sizeof("); search != string::npos && !invalid_sizeof; ) {
+		const size_t open = search + 6;
+		int depth = 0; size_t close = string::npos;
+		for(size_t position = open; position < expanded_size.size(); ++position) {
+			if(expanded_size[position] == '(') ++depth;
+			else if(expanded_size[position] == ')' && --depth == 0) { close = position; break; }
+		}
+		if(close == string::npos) break;
+		string operand = CanonicalSpelling(ReplaceIdentifiers(
+			expanded_size.substr(open + 1, close - open - 1), substitutions));
+		while(operand.compare(0, 6, "const ") == 0)
+			operand = CanonicalSpelling(operand.substr(6));
+		while(operand.compare(0, 9, "volatile ") == 0)
+			operand = CanonicalSpelling(operand.substr(9));
+		const string resolved_operand = ResolveAlias(operand, context);
+		if(resolved_operand == "void" || resolved_operand == "const void" ||
+			resolved_operand == "volatile void") invalid_sizeof = true;
+		map<string, CPPGMAstNodePtr>::const_iterator incomplete =
+			class_declarations_.find(resolved_operand);
+		if(incomplete != class_declarations_.end() && incomplete->second &&
+			incomplete->second->kind == "class-forward-declaration") invalid_sizeof = true;
+		search = expanded_size.find("sizeof(", close + 1);
+	}
+	if(invalid_sizeof) return true;
 	if(EvaluateActivePackSize(raw, result)) return true;
 	const size_t subscript_open = raw.find('[');
 	if(subscript_open != string::npos && raw[raw.size() - 1] == ']' && subscript_open > 0) {

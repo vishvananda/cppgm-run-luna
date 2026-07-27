@@ -112,6 +112,100 @@ bool PA18TemplateExpander::IsValidFunctionAddressTemplateArgument(
 	return false;
 }
 
+bool PA18TemplateExpander::ValidateTemplateDefaults(
+	const TemplateDefinition& definition, const vector<string>& arguments,
+	const string& context, const map<string, string>& substitutions)
+{
+	map<string, string> local = substitutions;
+	vector<bool> defaulted;
+	map<string, vector<string> > packs;
+	size_t argument = 0;
+	for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter) {
+		const TemplateParameter& item = definition.parameters[parameter];
+		if(item.pack) {
+			size_t trailing_fixed = 0;
+			for(size_t later = parameter + 1; later < definition.parameters.size(); ++later)
+				if(!definition.parameters[later].pack) ++trailing_fixed;
+			const size_t available = arguments.size() > argument ?
+				arguments.size() - argument : 0;
+			const size_t count = available > trailing_fixed ? available - trailing_fixed : 0;
+			for(size_t value = 0; value < count; ++value)
+				packs[item.name].push_back(arguments[argument++]);
+			if(!item.name.empty() && !packs[item.name].empty())
+				local[item.name] = packs[item.name][0];
+			continue;
+		}
+		if(argument >= arguments.size()) continue;
+		const string expected_default = CanonicalSpelling(ReplaceIdentifiers(
+			item.default_type, local));
+		const bool is_default = !item.default_type.empty() &&
+			CanonicalSpelling(arguments[argument]) == expected_default;
+		defaulted.push_back(is_default);
+		if(!item.name.empty()) local[item.name] = arguments[argument];
+		++argument;
+	}
+	const map<string, vector<string> > previous_packs = active_pack_substitutions_;
+	for(map<string, vector<string> >::const_iterator pack = packs.begin();
+		pack != packs.end(); ++pack)
+		if(!pack->first.empty()) active_pack_substitutions_[pack->first] = pack->second;
+	try {
+		argument = 0;
+		size_t default_index = 0;
+		for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter) {
+			const TemplateParameter& item = definition.parameters[parameter];
+			if(item.pack) {
+				size_t trailing_fixed = 0;
+				for(size_t later = parameter + 1; later < definition.parameters.size(); ++later)
+					if(!definition.parameters[later].pack) ++trailing_fixed;
+				const size_t available = arguments.size() > argument ?
+					arguments.size() - argument : 0;
+				argument += available > trailing_fixed ? available - trailing_fixed : 0;
+				continue;
+			}
+			if(argument >= arguments.size()) continue;
+			if(default_index < defaulted.size() && defaulted[default_index]) {
+				string declared = CanonicalSpelling(ReplaceIdentifiers(
+					item.non_type_type, local));
+				size_t open = declared.find('<');
+				const bool logical_non_type = !item.type &&
+					(declared.find("&&") != string::npos || declared.find("||") != string::npos);
+				if(logical_non_type && open != string::npos) {
+					string base, argument_text; size_t begin = 0, close = string::npos;
+					if(TemplateBase(declared, open, &begin, &base) &&
+						TemplateRange(declared, open, &argument_text, &close) &&
+						(close + 7 == declared.size() && declared.compare(close + 1, 6, "::type") == 0) &&
+						(LastComponent(base) == "enable_if" ||
+							LastComponent(base) == "enable_if_t")) {
+						const vector<string> condition = SplitTemplateArguments(argument_text);
+						PA19IntegralValue enabled;
+						if(!condition.empty() && EvaluateIntegralText(condition[0], context,
+							local, &enabled) && enabled.known && PA19Raw(enabled) == 0) {
+							active_pack_substitutions_ = previous_packs;
+							return false;
+						}
+					}
+				}
+				if(item.type) RewriteText(arguments[argument], context, local, 0);
+				else if(logical_non_type) {
+					PA19IntegralValue value;
+					ResolveIntegralArgument(item, arguments[argument], context, local, &value);
+				}
+			}
+			if(!item.name.empty()) local[item.name] = arguments[argument];
+			++argument;
+			++default_index;
+		}
+	} catch(const PA18SubstitutionFailure&) {
+		active_pack_substitutions_ = previous_packs;
+		return false;
+	} catch(const logic_error&) {
+		active_pack_substitutions_ = previous_packs;
+		return false;
+	}
+	active_pack_substitutions_ = previous_packs;
+	return true;
+}
+
 bool PA18TemplateExpander::ResolvePointerOrReferenceArgument(
 	const TemplateParameter& parameter, const string& raw, const string& context,
 	const map<string, string>& substitutions, string* result) const

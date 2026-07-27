@@ -961,7 +961,8 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 				if(complete) complete_args = explicit_args;
 				else try { complete = InferFunctionArguments(*explicit_definition, explicit_deduction_input, &complete_args, substitutions, context, &explicit_args, 0, &inferred_function_values); }
 				catch(const PA18SubstitutionFailure&) { complete = false; }
-				if(complete) {
+				if(complete && ValidateTemplateDefaults(*explicit_definition, complete_args,
+					context, substitutions)) {
 					try {
 						const string requested_owner_name = explicit_definition->member_template ?
 							active_instantiation_name_ : string();
@@ -1331,6 +1332,7 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 				try { inferred_ok = InferFunctionArguments(*definition, result, &inferred, substitutions, context, 0, &inferred_pack_values, &inferred_function_values, 0, &forwarding_pack_values); }
 				catch(const PA18SubstitutionFailure&) { inferred_ok = false; }
 				if(!inferred_ok) continue;
+				if(!ValidateTemplateDefaults(*definition, inferred, context, substitutions)) continue;
 				const TemplateDefinition* selected_definition =
 					FindExplicitFunctionSpecialization(definition->qualified_name, inferred, context);
 				if(!selected_definition) selected_definition = definition;
