@@ -215,10 +215,22 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
           worst = max(worst, object_rank);
           total += object_rank;
         }
-        for(size_t a = 0; a < arguments.size(); ++a) {
-          const int rank = a < function->parameters.size() ?
-            ConversionRank(arguments[a], function->parameters[a]) : 2;
-          if(rank < 0) { viable = false; break; }
+		for(size_t a = 0; a < arguments.size(); ++a) {
+			int rank = a < function->parameters.size() ?
+				ConversionRank(arguments[a], function->parameters[a]) : 2;
+			// Empty braced-init-lists have no standalone expression type.  Their
+			// target is the parameter being considered: class parameters use the
+			// aggregate-construction path, and an array reference can bind the
+			// value-initialized temporary materialized by EmitReferenceArgument.
+			if(rank < 0 && a < function->parameters.size() &&
+				argument_nodes[a] && argument_nodes[a]->kind == "braced-init-list" &&
+				argument_nodes[a]->children.empty()) {
+				const TypePtr parameter_type = type_value(function->parameters[a]);
+				if(parameter_type && parameter_type->kind == TYPE_ARRAY &&
+					function->parameters[a]->kind == TYPE_LVALUE_REFERENCE)
+					rank = 2;
+			}
+			if(rank < 0) { viable = false; break; }
           if(rank >= 3) ++user_defined;
           worst = max(worst, rank);
           total += rank;

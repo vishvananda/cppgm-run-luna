@@ -3760,3 +3760,150 @@ exit-status, 7 general LowIR, 14 specification exit-status, and 11
 specification LowIR cases.  The next substantial checkpoint is the grouped
 general/400 alias, conversion, and inherited-constructor status/materialization
 slice, followed by the smaller specification partial-order/conversion group.
+
+## Checkpoint 101 scope — 2026-07-27 (before implementation)
+
+### Current failure audit
+
+The required live report is **208/250**, with earlier assignments passing and
+42 PA22 failures.  The complete failure set is grouped by primary behavior:
+
+- **Call deduction and partial ordering (10):**
+  `general/100-fixed-over-empty-trailing-pack-index-sequence`,
+  `general/100-function-parameter-empty-middle-pack-alias`,
+  `general/200-function-template-partial-order-class-template-cv`,
+  `general/200-partial-order-synthetic-virtual-member-emission`,
+  `spec/100-constructor-template-braced-array-bound-deduction`,
+  `spec/100-function-template-array-bound-braced-empty-argument`,
+  `spec/200-constructor-template-qualified-nested-id-partial-ordering`,
+  `spec/200-defaulted-class-template-argument-prefix-deduction`,
+  `spec/200-dependent-specialized-default-arg-deduction`, and
+  `spec/200-function-template-class-template-param-partial-order`.
+- **Substitution, lookup, and pack SFINAE (7):**
+  `general/100-template-deduction-rejects-value-base-argument`,
+  `general/300-alias-bool-explicit-pack-call-dependent-tag`,
+  `general/300-hidden-friend-sfinae-use-scope-shadowing`,
+  `general/300-using-member-template-implicit-object-cv-overload`,
+  `general/400-pack-expansion-size-mismatch-sfinae`,
+  `spec/200-member-operator-fixed-tag-default-partial-order`, and
+  `spec/500-hidden-friend-query-free-decltype-noexcept`.
+- **Constructor and conversion candidate selection (11):**
+  `general/200-constructor-template-rvalue-beats-const-ref`,
+  `general/400-conversion-function-template-prefers-nontemplate`,
+  `general/400-partial-specialization-inherited-constructor-template`,
+  `spec/300-constructor-template-const-ref-conversion`,
+  `spec/300-conversion-function-template-owner-result-copy-init`,
+  `spec/300-template-id-direct-parameter-same-name-deduction`,
+  `spec/500-conversion-function-template-reference-conditional-auto-ref`,
+  `spec/500-conversion-function-template-same-name-target`,
+  `spec/500-defaulted-rebind-constructor-deduction`,
+  `spec/500-function-result-template-id-shadowed-argument`, and
+  `spec/500-template-template-conversion-operator-reference-target`.
+- **Alias, owner, template-template, and typed LowIR replay (14):**
+  `general/400-alias-template-function-argument-cv`,
+  `general/400-function-assignment-invocable-and-helper`,
+  `general/400-member-alias-template-template-partial-deduction-owner`,
+  `general/400-static-data-nttp-pack-sizeof-bound`,
+  `general/400-template-template-alias-default-arity-sfinae`,
+  `spec/100-explicit-specialization-dependent-param-typedef`,
+  `spec/100-explicit-template-argument-overload-rejects-short-candidate`,
+  `spec/100-function-template-array-parameter-string-literal`,
+  `spec/200-member-template-nontype-param-shadows-inherited-value-sum`,
+  `spec/300-cross-specialization-converting-ctor-operator-template`,
+  `spec/300-qualified-member-function-value-fallback-sfinae`,
+  `spec/400-dependent-decltype-member-template-conversion-operator`,
+  `spec/500-template-template-piecewise-partial-ordering`, and
+  `spec/500-type-pack-qualified-static-member-expansion`.
+
+The buckets overlap at the semantic boundaries, but every name in the live
+report appears exactly once in this primary map.
+
+### Checkpoint Scope
+
+Complete the **braced/array-bound deduction and constructor-candidate** slice:
+carry empty braced-init arguments as typed non-deduced candidates, preserve
+reference-to-array element and bound facts while matching a later deduced
+parameter, and replay the selected constructor with forwarding- and
+const-reference conversion ranking.  The focused fixtures are
+`spec/100-constructor-template-braced-array-bound-deduction`,
+`spec/100-function-template-array-bound-braced-empty-argument`,
+`general/200-constructor-template-rvalue-beats-const-ref`,
+`spec/300-constructor-template-const-ref-conversion`,
+`spec/300-template-id-direct-parameter-same-name-deduction`, and
+`spec/500-defaulted-rebind-constructor-deduction`.  The implementation must
+keep candidate-local deduction facts in typed state and leave invalid
+substitutions to candidate selection rather than turning them into global
+diagnostics.  Validation is the focused group, the full PA22 report,
+through-PA21, and the PA22 file audit; the remaining 36 failures stay mapped
+above, with the next group being conversion/template-template owner replay.
+
+## Checkpoint 101 result — 2026-07-27
+
+The selected six-fixture scope is complete: all six focused tests pass their
+checked LowIR comparisons.  The clean current-PA report improved from
+**208/250** to **214/250** with no timeout and no new failure name.  The
+increment preserves empty braced-list deduction facts, materializes bounded
+array-reference temporaries, keeps dependent forwarding calls deferred until
+member-template parameters are bound, and materializes converting constructor
+specializations when the target class appears only in an ordinary function
+parameter.  Empty-class value transfers now still run cross-specialization
+constructors.
+
+The final checkpoint validation passes through-PA21 at **1850/1850** and the
+PA22 file audit passes with the repository's existing warnings.  The lowering
+increment keeps derived-to-base value transfers on their prior temporary path
+and limits replay-only constant folding to constructor bodies, preserving the
+earlier LowIR contract while retaining the six-fixture gain.
+
+### Remaining Work Map
+
+The live report has **36** failures, grouped by primary behavior:
+
+- **Call deduction, partial ordering, and pack boundaries (11):**
+  `general/100-fixed-over-empty-trailing-pack-index-sequence`,
+  `general/100-function-parameter-empty-middle-pack-alias`,
+  `general/100-template-deduction-rejects-value-base-argument`,
+  `general/200-function-template-partial-order-class-template-cv`,
+  `general/200-partial-order-synthetic-virtual-member-emission`,
+  `spec/200-constructor-template-qualified-nested-id-partial-ordering`,
+  `spec/200-defaulted-class-template-argument-prefix-deduction`,
+  `spec/200-dependent-specialized-default-arg-deduction`,
+  `spec/200-function-template-class-template-param-partial-order`,
+  `spec/200-member-operator-fixed-tag-default-partial-order`, and
+  `spec/500-template-template-piecewise-partial-ordering`.
+- **Substitution, lookup, and pack SFINAE (5):**
+  `general/300-alias-bool-explicit-pack-call-dependent-tag`,
+  `general/300-hidden-friend-sfinae-use-scope-shadowing`,
+  `general/300-using-member-template-implicit-object-cv-overload`,
+  `general/400-pack-expansion-size-mismatch-sfinae`, and
+  `spec/500-hidden-friend-query-free-decltype-noexcept`.
+- **Constructor and conversion candidate selection (8):**
+  `general/400-conversion-function-template-prefers-nontemplate`,
+  `general/400-partial-specialization-inherited-constructor-template`,
+  `spec/300-conversion-function-template-owner-result-copy-init`,
+  `spec/300-cross-specialization-converting-ctor-operator-template`,
+  `spec/500-conversion-function-template-reference-conditional-auto-ref`,
+  `spec/500-conversion-function-template-same-name-target`,
+  `spec/500-function-result-template-id-shadowed-argument`, and
+  `spec/500-template-template-conversion-operator-reference-target`.
+- **Alias, owner, template-template, and typed LowIR replay (12):**
+  `general/400-alias-template-function-argument-cv`,
+  `general/400-function-assignment-invocable-and-helper`,
+  `general/400-member-alias-template-template-partial-deduction-owner`,
+  `general/400-static-data-nttp-pack-sizeof-bound`,
+  `general/400-template-template-alias-default-arity-sfinae`,
+  `spec/100-explicit-specialization-dependent-param-typedef`,
+  `spec/100-explicit-template-argument-overload-rejects-short-candidate`,
+  `spec/100-function-template-array-parameter-string-literal`,
+  `spec/200-member-template-nontype-param-shadows-inherited-value-sum`,
+  `spec/300-qualified-member-function-value-fallback-sfinae`,
+  `spec/400-dependent-decltype-member-template-conversion-operator`, and
+  `spec/500-type-pack-qualified-static-member-expansion`.
+
+### Next Checkpoint Scope
+
+Take the remaining conversion/candidate group together with the smaller
+substitution/lookup/pack-SFINAE group.  Preserve typed owner and immediate-
+context facts while resolving conversion-function templates, inherited
+constructors, hidden friends, and defaulted/template-template candidates;
+validate the focused group, full PA22, through-PA21, and the PA22 file audit.

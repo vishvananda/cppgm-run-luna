@@ -1376,6 +1376,15 @@ PA14Lowerer::Value PA14Lowerer::EmitValue(const CPPGMAstNodePtr& node, Scope* sc
 		// operand before ConvertValue sees the cast boundary, losing the required
 		// signed-to-unsigned value copy.
 		Value value = EmitValue(node->children[1], scope);
+		if(state_ && state_->record && state_->record->constructor &&
+		   value.known_constant && is_integral_type(value.type) &&
+		   is_integral_type(target) &&
+		   !(type_value(target) && type_value(target)->kind == TYPE_FUNDAMENTAL &&
+		     type_value(target)->name == "bool")) {
+			value.type = target;
+			value.operand = integer_text(value.constant);
+			return value;
+		}
 		// An explicit scalar cast is a value-producing conversion boundary.  In
 		// particular, a dependent alias can resolve from signed to unsigned
 		// types with the same LowIR width; retain the conversion copy instead of

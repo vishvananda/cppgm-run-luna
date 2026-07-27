@@ -92,6 +92,17 @@ string PA14Lowerer::EmitReferenceArgument(const CPPGMAstNodePtr& node, Scope* sc
         return address;
         }
     }
+    if(node && node->kind == "braced-init-list" && referred &&
+       type_value(referred)->kind == TYPE_ARRAY) {
+      const TypePtr array_type = type_value(referred);
+      const string slot = new_special_slot("argarr", low_type(array_type));
+      const string address = new_temp();
+      AddInstruction(address + " = addr $" + slot);
+      EmitAggregateArrayAt(address, array_type, node, scope,
+        CPPGMAstNodePtr(), -1, true);
+      RegisterTemporaryObject(array_type, address);
+      return address;
+    }
     if(node && node->kind == "binary-expression" && referred &&
        type_value(referred)->kind == TYPE_CLASS) {
       vector<CPPGMAstNodePtr> operator_arguments;
@@ -127,6 +138,21 @@ string PA14Lowerer::EmitReferenceArgument(const CPPGMAstNodePtr& node, Scope* sc
         return AdjustBaseAddress(
           EmitTemporaryObjectAddress(node, scope, "tmpobj"),
           constructed, referred);
+      if(constructed && referred && constructed->kind == TYPE_CLASS &&
+         type_value(referred)->kind == TYPE_CLASS &&
+         !PA12SameType(constructed, type_value(referred), true) &&
+         !IsDerivedFrom(constructed, type_value(referred))) {
+        const string slot = new_special_slot("arg", low_type(type_value(referred)));
+        const string address = new_temp();
+        AddInstruction(address + " = addr $" + slot);
+        vector<CPPGMAstNodePtr> constructor_arguments;
+        constructor_arguments.push_back(node);
+        if(EmitConstructorAt(type_value(referred), address, constructor_arguments,
+                             scope, false)) {
+          RegisterTemporaryObject(type_value(referred), address);
+          return address;
+        }
+      }
       if(constructed) return EmitTemporaryObjectAddress(node, scope, "arg");
     }
     if(node && node->kind == "call-expression" && !node->children.empty()) {

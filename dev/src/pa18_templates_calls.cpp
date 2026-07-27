@@ -909,29 +909,30 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 			size_t close = string::npos;
 			const TemplateDefinition* explicit_definition = 0;
 			if(TemplateBase(lookup_callee, open, &begin, &base) &&
-				TemplateRange(lookup_callee, open, &argument_text, &close))
+				TemplateRange(lookup_callee, open, &argument_text, &close)) {
 				explicit_definition = FindDefinition(base, context);
-			if(explicit_definition && !explicit_definition->class_template) {
-				vector<const TemplateDefinition*> overloads = FindFunctionDefinitions(base, context);
-				RankFunctionTemplateCandidatesForCall(&overloads, explicit_deduction_input,
-					context, substitutions);
-				if(overloads.size() > 1) {
-					const vector<string> raw_explicit_args = SplitTemplateArguments(argument_text);
-					const TemplateDefinition* selected_overload = 0;
-					for(size_t overload = 0; overload < overloads.size(); ++overload) {
-						vector<string> trial_arguments;
-						const bool valid_explicit = ValidateExplicitFunctionCandidate(*overloads[overload], explicit_deduction_input, context,
+				if(explicit_definition && !explicit_definition->class_template) {
+					vector<const TemplateDefinition*> overloads = FindFunctionDefinitions(base, context);
+					RankFunctionTemplateCandidatesForCall(&overloads, explicit_deduction_input,
+						context, substitutions);
+					if(overloads.size() > 1) {
+						const vector<string> raw_explicit_args = SplitTemplateArguments(argument_text);
+						const TemplateDefinition* selected_overload = 0;
+						for(size_t overload = 0; overload < overloads.size(); ++overload) {
+							vector<string> trial_arguments;
+							const bool valid_explicit = ValidateExplicitFunctionCandidate(*overloads[overload], explicit_deduction_input, context,
 								substitutions, raw_explicit_args, &trial_arguments);
-						if(valid_explicit) {
-							const bool prefer = !selected_overload ||
+							if(valid_explicit) {
+								const bool prefer = !selected_overload ||
 								overloads[overload]->parameters.size() >
 									selected_overload->parameters.size();
-							if(prefer) {
-								selected_overload = overloads[overload];
+								if(prefer) {
+									selected_overload = overloads[overload];
+								}
 							}
 						}
+						if(selected_overload) explicit_definition = selected_overload;
 					}
-					if(selected_overload) explicit_definition = selected_overload;
 				}
 			}
 			if(explicit_definition && !explicit_definition->class_template) {
@@ -939,10 +940,11 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 				map<string, string> explicit_substitutions = substitutions;
 				for(map<string, PA19IntegralValue>::const_iterator integral =
 					active_integral_substitutions_.begin();
-					integral != active_integral_substitutions_.end(); ++integral)
+					integral != active_integral_substitutions_.end(); ++integral) {
 					if(integral->second.known)
 						explicit_substitutions[integral->first] =
 							IntegralValueSpelling(integral->second);
+				}
 				for(size_t i = 0; i < explicit_args.size(); ++i) {
 					explicit_args[i] = NormalizeTypeArgument(RewriteText(
 						explicit_args[i], context, explicit_substitutions, 0));
@@ -955,6 +957,7 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 					explicit_args[i] = QualifyTypeArgument(explicit_args[i], context,
 						explicit_definition->owner);
 				}
+				if(PreserveUnresolvedExplicitTemplateCall(input, result, explicit_args, context, explicit_substitutions, substitutions)) return result;
 				const TemplateDefinition* explicit_specialization =
 					FindExplicitFunctionSpecialization(base, explicit_args, context);
 				if(explicit_specialization) explicit_definition = explicit_specialization;
@@ -1308,6 +1311,8 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 			const string callee_name = result_callee->value;
 			vector<const TemplateDefinition*> definitions =
 				FindFunctionDefinitions(callee_name, context);
+			MaterializeOrdinaryCallConversions(callee_name, result, definitions,
+				context, substitutions);
 		map<const TemplateDefinition*, string> inherited_owners;
 		const string qualified_callee_owner = PrefixComponent(callee_name);
 		if(!qualified_callee_owner.empty()) {

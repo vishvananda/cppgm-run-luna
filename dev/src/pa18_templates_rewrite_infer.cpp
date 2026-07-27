@@ -968,6 +968,33 @@ bool PA18TemplateExpander::InferFunctionParameter(
 		FunctionSignature signature;
 		bool inferred_argument = InferArgument(argument, &type, parameter_substitutions,
 			context, &signature);
+		// An empty braced-init-list is a non-deduced argument, but it still
+		// participates in viability once the other template arguments have
+		// supplied every dependent part of this parameter.  Carry the resolved
+		// parameter spelling as the candidate-local type fact instead of making
+		// a non-dependent parameter reject the candidate outright.
+		if(!inferred_argument && argument && argument->kind == "braced-init-list" &&
+			argument->children.empty()) {
+			map<string, string> braced_substitutions = parameter_substitutions;
+			for(map<string, string>::const_iterator binding = inferred->begin();
+				binding != inferred->end(); ++binding)
+				braced_substitutions[binding->first] = binding->second;
+			string resolved_braced = ReplaceIdentifiersPreservingPackSizes(
+				pattern, braced_substitutions);
+			try {
+				resolved_braced = const_cast<PA18TemplateExpander*>(this)->RewriteText(
+					resolved_braced, context, braced_substitutions, 0);
+			} catch(const PA18SubstitutionFailure&) {
+				resolved_braced.clear();
+			}
+			resolved_braced = NormalizeTypeArgument(ReplaceIdentifiers(
+				resolved_braced, braced_substitutions));
+			if(!resolved_braced.empty() && !HasUnresolvedTemplateParameter(
+				resolved_braced, context, braced_substitutions)) {
+				type = resolved_braced;
+				inferred_argument = true;
+			}
+		}
 		if(inferred_argument && signature.result_specifiers && signature.parameters &&
 			pattern.size() > 2 && pattern.compare(pattern.size() - 2, 2, "&&") == 0 &&
 			IsLvalueTemplateArgument(argument))

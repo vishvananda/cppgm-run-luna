@@ -173,17 +173,36 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
       for(size_t a = 0; a < argument_infos.size(); ++a) {
         int rank = 2;
         bool braced_class_handled = false;
-        if(a < function->parameters.size() && raw_arguments[a] &&
-           raw_arguments[a]->kind == "braced-init-list") {
-          const TypePtr parameter_type = type_value(function->parameters[a]);
-          if(parameter_type && parameter_type->kind == TYPE_CLASS) {
-            FunctionRecord* aggregate = EnsureAggregateConstructor(parameter_type);
-            if(aggregate && !aggregate->deleted) {
-              rank = function->parameters[a]->kind == TYPE_RVALUE_REFERENCE ? 2 : 3;
-              braced_class_handled = true;
-            }
-          }
-        }
+		if(a < function->parameters.size() && raw_arguments[a] &&
+		   raw_arguments[a]->kind == "braced-init-list") {
+		  const TypePtr parameter_type = type_value(function->parameters[a]);
+		  if(parameter_type && parameter_type->kind == TYPE_CLASS) {
+		    FunctionRecord* aggregate = EnsureAggregateConstructor(parameter_type);
+		    if(aggregate && !aggregate->deleted) {
+		      rank = function->parameters[a]->kind == TYPE_RVALUE_REFERENCE ? 2 : 3;
+		      braced_class_handled = true;
+		    }
+		    if(!braced_class_handled && raw_arguments[a]->children.empty()) {
+		      const vector<Binding*> defaults = MemberBindings(parameter_type,
+		        LastComponent(parameter_type->name));
+		      for(size_t candidate = 0; candidate < defaults.size(); ++candidate) {
+		        FunctionRecord* default_record = RecordForBinding(defaults[candidate]);
+		        TypePtr default_function = function_target_type(defaults[candidate]->type);
+		        if(!default_record || !default_record->constructor ||
+		           default_record->deleted || !default_function) continue;
+		        bool defaultable = default_function->parameters.empty();
+		        for(size_t parameter = 0; defaultable &&
+		            parameter < default_function->parameters.size(); ++parameter)
+		          if(!HasDefaultArgument(defaults[candidate], parameter)) defaultable = false;
+		        if(defaultable) {
+		          rank = function->parameters[a]->kind == TYPE_RVALUE_REFERENCE ? 2 : 3;
+		          braced_class_handled = true;
+		          break;
+		        }
+		      }
+		    }
+		  }
+		}
 		if(!braced_class_handled)
 			rank = a < function->parameters.size() ?
 				ConversionRank(argument_infos[a], function->parameters[a]) : 2;
@@ -207,7 +226,7 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
 		}
 	}
 	if(!best_binding) {
-      bool has_nonstatic_data = false;
+	  bool has_nonstatic_data = false;
       for(size_t i = 0; i < object_type->class_members.size(); ++i)
         if(!object_type->class_members[i].is_static &&
            !object_type->class_members[i].name.empty()) {
@@ -614,14 +633,23 @@ void PA14Lowerer::EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr&
       }
       FunctionRecord* aggregate_candidate = EnsureAggregateConstructor(aggregate_type);
       vector<CPPGMAstNodePtr> constructor_arguments;
-      if(expression && expression->kind == "braced-init-list") {
-        const bool parenthesized_braced = !initializer->children.empty() &&
-          initializer->children[0] &&
-          initializer->children[0]->kind == "paren-initializer";
-        if(parenthesized_braced && !aggregate_candidate)
-          constructor_arguments.push_back(expression);
-        else constructor_arguments = expression->children;
-      }
+		if(expression && expression->kind == "braced-init-list") {
+			const bool parenthesized_braced = !initializer->children.empty() &&
+			  initializer->children[0] &&
+			  initializer->children[0]->kind == "paren-initializer";
+			const CPPGMAstNodePtr parenthesized = parenthesized_braced ?
+			  initializer->children[0] : CPPGMAstNodePtr();
+			// `X x({a}, b, c)` keeps the braced list as the first argument;
+			// it does not make the whole parenthesized argument sequence one
+			// argument.  The single-child form `X x({a, b})` remains a
+			// braced aggregate argument for a non-aggregate constructor.
+			if(parenthesized_braced && !aggregate_candidate && parenthesized &&
+				parenthesized->children.size() == 1)
+				constructor_arguments.push_back(expression);
+			else if(parenthesized_braced && parenthesized)
+				constructor_arguments = parenthesized->children;
+			else constructor_arguments = expression->children;
+		}
       else if(!initializer->children.empty() && initializer->children[0] &&
               initializer->children[0]->kind == "paren-initializer")
         constructor_arguments = initializer->children[0]->children;

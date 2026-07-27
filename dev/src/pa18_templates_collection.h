@@ -616,10 +616,10 @@ private:
 	CPPGMAstNodePtr TransformAssignmentExpression(const CPPGMAstNodePtr& input, const string& context, const map<string, string>& substitutions);
 	CPPGMAstNodePtr TransformUnaryExpression(const CPPGMAstNodePtr& input, const string& context, const map<string, string>& substitutions);
 	void MaterializeInitializerConstructor(const CPPGMAstNodePtr& input, const CPPGMAstNodePtr& result, const string& context, const map<string, string>& substitutions);
-	bool MaterializeExplicitInstantiation(const CPPGMAstNodePtr& target,
-		const string& context, bool extern_instantiation = false);
-	CPPGMAstNodePtr TransformCallExpression(const CPPGMAstNodePtr& input,
-		const string& context, const map<string, string>& substitutions);
+	bool MaterializeExplicitInstantiation(const CPPGMAstNodePtr& target, const string& context, bool extern_instantiation = false);
+	CPPGMAstNodePtr TransformCallExpression(const CPPGMAstNodePtr& input, const string& context, const map<string, string>& substitutions);
+	bool PreserveUnresolvedExplicitTemplateCall(const CPPGMAstNodePtr& input, const CPPGMAstNodePtr& result, const vector<string>& explicit_arguments, const string& context, const map<string, string>& explicit_substitutions, const map<string, string>& substitutions);
+	void MaterializeOrdinaryCallConversions(const string& callee_name, const CPPGMAstNodePtr& result, const vector<const TemplateDefinition*>& definitions, const string& context, const map<string, string>& substitutions);
 	bool ValidateExplicitFunctionCandidate(const TemplateDefinition& definition, const CPPGMAstNodePtr& input, const string& context, const map<string, string>& substitutions, const vector<string>& raw_explicit_args, vector<string>* arguments); bool HasAbstractFunctionParameter(const TemplateDefinition& definition, const vector<string>& arguments, const string& context, const map<string, string>& substitutions);
 	bool IsAbstractClassType(const string& raw, const string& context, set<string>* active) const; bool IsAbstractObjectSpelling(const string& raw, const string& context) const; string ResolveAlias(string spelling, const string& context) const; bool FindLogicalNamespaceAlias(const string& spelling, string* alias_key) const; bool IsArrayTypeAlias(const string& alias_name, const string& context) const; bool HasPackBeforeFixed(const TemplateDefinition& definition) const;
 	bool LookupVariableType(const string& name, const string& context,
