@@ -733,3 +733,75 @@ performed after a constructor has been selected.
   from the fresh report as 10 general exit-status, 7 general LowIR, 14
   specification exit-status, and 11 specification LowIR cases.
 - `make build`, `git diff --check`, and the focused checkpoint check pass.
+
+## Checkpoint 101 Audit — 2026-07-27
+
+### Scope Reviewed
+
+Reviewed the Checkpoint 101 scope and result in [plan.md](plan.md), the PA22
+contract in [README.md](README.md), recent commits `b686537`, `88c22be`, and
+`ca62437`, the complete active report at
+`/home/vishvananda/work/.ralph/luna-gpt-5.6-luna-ultra/last-test.log`, and the
+six focused PA22 fixtures.  The source review covered the latest checkpoint
+changes in `pa14_lowering_calls.cpp`, `pa14_lowering_constructors.cpp`,
+`pa14_lowering_control.cpp`, `pa14_lowering_expressions.cpp`,
+`pa14_lowering_planning.cpp`, `pa18_templates_calls.cpp`,
+`pa18_templates_calls_conversions.cpp`, `pa18_templates_collection.h`, and
+`pa18_templates_rewrite_infer.cpp`, including the source-set registration.
+The audit traced braced-list deduction, array-reference temporary lowering,
+constructor/conversion replay, candidate ownership, hot-path inference, file
+size limits, and preservation of PA1–PA21.
+
+### Findings
+
+- The new ordinary-conversion replay helper accepted the entire visible
+  function-template definition vector before overload selection, then
+  synthesized a constructor member call for each candidate from a raw
+  parameter spelling.  That could materialize nonselected constructors,
+  repeated class lookups, and blur candidate ownership.  It was a real
+  pre-selection architecture/performance blocker, not a timeout issue.
+- The helper now runs only when lookup has no template definitions and the
+  ordinary signature index supplies a unique function signature.  Target and
+  source class identity is checked through the existing declaration index and
+  reused; no emitted LowIR or generated text is reparsed.
+- `EmitObjectValueArgument` had acquired an unconditional `Infer` call even
+  for non-empty class storage, where `EmitObjectTransferAt` already owns the
+  source conversion path.  That duplicated hot-path type inference.  The
+  inference is now limited to empty-storage objects, the only path requiring
+  the new cross-specialization empty-class constructor check.
+- No skipped compiler phase, fallback-success path, dummy output, embedded
+  payload, interpreter/VM/trampoline substitute, source/test-specific
+  acceptance gate, timeout workaround, weakened check, duplicated AST
+  ownership, or unchecked implementation fragment was found.  Braced arrays
+  and constructors continue through typed PA14 lowering and the existing
+  LowIR emission pipeline; candidate failures remain candidate-local.
+- The file audit has no new fatal issue or bypass.  The checkpoint sources
+  remain within the PA22 size limits; the audit reports only the repository's
+  existing 12 structural warnings.
+
+### Changes Made
+
+- Removed the all-template-definition conversion replay loop and narrowed the
+  helper API/call site to unique ordinary signatures.
+- Reused target/source declaration results instead of repeating indexed class
+  lookups during ordinary conversion replay.
+- Made source-type inference conditional on empty-storage object lowering.
+- Kept the six-fixture behavior and all changes in `dev/src`; no tests or
+  reference fixtures were changed.  The complete 36-fixture failure map and
+  next substantial checkpoint are refreshed in [plan.md](plan.md).
+
+### Validation
+
+- Checkpoint focus — **passed**: the six requested fixtures pass, **6/6**.
+- Required current-PA report — **passed for stage progress**:
+  `make test-report ACTIVE_TEST_REPORT_PAS='pa22'` reports **214/250**, equal
+  to the turn-start baseline, with the same complete 36-fixture residual and
+  no timeout; earlier assignments remain green.
+- Required prior-through command — **passed**:
+  `n=22; if [ "$n" -le 1 ]; then echo '===== ALL TESTS PASSED SUCCESSFULLY! (0/0) ====='; else make test-report-through-pa$((n - 1)); fi`
+  reports **1850/1850** through PA21.
+- Required file audit — **passed**:
+  `perl scripts/cppgm_file_audit.pl --stage pa22 --paths dev/src`, with only
+  the unchanged 12 warnings.
+- `make build`, `git diff --check`, and post-commit `git status --short` are
+  clean.

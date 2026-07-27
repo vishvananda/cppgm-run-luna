@@ -53,8 +53,7 @@ bool PA18TemplateExpander::PreserveUnresolvedExplicitTemplateCall(
 
 void PA18TemplateExpander::MaterializeOrdinaryCallConversions(
 	const string& callee_name, const CPPGMAstNodePtr& result,
-	const vector<const TemplateDefinition*>& definitions, const string& context,
-	const map<string, string>& substitutions)
+	const string& context, const map<string, string>& substitutions)
 {
 	if(!result) return;
 	const auto materialize_conversion = [&](const string& raw_parameter,
@@ -67,16 +66,22 @@ void PA18TemplateExpander::MaterializeOrdinaryCallConversions(
 		} catch(const PA18SubstitutionFailure&) {
 			return;
 		}
-		if(target_type.empty() || !FindClassDeclaration(target_type, context)) return;
+		const CPPGMAstNodePtr target_declaration = target_type.empty() ?
+			CPPGMAstNodePtr() : FindClassDeclaration(target_type, context);
+		if(!target_declaration) return;
 		string source_type;
+		CPPGMAstNodePtr source_declaration;
 		try {
 			if(!InferArgument(argument, &source_type, substitutions, context)) return;
 			source_type = StripOrdinaryCallConversionType(ResolveAlias(RewriteText(
 				source_type, context, substitutions, 0), context));
-			if(!FindClassDeclaration(source_type, context))
+			source_declaration = FindClassDeclaration(source_type, context);
+			if(!source_declaration)
 				source_type = StripOrdinaryCallConversionType(QualifyTypeArgument(
 					source_type, context));
-			if(!FindClassDeclaration(source_type, context)) {
+			if(!source_declaration)
+				source_declaration = FindClassDeclaration(source_type, context);
+			if(!source_declaration) {
 				map<string, string>::const_iterator target_base = specialization_bases_.find(
 					LastComponent(target_type));
 				if(target_base != specialization_bases_.end()) {
@@ -84,11 +89,12 @@ void PA18TemplateExpander::MaterializeOrdinaryCallConversions(
 					if(!prefix.empty() && source_type.find("::") == string::npos)
 						source_type = prefix + "::" + source_type;
 				}
+				source_declaration = FindClassDeclaration(source_type, context);
 			}
 		} catch(const PA18SubstitutionFailure&) {
 			return;
 		}
-		if(source_type.empty() || !FindClassDeclaration(source_type, context) ||
+		if(source_type.empty() || !source_declaration ||
 			source_type == target_type) return;
 		string constructor_name = LastComponent(target_type);
 		map<string, string>::const_iterator base = specialization_bases_.find(
@@ -111,25 +117,7 @@ void PA18TemplateExpander::MaterializeOrdinaryCallConversions(
 				context, substitutions);
 		} catch(const PA18SubstitutionFailure&) {}
 	};
-	if(result->children.size() > 1 && result->children[1] &&
-		result->children[1]->kind == "argument-list") {
-		const vector<CPPGMAstNodePtr>& call_arguments = result->children[1]->children;
-		for(size_t candidate = 0; candidate < definitions.size(); ++candidate) {
-			if(!definitions[candidate] || !definitions[candidate]->declaration) continue;
-			const CPPGMAstNodePtr clause = DescendantOfKind(
-				FunctionDeclarator(definitions[candidate]->declaration), "parameter-clause");
-			if(!clause) continue;
-			size_t argument = 0;
-			for(size_t parameter = 0; parameter < clause->children.size() &&
-				argument < call_arguments.size(); ++parameter) {
-				const CPPGMAstNodePtr parameter_node = clause->children[parameter];
-				if(!parameter_node || parameter_node->kind != "parameter-declaration") continue;
-				materialize_conversion(ParameterTypeSpelling(parameter_node),
-					call_arguments[argument++]);
-			}
-		}
-	}
-	if(definitions.empty() && result->children.size() > 1 && result->children[1]) {
+	if(result->children.size() > 1 && result->children[1]) {
 		const FunctionSignature* signature = FindFunctionSignature(callee_name, context);
 		if(signature && signature->parameters) {
 			size_t argument = 0;

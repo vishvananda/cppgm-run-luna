@@ -1311,8 +1311,8 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 			const string callee_name = result_callee->value;
 			vector<const TemplateDefinition*> definitions =
 				FindFunctionDefinitions(callee_name, context);
-			MaterializeOrdinaryCallConversions(callee_name, result, definitions,
-				context, substitutions);
+			// PA14 owns overload ranking; replay only a unique ordinary signature here.
+			if(definitions.empty()) MaterializeOrdinaryCallConversions(callee_name, result, context, substitutions);
 		map<const TemplateDefinition*, string> inherited_owners;
 		const string qualified_callee_owner = PrefixComponent(callee_name);
 		if(!qualified_callee_owner.empty()) {

@@ -41,14 +41,18 @@ PA14Lowerer::Value PA14Lowerer::EmitObjectValueArgument(
     const string slot = new_special_slot("argobj", low_type(object_type));
     const string address = new_temp();
     AddInstruction(address + " = addr $" + slot);
-    const ExprInfo source_info = Infer(node, scope);
-    const TypePtr source_type = expression_value_type(source_info);
+    const bool empty_storage = IsEmptyBaseStorage(object_type);
+    TypePtr source_type;
+    if(empty_storage) {
+      const ExprInfo source_info = Infer(node, scope);
+      source_type = expression_value_type(source_info);
+    }
     // Empty classes still run converting constructors.  The ordinary empty
     // storage shortcut below only needs an address for an exact or derived
     // object; a cross-specialization class value must first initialize the
     // target object so its constructor side effects and typed ABI entry are
     // preserved.
-    if(source_type && source_type->kind == TYPE_CLASS &&
+    if(empty_storage && source_type && source_type->kind == TYPE_CLASS &&
        !PA12SameType(source_type, object_type, true) &&
        !IsDerivedFrom(source_type, object_type)) {
       if(EmitObjectTransferAt(object_type, address, node, scope, true)) {
@@ -58,7 +62,6 @@ PA14Lowerer::Value PA14Lowerer::EmitObjectValueArgument(
         return result;
       }
     }
-    const bool empty_storage = IsEmptyBaseStorage(object_type);
     if(empty_storage && IsTrivialValueStorage(object_type)) {
       const TypePtr constructed = node && node->kind == "call-expression" &&
         !node->children.empty() ? ConstructorObjectType(node->children[0], scope) : TypePtr();

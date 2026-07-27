@@ -3855,6 +3855,19 @@ increment keeps derived-to-base value transfers on their prior temporary path
 and limits replay-only constant folding to constructor bodies, preserving the
 earlier LowIR contract while retaining the six-fixture gain.
 
+### Checkpoint Audit Result
+
+The audit removed the conversion-replay path's pre-selection scan over every
+visible template definition.  Early replay now requires the unique ordinary
+function signature, reuses indexed class declarations, and leaves template
+candidate ranking to the normal candidate path.  PA14 now performs the extra
+source-type inference only for empty-storage objects, where the new
+cross-specialization constructor behavior needs it.  The fresh report remains
+**214/250**, with the same complete 36-fixture residual and no timeout; the
+map below is therefore refreshed and unchanged.  The next substantial group
+remains conversion/template-template owner replay plus the smaller
+substitution/lookup/pack-SFINAE group.
+
 ### Remaining Work Map
 
 The live report has **36** failures, grouped by primary behavior:
