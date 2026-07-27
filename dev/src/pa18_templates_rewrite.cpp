@@ -1336,11 +1336,12 @@ CPPGMAstNodePtr PA18TemplateExpander::FinishRegularNode(
 		// scope closes; doing it here recursively re-enters the same constructor.
 		if(active_template_declaration_depth_ == 0)
 			MaterializeInitializerConstructor(input, result, context, substitutions);
+		if(input->kind == "simple-declaration")
+			DeduceAutoInitializerType(result, context, substitutions);
 		if(input->kind == "simple-declaration") ReifyReferenceType(result);
-		if(input->kind == "binary-expression" || input->kind == "assignment-expression") {
-			InstantiateOperatorTemplate(result, context, substitutions);
-			RewriteOperatorFunctionArgument(result, context, substitutions);
-		}
+		if(input->kind == "conditional-expression")
+			MaterializeConditionalConversions(result, context, substitutions);
+		if(input->kind == "binary-expression" || input->kind == "assignment-expression") { InstantiateOperatorTemplate(result, context, substitutions); RewriteOperatorFunctionArgument(result, context, substitutions); }
 		if(!promoted_local_class.empty()) {
 			map<string, string> promoted_substitution;
 			promoted_substitution[LastComponent(input->value)] = promoted_local_class;

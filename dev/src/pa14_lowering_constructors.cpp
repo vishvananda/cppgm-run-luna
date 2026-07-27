@@ -41,6 +41,27 @@ PA14Lowerer::Value PA14Lowerer::EmitObjectValueArgument(
     const string slot = new_special_slot("argobj", low_type(object_type));
     const string address = new_temp();
     AddInstruction(address + " = addr $" + slot);
+    const ExprInfo source_info = Infer(node, scope);
+    const TypePtr source_value = expression_value_type(source_info);
+    if(source_value && source_value->kind == TYPE_CLASS &&
+       !PA12SameType(source_value, object_type, true)) {
+      Binding* conversion = FindConversionOperator(source_value, object_type, true);
+      if(conversion) {
+        // A class-by-value parameter owns a separate object.  Materialize a
+        // user-defined conversion result first, then copy it into the ABI
+        // argument object; passing the destination as an indirect conversion
+        // result would elide this C++11 object boundary.
+        Value converted = EmitConversionOperator(node, scope, object_type, true);
+        if(converted.operand.empty()) return converted;
+        AddInstruction("copyobj " + integer_text(static_cast<long long>(type_size(object_type))) +
+          "x" + integer_text(static_cast<long long>(type_alignment(object_type))) +
+          " " + converted.operand + ", " + address);
+        Value result;
+        result.type = object_type;
+        result.operand = "$" + slot;
+        return result;
+      }
+    }
     const bool empty_storage = IsEmptyBaseStorage(object_type);
     TypePtr source_type;
     if(empty_storage) {

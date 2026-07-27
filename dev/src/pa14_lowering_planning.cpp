@@ -90,8 +90,18 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
       if(direct && assignment_call) {
         TypePtr assignment_owner = type_value(object_info.type);
         if(assignment_owner && assignment_owner->kind == TYPE_CLASS) {
-          (void)EnsureImplicitAssignment(assignment_owner, false);
-          if(!arguments.empty() && arguments[0].category != "lvalue")
+          bool has_direct_assignment = false;
+          bool has_direct_move_assignment = false;
+          for(size_t candidate = 0; candidate < candidates.size(); ++candidate) {
+            FunctionRecord* record = RecordForBinding(candidates[candidate]);
+            if(!record || record->member_template) continue;
+            has_direct_assignment = true;
+            if(record->move_assignment) has_direct_move_assignment = true;
+          }
+          if(!has_direct_assignment)
+            (void)EnsureImplicitAssignment(assignment_owner, false);
+          if(!arguments.empty() && arguments[0].category != "lvalue" &&
+             !has_direct_move_assignment)
             (void)EnsureImplicitAssignment(assignment_owner, true);
           const vector<Binding*> ordinary = MemberBindings(assignment_owner, "operator=");
           for(size_t i = 0; i < ordinary.size(); ++i)
@@ -240,6 +250,16 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
         FunctionRecord* best_record = RecordForBinding(best.binding);
         const bool prefer_non_template = best_record && candidate_record &&
           best_record->member_template && !candidate_record->member_template;
+        // A non-template and a function-template overload with identical
+        // conversion ranks are ordered by the non-template candidate.  Keep
+        // that ordering symmetric: the old replacement-only check preferred
+        // the non-template when it was visited second, but still diagnosed an
+        // ambiguity when the template was visited second.
+        const bool same_rank = best.binding && user_defined == best.user_defined &&
+          worst == best.worst && total == best.total;
+        const bool prefer_existing_non_template = same_rank && best_record &&
+          candidate_record && !best_record->member_template &&
+          candidate_record->member_template;
         if(!best.binding || prefer_non_template || user_defined < best.user_defined ||
            (user_defined == best.user_defined &&
             (worst < best.worst || (worst == best.worst && total < best.total)))) {
@@ -254,6 +274,8 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
           best.worst = worst;
           best.total = total;
           ambiguous_best = false;
+        } else if(prefer_existing_non_template) {
+          continue;
         } else if(user_defined == best.user_defined && worst == best.worst &&
                   total == best.total &&
                   !PA12SameType(best.function, function, false)) {
@@ -396,7 +418,16 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseOperatorCall(
         total += rank;
       }
       if(!viable) continue;
-      if(!best.binding || user_defined < best.user_defined ||
+      FunctionRecord* candidate_record = RecordForBinding(binding);
+      FunctionRecord* best_record = RecordForBinding(best.binding);
+      const bool same_rank = best.binding && user_defined == best.user_defined &&
+        worst == best.worst && total == best.total;
+      const bool prefer_candidate_non_template = best_record && candidate_record &&
+        best_record->member_template && !candidate_record->member_template;
+      const bool prefer_existing_non_template = same_rank && best_record &&
+        candidate_record && !best_record->member_template &&
+        candidate_record->member_template;
+      if(!best.binding || prefer_candidate_non_template || user_defined < best.user_defined ||
          (user_defined == best.user_defined &&
           (worst < best.worst || (worst == best.worst && total < best.total)))) {
         best.binding = binding;
@@ -408,6 +439,8 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseOperatorCall(
         best.user_defined = user_defined;
         best.worst = worst;
         best.total = total;
+      } else if(prefer_existing_non_template) {
+        continue;
       } else if(worst == best.worst && total == best.total &&
                 !PA12SameType(best.function, function, false)) {
         throw logic_error("ambiguous operator overload");

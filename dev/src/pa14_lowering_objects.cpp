@@ -638,15 +638,21 @@ bool PA14Lowerer::EmitObjectTransferAt(const TypePtr& raw_target,
       arguments.push_back(source);
       return EmitConstructorAt(target, destination, arguments, scope, true);
     }
-    // A class-valued return/initializer may be produced by a conversion
-    // operator rather than by a converting constructor on the destination.
-    // Keep the destination as the conversion call's indirect result slot so
-    // a hidden friend/member conversion can construct the final object
-    // directly (and, importantly, perform its private construction in the
-    // selected friend context).
+    // A class-valued conversion is still a constructor boundary in C++11:
+    // materialize the conversion result, then initialize the destination
+    // through its copy/move constructor.  Passing destination directly as
+    // the conversion's ABI result slot skips that boundary and changes both
+    // object lifetime and the generated call sequence.
     if(target && target->kind == TYPE_CLASS) {
       Binding* conversion = FindConversionOperator(source_type, target, true);
       if(conversion) {
+        FunctionRecord* conversion_record = RecordForBinding(conversion);
+        if(conversion_record && conversion_record->member_template) {
+          vector<CPPGMAstNodePtr> constructor_arguments;
+          constructor_arguments.push_back(source);
+          return EmitConstructorAt(target, destination, constructor_arguments, scope,
+            allow_explicit);
+        }
         CallChoice choice;
         choice.binding = conversion;
         choice.function = function_target_type(conversion->type);
@@ -657,7 +663,6 @@ bool PA14Lowerer::EmitObjectTransferAt(const TypePtr& raw_target,
         choice.conversion = true;
         const Value converted = EmitChosenCall(choice, CPPGMAstNodePtr(),
           vector<CPPGMAstNodePtr>(), scope, destination);
-        FunctionRecord* conversion_record = RecordForBinding(conversion);
         if(conversion_record && conversion_record->indirect_result) return true;
         if(converted.operand.empty()) return false;
         AddInstruction("copyobj " + integer_text(static_cast<long long>(type_size(target))) +

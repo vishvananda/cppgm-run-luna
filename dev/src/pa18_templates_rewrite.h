@@ -3,8 +3,7 @@
 #include "pa18_templates_rewrite_decltype.h"
 #include "pa18_templates_rewrite_instantiate.h"
 bool MatchOrderingTypePattern(const string& raw_pattern, const string& raw_actual, const set<string>& parameter_names, map<string, string>* inferred) const;
-bool MatchOrderingPatternList(const vector<string>& patterns,
-	const vector<string>& actual, const set<string>& parameter_names,
+bool MatchOrderingPatternList(const vector<string>& patterns, const vector<string>& actual, const set<string>& parameter_names,
 	map<string, string>* inferred) const;
 bool ClassPartialMoreSpecialized(const TemplateDefinition& lhs,
 	const TemplateDefinition& rhs, const string& context) const;
@@ -1057,6 +1056,7 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 		const string& context, const map<string, string>& substitutions,
 		const CPPGMAstNodePtr& result, const string& promoted_local_class,
 		bool defer_type_only_classes = false);
+	void DeduceAutoInitializerType(const CPPGMAstNodePtr& result, const string& context, const map<string, string>& substitutions); void MaterializeConditionalConversions(const CPPGMAstNodePtr& result, const string& context, const map<string, string>& substitutions); bool MaterializeConditionalConversion(const string& actual, const string& expected, const string& context, const map<string, string>& substitutions);
 	bool ConsumeMaterializedStaticAssert(const CPPGMAstNodePtr& input,
 		const CPPGMAstNodePtr& result, const string& context,
 		const map<string, string>& substitutions);
@@ -1194,7 +1194,7 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 		}
 		if(input->kind == "namespace-definition") return TransformNamespace(input, context, substitutions);
 		if(input->kind == "call-expression") return TransformCallExpression(input, context, substitutions);
-		return TransformRegularNode(input, context, substitutions);
-	}
+		return TransformRegularNode(input, context, substitutions); }
+bool ReplayMemberCall(const CPPGMAstNodePtr& call, const CPPGMAstNodePtr& callee, const string& original_member, const string& context, const map<string, string>& substitutions, bool explicit_instantiation, bool constructor_replay); bool ParseMemberCall(MemberCallState* state); bool ResolveMemberObject(MemberCallState* state); bool ResolveMemberOwner(MemberCallState* state); bool CollectMemberCallCandidates(MemberCallState* state); bool PrepareMemberCandidate(MemberCallState* state, size_t candidate_index, MemberCallCandidateState* candidate); bool PrepareMemberCandidateArguments(MemberCallCandidateState* candidate); void BindExpectedMemberConversion(MemberCallCandidateState* candidate); bool DeduceMemberCandidate(MemberCallCandidateState* candidate); bool EmitMemberCandidate(MemberCallCandidateState* candidate); bool TryMemberCandidate(MemberCallState* state, size_t candidate_index);
 };
 } // namespace pa18_templates_internal

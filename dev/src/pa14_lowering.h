@@ -1025,6 +1025,8 @@ ExprInfo InferBinary(const CPPGMAstNodePtr& node, Scope* scope);
 
 ExprInfo InferSubscript(const CPPGMAstNodePtr& node, Scope* scope);
 
+ExprInfo InferConditional(const CPPGMAstNodePtr& node, Scope* scope);
+
 ExprInfo Infer(const CPPGMAstNodePtr& node, Scope* scope,
               const TypePtr& expected = TypePtr());
 

@@ -1,5 +1,6 @@
 #include "pa14_lowering.h"
 
+#include <cctype>
 
 using namespace std;
 
@@ -578,9 +579,29 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
     function = PA12AdjustedType(function);
     function = function_type(function);
     if(!function) throw logic_error("special member has no function type");
+    const string raw_name = declarator_name(declarator);
+    const string conversion_suffix = raw_name.compare(0, 8, "operator") == 0 ?
+      raw_name.substr(8) : string();
+    const bool conversion_operator = !conversion_suffix.empty() &&
+      (std::isalnum(static_cast<unsigned char>(conversion_suffix[0])) ||
+       conversion_suffix[0] == '_' || conversion_suffix[0] == ' ');
+    if(conversion_operator) {
+      string target_name = conversion_suffix;
+      while(!target_name.empty() && target_name[0] == ' ') target_name.erase(0, 1);
+      Analyzer::PathTarget target = analyzer_.ResolvePath(scope, target_name);
+      TypePtr target_type = target.binding ? type_value(target.binding->type) : TypePtr();
+      if(target_type && target_type->kind == TYPE_CLASS) {
+        TypePtr adjusted(new Type(*function));
+        adjusted->child = target_type;
+        function = adjusted;
+      }
+    }
+    if(conversion_operator) for(size_t i = 0; i < declared_bindings.size(); ++i)
+      if(declared_bindings[i] && declared_bindings[i]->kind == BIND_FUNCTION &&
+         declared_bindings[i]->declaration.get() == node.get())
+        declared_bindings[i]->type = function;
     TypePtr owner = scope->owner_type;
     if(!owner || owner->kind != TYPE_CLASS) throw logic_error("special member has no class owner");
-    const string raw_name = declarator_name(declarator);
     const string name = SpecialMemberName(raw_name);
     const string qname = TypeQualifiedName(owner) + "::" +
       special_member_symbol_name(owner, name);
@@ -624,6 +645,9 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
 	record->qualified_name = qname;
 	record->member = true;
 	record->static_member = false;
+	record->member_template = record->member_template ||
+		(conversion_operator && node->template_instantiation &&
+		 node->template_primary.find("operator") != string::npos);
 	const bool out_of_class_definition = definition && out_of_class_member;
 	record->out_of_class_definition = record->out_of_class_definition ||
 		out_of_class_definition;

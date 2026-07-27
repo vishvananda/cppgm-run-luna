@@ -1326,17 +1326,7 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferUncached(const CPPGMAstNodePtr& node, Sc
       return result;
     }
     if(node->kind == "conditional-expression") {
-      ExprInfo result;
-      ExprInfo when_true = Infer(node->children[1], scope);
-      ExprInfo when_false = Infer(node->children[2], scope);
-      if(when_true.null_pointer_constant && expression_value_type(when_false) &&
-         expression_value_type(when_false)->kind == TYPE_POINTER) result.type = expression_value_type(when_false);
-      else if(when_false.null_pointer_constant && expression_value_type(when_true) &&
-              expression_value_type(when_true)->kind == TYPE_POINTER) result.type = expression_value_type(when_true);
-      else result.type = CommonType(when_true.type, when_false.type);
-      result.category = PA12SameType(when_true.type, when_false.type, false) &&
-        when_true.category == "lvalue" && when_false.category == "lvalue" ? "lvalue" : "prvalue";
-      return result;
+      return InferConditional(node, scope);
     }
     if(node->kind == "subscript-expression") return InferSubscript(node, scope);
     if(node->kind == "member-expression") return InferMember(node, scope);

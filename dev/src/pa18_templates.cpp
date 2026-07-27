@@ -1191,6 +1191,7 @@ void PA18TemplateExpander::InjectGenerated(const CPPGMAstNodePtr& node,
 			InjectGenerated(node->children[i], context, context);
 		}
 		InsertDeferredGenerated(node);
+		InjectLateRootGenerated(node);
 		return;
 	}
 	if(node->kind == "namespace-definition") {

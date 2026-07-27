@@ -325,6 +325,10 @@ void PA14Lowerer::Lower(ostream& out)
     EmitDynamicInitializers(entries);
     EmitNeededOrdinary(entries);
     EmitMemberPass(entries);
+    // A generated member body can instantiate a free helper after the last
+    // ordinary-demand sweep.  Close that typed demand frontier before final
+    // declarations are emitted.
+    EmitNeededOrdinary(entries);
     EmitFinalEntries(entries, out, initial_global_count);
   }
 

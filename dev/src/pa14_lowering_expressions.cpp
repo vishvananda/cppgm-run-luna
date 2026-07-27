@@ -328,10 +328,9 @@ PA14Lowerer::Value PA14Lowerer::EmitAssignment(const CPPGMAstNodePtr& node, Scop
         for(size_t i = 0; i < direct_assignments.size(); ++i)
           if(direct_assignments[i]->kind == BIND_FUNCTION &&
              (!RecordForBinding(direct_assignments[i]) ||
-              (!RecordForBinding(direct_assignments[i])->template_instantiation &&
-               !RecordForBinding(direct_assignments[i])->member_template))) {
+              !RecordForBinding(direct_assignments[i])->member_template)) {
             has_direct_assignment = true;
-          }
+        }
         // An inherited operator= does not suppress the derived class's
         // implicit assignment operator.  Synthesize that direct candidate
         // before overload lookup so its complete object/base storage is used.
@@ -891,7 +890,14 @@ string PA14Lowerer::EmitConditionalAddress(const CPPGMAstNodePtr& node, Scope* s
     } else EmitCondition(node->children[0], scope, then_label, else_label);
     TypePtr target_type = expression_value_type(info);
     AddBlock(then_label);
-    const string true_address_raw = EmitAddress(node->children[1], scope);
+    const ExprInfo true_info = Infer(node->children[1], scope);
+    const TypePtr true_value_type = expression_value_type(true_info);
+    string true_address_raw;
+    if(true_value_type && target_type && true_value_type->kind == TYPE_CLASS &&
+       target_type->kind == TYPE_CLASS && !PA12SameType(true_value_type, target_type, false) &&
+       FindConversionOperator(true_value_type, target_type, false))
+      true_address_raw = EmitConversionOperator(node->children[1], scope, target_type, false).operand;
+    else true_address_raw = EmitAddress(node->children[1], scope);
     TypePtr true_type = expression_value_type(Infer(node->children[1], scope));
     const string true_address = true_type && target_type &&
       true_type->kind == TYPE_CLASS && target_type->kind == TYPE_CLASS &&
@@ -900,7 +906,14 @@ string PA14Lowerer::EmitConditionalAddress(const CPPGMAstNodePtr& node, Scope* s
     emit_store(PointerTo(Fundamental("char")), true_address, "$" + slot);
     Terminate("jump ^" + end_label);
     AddBlock(else_label);
-    const string false_address_raw = EmitAddress(node->children[2], scope);
+    const ExprInfo false_info = Infer(node->children[2], scope);
+    const TypePtr false_value_type = expression_value_type(false_info);
+    string false_address_raw;
+    if(false_value_type && target_type && false_value_type->kind == TYPE_CLASS &&
+       target_type->kind == TYPE_CLASS && !PA12SameType(false_value_type, target_type, false) &&
+       FindConversionOperator(false_value_type, target_type, false))
+      false_address_raw = EmitConversionOperator(node->children[2], scope, target_type, false).operand;
+    else false_address_raw = EmitAddress(node->children[2], scope);
     TypePtr false_type = expression_value_type(Infer(node->children[2], scope));
     const string false_address = false_type && target_type &&
       false_type->kind == TYPE_CLASS && target_type->kind == TYPE_CLASS &&

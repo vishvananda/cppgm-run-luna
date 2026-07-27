@@ -75,6 +75,51 @@ Analyzer::Analyzer()
 	: global_(new Scope(SCOPE_NAMESPACE, "<global>", 0)), anonymous_type_count_(0),
 	  pending_class_layouts_() {}
 
+size_t Analyzer::TypeSize(const TypePtr& type) const
+{
+	if (!type) return 0;
+	switch (type->kind) {
+	case TYPE_FUNDAMENTAL: return FundamentalSize(type->name);
+	case TYPE_POINTER:
+	case TYPE_LVALUE_REFERENCE:
+	case TYPE_RVALUE_REFERENCE:
+	case TYPE_MEMBER_POINTER: return 8;
+	case TYPE_FUNCTION: return 4;
+	case TYPE_ARRAY: return type->bound < 0 ? 0 : static_cast<size_t>(type->bound) * TypeSize(type->child);
+	case TYPE_ENUM:
+		if (!type->complete) throw logic_error("sizeof incomplete enum");
+		return type->underlying ? TypeSize(type->underlying) : 4;
+	case TYPE_CLASS:
+		if (!type->layout_complete && type->owned_scope && type->owned_scope->owner_type &&
+			type->owned_scope->owner_type.get() != type.get() &&
+			type->owned_scope->owner_type->complete &&
+			type->owned_scope->owner_type->layout_complete)
+			return type->owned_scope->owner_type->object_size;
+		if (!type->complete || !type->layout_complete)
+			throw logic_error("sizeof incomplete class");
+		return type->object_size;
+	case TYPE_TEMPLATE_PARAMETER:
+	case TYPE_TEMPLATE_TEMPLATE_PARAMETER: return 0;
+	}
+	return 0;
+}
+
+size_t Analyzer::TypeAlignment(const TypePtr& type) const
+{
+	if (!type) return 0;
+	if (type->kind == TYPE_ARRAY) return TypeAlignment(type->child);
+	if (type->kind == TYPE_CLASS && !type->layout_complete && type->owned_scope &&
+		type->owned_scope->owner_type && type->owned_scope->owner_type.get() != type.get() &&
+		type->owned_scope->owner_type->complete && type->owned_scope->owner_type->layout_complete)
+		return type->owned_scope->owner_type->object_alignment;
+	if (type->kind == TYPE_CLASS && !type->complete)
+		throw logic_error("alignof incomplete class");
+	if (type->kind == TYPE_CLASS && type->layout_complete)
+		return type->object_alignment;
+	if (type->kind == TYPE_ENUM && type->underlying) return TypeAlignment(type->underlying);
+	return TypeSize(type);
+}
+
 void Analyzer::Analyze(const CPPGMAstNodePtr& tree)
 {
 	if (!tree || tree->kind != "translation-unit") throw logic_error("invalid translation unit");

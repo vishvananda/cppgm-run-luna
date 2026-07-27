@@ -172,6 +172,68 @@ void PA18TemplateExpander::MaterializeInitializerConstructor(
 	// such as String(T) is invisible because no source expression names String
 	// directly.
 	const CPPGMAstNodePtr target_declaration = FindClassDeclaration(target, context);
+	// A direct initialization may use a conversion-function template on the
+	// argument object even when none of the destination's constructors accepts
+	// that source type.  Replay the conversion with the destination type as an
+	// immediate-result fact; this is what makes a target such as View<T, U>
+	// deduce a template-template conversion parameter.
+	for(size_t argument = 0; argument < arguments.size(); ++argument) {
+		string source_type;
+		try {
+			if(!InferArgument(arguments[argument], &source_type, substitutions, context)) continue;
+			source_type = CanonicalSpelling(ResolveAlias(RewriteText(source_type,
+				context, substitutions, 0), context));
+		} catch(const PA18SubstitutionFailure&) {
+			continue;
+		}
+		while(source_type.compare(0, 6, "const ") == 0 ||
+			source_type.compare(0, 9, "volatile ") == 0)
+			source_type = CanonicalSpelling(source_type.substr(source_type.find(' ') + 1));
+		while(!source_type.empty() && (source_type[source_type.size() - 1] == '&' ||
+			source_type[source_type.size() - 1] == '*'))
+			source_type = CanonicalSpelling(source_type.substr(0, source_type.size() - 1));
+		while(source_type.size() > 6 && source_type.compare(source_type.size() - 6,
+			6, " const") == 0)
+			source_type = CanonicalSpelling(source_type.substr(0, source_type.size() - 6));
+		while(source_type.size() > 9 && source_type.compare(source_type.size() - 9,
+			9, " volatile") == 0)
+			source_type = CanonicalSpelling(source_type.substr(0, source_type.size() - 9));
+		if(source_type.empty() || source_type == target ||
+			!FindClassDeclaration(source_type, context)) continue;
+		string source_owner = source_type;
+		map<string, string>::const_iterator source_base = specialization_bases_.find(
+			LastComponent(source_type));
+		if(source_base != specialization_bases_.end()) source_owner = source_base->second;
+		for(map<string, TemplateDefinition>::const_iterator candidate = definitions_.begin();
+			candidate != definitions_.end(); ++candidate) {
+			const TemplateDefinition& definition = candidate->second;
+			const string conversion_name = LastComponent(definition.name);
+			const bool conversion_operator = conversion_name.compare(0, 8, "operator") == 0 &&
+				conversion_name.size() > 8 &&
+				(IsIdentifierCharacter(conversion_name[8]) || conversion_name[8] == ' ');
+			if(definition.class_template || definition.alias_template ||
+				definition.variable_template || !definition.member_template ||
+				!conversion_operator || definition.parameters.empty() ||
+				!SameTemplateOwner(definition.owner, source_owner)) continue;
+			CPPGMAstNodePtr object(new CPPGMAstNode("id-expression"));
+			object->inferred_type = source_type;
+			CPPGMAstNodePtr member(new CPPGMAstNode("member-expression", "."));
+			member->children.push_back(object);
+			member->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
+				"identifier", conversion_name)));
+			CPPGMAstNodePtr conversion_call(new CPPGMAstNode("call-expression"));
+			conversion_call->inferred_type = target;
+			conversion_call->children.push_back(member);
+			conversion_call->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
+				"argument-list")));
+			try {
+				if(InstantiateMemberCall(conversion_call, member, conversion_name,
+					context, substitutions, false)) break;
+			} catch(const PA18SubstitutionFailure&) {
+			} catch(const logic_error&) {
+			}
+		}
+	}
 	const auto materialize_conversion_constructor = [&](const string& raw_parameter,
 		const CPPGMAstNodePtr& argument) {
 		if(!argument) return;
@@ -186,7 +248,18 @@ void PA18TemplateExpander::MaterializeInitializerConstructor(
 		while(!parameter_type.empty() && (parameter_type[parameter_type.size() - 1] == '&' ||
 			parameter_type[parameter_type.size() - 1] == '*'))
 			parameter_type = CanonicalSpelling(parameter_type.substr(0, parameter_type.size() - 1));
-		if(parameter_type.empty() || !FindClassDeclaration(parameter_type, context)) return;
+		while(parameter_type.size() > 6 && parameter_type.compare(
+			parameter_type.size() - 6, 6, " const") == 0)
+			parameter_type = CanonicalSpelling(parameter_type.substr(0,
+				parameter_type.size() - 6));
+		while(parameter_type.size() > 9 && parameter_type.compare(
+			parameter_type.size() - 9, 9, " volatile") == 0)
+			parameter_type = CanonicalSpelling(parameter_type.substr(0,
+				parameter_type.size() - 9));
+		// The source may already be a generated class-template specialization;
+		// its typed declaration is represented in the specialization maps even
+		// when the original spelling no longer has a standalone AST declaration.
+		if(parameter_type.empty()) return;
 		string source_owner = parameter_type;
 		string source_name = LastComponent(parameter_type);
 		map<string, string>::const_iterator base = specialization_bases_.find(source_name);
@@ -195,8 +268,8 @@ void PA18TemplateExpander::MaterializeInitializerConstructor(
 			source_name = LastComponent(source_owner);
 		}
 		map<string, vector<string> >::const_iterator indexed = definitions_by_name_.find(source_name);
-		if(indexed == definitions_by_name_.end()) return;
-		for(size_t candidate = 0; candidate < indexed->second.size(); ++candidate) {
+		if(indexed != definitions_by_name_.end()) for(size_t candidate = 0;
+			candidate < indexed->second.size(); ++candidate) {
 			map<string, TemplateDefinition>::const_iterator found = definitions_.find(
 				indexed->second[candidate]);
 			if(found == definitions_.end()) continue;
@@ -222,6 +295,60 @@ void PA18TemplateExpander::MaterializeInitializerConstructor(
 				// This candidate is unavailable after substitution; another
 				// constructor template may still be viable.
 			}
+		}
+		// Copy-initialization may select a conversion-function template on the
+		// source object instead of a converting constructor on the destination.
+		// Such a member is often defined out of class and is therefore absent from
+		// the concrete source scope until this replay explicitly instantiates it.
+		for(map<string, TemplateDefinition>::const_iterator candidate = definitions_.begin();
+			candidate != definitions_.end(); ++candidate) {
+			const TemplateDefinition& definition = candidate->second;
+			const string conversion_name = LastComponent(definition.name);
+			const bool conversion_operator = conversion_name.compare(0, 8, "operator") == 0 &&
+				conversion_name.size() > 8 &&
+				(IsIdentifierCharacter(conversion_name[8]) || conversion_name[8] == ' ');
+			if(definition.class_template || definition.alias_template ||
+				definition.variable_template || !definition.member_template ||
+				!conversion_operator || definition.parameters.empty() ||
+				!SameTemplateOwner(definition.owner, source_owner)) continue;
+			CPPGMAstNodePtr object(new CPPGMAstNode("id-expression"));
+			object->inferred_type = parameter_type;
+			CPPGMAstNodePtr member(new CPPGMAstNode("member-expression", "."));
+			member->children.push_back(object);
+			member->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
+				"identifier", conversion_name)));
+			CPPGMAstNodePtr call(new CPPGMAstNode("call-expression"));
+			call->inferred_type = target;
+			call->children.push_back(member);
+			call->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("argument-list")));
+			try {
+				const bool materialized = InstantiateMemberCall(call, member, conversion_name,
+					context, substitutions, false);
+				if(materialized) {
+					map<string, CPPGMAstNodePtr>::iterator class_declaration =
+						class_declarations_.find(parameter_type);
+					if(class_declaration == class_declarations_.end())
+						for(map<string, CPPGMAstNodePtr>::iterator candidate_class =
+							class_declarations_.begin(); candidate_class != class_declarations_.end();
+							++candidate_class)
+							if(LastComponent(candidate_class->first) == LastComponent(parameter_type)) {
+								class_declaration = candidate_class;
+								break;
+							}
+					map<string, vector<CPPGMAstNodePtr> >::iterator generated_owner =
+						generated_by_owner_.find(LastComponent(parameter_type));
+					if(class_declaration != class_declarations_.end() &&
+						generated_owner != generated_by_owner_.end() &&
+						!generated_owner->second.empty()) {
+						const CPPGMAstNodePtr generated = generated_owner->second.back();
+						if(generated && find(class_declaration->second->children.begin(),
+							class_declaration->second->children.end(), generated) ==
+							class_declaration->second->children.end())
+							class_declaration->second->children.push_back(generated);
+					}
+					return;
+				}
+			} catch(const PA18SubstitutionFailure&) {}
 		}
 	};
 	if(target_declaration) for(size_t child = 0; child < target_declaration->children.size(); ++child) {

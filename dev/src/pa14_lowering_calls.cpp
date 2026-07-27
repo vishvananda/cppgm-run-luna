@@ -207,8 +207,43 @@ string PA14Lowerer::EmitReferenceArgument(const CPPGMAstNodePtr& node, Scope* sc
        referred->kind == TYPE_CLASS) {
       Binding* conversion = FindConversionOperator(source_type, referred, false);
       if(conversion) {
-        Value converted = EmitConversionOperator(node, scope, referred, false);
+        // A class-valued conversion used as a reference argument needs the
+        // same temporary category as an ordinary constructor argument.  The
+        // generic conversion helper creates a return-object slot, but this
+        // path is an argument boundary and must materialize the result in an
+        // arg slot before the destination copy/move constructor sees it.
+        const TypePtr conversion_function = function_target_type(conversion->type);
+        const TypePtr conversion_result = conversion_function ?
+          conversion_function->child : TypePtr();
+        Value converted;
+        if(conversion_result && type_is_reference(conversion_result)) {
+          converted = EmitConversionOperator(node, scope, referred, false);
+        } else {
+          CallChoice choice;
+          choice.binding = conversion;
+          choice.function = conversion_function;
+          choice.object = node;
+          choice.direct = true;
+          choice.member = true;
+          choice.static_member = false;
+          choice.conversion = true;
+          const string slot = new_special_slot("arg", low_type(referred));
+          const string address = new_temp();
+          AddInstruction(address + " = addr $" + slot);
+          converted = EmitChosenCall(choice, CPPGMAstNodePtr(),
+            vector<CPPGMAstNodePtr>(), scope, address);
+        }
+        if(converted.operand.empty()) return converted.operand;
         if(converted.lvalue) return converted.operand;
+        // A class-valued conversion function returns through the ABI's
+        // indirect-result slot.  That slot is the temporary bound to the
+        // reference; falling through to EmitConstructorAt would retry the
+        // same conversion as a converting constructor indefinitely.
+        if(converted.type && type_value(converted.type) &&
+           type_value(converted.type)->kind == TYPE_CLASS) {
+          RegisterTemporaryObject(type_value(converted.type), converted.operand);
+          return converted.operand;
+        }
       }
     }
     if(referred && referred->kind == TYPE_CLASS && source.category == "prvalue" &&
@@ -315,10 +350,17 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
     function_record = choice.binding ? RecordForBinding(choice.binding) : 0;
     if(function_record && function_record->deleted)
       throw logic_error("call to deleted function " + function_record->qualified_name);
-    if(function_record && function_record->member) {
+    if(function_record) {
+      // Calls emitted while lowering a materialized generated body can reach
+      // a generated free helper after ordinary root-demand collection has
+      // finished.  Demand is a property of the emitted call, not of the
+      // declaration's template-instantiation bit; mark the selected record
+      // here so unused SFINAE/dependent helpers remain un-emitted.
       function_record->needed = true;
-      FunctionRecord* base_entry = BaseEntryFor(function_record);
-      if(base_entry) base_entry->needed = true;
+      if(function_record->member) {
+        FunctionRecord* base_entry = BaseEntryFor(function_record);
+        if(base_entry) base_entry->needed = true;
+      }
     }
     string indirect_result_address;
     string virtual_object_operand;

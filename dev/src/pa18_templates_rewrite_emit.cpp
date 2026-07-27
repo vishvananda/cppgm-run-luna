@@ -620,6 +620,12 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 	}
 	if(definition.class_template)
 		generated->dependent_base_lookup = DefinitionHasDependentBase(definition);
+	const string generated_definition_name = LastComponent(definition.name);
+	const bool operator_member = generated_definition_name.compare(0, 8,
+		"operator") == 0;
+	const bool conversion_operator = operator_member && generated_definition_name.size() > 8 &&
+		(IsIdentifierCharacter(generated_definition_name[8]) ||
+		 generated_definition_name[8] == ' ');
 	const bool generated_special_member = generated->kind == "special-member-definition" ||
 		generated->kind == "special-member-declaration";
 	const bool explicit_static_data = definition.explicit_specialization &&
@@ -646,14 +652,22 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 	if(member_definition && !concrete_owner.empty()) {
 		const bool special_member = generated->kind == "special-member-definition" ||
 			generated->kind == "special-member-declaration";
-		const bool operator_member = LastComponent(definition.name).compare(0, 8,
-			"operator") == 0;
-		if(special_member)
+		const bool constructor_special_member = special_member && !conversion_operator;
+		if(constructor_special_member)
 			generated->value = concrete_owner + "::" + LastComponent(concrete_owner);
 		if(!explicit_member_definition)
-			RenameGeneratedFunction(generated, special_member ?
+			RenameGeneratedFunction(generated, constructor_special_member ?
 				LastComponent(concrete_owner) : definition.member_template ? local_name :
 				operator_member ? local_name : LastComponent(definition.name));
+		if(conversion_operator) {
+			const CPPGMAstNodePtr conversion_declarator = FunctionDeclarator(generated);
+			const CPPGMAstNodePtr conversion_identifier = DescendantOfKind(
+				conversion_declarator, "identifier");
+			const string generated_conversion_name = LastComponent(generated->value);
+			if(conversion_identifier && generated_conversion_name.compare(0, 8,
+				"operator") == 0)
+				conversion_identifier->value = generated_conversion_name;
+		}
 		if(definition.explicit_specialization && generated->kind == "simple-declaration") {
 			const CPPGMAstNodePtr identifier = DescendantOfKind(generated, "identifier");
 			if(identifier)

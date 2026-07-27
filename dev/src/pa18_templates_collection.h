@@ -13,8 +13,7 @@
 using namespace std;
 namespace pa18_templates_internal {
 class PA18SubstitutionFailure : public logic_error { public: explicit PA18SubstitutionFailure(const string& message) : logic_error(message) {} };
-inline bool IsIdentifierCharacter(char ch)
-{
+inline bool IsIdentifierCharacter(char ch) {
 	return isalnum(static_cast<unsigned char>(ch)) || ch == '_';
 }
 inline string Trim(const string& raw)
@@ -444,7 +443,7 @@ struct FunctionSignature
 	CPPGMAstNodePtr declarator;
 	CPPGMAstNodePtr parameters; bool lvalue_argument; FunctionSignature() : result_specifiers(), declarator(), parameters(), lvalue_argument(false) {}
 };
-class PA18TemplateExpander
+struct ExplicitCallSelection; struct MemberCallState; struct MemberCallCandidateState; class PA18TemplateExpander
 {
 public:
 	vector<CPPGMAstNodePtr> Run(const vector<CPPGMAstNodePtr>& input);
@@ -597,8 +596,8 @@ private:
 	bool IsKnownMemberTemplateId(const string& raw) const;
 	void CollectInheritedMemberTemplates(const string& raw_class, const string& member,
 		const map<string, string>& substitutions, const string& context,
-		vector<const TemplateDefinition*>* result, set<string>* active,
-		map<const TemplateDefinition*, string>* concrete_owners);
+	vector<const TemplateDefinition*>* result, set<string>* active,
+		map<const TemplateDefinition*, string>* concrete_owners); void CollectInheritedMemberBases(const CPPGMAstNodePtr& declaration, const string& member, const string& declaration_context, const map<string, string>& class_substitutions, vector<const TemplateDefinition*>* result, set<string>* active, map<const TemplateDefinition*, string>* concrete_owners); void AppendInheritedMemberCandidates(const string& member, const string& declaration_context, const string& base_lookup, const TemplateDefinition* base_definition, const vector<string>& base_arguments, bool base_lookup_generated, const map<string, string>& base_substitutions, vector<const TemplateDefinition*>* result, set<string>* active, map<const TemplateDefinition*, string>* concrete_owners);
 	bool HasViableOrdinaryCallableMember(const CPPGMAstNodePtr& call,
 		const string& object_type, const string& member_name,
 		const string& context, const map<string, string>& substitutions, bool object_const = false, bool object_volatile = false, bool include_special_members = false);
@@ -606,9 +605,9 @@ private:
 		const CPPGMAstNodePtr& callee, const string& original_member,
 		const string& context,
 		const map<string, string>& substitutions,
-		bool explicit_instantiation = false, bool constructor_replay = false); int MemberTemplatePatternScore(const TemplateDefinition* candidate) const; void RestoreMemberTemplateDefaults(const string& member_name, const TemplateDefinition& definition, TemplateDefinition* result) const; bool ContainsSubstitutionIdentifier(const string& text, const map<string, string>& substitutions) const; bool FunctionTemplateCvPointerTie(const TemplateDefinition& lhs, const TemplateDefinition& rhs) const; bool FunctionTemplateMoreSpecialized(const TemplateDefinition& lhs, const TemplateDefinition& rhs, const string& context) const; bool PreserveFunctionLookupOrder(const vector<const TemplateDefinition*>& definitions, const string& context, const map<string, string>& substitutions) const; void SortFunctionTemplateCandidates(vector<const TemplateDefinition*>* candidates, const string& context) const; void RankFunctionTemplateCandidatesForCall(vector<const TemplateDefinition*>* candidates, const CPPGMAstNodePtr& call, const string& context, const map<string, string>& substitutions) const;
-	void RankMemberCandidatesByClassExactness(vector<const TemplateDefinition*>* candidates, const CPPGMAstNodePtr& call, const map<string, string>& substitutions, const string& context);
-	bool ValidateTemplateDefaults(const TemplateDefinition& definition, const vector<string>& arguments, const string& context, const map<string, string>& substitutions); bool TransformQualifiedMemberTemplateCall(const CPPGMAstNodePtr& input,
+		bool explicit_instantiation = false, bool constructor_replay = false);
+	int MemberTemplatePatternScore(const TemplateDefinition* candidate) const; void RestoreMemberTemplateDefaults(const string& member_name, const TemplateDefinition& definition, TemplateDefinition* result) const; bool ContainsSubstitutionIdentifier(const string& text, const map<string, string>& substitutions) const; bool FunctionTemplateCvPointerTie(const TemplateDefinition& lhs, const TemplateDefinition& rhs) const; bool FunctionTemplateMoreSpecialized(const TemplateDefinition& lhs, const TemplateDefinition& rhs, const string& context) const; bool PreserveFunctionLookupOrder(const vector<const TemplateDefinition*>& definitions, const string& context, const map<string, string>& substitutions) const; void SortFunctionTemplateCandidates(vector<const TemplateDefinition*>* candidates, const string& context) const; void RankFunctionTemplateCandidatesForCall(vector<const TemplateDefinition*>* candidates, const CPPGMAstNodePtr& call, const string& context, const map<string, string>& substitutions) const;
+	void RankMemberCandidatesByClassExactness(vector<const TemplateDefinition*>* candidates, const CPPGMAstNodePtr& call, const map<string, string>& substitutions, const string& context); bool ValidateTemplateDefaults(const TemplateDefinition& definition, const vector<string>& arguments, const string& context, const map<string, string>& substitutions); bool TransformQualifiedMemberTemplateCall(const CPPGMAstNodePtr& input,
 		const CPPGMAstNodePtr& input_callee, const string& context,
 		const map<string, string>& substitutions,
 		const CPPGMAstNodePtr& result);
@@ -617,9 +616,10 @@ private:
 	CPPGMAstNodePtr TransformUnaryExpression(const CPPGMAstNodePtr& input, const string& context, const map<string, string>& substitutions);
 	void MaterializeInitializerConstructor(const CPPGMAstNodePtr& input, const CPPGMAstNodePtr& result, const string& context, const map<string, string>& substitutions);
 	bool MaterializeExplicitInstantiation(const CPPGMAstNodePtr& target, const string& context, bool extern_instantiation = false);
-	CPPGMAstNodePtr TransformCallExpression(const CPPGMAstNodePtr& input, const string& context, const map<string, string>& substitutions);
+	CPPGMAstNodePtr TransformCallExpression(const CPPGMAstNodePtr& input, const string& context, const map<string, string>& substitutions); CPPGMAstNodePtr BuildExplicitDeductionInput(const CPPGMAstNodePtr& input, const string& context, const map<string, string>& substitutions); ExplicitCallSelection SelectExplicitCallDefinition(const CPPGMAstNodePtr& input, const CPPGMAstNodePtr& input_callee, const string& context, const map<string, string>& substitutions); bool TransformExplicitFunctionCall(const CPPGMAstNodePtr& input, const CPPGMAstNodePtr& input_callee, const string& context, const map<string, string>& substitutions, const CPPGMAstNodePtr& result); bool TransformUnqualifiedMemberTemplateCall(const CPPGMAstNodePtr& input, const CPPGMAstNodePtr& input_callee, const string& context, const map<string, string>& substitutions, const CPPGMAstNodePtr& result); void TransformCallChildren(const CPPGMAstNodePtr& input, const CPPGMAstNodePtr& result, const string& context, const map<string, string>& substitutions); CPPGMAstNodePtr MaterializeStaticCastCall(const CPPGMAstNodePtr& result, CPPGMAstNodePtr result_callee, const string& context, const map<string, string>& substitutions); bool MaterializeNamedCallTarget(const CPPGMAstNodePtr& result, CPPGMAstNodePtr* result_callee, const string& context, const map<string, string>& substitutions, bool* constructor_replayed); CPPGMAstNodePtr MaterializeOperatorCallTargets(const CPPGMAstNodePtr& result, const CPPGMAstNodePtr& input_callee, CPPGMAstNodePtr result_callee, const string& context, const map<string, string>& substitutions); bool MaterializeImplicitMemberCall(const CPPGMAstNodePtr& result, const CPPGMAstNodePtr& result_callee, const CPPGMAstNodePtr& input_callee, const string& context, const map<string, string>& substitutions); bool MaterializeFreeFunctionCandidates(const vector<const TemplateDefinition*>& definitions, const CPPGMAstNodePtr& result, const CPPGMAstNodePtr& result_callee, const string& callee_name, const string& qualified_callee_owner, const string& context, const map<string, string>& substitutions, const map<const TemplateDefinition*, string>& inherited_owners); void MaterializeFreeFunctionCall(const CPPGMAstNodePtr& result, const CPPGMAstNodePtr& result_callee, bool constructor_replayed, bool implicit_member_instantiated, const string& context, const map<string, string>& substitutions); void FinalizeCallResult(const CPPGMAstNodePtr& result, const CPPGMAstNodePtr& result_callee, const string& context, const map<string, string>& substitutions);
 	bool PreserveUnresolvedExplicitTemplateCall(const CPPGMAstNodePtr& input, const CPPGMAstNodePtr& result, const vector<string>& explicit_arguments, const string& context, const map<string, string>& explicit_substitutions, const map<string, string>& substitutions);
 	void MaterializeOrdinaryCallConversions(const string& callee_name, const CPPGMAstNodePtr& result, const string& context, const map<string, string>& substitutions);
+	void MaterializeOrdinaryConversion(const string& raw_parameter, const CPPGMAstNodePtr& argument, const string& context, const map<string, string>& substitutions); bool ResolveOrdinaryConversionTypes(const string& raw_parameter, const CPPGMAstNodePtr& argument, const string& context, const map<string, string>& substitutions, string* target_type, string* source_type, CPPGMAstNodePtr* source_declaration); bool ReplayOrdinaryConversion(const string& source_type, const string& target_type, const CPPGMAstNodePtr& source_declaration, const string& context, const map<string, string>& substitutions); bool TryOrdinaryConversionDefinition(const TemplateDefinition& definition, const string& source_type, const string& target_type, const string& expected_pattern, const string& context, const map<string, string>& substitutions);
 	bool ValidateExplicitFunctionCandidate(const TemplateDefinition& definition, const CPPGMAstNodePtr& input, const string& context, const map<string, string>& substitutions, const vector<string>& raw_explicit_args, vector<string>* arguments); bool HasAbstractFunctionParameter(const TemplateDefinition& definition, const vector<string>& arguments, const string& context, const map<string, string>& substitutions);
 	bool IsAbstractClassType(const string& raw, const string& context, set<string>* active) const; bool IsAbstractObjectSpelling(const string& raw, const string& context) const; string ResolveAlias(string spelling, const string& context) const; bool FindLogicalNamespaceAlias(const string& spelling, string* alias_key) const; bool IsArrayTypeAlias(const string& alias_name, const string& context) const; bool HasPackBeforeFixed(const TemplateDefinition& definition) const;
 	bool LookupVariableType(const string& name, const string& context,
@@ -1185,7 +1185,7 @@ private:
 	bool TypeOnlyNode(const CPPGMAstNodePtr& node) const;
 	void InsertGenerated(vector<CPPGMAstNodePtr>* children, const string& owner);
 	void InjectGenerated(const CPPGMAstNodePtr& node, const string& context,
-		const string& lexical_context);
+		const string& lexical_context); void InjectLateRootGenerated(const CPPGMAstNodePtr& node);
 	bool HasExternalCompleteDependency(const CPPGMAstNodePtr& node,
 		const string& owner, set<string>* dependencies) const;
 	bool DeclaresSourceType(const CPPGMAstNodePtr& node, const set<string>& names) const;

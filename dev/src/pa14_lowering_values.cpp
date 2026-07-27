@@ -708,7 +708,6 @@ PA14Lowerer::FunctionRecord* PA14Lowerer::EnsureImplicitAssignment(
       if(candidates[i]->kind != BIND_FUNCTION) continue;
       TypePtr function = function_target_type(candidates[i]->type);
       if(!function || function->parameters.empty() ||
-         !type_is_reference(function->parameters[0]) ||
          !PA12SameType(type_value(function->parameters[0]), owner, true)) continue;
       FunctionRecord* candidate = RecordForBinding(candidates[i]);
       if(!candidate || candidate->member_template) continue;
@@ -716,6 +715,11 @@ PA14Lowerer::FunctionRecord* PA14Lowerer::EnsureImplicitAssignment(
         if(move) return candidate;
       } else if(!copy_fallback) copy_fallback = candidate;
     }
+    // A user-declared copy assignment may take the class by value, not only
+    // by const lvalue reference.  It still suppresses implicit move
+    // assignment, so never manufacture a competing rvalue-reference
+    // candidate for that typed declaration.
+    if(copy_fallback && !copy_fallback->synthesized_value_member) return copy_fallback;
     if(move && ClassHasDeclaredValueMember(owner)) return copy_fallback;
     const TypePtr parameter = move ? ReferenceTo(TYPE_RVALUE_REFERENCE, owner) :
       ReferenceTo(TYPE_LVALUE_REFERENCE, CloneWithCv(owner, true, false));
@@ -841,9 +845,17 @@ Binding* PA14Lowerer::FindConversionOperator(const TypePtr& raw_source,
       if(!best || candidate_rank < best_rank) {
         best = binding;
         best_rank = candidate_rank;
-      } else if(candidate_rank == best_rank &&
-                !PA12SameType(function, function_target_type(best->type), false)) {
-        throw logic_error("ambiguous conversion function");
+      } else if(candidate_rank == best_rank) {
+        FunctionRecord* best_record = RecordForBinding(best);
+        const bool candidate_template = record->member_template;
+        const bool best_template = best_record && best_record->member_template;
+        if(best_template && !candidate_template) {
+          best = binding;
+          continue;
+        }
+        if(!best_template && candidate_template) continue;
+        if(!PA12SameType(function, function_target_type(best->type), false))
+          throw logic_error("ambiguous conversion function");
       }
     }
     if(rank && best) *rank = best_rank;

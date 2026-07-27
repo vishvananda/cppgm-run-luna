@@ -3920,3 +3920,160 @@ substitution/lookup/pack-SFINAE group.  Preserve typed owner and immediate-
 context facts while resolving conversion-function templates, inherited
 constructors, hidden friends, and defaulted/template-template candidates;
 validate the focused group, full PA22, through-PA21, and the PA22 file audit.
+
+## Checkpoint 102 scope — 2026-07-27 (before implementation)
+
+### Remaining Work Map
+
+The live `make test-report ACTIVE_TEST_REPORT_PAS='pa22'` baseline is
+**214/250**, with **36** failures and no timeout.  The complete set is grouped
+by primary behavior:
+
+- **Call deduction, ordering, and pack boundaries (11):**
+  `general/100-fixed-over-empty-trailing-pack-index-sequence`,
+  `general/100-function-parameter-empty-middle-pack-alias`,
+  `general/100-template-deduction-rejects-value-base-argument`,
+  `general/200-function-template-partial-order-class-template-cv`,
+  `general/200-partial-order-synthetic-virtual-member-emission`,
+  `spec/200-constructor-template-qualified-nested-id-partial-ordering`,
+  `spec/200-defaulted-class-template-argument-prefix-deduction`,
+  `spec/200-dependent-specialized-default-arg-deduction`,
+  `spec/200-function-template-class-template-param-partial-order`,
+  `spec/200-member-operator-fixed-tag-default-partial-order`, and
+  `spec/500-template-template-piecewise-partial-ordering`.
+- **Substitution, lookup, and pack SFINAE (5):**
+  `general/300-alias-bool-explicit-pack-call-dependent-tag`,
+  `general/300-hidden-friend-sfinae-use-scope-shadowing`,
+  `general/300-using-member-template-implicit-object-cv-overload`,
+  `general/400-pack-expansion-size-mismatch-sfinae`, and
+  `spec/500-hidden-friend-query-free-decltype-noexcept`.
+- **Conversion and constructor candidate selection (8):**
+  `general/400-conversion-function-template-prefers-nontemplate`,
+  `general/400-partial-specialization-inherited-constructor-template`,
+  `spec/300-conversion-function-template-owner-result-copy-init`,
+  `spec/300-cross-specialization-converting-ctor-operator-template`,
+  `spec/500-conversion-function-template-reference-conditional-auto-ref`,
+  `spec/500-conversion-function-template-same-name-target`,
+  `spec/500-function-result-template-id-shadowed-argument`, and
+  `spec/500-template-template-conversion-operator-reference-target`.
+- **Alias, owner, template-template, and typed LowIR replay (12):**
+  `general/400-alias-template-function-argument-cv`,
+  `general/400-function-assignment-invocable-and-helper`,
+  `general/400-member-alias-template-template-partial-deduction-owner`,
+  `general/400-static-data-nttp-pack-sizeof-bound`,
+  `general/400-template-template-alias-default-arity-sfinae`,
+  `spec/100-explicit-specialization-dependent-param-typedef`,
+  `spec/100-explicit-template-argument-overload-rejects-short-candidate`,
+  `spec/100-function-template-array-parameter-string-literal`,
+  `spec/200-member-template-nontype-param-shadows-inherited-value-sum`,
+  `spec/300-qualified-member-function-value-fallback-sfinae`,
+  `spec/400-dependent-decltype-member-template-conversion-operator`, and
+  `spec/500-type-pack-qualified-static-member-expansion`.
+
+The status failures are the executable part of the first three groups; the
+remaining 19 failures are LowIR comparisons.  No fixture from the live report
+is omitted.  Several tests intentionally overlap (for example, conversion
+templates also exercise owner replay), but the grouping identifies the shared
+compiler path to change.
+
+### Checkpoint Scope
+
+Complete the **17-fixture candidate-status slice**: preserve typed owner and
+template-template arguments through conversion-function and inherited-
+constructor replay; prefer a viable non-template conversion over an equally
+ranked conversion template; keep hidden-friend and using-imported lookup in
+the immediate SFINAE context; reject mismatched multi-pack expansions as a
+discarded candidate; and select the correct fixed/variadic member-template
+candidate after defaults.  This scope covers the 17 status fixtures in the
+first three groups, including the dependent conversion, function-result, and
+template-template conversion cases.  The 19 LowIR-only cases remain explicit
+follow-up work.
+
+Validation for this checkpoint is the focused status group, the authoritative
+full PA22 report, the through-PA21 report, and the PA22 file audit.  The next
+checkpoint will address the remaining LowIR materialization/ordering group.
+
+## Checkpoint 102 result — 2026-07-27
+
+Implemented the conversion/constructor and typed LowIR boundary slice.  PA14
+now ranks equally viable non-template conversions ahead of conversion
+templates, preserves declared class-template assignments, materializes
+class-valued conversions in the correct C++11 temporary boundary for
+reference, by-address, and by-value arguments, and keeps cv-qualified class
+views tied to canonical size/alignment facts.  PA18 now carries expected
+conversion results through member-template deduction, replays
+template-template conversion targets, preserves generated conversion return
+types, and inserts only root helpers referenced by generated bodies.  The
+lowering demand sweep closes over free helpers created while emitting those
+bodies without retaining unused SFINAE candidates.
+
+The live report is **218/250**, up four tests from the 214/250 baseline, with
+no newly failing fixture names.  The repaired fixtures are
+`general/400-conversion-function-template-prefers-nontemplate`,
+`spec/500-conversion-function-template-reference-conditional-auto-ref`,
+`spec/500-conversion-function-template-same-name-target`, and
+`spec/500-template-template-conversion-operator-reference-target`; the
+explicit user-conversion call path also remains passing after the temporary
+boundary fix.
+
+### Remaining Work Map
+
+The exact live failure set has 32 fixtures:
+
+- **Call deduction, partial ordering, and pack boundaries (12):**
+  `general/100-fixed-over-empty-trailing-pack-index-sequence`,
+  `general/100-function-parameter-empty-middle-pack-alias`,
+  `general/100-template-deduction-rejects-value-base-argument`,
+  `general/200-function-template-partial-order-class-template-cv`,
+  `general/200-partial-order-synthetic-virtual-member-emission`,
+  `spec/200-constructor-template-qualified-nested-id-partial-ordering`,
+  `spec/200-defaulted-class-template-argument-prefix-deduction`,
+  `spec/200-dependent-specialized-default-arg-deduction`,
+  `spec/200-function-template-class-template-param-partial-order`,
+  `spec/200-member-operator-fixed-tag-default-partial-order`,
+  `spec/500-template-template-piecewise-partial-ordering`, and
+  `spec/100-function-template-array-parameter-string-literal`.
+- **Substitution, lookup, and pack SFINAE (5):**
+  `general/300-alias-bool-explicit-pack-call-dependent-tag`,
+  `general/300-hidden-friend-sfinae-use-scope-shadowing`,
+  `general/300-using-member-template-implicit-object-cv-overload`,
+  `general/400-pack-expansion-size-mismatch-sfinae`, and
+  `spec/500-hidden-friend-query-free-decltype-noexcept`.
+- **Conversion, constructor, and owner replay (4):**
+  `general/400-partial-specialization-inherited-constructor-template`,
+  `spec/300-conversion-function-template-owner-result-copy-init`,
+  `spec/300-cross-specialization-converting-ctor-operator-template`, and
+  `spec/500-function-result-template-id-shadowed-argument`.
+- **Alias, template-template, and typed LowIR materialization (11):**
+  `general/400-alias-template-function-argument-cv`,
+  `general/400-function-assignment-invocable-and-helper`,
+  `general/400-member-alias-template-template-partial-deduction-owner`,
+  `general/400-static-data-nttp-pack-sizeof-bound`,
+  `general/400-template-template-alias-default-arity-sfinae`,
+  `spec/100-explicit-specialization-dependent-param-typedef`,
+  `spec/100-explicit-template-argument-overload-rejects-short-candidate`,
+  `spec/200-member-template-nontype-param-shadows-inherited-value-sum`,
+  `spec/300-qualified-member-function-value-fallback-sfinae`,
+  `spec/400-dependent-decltype-member-template-conversion-operator`, and
+  `spec/500-type-pack-qualified-static-member-expansion`.
+
+### Next Checkpoint Group
+
+Take the 12-fixture call/partial-ordering group first, bundled with the
+five-fixture substitution/pack-SFINAE group.  The following checkpoint will
+then close the remaining alias/owner/template-template and typed LowIR cases.
+
+## Checkpoint 102 validation — 2026-07-27
+
+The complete current-PA report confirms **218/250**, four above the
+214/250 turn-start baseline, with the exact 32-fixture remaining map above.
+The focused conversion fixtures all pass, including the same-name target,
+reference/conditional-auto-ref, template-template reference-target, and
+non-template-preference cases.  `make test-report-through-pa21` passes all
+**1850/1850** earlier tests.  The PA22 file audit passes with 12 existing
+warnings; no fatal audit finding remains.  Temporary diagnostic tracing was
+removed before this checkpoint was closed.
+
+The next checkpoint remains the bundled call/partial-ordering plus
+substitution/pack-SFINAE group, followed by the alias/owner/template-template
+and typed-LowIR group listed in the remaining map.
