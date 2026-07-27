@@ -1472,11 +1472,15 @@ private:
 				PrintTop(node->children[i], scope, indentation, string());
 			return;
 		}
-		if (node->kind == "template-declaration")
-		{
-			if (node->children.size() > 1) PrintTop(node->children[1], scope, indentation, string());
-			return;
-		}
+		if (node->kind == "template-declaration") {
+			if (node->children.size() > 1) {
+				Scope* template_scope = a_.NewChild(scope, SCOPE_TEMPLATE_PARAMETERS, string()); const CPPGMAstNodePtr list = ChildOfKind(node->children[0], "template-parameter-list");
+				if (list) for (size_t parameter_index = 0; parameter_index < list->children.size(); ++parameter_index) {
+					const CPPGMAstNodePtr parameter = list->children[parameter_index]; if (!parameter || parameter->kind != "type-parameter") continue; const string name = FirstIdentifier(parameter); if (name.empty()) continue;
+					const bool template_template = HasKind(parameter, "template-template-parameter"); a_.AddTypeBinding(template_scope, name, TypePtr(new Type(template_template ? TYPE_TEMPLATE_TEMPLATE_PARAMETER : TYPE_TEMPLATE_PARAMETER, name)));
+				}
+				PrintTop(node->children[1], template_scope, indentation, string()); }
+			return; }
 		if (node->kind == "special-member-definition") return;
 		if (node->kind == "empty-declaration" || node->kind == "namespace-alias-definition" ||
 			node->kind == "using-directive" || node->kind == "using-declaration" ||
@@ -1484,17 +1488,5 @@ private:
 			node->kind == "enum-specifier" || node->kind == "static-assert-declaration") return;
 		throw logic_error("unsupported top-level declaration");
 	}
-};
-void Analyzer::PrintSemantics(const CPPGMAstNodePtr& tree, ostream& out)
-{
-	PA12Printer printer(*this);
-	printer.Print(tree, out);
-}
-void EmitPA12Semantics(const CPPGMAstNodePtr& translation_unit, ostream& out)
-{
-	Analyzer analyzer;
-	analyzer.Analyze(translation_unit);
-	ostringstream buffer;
-	analyzer.PrintSemantics(translation_unit, buffer);
-	out << buffer.str();
-}
+}; void Analyzer::PrintSemantics(const CPPGMAstNodePtr& tree, ostream& out) { PA12Printer printer(*this); printer.Print(tree, out); }
+void EmitPA12Semantics(const CPPGMAstNodePtr& translation_unit, ostream& out) { Analyzer analyzer; analyzer.Analyze(translation_unit); ostringstream buffer; analyzer.PrintSemantics(translation_unit, buffer); out << buffer.str(); }

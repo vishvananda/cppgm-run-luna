@@ -339,6 +339,83 @@ void PA18TemplateExpander::RestoreMemberTemplateDefaults(
 	}
 }
 
+CPPGMAstNodePtr PA18TemplateExpander::FunctionParameterDefaultNode(
+	const TemplateDefinition& definition, size_t parameter) const
+{
+	const CPPGMAstNodePtr own_declarator = FunctionDeclarator(definition.declaration);
+	const CPPGMAstNodePtr own_clause = DescendantOfKind(own_declarator,
+		"parameter-clause");
+	if(own_clause && parameter < own_clause->children.size() &&
+		ChildOfKindLocal(own_clause->children[parameter], "default-argument"))
+		return ChildOfKindLocal(own_clause->children[parameter], "default-argument");
+	// A free-function definition cannot inherit a default from an unrelated
+	// declaration found by the name index.  The cross-declaration lookup is
+	// only needed for out-of-class member definitions, where the declaration
+	// and definition have the same owner and signature.
+	if(definition.owner.empty()) return CPPGMAstNodePtr();
+	const string member_name = LastComponent(definition.name);
+	map<string, vector<string> >::const_iterator indexed = definitions_by_name_.find(member_name);
+	if(indexed == definitions_by_name_.end()) return CPPGMAstNodePtr();
+	const string definition_owner = LastComponent(StripTemplateArgumentsForValidation(
+		definition.owner));
+	const string definition_signature = MemberSignatureKey(definition);
+	for(size_t index = 0; index < indexed->second.size(); ++index) {
+		map<string, TemplateDefinition>::const_iterator found = definitions_.find(
+			indexed->second[index]);
+		if(found == definitions_.end() || !found->second.declaration ||
+			&found->second == &definition) continue;
+		const TemplateDefinition& candidate = found->second;
+		if(candidate.declaration->kind != "simple-declaration" &&
+			candidate.declaration->kind != "special-member-declaration") continue;
+		const string candidate_owner = LastComponent(StripTemplateArgumentsForValidation(
+			candidate.owner));
+		if(candidate_owner != definition_owner ||
+			MemberSignatureKey(candidate) != definition_signature) continue;
+		const CPPGMAstNodePtr candidate_declarator = FunctionDeclarator(
+			candidate.declaration);
+		const CPPGMAstNodePtr candidate_clause = DescendantOfKind(candidate_declarator,
+			"parameter-clause");
+		if(candidate_clause && parameter < candidate_clause->children.size() &&
+			ChildOfKindLocal(candidate_clause->children[parameter], "default-argument"))
+			return ChildOfKindLocal(candidate_clause->children[parameter], "default-argument");
+	}
+	return CPPGMAstNodePtr();
+}
+
+bool PA18TemplateExpander::FunctionParameterHasDefault(
+	const TemplateDefinition& definition, size_t parameter) const
+{
+	return static_cast<bool>(FunctionParameterDefaultNode(definition, parameter));
+}
+
+bool PA18TemplateExpander::RestoreFunctionParameterDefaults(
+	const TemplateDefinition& definition, TemplateDefinition* result) const
+{
+	if(!result || !result->declaration) return false;
+	const CPPGMAstNodePtr source_clause = DescendantOfKind(
+		FunctionDeclarator(result->declaration), "parameter-clause");
+	if(!source_clause) return false;
+	vector<CPPGMAstNodePtr> defaults(source_clause->children.size());
+	bool restored = false;
+	for(size_t parameter = 0; parameter < source_clause->children.size(); ++parameter) {
+		const CPPGMAstNodePtr target = source_clause->children[parameter];
+		if(!target || target->kind != "parameter-declaration" ||
+			ChildOfKindLocal(target, "default-argument")) continue;
+		const CPPGMAstNodePtr source = FunctionParameterDefaultNode(definition, parameter);
+		if(source) { defaults[parameter] = source; restored = true; }
+	}
+	if(!restored) return false;
+	result->declaration = CloneNode(result->declaration);
+	const CPPGMAstNodePtr target_clause = DescendantOfKind(
+		FunctionDeclarator(result->declaration), "parameter-clause");
+	if(!target_clause) return false;
+	for(size_t parameter = 0; parameter < defaults.size() &&
+		parameter < target_clause->children.size(); ++parameter)
+		if(defaults[parameter])
+			target_clause->children[parameter]->children.push_back(CloneNode(defaults[parameter]));
+	return true;
+}
+
 bool PA18TemplateExpander::IsAbstractClassType(const string& raw,
 	const string& context, set<string>* active) const
 {

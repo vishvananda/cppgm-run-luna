@@ -58,6 +58,19 @@ void Analyzer::ProcessTemplate(const CPPGMAstNodePtr& node, Scope* scope)
 		}
 	}
 	Process(node->children[1], parameters);
+	// Keep a typed primary anchor in the enclosing scope for later concrete
+	// member replay.  It is semantic lookup state, not a second source binding,
+	// so the PA11 dump suppresses this synthetic anchor.
+	if (scope && (node->children[1]->kind == "class-specifier" ||
+		node->children[1]->kind == "class-forward-declaration")) {
+		const string class_name = LastComponent(node->children[1]->value);
+		Binding* template_class = class_name.empty() ? 0 : parameters->local(class_name);
+		if (template_class && template_class->kind == BIND_TYPE && template_class->type) {
+			AddTypeBinding(scope, class_name, template_class->type);
+			Binding* anchor = scope->local(class_name);
+			if (anchor) anchor->suppress_dump = true;
+		}
+	}
 	// Materialized classes retain dependent member-template declarations so
 	// later lowering can select their concrete replay.  Keep the callable
 	// binding in the enclosing class scope without adding it to layout.

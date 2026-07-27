@@ -20,6 +20,7 @@ Type::Type(TypeKind type_kind, const string& type_name)
 Binding::Binding(BindingKind binding_kind, const string& binding_name,
 	const TypePtr& binding_type)
 	: kind(binding_kind), name(binding_name), type(binding_type), has_value(false),
+	  suppress_dump(false),
 	  constant_value(), value(0),
 	  type_override(), qualified_name(), injected_member(false), injected_object_name(),
 	  injected_owner(), hidden_friend(false), friend_owner(), is_member(false),

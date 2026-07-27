@@ -1,4 +1,41 @@
 #pragma once
+
+inline vector<string> SplitCallArguments(const string& raw)
+{
+	vector<string> result;
+	string current;
+	int angle = 0, parentheses = 0, brackets = 0, braces = 0;
+	vector<int> angle_parentheses;
+	for (size_t i = 0; i < raw.size(); ++i) {
+		const char ch = raw[i];
+		if (ch == '<' && IsTemplateAngleOpen(raw, i)) {
+			++angle;
+			angle_parentheses.push_back(parentheses);
+		} else if (ch == '>' && angle > 0) {
+			const int opener_parentheses = angle_parentheses.empty() ? 0 :
+				angle_parentheses.back();
+			if (parentheses <= opener_parentheses) {
+				--angle;
+				if (!angle_parentheses.empty()) angle_parentheses.pop_back();
+			}
+		}
+		else if (ch == '(') ++parentheses;
+		else if (ch == ')' && parentheses > 0) --parentheses;
+		else if (ch == '[') ++brackets;
+		else if (ch == ']' && brackets > 0) --brackets;
+		else if (ch == '{') ++braces;
+		else if (ch == '}' && braces > 0) --braces;
+		if (ch == ',' && angle == 0 && parentheses == 0 && brackets == 0 &&
+			braces == 0) {
+			result.push_back(CanonicalSpelling(current));
+			current.clear();
+		} else current += ch;
+	}
+	if (!current.empty() || !result.empty())
+		result.push_back(CanonicalSpelling(current));
+	if (result.size() == 1 && result[0].empty()) result.clear();
+	return result;
+}
 	string InferLiteralArgumentType(const string& value) const
 	{
 		const bool floating = value.find('.') != string::npos || value.find('e') != string::npos ||
@@ -619,7 +656,7 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 			vector<string> function_parameters;
 			if(SplitFunctionPointerType(ReplaceIdentifiers(cast_type, substitutions),
 				&function_result, &function_parameters)) {
-				const vector<string> actual_expressions = SplitTemplateArguments(call_arguments);
+			const vector<string> actual_expressions = SplitCallArguments(call_arguments);
 				if(actual_expressions.size() != function_parameters.size()) return string();
 				for(size_t argument = 0; argument < actual_expressions.size(); ++argument) {
 					const string actual = ExpressionTypeSpelling(actual_expressions[argument],

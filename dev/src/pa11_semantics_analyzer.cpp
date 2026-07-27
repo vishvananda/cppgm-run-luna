@@ -57,114 +57,23 @@ CPPGMAstNodePtr FindReturnStatement(const CPPGMAstNodePtr& node)
 	return CPPGMAstNodePtr();
 }
 
+size_t TopLevelScopeSeparator(const string& raw)
+{
+	int angle_depth = 0;
+	for (size_t i = 0; i + 1 < raw.size(); ++i) {
+		if (raw[i] == '<') ++angle_depth;
+		else if (raw[i] == '>' && angle_depth > 0) --angle_depth;
+		else if (raw[i] == ':' && raw[i + 1] == ':' && angle_depth == 0)
+			return i;
+	}
+	return string::npos;
+}
+
 }
 
 Analyzer::Analyzer()
 	: global_(new Scope(SCOPE_NAMESPACE, "<global>", 0)), anonymous_type_count_(0),
-	  pending_class_layouts_()
-{
-}
-
-TypePtr Analyzer::ResolveType(Scope* from, const string& raw) const
-{
-	const string name = StripTypeMarker(raw);
-	// Friend-template parameter types can be dependent template-ids such as
-	// Box<U>; preserve that identity as a typed class specialization.
-	const size_t template_open = name.find('<');
-	if (template_open != string::npos && name.size() > template_open + 1 &&
-		name[name.size() - 1] == '>')
-	{
-		const string primary_name = name.substr(0, template_open);
-		TypePtr primary = ResolveType(from, primary_name);
-		if (primary && (primary->kind == TYPE_CLASS ||
-			primary->kind == TYPE_TEMPLATE_PARAMETER))
-		{
-			vector<string> arguments;
-			string current;
-			int depth = 0;
-			for (size_t i = template_open + 1; i + 1 < name.size(); ++i)
-			{
-				const char ch = name[i];
-				if (ch == '<') ++depth;
-				else if (ch == '>' && depth > 0) --depth;
-				if (ch == ',' && depth == 0)
-				{
-					while (!current.empty() && isspace(static_cast<unsigned char>(current[0])))
-						current.erase(0, 1);
-					while (!current.empty() && isspace(static_cast<unsigned char>(current[current.size() - 1])))
-						current.erase(current.size() - 1);
-					arguments.push_back(current);
-					current.clear();
-				}
-				else current += ch;
-			}
-			while (!current.empty() && isspace(static_cast<unsigned char>(current[0])))
-				current.erase(0, 1);
-			while (!current.empty() && isspace(static_cast<unsigned char>(current[current.size() - 1])))
-				current.erase(current.size() - 1);
-			if (!current.empty()) arguments.push_back(current);
-			TypePtr specialization(new Type(*primary));
-			specialization->name = name;
-			specialization->template_specialization = true;
-			specialization->template_primary = primary->name;
-			specialization->template_arguments = arguments;
-			return specialization;
-		}
-	}
-		if (name.find("::") == string::npos)
-		{
-		for (Scope* current = from; current; current = current->parent)
-			for (size_t i = current->bindings.size(); i > 0; --i)
-			{
-				const Binding& candidate = current->bindings[i - 1];
-				if (candidate.name == name && (candidate.kind == BIND_TYPE ||
-					candidate.kind == BIND_TYPE_ALIAS) && AccessibleType(candidate, from))
-					return candidate.type;
-			}
-		for (Scope* current = from; current; current = current->parent)
-			if (current->kind == SCOPE_CLASS && current->owner_type)
-				for (TypePtr base = current->owner_type->direct_base; base;
-					base = base->direct_base)
-				{
-					if (LastComponent(base->name) == name) return base;
-					if (!base->owned_scope) continue;
-					for (size_t i = base->owned_scope->bindings.size(); i > 0; --i)
-					{
-						const Binding& candidate = base->owned_scope->bindings[i - 1];
-						if (candidate.name == name && (candidate.kind == BIND_TYPE ||
-							candidate.kind == BIND_TYPE_ALIAS) && AccessibleType(candidate, from))
-							return candidate.type;
-					}
-				}
-	}
-	Binding* binding = ResolveBinding(from, name);
-	if (!binding || (binding->kind != BIND_TYPE &&
-		binding->kind != BIND_TYPE_ALIAS) || !AccessibleType(*binding, from))
-	{
-		// A transformed alias can retain only a concrete specialization of a
-		// class primary in the namespace scope.  Recover the primary from that
-		// typed specialization instead of creating an unrelated incomplete type.
-		if (!binding && name.find("::") != string::npos) {
-			const size_t separator = name.rfind("::");
-			PathTarget owner = ResolvePath(from, name.substr(0, separator));
-			Scope* owner_scope = owner.scope;
-			if (!owner_scope && owner.binding) owner_scope = ScopeForType(owner.binding->type);
-			const string requested = LastComponent(name.substr(separator + 2));
-			if (owner_scope) for (size_t i = 0; i < owner_scope->bindings.size(); ++i) {
-				const Binding& candidate = owner_scope->bindings[i];
-				TypePtr type = candidate.type;
-				if ((candidate.kind != BIND_TYPE && candidate.kind != BIND_TYPE_ALIAS) || !type)
-					continue;
-				if (type->kind == TYPE_CLASS &&
-					(LastComponent(type->name) == requested ||
-					 LastComponent(type->template_primary) == requested))
-					return type;
-			}
-		}
-		throw logic_error("unknown type: " + raw);
-	}
-	return binding->type;
-}
+	  pending_class_layouts_() {}
 
 void Analyzer::Analyze(const CPPGMAstNodePtr& tree)
 {
@@ -538,10 +447,8 @@ void Analyzer::ProcessFunctionDefinition(const CPPGMAstNodePtr& node, Scope* sco
 	CPPGMAstNodePtr declarator = node->children[1];
 	const string raw_name = FirstIdentifier(declarator);
 	if (raw_name.empty()) throw logic_error("function has no name");
-	TypePtr function_type = BuildDeclarator(declarator, base, scope);
-	if (!function_type || function_type->kind != TYPE_FUNCTION)
-		throw logic_error("definition is not a function");
 	Scope* declaration_scope = scope;
+	Scope* lookup_scope = scope;
 	TypePtr member_owner;
 	string name = raw_name;
 	const size_t separator = raw_name.rfind("::");
@@ -553,6 +460,7 @@ void Analyzer::ProcessFunctionDefinition(const CPPGMAstNodePtr& node, Scope* sco
 		if (member_owner && member_owner->kind == TYPE_CLASS && member_owner->owned_scope)
 		{
 			declaration_scope = member_owner->owned_scope;
+			lookup_scope = declaration_scope;
 			name = LastComponent(raw_name);
 		}
 	}
@@ -560,6 +468,32 @@ void Analyzer::ProcessFunctionDefinition(const CPPGMAstNodePtr& node, Scope* sco
 	{
 		member_owner = scope->owner_type;
 	}
+	TypePtr function_type;
+	try {
+		// Keep the ordinary declaration lookup path for definitions whose
+		// parameter and trailing-return types are already visible.  The bridge
+		// below is only needed when a dependent owner member is the missing fact;
+		// this preserves the earlier source-order behavior for ordinary members.
+		function_type = BuildDeclarator(declarator, base, scope);
+	} catch (const logic_error&) {
+		if (!member_owner || member_owner->kind != TYPE_CLASS ||
+			!member_owner->owned_scope) throw;
+		lookup_scope = NewChild(scope, SCOPE_CLASS, name);
+		lookup_scope->owner_type = member_owner;
+		for (size_t binding = 0; binding < declaration_scope->bindings.size(); ++binding)
+			lookup_scope->add(declaration_scope->bindings[binding]);
+		function_type = BuildDeclarator(declarator, base, lookup_scope);
+	}
+	if ((!function_type || function_type->kind != TYPE_FUNCTION) &&
+		member_owner && member_owner->kind == TYPE_CLASS && member_owner->owned_scope) {
+		lookup_scope = NewChild(scope, SCOPE_CLASS, name);
+		lookup_scope->owner_type = member_owner;
+		for (size_t binding = 0; binding < declaration_scope->bindings.size(); ++binding)
+			lookup_scope->add(declaration_scope->bindings[binding]);
+		function_type = BuildDeclarator(declarator, base, lookup_scope);
+	}
+	if (!function_type || function_type->kind != TYPE_FUNCTION)
+		throw logic_error("definition is not a function");
 	Binding binding(BIND_FUNCTION, name, function_type);
 	binding.hidden_friend = facts.is_friend;
 	binding.friend_owner = facts.is_friend ? member_owner : TypePtr();
@@ -586,9 +520,9 @@ void Analyzer::ProcessFunctionDefinition(const CPPGMAstNodePtr& node, Scope* sco
 			stored->is_final = stored->is_final || candidate.is_final;
 		}
 	}
-	Scope* function_scope = NewChild(declaration_scope, SCOPE_FUNCTION, name);
+	Scope* function_scope = NewChild(lookup_scope, SCOPE_FUNCTION, name);
 	function_scopes_[node.get()] = function_scope;
-	AddFunctionParameters(function_scope, declarator, declaration_scope);
+	AddFunctionParameters(function_scope, declarator, lookup_scope);
 	ProcessCompound(node->children[2], function_scope);
 	if (HasTemplateParameterScope(scope))
 		ValidateNondependentTemplateNode(node->children[2], function_scope);
@@ -615,7 +549,8 @@ void Analyzer::ValidateNondependentTemplateNode(const CPPGMAstNodePtr& node,
 		const bool builtin_value_initialization = parent &&
 			parent->kind == "call-expression" && child_index == 0 &&
 			IsFundamentalWord(node->value);
-			if (!member_name && !type_name && !IsDependentTemplateName(current, node->value) &&
+			if (!member_name && !type_name &&
+				!IsDependentTemplateName(current, node->value) &&
 				!builtin_value_initialization && !ResolveBinding(current, node->value)) {
 				throw logic_error("unknown nondependent template name: " + node->value);
 			}
@@ -1343,11 +1278,11 @@ TypePtr Analyzer::ProcessClass(const CPPGMAstNodePtr& node, Scope* scope)
 				}
 		return type;
 	}
-	const bool qualified_definition = raw_name.find("::") != string::npos;
+	const bool qualified_definition = TopLevelScopeSeparator(raw_name) != string::npos;
 	Scope* owner = scope;
 	if (qualified_definition)
 	{
-		const size_t separator = raw_name.rfind("::");
+		const size_t separator = TopLevelScopeSeparator(raw_name);
 		PathTarget prefix = ResolvePath(scope, raw_name.substr(0, separator));
 		owner = prefix.binding ? ScopeForType(prefix.binding->type) : prefix.scope;
 		if (!owner) throw logic_error("unknown class owner");
@@ -1439,9 +1374,9 @@ TypePtr Analyzer::ProcessForwardClass(const CPPGMAstNodePtr& node, Scope* scope)
 	const string name = LastComponent(raw_name);
 	if (name.empty()) throw logic_error("anonymous class forward declaration");
 	Scope* owner = scope;
-	if (raw_name.find("::") != string::npos)
+	if (TopLevelScopeSeparator(raw_name) != string::npos)
 	{
-		const size_t separator = raw_name.rfind("::");
+		const size_t separator = TopLevelScopeSeparator(raw_name);
 		PathTarget prefix = ResolvePath(scope, raw_name.substr(0, separator));
 		owner = prefix.binding ? ScopeForType(prefix.binding->type) : prefix.scope;
 		if (!owner) throw logic_error("unknown forward class owner");

@@ -274,6 +274,7 @@ inline string ReplaceIdentifiers(const string& raw, const map<string, string>& s
 				for(map<string,string>::const_iterator it = substitutions.begin();
 					it != substitutions.end(); ++it) {
 					if(it->first.empty() || word.size() <= it->first.size()) continue;
+					if(word.compare(0, 8, "typename") == 0 && word.size() > 8 && word.substr(8) == it->first) { result += "typename " + it->second; compact_substitution = true; break; }
 					if(word.compare(0, it->first.size(), it->first) == 0) {
 						const string suffix = word.substr(it->first.size());
 						if(suffix == "const" || suffix == "volatile") {
@@ -583,9 +584,8 @@ private:
 	bool HasInlineTemplateCandidate(const vector<const TemplateDefinition*>& definitions,
 		const string& context) const;
 	bool IsTopLevelPackPattern(const string& value) const;
-	CPPGMAstNodePtr FunctionDeclarator(const CPPGMAstNodePtr& declaration) const;
-	bool IsBuiltinArithmeticType(string raw) const; bool IsKnownTypeSpelling(string raw, const string& context) const;
-	bool HasUnavailableGeneratedMemberType(string raw, const string& context, const map<string, string>& substitutions) const; bool GeneratedNodeHasUnavailableMemberType(const CPPGMAstNodePtr& node, const string& context, const map<string, string>& substitutions) const;
+	CPPGMAstNodePtr FunctionDeclarator(const CPPGMAstNodePtr& declaration) const; CPPGMAstNodePtr FunctionParameterDefaultNode(const TemplateDefinition& definition, size_t parameter) const; bool FunctionParameterHasDefault(const TemplateDefinition& definition, size_t parameter) const; bool RestoreFunctionParameterDefaults(const TemplateDefinition& definition, TemplateDefinition* result) const;
+	bool IsBuiltinArithmeticType(string raw) const; bool IsKnownTypeSpelling(string raw, const string& context) const; bool HasUnavailableGeneratedMemberType(string raw, const string& context, const map<string, string>& substitutions) const; bool GeneratedNodeHasUnavailableMemberType(const CPPGMAstNodePtr& node, const string& context, const map<string, string>& substitutions) const;
 	bool HasDeferredDependentClassMember(const TemplateDefinition& definition, const string& context, const map<string, string>& substitutions) const;
 	bool HasUnresolvedTemplateParameter(string raw, const string& context, const map<string, string>& substitutions) const;
 	string CommonBuiltinArithmeticType(const string& left, const string& right) const;

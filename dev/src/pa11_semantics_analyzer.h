@@ -47,7 +47,7 @@ public:
 		out << "\n";
 		for (size_t i = 0; i < scope->bindings.size(); ++i)
 		{
-			const Binding& binding = scope->bindings[i];
+			const Binding& binding = scope->bindings[i]; if (binding.suppress_dump) continue;
 			Indent(out, indentation + 1);
 			out << BindingKindText(binding.kind) << " " << binding.name << " ";
 			if (!binding.type_override.empty()) out << binding.type_override;

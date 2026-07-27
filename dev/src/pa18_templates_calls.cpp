@@ -369,6 +369,17 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 			&explicit_arguments;
 		bool inferred = false;
 		map<string, string> deduction_substitutions = candidate_substitutions;
+		// Preserve concrete enclosing template bindings while replaying the
+		// selected member's call-site argument types.  They provide typed owner
+		// facts such as `String::const_iterator` without importing unrelated names.
+		for(map<string, string>::const_iterator outer = substitutions.begin();
+			outer != substitutions.end(); ++outer) {
+			if(deduction_substitutions.find(outer->first) != deduction_substitutions.end())
+				continue;
+			const string concrete = CanonicalSpelling(ResolveAlias(outer->second, context));
+			if(IsKnownTypeSpelling(concrete, context))
+				deduction_substitutions[outer->first] = outer->second;
+		}
 		if(parent && !parent->name.empty())
 			// The enclosing class name is useful while replaying the generated
 			// member body, but it is not a template parameter.  Leaving it in the
@@ -420,6 +431,9 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 			}
 		}
 	map<string, vector<string> > forwarding_pack_values;
+	TemplateDefinition materialization_definition = inference_definition;
+	const bool restored_function_defaults = RestoreFunctionParameterDefaults(
+		inference_definition, &materialization_definition);
 	try {
 		inferred = InferFunctionArguments(inference_definition, call, &member_arguments,
 				deduction_substitutions, context, explicit_prefix, &inferred_pack_values,
@@ -512,7 +526,9 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 		const ConcreteOwnerContext previous_concrete_owner = active_concrete_owner_;
 		if(requested_owner_pointer) SetActiveConcreteOwner(requested_owner, context);
 		try {
-		generated_name = Instantiate(definition, instantiation_member_arguments, context,
+		generated_name = Instantiate(restored_function_defaults ? materialization_definition :
+			inference_definition,
+			instantiation_member_arguments, context,
 			explicit_instantiation,
 				&instantiation_pack_hints, &candidate_substitutions,
 				requested_owner_pointer, &inferred_function_values,

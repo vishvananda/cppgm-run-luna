@@ -7,7 +7,10 @@ void Analyzer::ProcessUsingDeclaration(const CPPGMAstNodePtr& node, Scope* scope
 	CPPGMAstNodePtr target_node = ChildOfKind(node, "target");
 	if (!target_node) throw logic_error("invalid using declaration");
 	const string target_name = target_node->value;
-	if (target_name.find('<') != string::npos)
+	const string target_component = LastComponent(target_name);
+	const bool operator_name = target_component.compare(0, 8, "operator") == 0 &&
+		target_component.size() > 8 && target_component[8] != ' ';
+	if (target_name.find('<') != string::npos && !operator_name)
 		throw logic_error("using declaration cannot name template-id");
 	const size_t target_separator = target_name.rfind("::");
 	const string target_owner_name = target_separator == string::npos ? string() :

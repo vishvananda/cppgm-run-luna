@@ -3369,3 +3369,86 @@ inherited/member constructor replay, dependent owner defaults, ADL alias
 return lookup, and the remaining partial-specialization/conversion result
 selection.  Include its three LowIR result-materialization cases, then rerun
 the full PA22 report, through-PA21, and the PA22 file audit.
+
+## Checkpoint 97 scope — before implementation — 2026-07-27
+
+- The current-PA report was revalidated at **194/250** before this increment;
+  the complete failure set was grouped below by the shared early-deduction,
+  general/400, general/500, and specification-band behaviors.
+- **Remaining Work Map:** the selected general/500 owner-replay group was
+  `adl-alias-return-operator-template`,
+  `async-initiate-dependent-return-sfinae`,
+  `member-template-dependent-owner-defaulted-sfinae`,
+  `member-template-retained-dependent-param-candidate-drop`, and
+  `partial-specialization-cv-qualifier-subset`; the other current failures
+  remain in the four grouped bands listed in the result below.
+- **Checkpoint Scope:** preserve typed enclosing-owner bindings while replaying
+  member-template calls; resolve qualified dependent `decltype` calls with
+  nested call arguments; recover default function parameters from the matching
+  in-class declaration when materializing an out-of-class definition; and
+  retain operator template-id using declarations without weakening ordinary
+  template-id rejection.
+- **Validation scope:** the selected general/500 behavior, the exact PA22
+  report, through-PA21 regression, and the PA22 source file audit.
+
+## Checkpoint 97 result — 2026-07-27
+
+The authoritative current-PA report is **197/250**, up from the turn-start
+**178/250** and the checkpoint baseline **194/250**.  The increment now
+preserves typed owner facts through out-of-class member definitions, parses
+qualified dependent member calls and nested call arguments during `decltype`
+replay, restores matching declaration defaults before materialization, and
+keeps operator template-id using declarations available to lookup.  The
+general/500 ADL alias-return, async dependent-return, and cv-qualified partial
+specialization cases no longer fail the exact report; the two retained/default
+member replay cases now reach materialization but still have LowIR-shape work.
+
+Required validation passed: the exact through-PA21 report is **1850/1850**, and
+`cppgm_file_audit.pl --stage pa22 --paths dev/src` passed with warnings only.
+
+### Remaining Work Map
+
+- **Early deduction, pack, using, and partial-order replay (11):** status
+  `general/100-defaulted-nested-class-template-deduction`,
+  `general/100-template-deduction-rejects-value-base-argument`,
+  `general/200-constructor-template-rvalue-beats-const-ref`,
+  `general/300-alias-bool-explicit-pack-call-dependent-tag`,
+  `general/300-hidden-friend-sfinae-use-scope-shadowing`, and
+  `general/300-using-member-template-implicit-object-cv-overload`; LowIR
+  `general/100-dependent-remove-reference-transform-forwarding`,
+  `general/100-fixed-over-empty-trailing-pack-index-sequence`,
+  `general/100-function-parameter-empty-middle-pack-alias`,
+  `general/200-function-template-partial-order-class-template-cv`, and
+  `general/200-partial-order-synthetic-virtual-member-emission`.
+- **General/400 alias, conversion, constructor, and LowIR replay (8):** status
+  `general/400-alias-template-function-argument-cv`,
+  `general/400-conversion-function-template-prefers-nontemplate`,
+  `general/400-member-alias-template-template-partial-deduction-owner`,
+  `general/400-pack-expansion-size-mismatch-sfinae`, and
+  `general/400-partial-specialization-inherited-constructor-template`; LowIR
+  `general/400-function-assignment-invocable-and-helper`,
+  `general/400-static-data-nttp-pack-sizeof-bound`, and
+  `general/400-template-template-alias-default-arity-sfinae`.
+- **Remaining general/500 owner, constructor, and result replay (8):** status
+  `general/500-constructor-sfinae-member-template-value`,
+  `general/500-inherited-constructor-template-member-alias-pack` (timeout),
+  and `general/500-weak-ptr-shared-ptr-template-ctor`; LowIR
+  `general/500-bool-alias-function-template-result-metadata`,
+  `general/500-current-specialization-nontype-default-dependent`,
+  `general/500-dependent-member-alias-function-return`,
+  `general/500-member-template-dependent-owner-defaulted-sfinae`, and
+  `general/500-member-template-retained-dependent-param-candidate-drop`.
+- **Specification-band deduction, conversion, and LowIR replay (26):** the
+  remaining `spec/100`, `spec/200`, `spec/300`, `spec/400`, and `spec/500`
+  cases are unchanged from Checkpoint 96: 15 status failures covering
+  constructor, conversion, partial-order, template-id, and hidden-friend
+  lookup, plus 11 LowIR-shape failures covering explicit specialization,
+  array/string arguments, nested/defaulted deduction, cross-specialization
+  conversion, qualified-member fallback, and qualified static-member pack
+  expansion.
+
+### Next Checkpoint Scope
+
+Finish the remaining general/500 constructor and result-materialization group,
+starting with the two member replay LowIR cases and the inherited-constructor
+timeout; then continue with the specification-band deduction/conversion group.

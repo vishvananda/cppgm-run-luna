@@ -1261,7 +1261,7 @@ bool PA18TemplateExpander::InferFunctionArguments(const TemplateDefinition& defi
 		const CPPGMAstNodePtr parameter = parameters->children[i];
 		if(!parameter || parameter->kind != "parameter-declaration") continue;
 		if(IsFunctionParameterPack(parameter)) has_pack = true;
-		else if(!ChildOfKindLocal(parameter, "default-argument")) ++required_parameters;
+		else if(!FunctionParameterHasDefault(definition, i)) ++required_parameters;
 	}
 	if(arguments->children.size() < required_parameters ||
 		(!has_pack && arguments->children.size() > parameters->children.size())) return false;

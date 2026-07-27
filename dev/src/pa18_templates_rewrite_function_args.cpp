@@ -21,7 +21,7 @@ bool PA18TemplateExpander::InferFunctionTypeArguments(const TemplateDefinition& 
 		if(!parameter || parameter->kind != "parameter-declaration") continue;
 		++parameter_count;
 		if(IsFunctionParameterPack(parameter)) has_parameter_pack = true;
-		else if(!ChildOfKindLocal(parameter, "default-argument")) ++required_parameters;
+		else if(!FunctionParameterHasDefault(definition, i)) ++required_parameters;
 	}
 	if(actual_types.size() < required_parameters ||
 		(!has_parameter_pack && actual_types.size() > parameter_count)) return false;

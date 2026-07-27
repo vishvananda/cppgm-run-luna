@@ -69,23 +69,62 @@ namespace pa18_templates_internal {
 				}
 			}
 		}
+		// A qualified call whose owner is a dependent class or alias template is
+		// still a member lookup.  The first '<' in a spelling such as
+		// `enable_if_t<...>::initiate(...)` belongs to the owner, so treating it as
+		// an explicit function-template-id makes the alias itself look callable and
+		// loses the actual `async_result<...>::initiate` overload set.
+		vector<const TemplateDefinition*> qualified_candidates;
+		string qualified_member_name;
+		string qualified_owner;
+		bool qualified_member_call = false;
+		const size_t qualified_separator = TopLevelScopeSeparator(callee);
+		if(qualified_separator != string::npos) {
+			const string owner_spelling = callee.substr(0, qualified_separator);
+			qualified_member_name = callee.substr(qualified_separator + 2);
+			if(!qualified_member_name.empty()) {
+				qualified_member_call = true;
+				qualified_owner = CanonicalSpelling(ReplaceIdentifiers(owner_spelling,
+					substitutions));
+				try {
+					qualified_owner = RewriteText(qualified_owner, function_context,
+						substitutions, 0);
+				} catch(const PA18SubstitutionFailure&) {}
+				qualified_owner = CanonicalSpelling(ResolveAlias(ReplaceIdentifiers(
+					qualified_owner, substitutions), function_context));
+				qualified_candidates = FindFunctionDefinitions(qualified_member_name,
+					qualified_owner);
+				if(qualified_candidates.empty())
+					qualified_candidates = FindFunctionDefinitions(qualified_member_name,
+						owner_spelling);
+			}
+		}
 		vector<string> explicit_arguments;
 		const TemplateDefinition* explicit_definition = 0;
 		string explicit_base_name;
-	const size_t template_open = callee.find('<');
+		const size_t member_template_open = qualified_member_call ?
+			qualified_member_name.find('<') : string::npos;
+		const size_t template_open = qualified_member_call ? member_template_open :
+			callee.find('<');
 	const bool callee_is_static_cast = callee.compare(0, 12, "static_cast<") == 0;
 		if(template_open != string::npos && !callee_is_static_cast) {
 			string base_arguments, base;
 			size_t template_close = string::npos, begin = 0;
-				if(!TemplateBase(callee, template_open, &begin, &base) ||
-					!TemplateRange(callee, template_open, &base_arguments, &template_close)) return false;
+			const string& template_source = qualified_member_call ? qualified_member_name : callee;
+			if(!TemplateBase(template_source, template_open, &begin, &base) ||
+				!TemplateRange(template_source, template_open, &base_arguments, &template_close)) return false;
 				explicit_base_name = base;
-				explicit_definition = FindExplicitFunctionTemplate(base, function_context);
+				explicit_definition = FindExplicitFunctionTemplate(base,
+					qualified_member_call && !qualified_owner.empty() ? qualified_owner :
+					function_context);
 			if(!explicit_definition) {
 				vector<const TemplateDefinition*> inherited;
 				set<string> active;
 				map<const TemplateDefinition*, string> concrete_owners;
-				CollectInheritedMemberTemplates(context, base, substitutions,
+				if(qualified_member_call && !qualified_owner.empty())
+					CollectInheritedMemberTemplates(qualified_owner, base, substitutions,
+						function_context, &inherited, &active, &concrete_owners);
+				else CollectInheritedMemberTemplates(context, base, substitutions,
 					function_context, &inherited, &active, &concrete_owners);
 				if(!inherited.empty()) explicit_definition = inherited[0];
 			}
@@ -95,7 +134,7 @@ namespace pa18_templates_internal {
 				substitutions, &explicit_arguments);
 		}
 		vector<string> actual_types;
-		const vector<string> actual_expressions = SplitTemplateArguments(argument_text);
+		const vector<string> actual_expressions = SplitCallArguments(argument_text);
 		for(size_t i = 0; i < actual_expressions.size(); ++i) {
 			if(actual_expressions[i].empty()) continue;
 			string actual_expression = actual_expressions[i];
@@ -189,16 +228,22 @@ namespace pa18_templates_internal {
 		}
 		vector<const TemplateDefinition*> candidates;
 		if(explicit_definition) {
-			candidates = FindFunctionDefinitions(explicit_base_name, function_context);
+			candidates = qualified_member_call && !qualified_owner.empty() ?
+				FindFunctionDefinitions(explicit_base_name, qualified_owner) :
+				FindFunctionDefinitions(explicit_base_name, function_context);
 			if(candidates.empty()) candidates.push_back(explicit_definition);
 		}
+		else if(qualified_member_call) candidates = qualified_candidates;
 		else candidates = FindFunctionDefinitions(callee, function_context);
 		if(generated_callee && GeneratedFunctionCallResultType(callee, function_context,
 			substitutions, actual_types, result)) return true;
 		if(candidates.empty()) {
 			set<string> active;
 			map<const TemplateDefinition*, string> concrete_owners;
-			CollectInheritedMemberTemplates(context, callee, substitutions,
+			if(qualified_member_call && !qualified_owner.empty())
+				CollectInheritedMemberTemplates(qualified_owner, qualified_member_name,
+					substitutions, function_context, &candidates, &active, &concrete_owners);
+			else CollectInheritedMemberTemplates(context, callee, substitutions,
 				function_context, &candidates, &active, &concrete_owners);
 		}
 		if(candidates.empty() && GeneratedFunctionCallResultType(callee, function_context,

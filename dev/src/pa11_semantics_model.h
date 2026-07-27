@@ -182,7 +182,7 @@ struct Binding
 	BindingKind kind;
 	string name;
 	TypePtr type;
-	bool has_value;
+	bool has_value; bool suppress_dump;
 	// PA19 owns the semantic constant.  `value` remains only as the signed
 	// compatibility projection consumed by the pre-PA19 lowering paths.
 	PA19IntegralValue constant_value;
