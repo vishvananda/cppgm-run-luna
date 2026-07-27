@@ -1135,11 +1135,11 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 				HasFriendSpecifier(input->children[1]->children[0]) &&
 				DescendantOfKind(input->children[1], "parameter-clause"))
 				return TransformRegularNode(input, context, substitutions);
-			if(!active_instantiation_name_.empty() && input->children.size() > 1 &&
-				input->children[1] &&
-				(input->children[1]->kind == "special-member-definition" ||
-				 input->children[1]->kind == "special-member-declaration"))
+			if(!active_instantiation_name_.empty() && input->children.size() > 1 && input->children[1] && (input->children[1]->kind == "special-member-definition" || input->children[1]->kind == "special-member-declaration")) {
+				if(specialization_bases_.find(LastComponent(active_instantiation_name_)) == specialization_bases_.end()) return TransformRegularNode(input, context, substitutions);
+				struct TemplateDeclarationScope { size_t& depth; TemplateDeclarationScope(size_t& value) : depth(value) { ++depth; } ~TemplateDeclarationScope() { --depth; } } scope(active_template_declaration_depth_);
 				return TransformRegularNode(input, context, substitutions);
+			}
 			if(input->children.size() > 1 && input->children[1] &&
 				(input->children[1]->kind == "class-specifier" ||
 				 input->children[1]->kind == "class-forward-declaration"))

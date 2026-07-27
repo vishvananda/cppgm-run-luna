@@ -568,3 +568,94 @@ suite, and the PA22 file audit.
 - `make build` and `git diff --check` pass.  The refreshed exact failure map
   and the next substantial group, general/400 typed aliases, constructors,
   conversions, and NTTPs, are recorded in `pa22/plan.md`.
+
+## Checkpoint 98 Audit — Checkpoint 97 implementation
+
+### Scope Reviewed
+
+Reviewed the latest Checkpoint 97 scope in [plan.md](plan.md), the PA22
+contract in [README.md](README.md), the primary checkpoint log at
+`/home/vishvananda/work/.ralph/luna-gpt-5.6-luna-ultra/last-test.log`, and
+recent commits `dbc9614`, `aa42352`, `94b49df`, `309be2e`, and `dc21ac9`.
+The changed implementation reviewed was
+`dev/src/pa18_templates_calls.cpp`, `dev/src/pa18_templates_calls_qualified.cpp`,
+`dev/src/pa18_templates_collection.h`, `dev/src/pa18_templates_rewrite.cpp`,
+`dev/src/pa18_templates_rewrite.h`,
+`dev/src/pa18_templates_rewrite_constructor.cpp`,
+`dev/src/pa18_templates_rewrite_specialization.cpp`, and
+`dev/src/pa18_templates_rewrite_text.cpp`.
+
+The audit traced constructor/member-template replay, dependent default
+substitution, inherited-constructor materialization, nested-type deduction,
+ordinary-member candidate viability, hot-path lookup work, file-audit health,
+and preservation of PA1–PA21.  It also reviewed the complete current-PA
+failure set rather than only the checkpoint fixtures.
+
+### Findings
+
+- A dependent replacement whose template-id still contained the substituted
+  parameter could recursively re-enter `RewriteText` without reaching a
+  semantic fixed point.  The resulting failure was a genuine algorithmic
+  recursion bug, not a timeout-budget problem.  The rewrite boundary now
+  protects only the self-containing template-id binding while retaining the
+  typed substitution map for all other arguments.
+- Special-member constructor replay used the mem-initializer spelling as the
+  lookup name even when that spelling was a data member.  That dropped the
+  typed member class and could omit a nested member-template constructor.
+  Replay now derives the constructor owner from the resolved member type and
+  its specialization base identity.
+- Inherited constructor template declaration replay could materialize its own
+  initializer while the concrete special-member declaration was still being
+  transformed.  This caused recursive re-entry and the reported timeout.  A
+  scoped declaration-depth fact defers only that reentrant materialization;
+  it does not cap execution time or convert failure into success.
+- Ordinary member lookup and constructor replay now have an explicit semantic
+  boundary: special-member definitions are considered by the ordinary-call
+  viability probe only when the caller marks constructor replay.  The normal
+  overload path is not made to recover constructor facts from generated text.
+- A concrete nested type that was already represented by a qualified owner
+  could be compared against a bare nested spelling during deduction.  The
+  matcher now resolves that identity through the owner declaration index.
+  The attempted concrete-member lookup mode that regressed broad SFINAE was
+  rejected and reverted; the retained path preserves the earlier lookup
+  contract.
+- No skipped compiler phase, fallback-success path, dummy output, embedded
+  payload, interpreter/VM/trampoline substitute, source- or test-specific
+  acceptance gate, emitted-text execution, weakened check, hidden
+  implementation fragment, or file-audit bypass was found.  The recursion
+  guards are semantic cycle guards, not timeout workarounds.  No full-suite
+  walk, emitted-LowIR reparse, duplicated AST ownership, or hot-path
+  unbounded scan was introduced.
+
+### Changes Made
+
+- Added a bounded self-containing-template-id substitution guard at the text
+  rewrite boundary.
+- Added typed member-class constructor-name recovery and threaded an explicit
+  `constructor_replay` flag through member-call viability.
+- Added scoped concrete special-member declaration replay depth so initializer
+  constructor materialization cannot recursively re-enter its declaration.
+- Added generated-owner/nested-class identity normalization through the typed
+  class declaration index.
+- Kept all implementation changes under `dev/src`; no tests or reference
+  fixtures were changed.  The rejected concrete nested lookup mode was
+  removed after its full-report regression was confirmed.
+
+### Validation
+
+- Required active report — **passed for stage progress**:
+  `make test-report ACTIVE_TEST_REPORT_PAS='pa22'` reported **200/250**,
+  above the checkpoint baseline of **197/250**, with **50** residual
+  current-PA fixtures and **0 timeout failures**.
+- Required prior-through check — **passed**:
+  `n=22; if [ "$n" -le 1 ]; then echo '===== ALL TESTS PASSED SUCCESSFULLY! (0/0) ====='; else make test-report-through-pa$((n - 1)); fi`
+  reported **1850/1850** through PA21.
+- Required file audit — **passed**:
+  `perl scripts/cppgm_file_audit.pl --stage pa22 --paths dev/src`.
+- The formerly recursive/defaulted nested fixture, dependent forwarding
+  fixture, and forwarding-lvalue overload fixture complete without timeout;
+  the inherited-constructor fixture completes in **0.02s** rather than
+  timing out.  Its remaining result is a LowIR parity failure recorded in the
+  refreshed work map, not an execution or architecture shortcut.
+- `git diff --check` passes; the final commit will leave `git status --short`
+  empty.

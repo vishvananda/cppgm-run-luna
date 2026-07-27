@@ -13,8 +13,27 @@ int PA18TemplateExpander::MatchDirectTypeParameter(const string& pattern,
 	if(parameter_names.find(pattern) == parameter_names.end() ||
 		(!class_pattern && pattern.find('<') != string::npos)) return -1;
 	map<string, string>::const_iterator prior = inferred->find(pattern);
-	if(prior != inferred->end() && CanonicalSpelling(ResolveAlias(
-		prior->second, context)) != CanonicalSpelling(ResolveAlias(actual, context))) return 0;
+	if(prior != inferred->end()) {
+		const string prior_type = CanonicalSpelling(ResolveAlias(prior->second, context));
+		string actual_type = CanonicalSpelling(ResolveAlias(actual, context));
+		if(prior_type != actual_type && actual.find("::") == string::npos) {
+			const size_t separator = prior_type.rfind("::");
+			if(separator != string::npos) {
+				const string owner = prior_type.substr(0, separator);
+				const string nested = LastComponent(actual);
+				const CPPGMAstNodePtr declaration = FindClassDeclaration(owner, context);
+				if(declaration) for(size_t child = 0; child < declaration->children.size(); ++child) {
+					const CPPGMAstNodePtr candidate = declaration->children[child];
+					if(!candidate || (candidate->kind != "class-specifier" &&
+						candidate->kind != "class-forward-declaration") ||
+						LastComponent(candidate->value) != nested) continue;
+					actual_type = owner + "::" + nested;
+					break;
+				}
+			}
+		}
+		if(prior_type != actual_type) return 0;
+	}
 	(*inferred)[pattern] = actual;
 	return 1;
 }

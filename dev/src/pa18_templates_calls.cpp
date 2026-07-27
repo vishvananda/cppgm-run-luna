@@ -6,7 +6,7 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 	const CPPGMAstNodePtr& callee, const string& original_member,
 	const string& context,
 	const map<string, string>& substitutions,
-	bool explicit_instantiation)
+	bool explicit_instantiation, bool constructor_replay)
 {
 	if(!call || !callee || callee->kind != "member-expression" ||
 		callee->children.size() < 2 || !callee->children[1]) return false;
@@ -230,8 +230,9 @@ bool PA18TemplateExpander::InstantiateMemberCall(const CPPGMAstNodePtr& call,
 		if(!specialized_candidates.empty()) candidates.swap(specialized_candidates);
 	}
 	const vector<const TemplateDefinition*> direct_member_candidates = candidates;
-	if(HasViableOrdinaryCallableMember(call, object_type, member_name,
-		context, substitutions, object_const, object_volatile)) return false;
+	const bool ordinary_callable = HasViableOrdinaryCallableMember(call, object_type, member_name,
+		context, substitutions, object_const, object_volatile, constructor_replay);
+	if(ordinary_callable) return false;
 	vector<const TemplateDefinition*> inherited_candidates;
 	set<string> inherited_active;
 	map<const TemplateDefinition*, string> inherited_owners;

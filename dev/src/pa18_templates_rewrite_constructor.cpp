@@ -99,10 +99,19 @@ void PA18TemplateExpander::MaterializeInitializerConstructor(
 				constructor_member_name = base == specialization_bases_.end() ?
 					LastComponent(member_type) : LastComponent(base->second);
 			} else if(!FindClassMemberType(context, LastComponent(member_id->value),
-				 substitutions, context, &member_type, &active)) continue;
+					substitutions, context, &member_type, &active)) continue;
 			member_type = CanonicalSpelling(ResolveAlias(RewriteText(member_type,
 				context, substitutions, 0), context));
 			if(member_type.empty() || (!delegating && !FindClassDeclaration(member_type, context))) continue;
+			if(!delegating) {
+				// The mem-initializer id names a field, not its constructor.  Use the
+				// resolved field type and its source specialization as the typed lookup
+				// owner instead of rediscovering that fact from generated spelling.
+				map<string, string>::const_iterator base = specialization_bases_.find(
+					LastComponent(member_type));
+				constructor_member_name = base == specialization_bases_.end() ?
+					LastComponent(member_type) : LastComponent(base->second);
+			}
 			CPPGMAstNodePtr object(new CPPGMAstNode("id-expression"));
 			object->inferred_type = member_type;
 			CPPGMAstNodePtr member(new CPPGMAstNode("member-expression", "."));
@@ -115,7 +124,7 @@ void PA18TemplateExpander::MaterializeInitializerConstructor(
 			arguments->children = transformed_arguments->children;
 			call->children.push_back(arguments);
 			InstantiateMemberCall(call, member, constructor_member_name, context,
-				substitutions);
+				substitutions, false, delegating);
 		}
 		return;
 	}

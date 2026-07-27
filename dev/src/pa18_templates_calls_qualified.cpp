@@ -33,7 +33,7 @@ bool PA18TemplateExpander::IsKnownMemberTemplateId(const string& raw) const
 bool PA18TemplateExpander::HasViableOrdinaryCallableMember(
 	const CPPGMAstNodePtr& call, const string& object_type, const string& member_name,
 	const string& context, const map<string, string>& substitutions,
-	bool object_const, bool object_volatile)
+	bool object_const, bool object_volatile, bool include_special_members)
 {
 	if(!call || call->children.size() <= 1 || !call->children[1]) return false;
 	const CPPGMAstNodePtr arguments = call->children[1]->kind == "argument-list" ?
@@ -53,9 +53,22 @@ bool PA18TemplateExpander::HasViableOrdinaryCallableMember(
 		}
 		for(size_t child = 0; child < declaration->children.size(); ++child) {
 			const CPPGMAstNodePtr candidate = declaration->children[child];
-			if(!candidate || (candidate->kind != "function-definition" &&
-				candidate->kind != "simple-declaration") ||
-				LastComponent(DeclarationName(candidate)) != member_name) continue;
+			// A special-member definition participates in this probe only for a
+			// synthetic constructor replay.  Ordinary member lookup must not let a
+			// generated constructor declaration preempt a real overload set.
+			const bool special_member = include_special_members && candidate &&
+				candidate->kind == "special-member-definition";
+			if(!candidate || (!special_member && candidate->kind != "function-definition" &&
+				candidate->kind != "simple-declaration")) continue;
+			const string candidate_name = LastComponent(DeclarationName(candidate));
+			bool name_matches = candidate_name == member_name;
+			if(!name_matches && special_member) {
+				map<string, string>::const_iterator generated = specialization_bases_.find(
+					candidate_name);
+				name_matches = generated != specialization_bases_.end() &&
+					LastComponent(generated->second) == member_name;
+			}
+			if(!name_matches) continue;
 			const CPPGMAstNodePtr parameters = DescendantOfKind(
 				FunctionDeclarator(candidate), "parameter-clause");
 			if(!parameters || parameters->children.size() != arguments->children.size()) continue;
@@ -74,11 +87,19 @@ bool PA18TemplateExpander::HasViableOrdinaryCallableMember(
 					context, &actual_signature)) { viable = false; break; }
 				if(actual_signature.result_specifiers && actual_signature.parameters)
 					callable_argument = true;
+				string expected = FunctionTypeSpelling(parameter);
+				if(special_member && expected.find("::") == string::npos) {
+					string nested_type;
+					set<string> nested_active;
+					if(FindClassMemberType(class_name, LastComponent(expected), substitutions,
+						context, &nested_type, &nested_active, false) && !nested_type.empty())
+						expected = nested_type;
+				}
 				map<string, string> ignored;
-				if(!MatchTypePattern(FunctionTypeSpelling(parameter), actual,
+				if(!MatchTypePattern(expected, actual,
 					set<string>(), &ignored, context)) { viable = false; break; }
 			}
-			if(viable && (callable_argument || arguments->children.empty())) {
+			if(viable && (special_member || callable_argument || arguments->children.empty())) {
 				active.erase(class_name);
 				return true;
 			}

@@ -4,6 +4,23 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
+namespace {
+
+bool ContainsIdentifierToken(const string& text, const string& identifier)
+{
+	if(identifier.empty()) return false;
+	for(size_t at = 0; at < text.size();) {
+		if(!IsIdentifierCharacter(text[at])) { ++at; continue; }
+		const size_t begin = at;
+		while(at < text.size() && IsIdentifierCharacter(text[at])) ++at;
+		if(at - begin == identifier.size() &&
+			text.compare(begin, identifier.size(), identifier) == 0) return true;
+	}
+	return false;
+}
+
+} // namespace
+
 string PA18TemplateExpander::RewriteText(string raw, const string& context,
 	const map<string, string>& substitutions, bool* template_replaced,
 	bool resolve_alias, bool resolve_member, bool defer_class_definition)
@@ -632,6 +649,25 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			const string source_argument = args[i];
 			const string substituted_source_argument = CanonicalSpelling(
 				ReplaceIdentifiersPreservingPackSizes(source_argument, substitutions));
+			// A self-containing template-id replacement has no finite textual
+			// rewrite.  Drop only that binding for this nested rewrite; all semantic
+			// deduction facts remain in the caller's typed substitution map.
+			const map<string, string>* argument_substitutions = &substitutions;
+			map<string, string> protected_substitutions;
+			for(map<string, string>::const_iterator substitution = substitutions.begin();
+				substitution != substitutions.end(); ++substitution) {
+				const string& replacement = substitution->second;
+				if(replacement.find('<') == string::npos || replacement.find('>') == string::npos ||
+					!ContainsIdentifierToken(source_argument, substitution->first) ||
+					!ContainsIdentifierToken(replacement, substitution->first)) continue;
+				if(argument_substitutions == &substitutions) {
+					protected_substitutions = substitutions;
+					argument_substitutions = &protected_substitutions;
+				}
+				protected_substitutions.erase(substitution->first);
+			}
+			const string rewrite_source = argument_substitutions == &substitutions ?
+				args[i] : substituted_source_argument;
 					if(i < definition->parameters.size() &&
 						definition->parameters[i].template_template) {
 						string normalized;
@@ -804,9 +840,10 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 					const bool defer_nested_class_argument = defer_class_definition ||
 						(i < definition->parameters.size() && definition->parameters[i].type &&
 							source_argument != substituted_source_argument);
-					args[i] = NormalizeTypeArgument(RewriteText(args[i], context,
-						substitutions, 0, true, true, defer_nested_class_argument));
-				args[i] = CollapseReferenceSpelling(ReplaceIdentifiers(args[i], substitutions));
+					args[i] = NormalizeTypeArgument(RewriteText(rewrite_source, context,
+						*argument_substitutions, 0, true, true, defer_nested_class_argument));
+				args[i] = CollapseReferenceSpelling(ReplaceIdentifiers(args[i],
+					*argument_substitutions));
 				// Keep a typedef spelling for a pointer to a function type while
 				// selecting a class partial specialization.  Expanding
 				// `formatter_function*` to `string_like*` before matching
@@ -834,8 +871,8 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 					function_pointer_alias = function_pointer_alias_spelling(substituted_source_argument);
 				if(!function_pointer_alias.empty()) args[i] = function_pointer_alias;
 				else args[i] = ResolveAlias(args[i], context);
-				args[i] = NormalizeTypeArgument(RewriteText(args[i], context,
-					substitutions, 0, true, true, defer_nested_class_argument));
+				args[i] = NormalizeTypeArgument(RewriteText(rewrite_source, context,
+					*argument_substitutions, 0, true, true, defer_nested_class_argument));
 					if(function_pointer_alias.empty()) args[i] = ResolveAlias(args[i], context);
 					else args[i] = function_pointer_alias;
 					args[i] = QualifyTypeArgument(args[i], context, definition->owner);
