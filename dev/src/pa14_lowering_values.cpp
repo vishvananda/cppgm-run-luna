@@ -186,15 +186,9 @@ PA14Lowerer::Value PA14Lowerer::EmitIdentifier(const CPPGMAstNodePtr& node, Scop
 		 (early_demanded_global && early_demanded_global->explicit_specialization));
 	const bool explicit_specialized_static_storage = early_demanded_global &&
 		early_demanded_global->explicit_specialization;
-	const bool constexpr_template_static_definition = early_demanded_global &&
-		early_demanded_global->template_instantiation &&
-		early_demanded_global->initializer && !early_demanded_global->declaration &&
-		Analyzer::HasNodeValue(binding->declaration, "decl-specifier", "constexpr");
-	const bool static_storage_override = template_static_storage_override ||
-		constexpr_template_static_definition;
 	if(binding->kind == BIND_VARIABLE && binding->has_value && binding->declaration &&
 		binding->declaration->template_instantiation && binding_integral &&
-		!static_storage_override) {
+		!template_static_storage_override) {
 		result.type = binding->type;
 		result.operand = integer_text(binding->value);
 		result.known_constant = true;
@@ -222,7 +216,7 @@ PA14Lowerer::Value PA14Lowerer::EmitIdentifier(const CPPGMAstNodePtr& node, Scop
 		if(binding->is_static) {
 		GlobalRecord* demanded_global = EnsureStaticMemberStorage(binding,
 			decltype_form);
-		if(binding->has_value && !decltype_form && !static_storage_override) {
+		if(binding->has_value && !decltype_form && !template_static_storage_override) {
           result.known_constant = true;
           result.constant = binding->value;
           result.operand = integer_text(result.constant);
@@ -231,7 +225,7 @@ PA14Lowerer::Value PA14Lowerer::EmitIdentifier(const CPPGMAstNodePtr& node, Scop
         const TypePtr static_value_type = type_value(binding->type);
 		if(!decltype_form && demanded_global && demanded_global->initializer && static_value_type &&
 			static_value_type->is_const &&
-			(!static_storage_override || explicit_specialized_static_storage)) {
+			(!template_static_storage_override || explicit_specialized_static_storage)) {
 			long long constant = 0;
           if(FoldInteger(InitializerExpression(demanded_global->initializer), scope,
               &constant, 0)) {

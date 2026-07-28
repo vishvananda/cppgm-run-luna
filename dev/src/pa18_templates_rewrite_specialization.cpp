@@ -428,6 +428,20 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 		}
 		if(argument_index >= arguments.size()) return false;
 		string actual = CanonicalSpelling(arguments[argument_index++]);
+		// A second replay pass can append the source template argument list to
+		// an already materialized generated class name (`box_int_<int>`).  Only
+		// normalize that malformed generated spelling; ordinary generated names
+		// retain their qualified identity for lookup and lowering.
+		string generated_actual_base = actual;
+		const size_t generated_actual_open = generated_actual_base.find('<');
+		if(generated_actual_open != string::npos) {
+			generated_actual_base.erase(generated_actual_open);
+			const string generated_actual_key = LastComponent(generated_actual_base);
+			if(specialization_bases_.find(generated_actual_key) != specialization_bases_.end() &&
+				specialization_arguments_.find(generated_actual_key) !=
+				specialization_arguments_.end())
+				actual = generated_actual_key;
+		}
 		const size_t actual_parameter = argument_index - 1;
 		bool dependent_actual = false;
 		for(size_t actual_word = 0; actual_word < actual.size();) {

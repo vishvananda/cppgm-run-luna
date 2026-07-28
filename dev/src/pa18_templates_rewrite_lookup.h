@@ -204,6 +204,12 @@
 				const string repeated = JoinPath(current, JoinPath(current, raw_name));
 				found = definitions_.find(repeated);
 				if(found != definitions_.end()) return &found->second;
+				if(LastComponent(current) != LastComponent(raw_name)) {
+					const string normalized_repeated = JoinPath(current,
+						JoinPath(LastComponent(current), raw_name));
+					found = definitions_.find(normalized_repeated);
+					if(found != definitions_.end()) return &found->second;
+				}
 			}
 			const size_t separator = current.rfind("::");
 			if(separator == string::npos) break;

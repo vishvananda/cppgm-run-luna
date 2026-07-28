@@ -758,35 +758,6 @@ void PA14Lowerer::CollectClassMembers(const CPPGMAstNodePtr& node, Scope* scope)
     }
     CollectImplicitConstructor(type_found->second, class_scope);
     CollectImplicitDestructor(type_found->second, class_scope);
-    // A complete object use requires the selected default constructor even
-    // when the object is a subobject whose enclosing aggregate has no emitted
-    // constructor body.  The semantic pass records this as a typed complete
-    // object fact; carry that fact into the demand frontier for the
-    // specialization's zero-argument constructor.
-    if(type_found->second->template_specialization &&
-       complete_template_default_object_uses_.find(type_found->second.get()) !=
-         complete_template_default_object_uses_.end()) {
-      const vector<Binding*> constructors = MemberBindings(type_found->second,
-        LastComponent(type_found->second->name));
-      for(size_t constructor = 0; constructor < constructors.size(); ++constructor) {
-        Binding* binding = constructors[constructor];
-        FunctionRecord* record = RecordForBinding(binding);
-        TypePtr signature = binding ? function_target_type(binding->type) : TypePtr();
-        if(!record || !record->constructor || record->deleted || !signature) continue;
-        bool default_constructible = true;
-        for(size_t parameter = 0; parameter < signature->parameters.size(); ++parameter)
-          if(!HasDefaultArgument(binding, parameter)) {
-            default_constructible = false;
-            break;
-          }
-        if(default_constructible) {
-          record->needed = true;
-          record->complete_object_constructor = true;
-          FunctionRecord* base_entry = BaseEntryFor(record);
-          if(base_entry) base_entry->needed = true;
-        }
-      }
-    }
     if(has_inheriting_constructor_using)
       CollectInheritedConstructors(type_found->second, class_scope);
     (void)scope;

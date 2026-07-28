@@ -549,7 +549,40 @@ bool PA18TemplateExpander::ResolveConstructedCallResult(
 {
 	if(!result || callee.find('.') != string::npos || callee.find("->") != string::npos)
 		return false;
-	const string constructed = ResolveDecltypeTypeName(callee, context, substitutions);
+	string constructed = ResolveDecltypeTypeName(callee, context, substitutions);
+	// A functional construction used as the object of a dependent member call
+	// needs the complete generated class, not merely the source template
+	// spelling.  Ordinary type rewriting deliberately defers bare class
+	// template-ids, but `result<T>().get()` immediately performs member lookup
+	// on that temporary.  Materialize the typed class at this expression
+	// boundary and continue with its generated declaration.
+	const size_t constructed_open = constructed.find('<');
+	if(constructed_open != string::npos) {
+		string constructed_base, constructed_arguments;
+		size_t constructed_begin = 0, constructed_close = string::npos;
+		if(TemplateBase(constructed, constructed_open, &constructed_begin,
+			&constructed_base) && TemplateRange(constructed, constructed_open,
+			&constructed_arguments, &constructed_close)) {
+			const TemplateDefinition* constructed_definition = FindDefinition(
+				constructed_base, context);
+			if(!constructed_definition)
+				constructed_definition = FindDefinition(LastComponent(constructed_base), context);
+			if(constructed_definition && constructed_definition->class_template) {
+				try {
+					const vector<string> requested = SplitTemplateArguments(
+						constructed_arguments);
+					const string generated = Instantiate(*constructed_definition, requested,
+						context, false, 0, &substitutions);
+					if(!generated.empty() && FindClassDeclaration(generated, context))
+						constructed = generated;
+				} catch(const PA18SubstitutionFailure&) {
+					// The ordinary constructed-call path below reports a failed
+					// candidate as substitution failure; do not turn this probe into
+					// a hard diagnostic while trying the source spelling.
+				}
+			}
+		}
+	}
 	if(!IsKnownTypeSpelling(constructed, context)) return false;
 	bool viable = actual_types.empty() && IsDefaultConstructibleType(constructed, context);
 	const CPPGMAstNodePtr declaration = FindClassDeclaration(constructed, context);
@@ -1151,8 +1184,10 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 			existing->second.size() != owner_arguments.size()) continue;
 		bool same = true;
 		for(size_t argument = 0; argument < owner_arguments.size(); ++argument)
-			if(NormalizeTypeArgument(CanonicalSpelling(existing->second[argument])) !=
-				NormalizeTypeArgument(CanonicalSpelling(owner_arguments[argument]))) {
+			if(NormalizeTypeArgument(CanonicalSpelling(
+				RestoreSpecializationSpelling(existing->second[argument]))) !=
+				NormalizeTypeArgument(CanonicalSpelling(
+					RestoreSpecializationSpelling(owner_arguments[argument])))) {
 				same = false;
 				break;
 			}
@@ -1309,8 +1344,12 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 	if(!concrete_found) return false;
 	const string member_context = selected_owner->qualified_name.empty() ? context :
 		selected_owner->qualified_name;
-	concrete_member = NormalizeTypeArgument(RewriteText(concrete_member, member_context,
-		concrete_substitutions, 0));
+	const bool materialized_member_name = class_declarations_.find(concrete_member) !=
+		class_declarations_.end() || specialization_bases_.find(
+			LastComponent(concrete_member)) != specialization_bases_.end();
+	if(!materialized_member_name)
+		concrete_member = NormalizeTypeArgument(RewriteText(concrete_member, member_context,
+			concrete_substitutions, 0));
 	// `TemplateBase` points at the nested component after a dependent
 	// qualifier, so `Ptr::template rebind<U>::other` would otherwise become
 	// `Ptr::template standard_allocator_double_`.  The materialized member

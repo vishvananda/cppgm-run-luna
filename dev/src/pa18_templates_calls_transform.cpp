@@ -105,9 +105,9 @@ ExplicitCallSelection PA18TemplateExpander::SelectExplicitCallDefinition(
 			string argument_text;
 			size_t close = string::npos;
 			const TemplateDefinition* explicit_definition = 0;
-			if(TemplateBase(lookup_callee, open, &begin, &base) &&
-				TemplateRange(lookup_callee, open, &argument_text, &close)) {
-				explicit_definition = FindDefinition(base, context);
+					if(TemplateBase(lookup_callee, open, &begin, &base) &&
+						TemplateRange(lookup_callee, open, &argument_text, &close)) {
+						explicit_definition = FindDefinition(base, context);
 				if(explicit_definition && !explicit_definition->class_template) {
 					vector<const TemplateDefinition*> overloads = FindFunctionDefinitions(base, context);
 					RankFunctionTemplateCandidatesForCall(&overloads, explicit_deduction_input,
@@ -217,8 +217,8 @@ bool PA18TemplateExpander::TransformExplicitFunctionCall(
 							!explicit_definition->parameters[parameter].name.empty())
 							explicit_pack_values[explicit_definition->parameters[parameter].name] = explicit_args;
 				}
-				else try { complete = InferFunctionArguments(*explicit_definition, explicit_deduction_input, &complete_args, substitutions, context, &explicit_args, &inferred_pack_values, &inferred_function_values); }
-				catch(const PA18SubstitutionFailure&) { complete = false; }
+					else try { complete = InferFunctionArguments(*explicit_definition, explicit_deduction_input, &complete_args, substitutions, context, &explicit_args, &inferred_pack_values, &inferred_function_values); }
+					catch(const PA18SubstitutionFailure&) { complete = false; }
 				if(complete && ValidateTemplateDefaults(*explicit_definition, complete_args,
 					context, substitutions)) {
 					try {
@@ -241,7 +241,7 @@ bool PA18TemplateExpander::TransformExplicitFunctionCall(
 							if(child) result->children.push_back(child);
 						}
 						return true;
-					} catch(const PA18SubstitutionFailure&) {}
+						} catch(const PA18SubstitutionFailure&) {}
 				}
 			}
 	return false;
@@ -269,11 +269,10 @@ bool PA18TemplateExpander::TransformUnqualifiedMemberTemplateCall(
 			if(TemplateBase(raw_member_id, member_id_open, &member_id_begin, &member_id_base) &&
 				TemplateRange(raw_member_id, member_id_open, &member_id_arguments, &member_id_close)) {
 			const vector<const TemplateDefinition*> member_candidates = FindFunctionDefinitions(LastComponent(member_id_base), context);
-			bool member_context = !active_static_member_ &&
-				function_owners_.find(context) != function_owners_.end();
-			for(string current = context; !active_static_member_ &&
-				!member_context && !current.empty(); ) {
-				if(class_contexts_.find(current) != class_contexts_.end()) {
+			bool member_context = function_owners_.find(context) != function_owners_.end();
+			for(string current = context; !member_context && !current.empty(); ) {
+				if(class_contexts_.find(current) != class_contexts_.end() ||
+					class_declarations_.find(current) != class_declarations_.end()) {
 					member_context = true;
 					break;
 				}
@@ -297,8 +296,9 @@ bool PA18TemplateExpander::TransformUnqualifiedMemberTemplateCall(
 						if(transformed_arguments) member_arguments = transformed_arguments;
 					}
 					member_call->children.push_back(member_arguments);
-					if(InstantiateMemberCall(member_call, member, raw_member_id, context,
-						substitutions)) {
+					const bool instantiated = InstantiateMemberCall(member_call, member, raw_member_id, context,
+						substitutions);
+					if(instantiated) {
 						result->children = member_call->children;
 						result->template_primary = member_call->template_primary; result->template_arguments = member_call->template_arguments;
 						result->template_instantiation = true;
@@ -599,7 +599,7 @@ CPPGMAstNodePtr PA18TemplateExpander::MaterializeOperatorCallTargets(
 			new CPPGMAstNode("identifier", "operator()")));
 		result->children[0] = operator_member;
 		result_callee = operator_member;
-		InstantiateMemberCall(result, result_callee, "operator()", context, substitutions);
+			InstantiateMemberCall(result, result_callee, "operator()", context, substitutions);
 	}
 
 	return result_callee;
@@ -660,6 +660,176 @@ bool PA18TemplateExpander::MaterializeImplicitMemberCall(
 	return implicit_member_instantiated;
 }
 
+map<string, vector<string> > PA18TemplateExpander::BuildOwnerPackValues(
+	const string& qualified_callee_owner, const string& context) const
+{
+	map<string, vector<string> > result;
+	if(qualified_callee_owner.empty()) return result;
+	map<string, string>::const_iterator owner_base = specialization_bases_.find(
+		LastComponent(qualified_callee_owner));
+	map<string, vector<string> >::const_iterator owner_arguments =
+		specialization_arguments_.find(LastComponent(qualified_callee_owner));
+	if(owner_base == specialization_bases_.end() ||
+		owner_arguments == specialization_arguments_.end()) return result;
+	const TemplateDefinition* owner_definition = FindDefinition(owner_base->second, context);
+	if(!owner_definition || !owner_definition->class_template) return result;
+	size_t owner_argument = 0;
+	for(size_t parameter = 0; parameter < owner_definition->parameters.size(); ++parameter) {
+		const TemplateParameter& owner_parameter = owner_definition->parameters[parameter];
+		if(!owner_parameter.pack) {
+			if(owner_argument < owner_arguments->second.size()) ++owner_argument;
+			continue;
+		}
+		size_t trailing_fixed = 0;
+		for(size_t later = parameter + 1; later < owner_definition->parameters.size(); ++later)
+			if(!owner_definition->parameters[later].pack) ++trailing_fixed;
+		const size_t available = owner_arguments->second.size() > owner_argument ?
+			owner_arguments->second.size() - owner_argument : 0;
+		const size_t count = available > trailing_fixed ? available - trailing_fixed : 0;
+		vector<string>& values = result[owner_parameter.name];
+		for(size_t element = 0; element < count; ++element)
+			values.push_back(owner_arguments->second[owner_argument++]);
+	}
+	const TemplateDefinition* selected_owner = SelectClassTemplateDefinition(
+		owner_definition, owner_arguments->second, context);
+	if(!selected_owner || !selected_owner->partial_specialization) return result;
+	result.clear();
+	size_t selected_argument = 0;
+	for(size_t parameter = 0; parameter < selected_owner->specialization_parameter_details.size(); ++parameter) {
+		const TemplateParameter& detail = selected_owner->specialization_parameter_details[parameter];
+		if(!detail.pack) {
+			if(selected_argument < owner_arguments->second.size()) ++selected_argument;
+			continue;
+		}
+		size_t trailing_fixed = 0;
+		for(size_t later = parameter + 1;
+			later < selected_owner->specialization_parameter_details.size(); ++later)
+			if(!selected_owner->specialization_parameter_details[later].pack) ++trailing_fixed;
+		const size_t available = owner_arguments->second.size() > selected_argument ?
+			owner_arguments->second.size() - selected_argument : 0;
+		const size_t count = available > trailing_fixed ? available - trailing_fixed : 0;
+		vector<string>& values = result[detail.name];
+		for(size_t element = 0; element < count; ++element)
+			values.push_back(owner_arguments->second[selected_argument++]);
+	}
+	return result;
+}
+
+string PA18TemplateExpander::MaterializedFunctionResultType(
+	const TemplateDefinition& definition, const vector<string>& inferred,
+	const string& context, const map<string, string>& substitutions,
+	const map<string, vector<string> >& inferred_pack_values)
+{
+	if(!definition.declaration || definition.declaration->children.empty()) return string();
+	map<string, string> return_substitutions = substitutions;
+	for(size_t parameter = 0; parameter < definition.parameters.size() &&
+		parameter < inferred.size(); ++parameter)
+		if(!definition.parameters[parameter].name.empty())
+			return_substitutions[definition.parameters[parameter].name] = inferred[parameter];
+	string return_type = NodeTypeSpelling(definition.declaration->children[0]);
+	return_type += ReturnDeclaratorSuffix(FunctionDeclarator(definition.declaration));
+	const map<string, vector<string> > previous_packs = active_pack_substitutions_;
+	for(map<string, vector<string> >::const_iterator pack = inferred_pack_values.begin();
+		pack != inferred_pack_values.end(); ++pack)
+		if(!pack->first.empty()) active_pack_substitutions_[pack->first] = pack->second;
+	try {
+		const string result = CanonicalSpelling(ResolveAlias(RewriteText(
+			return_type, context, return_substitutions, 0), context));
+		active_pack_substitutions_ = previous_packs;
+		return result;
+	} catch(...) {
+		active_pack_substitutions_ = previous_packs;
+		throw;
+	}
+}
+
+void PA18TemplateExpander::ResolveSelectedFunctionArguments(
+	const TemplateDefinition& definition, const CPPGMAstNodePtr& result,
+	const vector<string>& inferred, const string& context,
+	const map<string, string>& substitutions)
+{
+	if(!definition.declaration || definition.declaration->children.empty()) return;
+	FunctionSignature signature;
+	signature.result_specifiers = definition.declaration->children[0];
+	signature.declarator = FunctionDeclarator(definition.declaration);
+	signature.parameters = DescendantOfKind(signature.declarator, "parameter-clause");
+	map<string, string> selected_substitutions = substitutions;
+	for(size_t parameter = 0; parameter < definition.parameters.size() &&
+		parameter < inferred.size(); ++parameter)
+		if(!definition.parameters[parameter].name.empty())
+			selected_substitutions[definition.parameters[parameter].name] = inferred[parameter];
+	ResolveFunctionArguments(result, &signature, context, &selected_substitutions);
+}
+
+bool PA18TemplateExpander::MaterializeFreeFunctionCandidate(
+	const TemplateDefinition* definition, const CPPGMAstNodePtr& result,
+	const CPPGMAstNodePtr& result_callee, const string& callee_name,
+	const string& qualified_callee_owner, const string& context,
+	const map<string, string>& substitutions,
+	const map<const TemplateDefinition*, string>& inherited_owners,
+	const map<string, vector<string> >& owner_pack_values)
+{
+	vector<string> inferred;
+	map<string, vector<string> > inferred_pack_values;
+	map<string, FunctionSignature> inferred_function_values;
+	map<string, vector<string> > forwarding_pack_values;
+	map<string, string> candidate_substitutions = substitutions;
+	if(definition->member_template && !qualified_callee_owner.empty())
+		AddConcreteOwnerSubstitutions(qualified_callee_owner, context,
+			&candidate_substitutions);
+	try {
+		if(!InferFunctionArguments(*definition, result, &inferred,
+			candidate_substitutions, context, 0, &inferred_pack_values,
+			&inferred_function_values, owner_pack_values.empty() ? 0 :
+			&owner_pack_values, &forwarding_pack_values)) return false;
+	} catch(const PA18SubstitutionFailure&) {
+		return false;
+	}
+	if(!ValidateTemplateDefaults(*definition, inferred, context,
+		candidate_substitutions)) return false;
+	const TemplateDefinition* selected_definition =
+		FindExplicitFunctionSpecialization(definition->qualified_name, inferred, context);
+	if(!selected_definition) selected_definition = definition;
+	string requested_owner_name = qualified_callee_owner;
+	map<const TemplateDefinition*, string>::const_iterator inherited_owner =
+		inherited_owners.find(selected_definition);
+	if(inherited_owner != inherited_owners.end() && !inherited_owner->second.empty())
+		requested_owner_name = inherited_owner->second;
+	const bool concrete_member_owner = !requested_owner_name.empty() &&
+		class_contexts_.find(requested_owner_name) != class_contexts_.end() &&
+		specialization_bases_.find(LastComponent(requested_owner_name)) !=
+		specialization_bases_.end() && !selected_definition->owner.empty();
+	const string* requested_owner = concrete_member_owner ? &requested_owner_name : 0;
+	try {
+		map<string, vector<string> > instantiation_pack_hints = inferred_pack_values;
+		for(map<string, vector<string> >::const_iterator owner_pack = owner_pack_values.begin();
+			owner_pack != owner_pack_values.end(); ++owner_pack)
+			instantiation_pack_hints[owner_pack->first] = owner_pack->second;
+		const map<string, string>* materialization_substitutions =
+			selected_definition->member_template && !qualified_callee_owner.empty() ?
+			&candidate_substitutions : 0;
+		const string local_name = Instantiate(*selected_definition, inferred, context, false,
+			&instantiation_pack_hints, materialization_substitutions, requested_owner,
+			&inferred_function_values, &forwarding_pack_values);
+		const string inferred_result_type = MaterializedFunctionResultType(
+			*selected_definition, inferred, context, substitutions, inferred_pack_values);
+		const string qualifier = concrete_member_owner ? requested_owner_name :
+			GeneratedFunctionQualifier(*definition, callee_name, context);
+		const string emitted_name = concrete_member_owner ?
+			LastComponent(selected_definition->name) : local_name;
+		if(!inferred_result_type.empty()) result->inferred_type = inferred_result_type;
+		result->template_primary = definition->qualified_name;
+		result->template_arguments = inferred;
+		result_callee->value = qualifier.empty() ? emitted_name : qualifier +
+			"::" + emitted_name;
+		ResolveSelectedFunctionArguments(*selected_definition, result, inferred,
+			context, substitutions);
+		return true;
+	} catch(const PA18SubstitutionFailure&) {
+		return false;
+	}
+}
+
 bool PA18TemplateExpander::MaterializeFreeFunctionCandidates(
 	const vector<const TemplateDefinition*>& definitions,
 	const CPPGMAstNodePtr& result, const CPPGMAstNodePtr& result_callee,
@@ -667,180 +837,81 @@ bool PA18TemplateExpander::MaterializeFreeFunctionCandidates(
 	const string& context, const map<string, string>& substitutions,
 	const map<const TemplateDefinition*, string>& inherited_owners)
 {
-	map<string, vector<string> > owner_pack_values;
-	if(!qualified_callee_owner.empty()) {
-		map<string, string>::const_iterator owner_base = specialization_bases_.find(
-			LastComponent(qualified_callee_owner));
-		map<string, vector<string> >::const_iterator owner_arguments =
-			specialization_arguments_.find(LastComponent(qualified_callee_owner));
-		if(owner_base != specialization_bases_.end() &&
-			owner_arguments != specialization_arguments_.end()) {
-			const TemplateDefinition* owner_definition = FindDefinition(
-				owner_base->second, context);
-			if(owner_definition && owner_definition->class_template) {
-				size_t owner_argument = 0;
-				for(size_t parameter = 0; parameter < owner_definition->parameters.size(); ++parameter) {
-					const TemplateParameter& owner_parameter = owner_definition->parameters[parameter];
-					if(owner_parameter.pack) {
-						size_t trailing_fixed = 0;
-						for(size_t later = parameter + 1; later < owner_definition->parameters.size(); ++later)
-							if(!owner_definition->parameters[later].pack) ++trailing_fixed;
-						const size_t available = owner_arguments->second.size() > owner_argument ?
-							owner_arguments->second.size() - owner_argument : 0;
-						const size_t count = available > trailing_fixed ? available - trailing_fixed : 0;
-						vector<string>& values = owner_pack_values[owner_parameter.name];
-						for(size_t element = 0; element < count; ++element)
-							values.push_back(owner_arguments->second[owner_argument++]);
-					} else if(owner_argument < owner_arguments->second.size()) ++owner_argument;
-				}
-				const TemplateDefinition* selected_owner = SelectClassTemplateDefinition(
-					owner_definition, owner_arguments->second, context);
-				if(selected_owner && selected_owner->partial_specialization) {
-					owner_pack_values.clear();
-					size_t selected_argument = 0;
-					for(size_t parameter = 0; parameter < selected_owner->specialization_parameter_details.size(); ++parameter) {
-						const TemplateParameter& detail = selected_owner->specialization_parameter_details[parameter];
-						if(detail.pack) {
-							size_t trailing_fixed = 0;
-							for(size_t later = parameter + 1; later < selected_owner->specialization_parameter_details.size(); ++later)
-								if(!selected_owner->specialization_parameter_details[later].pack) ++trailing_fixed;
-							const size_t available = owner_arguments->second.size() > selected_argument ?
-								owner_arguments->second.size() - selected_argument : 0;
-							const size_t count = available > trailing_fixed ? available - trailing_fixed : 0;
-							vector<string>& values = owner_pack_values[detail.name];
-							for(size_t element = 0; element < count; ++element)
-								values.push_back(owner_arguments->second[selected_argument++]);
-						} else if(selected_argument < owner_arguments->second.size()) ++selected_argument;
-					}
+	const map<string, vector<string> > owner_pack_values =
+		BuildOwnerPackValues(qualified_callee_owner, context);
+	for(size_t candidate = 0; candidate < definitions.size(); ++candidate) {
+		const TemplateDefinition* definition = definitions[candidate];
+		if(definition->declaration && definition->declaration->kind == "simple-declaration") {
+			bool has_definition = false;
+			for(size_t other = 0; other < definitions.size(); ++other) {
+				const TemplateDefinition* replacement = definitions[other];
+				if(replacement == definition || !replacement->declaration ||
+					replacement->declaration->kind != "function-definition") continue;
+				if(MemberSignatureKey(*replacement) == MemberSignatureKey(*definition)) {
+					has_definition = true;
+					break;
 				}
 			}
+			if(has_definition) continue;
 		}
+		if(MaterializeFreeFunctionCandidate(definition, result, result_callee,
+			callee_name, qualified_callee_owner, context, substitutions,
+			inherited_owners, owner_pack_values)) return true;
 	}
-			for(size_t candidate = 0; candidate < definitions.size(); ++candidate) {
-				const TemplateDefinition* definition = definitions[candidate];
-				if(definition->declaration && definition->declaration->kind == "simple-declaration") {
-					bool has_definition = false;
-					for(size_t other = 0; other < definitions.size(); ++other) {
-						const TemplateDefinition* replacement = definitions[other];
-						if(replacement == definition || !replacement->declaration ||
-							replacement->declaration->kind != "function-definition") continue;
-						if(MemberSignatureKey(*replacement) == MemberSignatureKey(*definition)) {
-							has_definition = true;
-							break;
-						}
-					}
-					if(has_definition) continue;
-					}
-					vector<string> inferred; map<string, vector<string> > inferred_pack_values; map<string, FunctionSignature> inferred_function_values; map<string, vector<string> > forwarding_pack_values; bool inferred_ok = false;
-					map<string, string> candidate_substitutions = substitutions;
-					if(definition->member_template && !qualified_callee_owner.empty())
-						AddConcreteOwnerSubstitutions(qualified_callee_owner, context,
-							&candidate_substitutions);
-				try { inferred_ok = InferFunctionArguments(*definition, result, &inferred, candidate_substitutions, context, 0, &inferred_pack_values, &inferred_function_values, owner_pack_values.empty() ? 0 : &owner_pack_values, &forwarding_pack_values); }
-				catch(const PA18SubstitutionFailure&) { inferred_ok = false; }
-				if(!inferred_ok) continue;
-					if(!ValidateTemplateDefaults(*definition, inferred, context, candidate_substitutions)) continue;
-				const TemplateDefinition* selected_definition =
-					FindExplicitFunctionSpecialization(definition->qualified_name, inferred, context);
-				if(!selected_definition) selected_definition = definition;
-				string requested_owner_name = qualified_callee_owner;
-				map<const TemplateDefinition*, string>::const_iterator inherited_owner =
-					inherited_owners.find(selected_definition);
-				if(inherited_owner != inherited_owners.end() && !inherited_owner->second.empty())
-					requested_owner_name = inherited_owner->second;
-				const bool concrete_member_owner = !requested_owner_name.empty() &&
-					class_contexts_.find(requested_owner_name) != class_contexts_.end() &&
-					specialization_bases_.find(LastComponent(requested_owner_name)) !=
-					specialization_bases_.end() && !selected_definition->owner.empty();
-				const string* requested_owner = concrete_member_owner ? &requested_owner_name : 0;
-				try {
-							map<string, vector<string> > instantiation_pack_hints = inferred_pack_values;
-							for(map<string, vector<string> >::const_iterator owner_pack = owner_pack_values.begin();
-								owner_pack != owner_pack_values.end(); ++owner_pack)
-								// A member template can reuse the enclosing class-pack's
-								// spelling as a function parameter pack.  The owner is
-								// already a concrete typed fact, so it must win over a
-								// same-named pack inferred from the call arguments.
-								instantiation_pack_hints[owner_pack->first] = owner_pack->second;
-						const map<string, string>* materialization_substitutions =
-							selected_definition->member_template && !qualified_callee_owner.empty() ?
-							&candidate_substitutions : 0;
-						const string local_name = Instantiate(*selected_definition, inferred, context, false,
-							&instantiation_pack_hints, materialization_substitutions, requested_owner, &inferred_function_values,
-						&forwarding_pack_values);
-					string inferred_result_type;
-					if(selected_definition->declaration &&
-						!selected_definition->declaration->children.empty()) {
-						map<string, string> return_substitutions = substitutions;
-						for(size_t parameter = 0; parameter < selected_definition->parameters.size() &&
-							parameter < inferred.size(); ++parameter)
-							if(!selected_definition->parameters[parameter].name.empty())
-								return_substitutions[selected_definition->parameters[parameter].name] =
-									inferred[parameter];
-						string return_type = NodeTypeSpelling(
-							selected_definition->declaration->children[0]);
-						return_type += ReturnDeclaratorSuffix(
-							FunctionDeclarator(selected_definition->declaration));
-						// Return-type inference replays the source declaration outside
-						// EmitInstantiation's pack scope.  Install the typed function-pack
-						// bindings here as well, so `holder<T...>` is expanded before a
-						// dependent alias such as `alt_t<I, holder<T...>>` is resolved.
-						const map<string, vector<string> > previous_return_packs =
-							active_pack_substitutions_;
-						for(map<string, vector<string> >::const_iterator pack =
-							inferred_pack_values.begin(); pack != inferred_pack_values.end(); ++pack)
-							if(!pack->first.empty()) active_pack_substitutions_[pack->first] =
-								pack->second;
-						try {
-							inferred_result_type = CanonicalSpelling(ResolveAlias(RewriteText(
-								return_type, context, return_substitutions, 0), context));
-						} catch(...) {
-							active_pack_substitutions_ = previous_return_packs;
-							throw;
-						}
-						active_pack_substitutions_ = previous_return_packs;
-					}
-					const string qualifier = concrete_member_owner ? requested_owner_name :
-						GeneratedFunctionQualifier(*definition, callee_name, context);
-					const string emitted_name = concrete_member_owner ?
-						LastComponent(selected_definition->name) : local_name;
-					// A selected free-function specialization owns the call's result type;
-					// retain the earlier fact only when return spelling could not be
-					// reconstructed from the declaration.
-					if(!inferred_result_type.empty()) result->inferred_type = inferred_result_type;
-					result->template_primary = definition->qualified_name;
-					result->template_arguments = inferred;
-					result_callee->value = qualifier.empty() ? emitted_name : qualifier +
-						"::" + emitted_name;
-					// A function-template argument whose expected type is supplied by
-					// this selected call (for example `check_partial(f, ...)`) is
-					// still an overload-set spelling in the source AST.  Resolve it
-					// against the concrete parameter types before lowering, so the
-					// address names the same materialized specialization that deduction
-					// used.
-					if(selected_definition->declaration &&
-						!selected_definition->declaration->children.empty()) {
-						FunctionSignature selected_signature;
-						selected_signature.result_specifiers =
-							selected_definition->declaration->children[0];
-						selected_signature.declarator = FunctionDeclarator(
-							selected_definition->declaration);
-						selected_signature.parameters = DescendantOfKind(
-							selected_signature.declarator, "parameter-clause");
-						map<string, string> selected_substitutions = substitutions;
-						for(size_t parameter = 0; parameter < selected_definition->parameters.size() &&
-							parameter < inferred.size(); ++parameter)
-							if(!selected_definition->parameters[parameter].name.empty())
-								selected_substitutions[selected_definition->parameters[parameter].name] =
-									inferred[parameter];
-						ResolveFunctionArguments(result, &selected_signature, context,
-							&selected_substitutions);
-					}
-					return true;
-				} catch(const PA18SubstitutionFailure&) { continue; }
-			}
-
 	return false;
+}
+
+void PA18TemplateExpander::RefinePartialSpecializationCallDefinitions(
+	vector<const TemplateDefinition*>* definitions,
+	const string& qualified_callee_owner, const string& callee_name,
+	const string& context)
+{
+	if(!definitions || qualified_callee_owner.empty()) return;
+	map<string, string>::const_iterator owner_base = specialization_bases_.find(
+		LastComponent(qualified_callee_owner));
+	map<string, vector<string> >::const_iterator owner_arguments =
+		specialization_arguments_.find(LastComponent(qualified_callee_owner));
+	if(owner_base == specialization_bases_.end() ||
+		owner_arguments == specialization_arguments_.end()) return;
+	const TemplateDefinition* primary = FindDefinition(owner_base->second, context);
+	const TemplateDefinition* selected = primary && primary->class_template ?
+		SelectClassTemplateDefinition(primary, owner_arguments->second, context) : 0;
+	if(!selected || !selected->partial_specialization) return;
+	const string selected_class_scope = JoinPath(selected->owner, selected->name);
+	string selected_owner = JoinPath(selected_class_scope, selected->name) + "<";
+	for(size_t argument = 0; argument < selected->specialization_pattern.size(); ++argument) {
+		if(argument) selected_owner += ",";
+		selected_owner += selected->specialization_pattern[argument];
+	}
+	selected_owner += ">";
+	vector<const TemplateDefinition*> selected_definitions;
+	const string member_name = LastComponent(callee_name);
+	map<string, vector<string> >::const_iterator indexed =
+		definitions_by_name_.find(member_name);
+	if(indexed != definitions_by_name_.end()) for(size_t candidate = 0;
+		candidate < indexed->second.size(); ++candidate) {
+		map<string, TemplateDefinition>::const_iterator found = definitions_.find(
+			indexed->second[candidate]);
+		if(found == definitions_.end() || !found->second.member_template) continue;
+		if(found->second.owner == selected_owner) selected_definitions.push_back(&found->second);
+	}
+	if(selected_definitions.empty()) return;
+	vector<const TemplateDefinition*> filtered;
+	string selected_base = selected_owner;
+	const size_t selected_open = selected_base.find('<');
+	if(selected_open != string::npos) selected_base.erase(selected_open);
+	for(size_t candidate = 0; candidate < definitions->size(); ++candidate) {
+		const TemplateDefinition* definition = (*definitions)[candidate];
+		string definition_base = definition->owner;
+		const size_t open = definition_base.find('<');
+		if(open != string::npos) definition_base.erase(open);
+		if(definition->member_template && definition_base == selected_base) continue;
+		filtered.push_back(definition);
+	}
+	for(size_t selected_index = 0; selected_index < selected_definitions.size(); ++selected_index)
+		if(find(filtered.begin(), filtered.end(), selected_definitions[selected_index]) == filtered.end())
+			filtered.push_back(selected_definitions[selected_index]);
+	definitions->swap(filtered);
 }
 
 void PA18TemplateExpander::MaterializeFreeFunctionCall(
@@ -851,73 +922,15 @@ void PA18TemplateExpander::MaterializeFreeFunctionCall(
 	if(!constructor_replayed && !implicit_member_instantiated && result_callee &&
 		result_callee->kind == "id-expression" &&
 		result_callee->value.find('<') == string::npos) {
-				const string callee_name = result_callee->value;
-				vector<const TemplateDefinition*> definitions =
-					FindFunctionDefinitions(callee_name, context);
-				// PA14 owns overload ranking; replay only a unique ordinary signature here.
-			MaterializeOrdinaryCallConversions(callee_name, result, context, substitutions);
-			map<const TemplateDefinition*, string> inherited_owners;
-			const string qualified_callee_owner = PrefixComponent(callee_name);
-			// A concrete qualified static call is looked up after the enclosing class
-			// specialization has been selected.  The ordinary name index contains the
-			// primary member template as well as members collected from partial class
-			// specializations; retaining the primary here makes a call such as
-			// `arg_list_factory<...>::reverse` use the primary's empty-pack body.
-			// Rebuild this small owner slice from the selected class specialization so
-			// member-template deduction sees its fixed enclosing parameters.
-			if(!qualified_callee_owner.empty()) {
-				map<string, string>::const_iterator owner_base = specialization_bases_.find(
-					LastComponent(qualified_callee_owner));
-				map<string, vector<string> >::const_iterator owner_arguments =
-					specialization_arguments_.find(LastComponent(qualified_callee_owner));
-				if(owner_base != specialization_bases_.end() &&
-					owner_arguments != specialization_arguments_.end()) {
-					const TemplateDefinition* primary = FindDefinition(owner_base->second, context);
-					const TemplateDefinition* selected = primary && primary->class_template ?
-						SelectClassTemplateDefinition(primary, owner_arguments->second, context) : 0;
-						if(selected && selected->partial_specialization) {
-							const string selected_class_scope = JoinPath(selected->owner, selected->name);
-						string selected_owner = JoinPath(selected_class_scope, selected->name);
-						selected_owner += "<";
-						for(size_t argument = 0; argument < selected->specialization_pattern.size(); ++argument) {
-							if(argument) selected_owner += ",";
-							selected_owner += selected->specialization_pattern[argument];
-						}
-						selected_owner += ">";
-						vector<const TemplateDefinition*> selected_definitions;
-						const string member_name = LastComponent(callee_name);
-						map<string, vector<string> >::const_iterator indexed =
-							definitions_by_name_.find(member_name);
-						if(indexed != definitions_by_name_.end()) for(size_t candidate = 0;
-							candidate < indexed->second.size(); ++candidate) {
-							map<string, TemplateDefinition>::const_iterator found = definitions_.find(
-								indexed->second[candidate]);
-							if(found == definitions_.end() || !found->second.member_template) continue;
-							if(found->second.owner == selected_owner)
-								selected_definitions.push_back(&found->second);
-						}
-						if(!selected_definitions.empty()) {
-							vector<const TemplateDefinition*> filtered;
-							string selected_base = selected_owner;
-							const size_t selected_open = selected_base.find('<');
-							if(selected_open != string::npos) selected_base.erase(selected_open);
-							for(size_t candidate = 0; candidate < definitions.size(); ++candidate) {
-								const TemplateDefinition* definition = definitions[candidate];
-								string definition_base = definition->owner;
-								const size_t open = definition_base.find('<');
-								if(open != string::npos) definition_base.erase(open);
-								if(definition->member_template && definition_base == selected_base) continue;
-								filtered.push_back(definition);
-							}
-							for(size_t selected_index = 0; selected_index < selected_definitions.size(); ++selected_index)
-								if(find(filtered.begin(), filtered.end(), selected_definitions[selected_index]) == filtered.end())
-									filtered.push_back(selected_definitions[selected_index]);
-							definitions.swap(filtered);
-						}
-					}
-				}
-			}
-			if(!qualified_callee_owner.empty()) {
+		const string callee_name = result_callee->value;
+		vector<const TemplateDefinition*> definitions =
+			FindFunctionDefinitions(callee_name, context);
+		MaterializeOrdinaryCallConversions(callee_name, result, context, substitutions);
+		map<const TemplateDefinition*, string> inherited_owners;
+		const string qualified_callee_owner = PrefixComponent(callee_name);
+		RefinePartialSpecializationCallDefinitions(&definitions,
+			qualified_callee_owner, callee_name, context);
+		if(!qualified_callee_owner.empty()) {
 			vector<const TemplateDefinition*> inherited;
 			set<string> active;
 			CollectInheritedMemberTemplates(qualified_callee_owner,
@@ -927,16 +940,22 @@ void PA18TemplateExpander::MaterializeFreeFunctionCall(
 				if(find(definitions.begin(), definitions.end(), inherited[inherited_index]) ==
 					definitions.end()) definitions.push_back(inherited[inherited_index]);
 		}
-		const bool preserve_lookup_order = PreserveFunctionLookupOrder(definitions, context, substitutions);
+		const bool preserve_lookup_order = PreserveFunctionLookupOrder(
+			definitions, context, substitutions);
 		if(!preserve_lookup_order) SortFunctionTemplateCandidates(&definitions, context);
-		if(!preserve_lookup_order && callee_name.compare(0, 8, "operator") != 0) RankFunctionTemplateCandidatesForCall(&definitions, result, context, substitutions);
+		if(!preserve_lookup_order && callee_name.compare(0, 8, "operator") != 0)
+			RankFunctionTemplateCandidatesForCall(&definitions, result, context, substitutions);
 		const bool inline_template_candidate = HasInlineTemplateCandidate(definitions, context);
 		bool extern_template_candidate = false;
 		for(size_t candidate = 0; candidate < definitions.size() && !extern_template_candidate;
 			++candidate) {
 			vector<string> inferred;
-			try { if(!InferFunctionArguments(*definitions[candidate], result, &inferred, substitutions, context, 0)) continue; }
-			catch(const PA18SubstitutionFailure&) { continue; }
+			try {
+				if(!InferFunctionArguments(*definitions[candidate], result, &inferred,
+					substitutions, context, 0)) continue;
+			} catch(const PA18SubstitutionFailure&) {
+				continue;
+			}
 			ostringstream request_key;
 			request_key << definitions[candidate]->qualified_name << "@" <<
 				definitions[candidate]->declaration.get();
@@ -948,12 +967,9 @@ void PA18TemplateExpander::MaterializeFreeFunctionCall(
 		if(!HasMaterializedMemberFunction(callee_name, context) &&
 			(!HasExactOrdinaryMatch(result, callee_name, substitutions, context) ||
 				inline_template_candidate || extern_template_candidate))
-
-			{
-				MaterializeFreeFunctionCandidates(definitions, result, result_callee,
-					callee_name, qualified_callee_owner, context, substitutions,
-					inherited_owners);
-			}
+			MaterializeFreeFunctionCandidates(definitions, result, result_callee,
+				callee_name, qualified_callee_owner, context, substitutions,
+				inherited_owners);
 		if(definitions.empty()) {
 			const FunctionSignature* signature = FindFunctionSignature(callee_name, context);
 			if(signature && callee_name.find("::") == string::npos &&

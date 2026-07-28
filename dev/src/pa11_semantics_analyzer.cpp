@@ -2,14 +2,11 @@
 #include "pa11_semantics_layout.h"
 #include <cstdlib>
 #include <functional>
-
 void CollectSourceTypeAliasPaths(const CPPGMAstNodePtr& node, const string& scope,
 	set<string>* paths);
 bool ContainsSourceTypeAliasBase(const CPPGMAstNodePtr& node,
 	const set<string>& paths);
-
 namespace {
-
 string AttributeNodeSpelling(const CPPGMAstNodePtr& node)
 {
 	if (!node) return string();
@@ -32,7 +29,6 @@ string AttributeNodeSpelling(const CPPGMAstNodePtr& node)
 	}
 	return result;
 }
-
 string StripTemplateArgumentsFromPath(const string& raw)
 {
 	string result;
@@ -45,7 +41,6 @@ string StripTemplateArgumentsFromPath(const string& raw)
 	}
 	return result;
 }
-
 CPPGMAstNodePtr FindReturnStatement(const CPPGMAstNodePtr& node)
 {
 	if (!node) return CPPGMAstNodePtr();
@@ -56,7 +51,6 @@ CPPGMAstNodePtr FindReturnStatement(const CPPGMAstNodePtr& node)
 	}
 	return CPPGMAstNodePtr();
 }
-
 size_t TopLevelScopeSeparator(const string& raw)
 {
 	int angle_depth = 0;
@@ -68,7 +62,6 @@ size_t TopLevelScopeSeparator(const string& raw)
 	}
 	return string::npos;
 }
-
 }
 
 Analyzer::Analyzer()
@@ -124,7 +117,14 @@ TypePtr Analyzer::ExpressionCallType(const CPPGMAstNodePtr& expression,
 	Scope* scope, size_t arity)
 {
 	if (!expression || expression->children.empty()) return TypePtr();
-	const string name = expression->children[0]->value;
+	const string spelled_name = expression->children[0]->value;
+	// The parser keeps an explicitly specialized function template as one
+	// id-expression (`test<T>`).  Binding lookup and the constant-template
+	// registry are keyed by the callable's unqualified name, so remove only
+	// the template argument suffix before selecting its overload.
+	const size_t template_open = spelled_name.find('<');
+	const string name = template_open == string::npos ? spelled_name :
+		spelled_name.substr(0, template_open);
 	vector<Binding*> candidates;
 	for (Scope* current = scope; current; current = current->parent) {
 		vector<Binding*> local;
@@ -134,7 +134,7 @@ TypePtr Analyzer::ExpressionCallType(const CPPGMAstNodePtr& expression,
 		if (!local.empty()) { candidates = local; break; }
 	}
 	map<string, vector<Binding*> >::const_iterator templates =
-		constant_template_functions_.find(name);
+		constant_template_functions_.find(LastComponent(name));
 	if (templates != constant_template_functions_.end())
 		for (size_t i = 0; i < templates->second.size(); ++i)
 			if (find(candidates.begin(), candidates.end(), templates->second[i]) == candidates.end())

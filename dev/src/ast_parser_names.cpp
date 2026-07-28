@@ -51,7 +51,11 @@ bool Parser::ParseTemplateSuffix(string* value)
 		if (i != raw_begin && (tokens_[i - 1].text == "const" ||
 			tokens_[i - 1].text == "volatile" ||
 			tokens_[i - 1].text == "typename" ||
-			tokens_[i - 1].text == "template")) raw += " ";
+			tokens_[i - 1].text == "template" ||
+			tokens_[i - 1].text == "class" ||
+			tokens_[i - 1].text == "struct" ||
+			tokens_[i - 1].text == "union" ||
+			tokens_[i - 1].text == "enum")) raw += " ";
 		raw += tokens_[i].text;
 	}
 	// A class or namespace member declaration can legitimately use a boolean

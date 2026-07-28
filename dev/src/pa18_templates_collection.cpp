@@ -4,6 +4,96 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
+void PA18TemplateExpander::EnsureTypeDependency(const string& spelling, const string& context,
+		const string& owner)
+	{
+		// PA10 preserves an elaborated type used as a template argument (for
+		// example `If<false, struct PrivateNat, int>`).  Register that
+		// incomplete class before alias replay removes the elaborated keyword.
+		// Restrict this recovery to an actual template-argument list: a source
+		// declaration such as `struct box` must not manufacture a competing
+		// forward that can change later partial-specialization lookup.
+		const string source = CanonicalSpelling(spelling);
+		const char* const elaborated[] = {"struct ", "class ", "union "};
+		for(size_t key = 0; key < sizeof(elaborated) / sizeof(elaborated[0]); ++key) {
+			const string marker = elaborated[key];
+			for(size_t at = source.find(marker); at != string::npos;
+				at = source.find(marker, at + marker.size())) {
+				if(at > 0 && IsIdentifierCharacter(source[at - 1])) continue;
+				int angle_depth = 0;
+				for(size_t position = 0; position < at; ++position) {
+					if(source[position] == '<') ++angle_depth;
+					else if(source[position] == '>' && angle_depth > 0) --angle_depth;
+				}
+				if(angle_depth == 0) continue;
+				size_t begin = at + marker.size();
+				while(begin < source.size() && isspace(static_cast<unsigned char>(source[begin]))) ++begin;
+				size_t end = begin;
+				while(end < source.size() && (IsIdentifierCharacter(source[end]) ||
+					source[end] == ':')) ++end;
+				if(end == begin) continue;
+				const string candidate = CanonicalSpelling(source.substr(begin, end - begin));
+				if(candidate.empty() || candidate.find('<') != string::npos) continue;
+				bool known = class_contexts_.find(candidate) != class_contexts_.end() ||
+					class_declarations_.find(candidate) != class_declarations_.end();
+				string qualified = candidate;
+				for(string current = context; !known && !current.empty();) {
+					const string scoped = JoinPath(current, candidate);
+					if(class_contexts_.find(scoped) != class_contexts_.end() ||
+						class_declarations_.find(scoped) != class_declarations_.end()) {
+						qualified = scoped;
+						known = true;
+					}
+					const size_t separator = current.rfind("::");
+					if(separator == string::npos) current.clear();
+					else current.erase(separator);
+				}
+				if(known) continue;
+				string declaration_owner = context;
+				if(function_contexts_.find(declaration_owner) != function_contexts_.end())
+					declaration_owner = PrefixComponent(declaration_owner);
+				qualified = declaration_owner.empty() ? candidate :
+					JoinPath(declaration_owner, candidate);
+				if(class_contexts_.find(qualified) != class_contexts_.end()) continue;
+				const CPPGMAstNodePtr forward = MakeForwardClass(LastComponent(candidate));
+				class_declarations_[qualified] = forward;
+				RememberClassPath(qualified);
+				vector<CPPGMAstNodePtr>& forwards = generated_namespace_forwards_[
+					PrefixComponent(qualified)];
+				bool already_queued = false;
+				for(size_t item = 0; item < forwards.size(); ++item)
+					if(forwards[item] && LastComponent(forwards[item]->value) ==
+						LastComponent(candidate)) already_queued = true;
+				if(!already_queued) forwards.push_back(forward);
+			}
+		}
+		const string qualified = QualifyTypeArgument(
+			NormalizeElaboratedSpelling(spelling, context), context);
+		if(!qualified.empty()) EnsureForwardClass(qualified, context, owner);
+	}
+void PA18TemplateExpander::EnsureDeclarationDependencies(const CPPGMAstNodePtr& node,
+		const string& context, const string& owner)
+	{
+		if(!node) return;
+		string child_context = context;
+		if(node->kind == "class-specifier" || node->kind == "class-forward-declaration")
+			child_context = JoinPath(context, LastComponent(node->value));
+		if(node->kind == "function-definition" && !node->children.empty()) {
+			EnsureTypeDependency(NodeTypeSpelling(node->children[0]), context, owner);
+			if(node->children.size() > 1) {
+				const CPPGMAstNodePtr clause = DescendantOfKind(node->children[1], "parameter-clause");
+				if(clause) for(size_t i = 0; i < clause->children.size(); ++i)
+					if(clause->children[i] && clause->children[i]->kind == "parameter-declaration")
+						EnsureTypeDependency(ParameterTypeSpelling(clause->children[i]), context, owner);
+			}
+		}
+		if(node->kind == "simple-declaration" && !node->children.empty())
+			EnsureTypeDependency(NodeTypeSpelling(node->children[0]), context, owner);
+		if(node->kind == "base-name") EnsureTypeDependency(node->value, context, owner);
+		for(size_t i = 0; i < node->children.size(); ++i)
+			EnsureDeclarationDependencies(node->children[i], child_context, owner);
+	}
+
 void PA18TemplateExpander::RememberClassPath(const string& path)
 {
 	if(path.empty()) return;
@@ -1199,6 +1289,8 @@ string PA18TemplateExpander::ResolveAlias(string spelling, const string& context
 	for(size_t depth = 0; depth < 16; ++depth) {
 		if(!seen.insert(spelling).second) break;
 		map<string, string>::const_iterator direct = type_aliases_.find(spelling);
+		const bool known_class_name = spelling.find("::") == string::npos &&
+			FindClassDeclaration(spelling, context);
 		if(direct == type_aliases_.end()) {
 			for(string current = context; direct == type_aliases_.end(); ) {
 				const string candidate = JoinPath(current, spelling);
@@ -1208,9 +1300,10 @@ string PA18TemplateExpander::ResolveAlias(string spelling, const string& context
 				current.erase(separator);
 			}
 		}
-		if(direct == type_aliases_.end()) {
+		if(direct == type_aliases_.end() && !known_class_name) {
 			const string short_name = LastComponent(spelling);
-			map<string, vector<string> >::const_iterator candidates = type_aliases_by_name_.find(short_name);
+			map<string, vector<string> >::const_iterator candidates =
+				type_aliases_by_name_.find(short_name);
 			if(spelling.find("::") == string::npos &&
 				candidates != type_aliases_by_name_.end() && candidates->second.size() == 1)
 				direct = type_aliases_.find(candidates->second[0]);
@@ -1240,11 +1333,7 @@ string PA18TemplateExpander::ResolveAlias(string spelling, const string& context
 			}
 				spelling = CanonicalSpelling(target); continue;
 		}
-		// A qualified member can contain nested template arguments with their
-		// own `::` (for example `enable_if<accepts<Args...>::value,int>::type`).
-		// Split only at the scope separator outside all template ranges; using
-		// the last textual separator treats the nested trait member as the class
-		// owner and recursively re-enters generated-member alias lookup.
+		// Split qualified members at a scope separator outside nested templates.
 		const size_t separator = TopLevelScopeSeparator(spelling);
 		if(separator == string::npos) break;
 		string class_key = spelling.substr(0, separator);
@@ -1277,10 +1366,6 @@ string PA18TemplateExpander::ResolveAlias(string spelling, const string& context
 		}
 		spelling = CanonicalSpelling(member_type);
 	}
-	// Top-level cv applied to an alias whose target is a reference does not
-	// qualify the referred-to object (`const IntRef` is still `int&`).  A cv
-	// written directly on the referred-to type (`const int&`) was peeled before
-	// the reference suffix, so retain it in that case.
 	if(resolved_reference_alias && suffix.empty() &&
 		!spelling.empty() && spelling[spelling.size() - 1] == '&') cv_prefix.clear();
 	if(reference_alias_specialization) {

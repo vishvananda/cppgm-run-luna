@@ -54,7 +54,6 @@ void PA14Lowerer::PrepareLoweringProgram()
   analyzer_.Analyze(program_);
   IndexClassTypesByName();
   complete_template_object_uses_.clear();
-	complete_template_default_object_uses_.clear();
   IndexCompleteTemplateObjectUses(program_);
   IndexFriendOwners();
   InstallBuiltins();
@@ -105,8 +104,7 @@ void PA14Lowerer::EmitInitialFunctionRoots(vector<string>& entries)
       FunctionRecord& function = functions_[i];
       if(!function.definition || !function.member || !function.constructor ||
          !function.needed || function.emitted || !function.template_instantiation ||
-         has_nested_callable_operation(function) ||
-         function.complete_object_constructor) continue;
+         has_nested_callable_operation(function)) continue;
       entries.push_back(EmitFunction(function));
       function.emitted = true;
       added = true;
@@ -245,21 +243,8 @@ vector<size_t> PA14Lowerer::MemberEmissionOrder() const
           break;
         }
     for(size_t member = 0; member < positions.size(); ++member)
-        order[positions[member]] = members[member];
+      order[positions[member]] = members[member];
   }
-  // A constructor demanded by a complete class-object use is emitted after
-  // the enclosing member body has established its demand frontier, but before
-  // ordinary local constructors.  Stable ordering preserves source order for
-  // all other members.
-  stable_sort(order.begin(), order.end(), [&](size_t left, size_t right) {
-    const FunctionRecord& left_function = functions_[left];
-    const FunctionRecord& right_function = functions_[right];
-    const int left_rank = left_function.complete_object_constructor ? 1 :
-      (left_function.constructor ? 2 : 0);
-    const int right_rank = right_function.complete_object_constructor ? 1 :
-      (right_function.constructor ? 2 : 0);
-    return left_rank < right_rank;
-  });
   return order;
 }
 

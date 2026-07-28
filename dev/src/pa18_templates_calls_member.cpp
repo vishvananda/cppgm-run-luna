@@ -115,8 +115,10 @@ bool PA18TemplateExpander::ReplayMemberCall(
 	const bool candidates_collected = owner_resolved && CollectMemberCallCandidates(&state);
 	if(!parsed || !object_resolved || !owner_resolved || !candidates_collected)
 		return false;
-	for(size_t candidate = 0; candidate < state.candidates.size(); ++candidate)
-		if(TryMemberCandidate(&state, candidate)) return true;
+	for(size_t candidate = 0; candidate < state.candidates.size(); ++candidate) {
+		const bool tried = TryMemberCandidate(&state, candidate);
+		if(tried) return true;
+	}
 	return false;
 }
 
@@ -497,8 +499,21 @@ bool PA18TemplateExpander::CollectMemberCallCandidates(MemberCallState* state)
 		if(find(candidates.begin(), candidates.end(), inherited_candidates[inherited]) ==
 			candidates.end() || inherited_owners.find(inherited_candidates[inherited]) !=
 			inherited_owners.end()) candidates.push_back(inherited_candidates[inherited]);
-	stable_sort(candidates.begin(), candidates.end(), [this, &context](const TemplateDefinition* left,
+	const auto has_ellipsis_parameter = [this](const TemplateDefinition* definition) {
+		if(!definition || !definition->declaration) return false;
+		const CPPGMAstNodePtr parameters = DescendantOfKind(
+			FunctionDeclarator(definition->declaration), "parameter-clause");
+		if(!parameters) return false;
+		for(size_t parameter = 0; parameter < parameters->children.size(); ++parameter)
+			if(parameters->children[parameter] &&
+				parameters->children[parameter]->kind == "ellipsis") return true;
+		return false;
+	};
+	stable_sort(candidates.begin(), candidates.end(), [this, &context, &has_ellipsis_parameter](const TemplateDefinition* left,
 		const TemplateDefinition* right) {
+		const bool left_ellipsis = has_ellipsis_parameter(left);
+		const bool right_ellipsis = has_ellipsis_parameter(right);
+		if(left_ellipsis != right_ellipsis) return !left_ellipsis;
 		const bool left_more = left && right && FunctionTemplateMoreSpecialized(
 			*left, *right, context);
 		const bool right_more = left && right && FunctionTemplateMoreSpecialized(
@@ -934,7 +949,7 @@ bool PA18TemplateExpander::DeduceMemberCandidate(
 		&conversion_explicit_arguments : (explicit_arguments.empty() ? 0 :
 		&explicit_arguments);
 	try {
-			inferred = InferFunctionArguments(inference_definition, call, &member_arguments,
+		inferred = InferFunctionArguments(inference_definition, call, &member_arguments,
 				deduction_substitutions, context, explicit_prefix, &inferred_pack_values,
 				&inferred_function_values, &bound_pack_values, &forwarding_pack_values);
 		} catch(const logic_error&) {
@@ -959,7 +974,9 @@ bool PA18TemplateExpander::DeduceMemberCandidate(
 		// that candidate before materialization; otherwise a constructor body
 		// recursively selects itself (the inherited-constructor `tag` case).
 		if(!ValidateTemplateDefaults(inference_definition, member_arguments, context,
-			deduction_substitutions)) return false;
+			deduction_substitutions)) {
+		return false;
+		}
 		bool dependent_member_arguments = false;
 		for(size_t parameter = 0; parameter < definition.parameters.size() &&
 			!dependent_member_arguments; ++parameter) {
@@ -1071,10 +1088,10 @@ bool PA18TemplateExpander::EmitMemberCandidate(
 	try {
 			generated_name = Instantiate(restored_function_defaults ? materialization_definition :
 				inference_definition, instantiation_member_arguments, context,
-				explicit_instantiation, &instantiation_pack_hints, &candidate_substitutions,
-				requested_owner_pointer, &inferred_function_values,
-				&forwarding_pack_values);
-	} catch(const logic_error&) {
+				 explicit_instantiation, &instantiation_pack_hints, &candidate_substitutions,
+				 requested_owner_pointer, &inferred_function_values,
+				 &forwarding_pack_values);
+		} catch(const logic_error&) {
 			active_concrete_owner_ = previous_concrete_owner;
 			return false;
 		}

@@ -449,8 +449,8 @@ void PA18TemplateExpander::ResolveTemplateArguments(const TemplateDefinition& de
 				argument = NormalizeTypeArgument(ReplaceIdentifiers(argument, *substitutions));
 			string function_pointer_alias = FunctionPointerAliasSpelling(source_type_argument, context); if(function_pointer_alias.empty()) function_pointer_alias = FunctionPointerAliasSpelling(argument, context);
 				argument = ResolveAlias(argument, context);
-				if(!preserve_source_type && !PreservesMaterializedTypeName(argument, *substitutions, context))
-					argument = RewriteText(argument, context, *substitutions, 0);
+			if(!preserve_source_type && !PreservesMaterializedTypeName(argument, *substitutions, context))
+				argument = RewriteText(argument, context, *substitutions, 0);
 			argument = NormalizeTypeArgument(argument);
 			if(!function_pointer_alias.empty()) argument = function_pointer_alias;
 			argument = QualifyTypeArgument(argument, context, definition.owner);

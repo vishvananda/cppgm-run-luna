@@ -614,9 +614,8 @@ bool PA14Lowerer::EmitObjectTransferAt(const TypePtr& raw_target,
         EnsureAggregateConstructor(constructed);
       const bool value_initialization = arguments.empty() && HasConstructor(constructed) &&
         (source->value == "braced-construction" || HasIntegralTemplateArgument(constructed));
-	  const bool result = EmitConstructorAt(target, destination, arguments, scope, allow_explicit,
+      return EmitConstructorAt(target, destination, arguments, scope, allow_explicit,
         false, allow_aggregate, false, value_initialization);
-	  return result;
     }
     if(!constructed && source->kind == "call-expression") {
       CallChoice choice = ChooseCall(source, scope);
@@ -645,23 +644,6 @@ bool PA14Lowerer::EmitObjectTransferAt(const TypePtr& raw_target,
     // the conversion's ABI result slot skips that boundary and changes both
     // object lifetime and the generated call sequence.
     if(target && target->kind == TYPE_CLASS) {
-      // Copy-initialization ranks the target's converting constructors beside
-      // source conversion functions.  Probe the constructor set first so a
-      // non-template constructor with the same conversion sequence wins over
-      // a conversion-function template; only fall back to the source operator
-      // when no target constructor is viable.
-      if(!PA12SameType(source_type, target, true)) {
-        vector<CPPGMAstNodePtr> constructor_arguments;
-        constructor_arguments.push_back(source);
-        try {
-          if(EmitConstructorAt(target, destination, constructor_arguments, scope,
-                               allow_explicit)) return true;
-        } catch(const logic_error& error) {
-          // A failed constructor probe is not terminal here: copy-initialization
-          // may still select a conversion function on the source class.
-          if(string(error.what()) != "no viable constructor") throw;
-        }
-      }
       Binding* conversion = FindConversionOperator(source_type, target, true);
       if(conversion) {
         FunctionRecord* conversion_record = RecordForBinding(conversion);
@@ -698,10 +680,7 @@ bool PA14Lowerer::EmitObjectTransferAt(const TypePtr& raw_target,
       // contains an aggregate construction.
       VariablePlan* source_local = source->kind == "id-expression" ?
         FindLocalPlan(source->value) : 0;
-      const bool evaluate_parameter = source_local &&
-        (implicit_return_move || (source_local->parameter &&
-         !(state_ && state_->record && state_->record->constructor)));
-      if(evaluate_parameter ||
+      if((source_local && (source_local->parameter || implicit_return_move)) ||
          (source->kind == "binary-expression" && PA12Operator(source->value) == ","))
         (void)EmitAddress(source, scope);
       return true;

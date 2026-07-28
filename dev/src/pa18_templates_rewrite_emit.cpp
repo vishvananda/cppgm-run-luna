@@ -359,7 +359,12 @@ bool PA18TemplateExpander::GeneratedNodeHasUnavailableMemberType(
 	const CPPGMAstNodePtr& node, const string& context,
 	const map<string, string>& substitutions) const
 {
-	if(!node) return false;
+	// Function bodies are not part of template argument substitution or
+	// overload viability.  In particular, a qualified call inside a replayed
+	// body can be parsed as a type-shaped member expression even though its
+	// explicitly specialized target is valid; probing it here would discard the
+	// enclosing function before the body is replayed.
+	if(!node || node->kind == "compound-statement") return false;
 	if(node->kind == "decl-specifier" || node->kind == "type-name" ||
 		node->kind == "type-specifier" || node->kind == "decltype-specifier" ||
 		node->kind == "base-name")

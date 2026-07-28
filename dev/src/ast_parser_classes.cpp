@@ -665,7 +665,12 @@ CPPGMAstNodePtr Parser::ParseTemplateArgumentList()
 CPPGMAstNodePtr Parser::ParseTemplateArgument()
 {
 	Mark mark = Save();
-	if (Peek().kind == AST_IDENTIFIER || Is("::"))
+	// Elaborated type arguments begin with a keyword that is lexed as an
+	// identifier in this context.  Let the type-id branch below consume
+	// `struct T`/`class T` instead of flattening the two tokens into the
+	// expression spelling `structT`.
+	if ((Peek().kind == AST_IDENTIFIER || Is("::")) &&
+		!Is("class") && !Is("struct") && !Is("union") && !Is("enum"))
 	{
 		CPPGMAstNodePtr expression = ParseAssignmentExpression();
 		if (expression && (Is(",") || Is(">") || Peek().kind == AST_RSHIFT_1 ||

@@ -491,10 +491,10 @@ bool PA18TemplateExpander::EvaluateLogicalIntegralText(const string& raw,
 					}
 		return false;
 	}
-	bool PA18TemplateExpander::EvaluateInheritedIntegralValue(const string& raw,
+		bool PA18TemplateExpander::EvaluateInheritedIntegralValue(const string& raw,
 		const string& context, const map<string, string>& substitutions,
 		PA19IntegralValue* result)
-	{
+		{
 		const size_t value_separator = raw.rfind("::");
 		if(value_separator == string::npos || raw.substr(value_separator + 2) != "value" ||
 			raw.find_first_of("&|+-*/%!<>=?,") != string::npos) return false;

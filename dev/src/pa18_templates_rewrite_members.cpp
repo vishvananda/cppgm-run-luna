@@ -387,10 +387,10 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 			// template-id changes lookup and overload visibility for ordinary aliases.
 			const TemplateDefinition* source_definition = FindDefinition(
 				source_template_base, context);
-			if(source_definition && source_definition->class_template) {
-				const TemplateDefinition* selected_source = SelectClassTemplateDefinition(
-					source_definition, requested_arguments, context);
-				if(selected_source) source_definition = selected_source;
+				if(source_definition && source_definition->class_template) {
+					const TemplateDefinition* selected_source = SelectClassTemplateDefinition(
+						source_definition, requested_arguments, context);
+					if(selected_source) source_definition = selected_source;
 				string source_member_type;
 				if(source_definition->declaration) for(size_t child_index = 0;
 					child_index < source_definition->declaration->children.size(); ++child_index) {

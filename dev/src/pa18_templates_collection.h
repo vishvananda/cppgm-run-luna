@@ -635,6 +635,9 @@ private:
 	void MaterializeInitializerConstructor(const CPPGMAstNodePtr& input, const CPPGMAstNodePtr& result, const string& context, const map<string, string>& substitutions);
 	bool MaterializeExplicitInstantiation(const CPPGMAstNodePtr& target, const string& context, bool extern_instantiation = false);
 	CPPGMAstNodePtr TransformCallExpression(const CPPGMAstNodePtr& input, const string& context, const map<string, string>& substitutions); CPPGMAstNodePtr BuildExplicitDeductionInput(const CPPGMAstNodePtr& input, const string& context, const map<string, string>& substitutions); ExplicitCallSelection SelectExplicitCallDefinition(const CPPGMAstNodePtr& input, const CPPGMAstNodePtr& input_callee, const string& context, const map<string, string>& substitutions); bool TransformExplicitFunctionCall(const CPPGMAstNodePtr& input, const CPPGMAstNodePtr& input_callee, const string& context, const map<string, string>& substitutions, const CPPGMAstNodePtr& result); bool TransformUnqualifiedMemberTemplateCall(const CPPGMAstNodePtr& input, const CPPGMAstNodePtr& input_callee, const string& context, const map<string, string>& substitutions, const CPPGMAstNodePtr& result); void TransformCallChildren(const CPPGMAstNodePtr& input, const CPPGMAstNodePtr& result, const string& context, const map<string, string>& substitutions); CPPGMAstNodePtr MaterializeStaticCastCall(const CPPGMAstNodePtr& result, CPPGMAstNodePtr result_callee, const string& context, const map<string, string>& substitutions); bool MaterializeNamedCallTarget(const CPPGMAstNodePtr& result, CPPGMAstNodePtr* result_callee, const string& context, const map<string, string>& substitutions, bool* constructor_replayed); CPPGMAstNodePtr MaterializeOperatorCallTargets(const CPPGMAstNodePtr& result, const CPPGMAstNodePtr& input_callee, CPPGMAstNodePtr result_callee, const string& context, const map<string, string>& substitutions); bool MaterializeImplicitMemberCall(const CPPGMAstNodePtr& result, const CPPGMAstNodePtr& result_callee, const CPPGMAstNodePtr& input_callee, const string& context, const map<string, string>& substitutions); bool MaterializeFreeFunctionCandidates(const vector<const TemplateDefinition*>& definitions, const CPPGMAstNodePtr& result, const CPPGMAstNodePtr& result_callee, const string& callee_name, const string& qualified_callee_owner, const string& context, const map<string, string>& substitutions, const map<const TemplateDefinition*, string>& inherited_owners); void MaterializeFreeFunctionCall(const CPPGMAstNodePtr& result, const CPPGMAstNodePtr& result_callee, bool constructor_replayed, bool implicit_member_instantiated, const string& context, const map<string, string>& substitutions); void FinalizeCallResult(const CPPGMAstNodePtr& result, const CPPGMAstNodePtr& result_callee, const string& context, const map<string, string>& substitutions);
+	map<string, vector<string> > BuildOwnerPackValues(const string& owner, const string& context) const; bool MaterializeFreeFunctionCandidate(const TemplateDefinition* definition, const CPPGMAstNodePtr& result, const CPPGMAstNodePtr& result_callee, const string& callee_name, const string& qualified_owner, const string& context, const map<string, string>& substitutions, const map<const TemplateDefinition*, string>& inherited_owners, const map<string, vector<string> >& owner_pack_values);
+	string MaterializedFunctionResultType(const TemplateDefinition& definition, const vector<string>& inferred, const string& context, const map<string, string>& substitutions, const map<string, vector<string> >& inferred_pack_values); void ResolveSelectedFunctionArguments(const TemplateDefinition& definition, const CPPGMAstNodePtr& result, const vector<string>& inferred, const string& context, const map<string, string>& substitutions);
+	void RefinePartialSpecializationCallDefinitions(vector<const TemplateDefinition*>* definitions, const string& qualified_owner, const string& callee_name, const string& context);
 	bool PreserveUnresolvedExplicitTemplateCall(const CPPGMAstNodePtr& input, const CPPGMAstNodePtr& result, const vector<string>& explicit_arguments, const string& context, const map<string, string>& explicit_substitutions, const map<string, string>& substitutions);
 	void MaterializeOrdinaryCallConversions(const string& callee_name, const CPPGMAstNodePtr& result, const string& context, const map<string, string>& substitutions);
 	void MaterializeOrdinaryConversion(const string& raw_parameter, const CPPGMAstNodePtr& argument, const string& context, const map<string, string>& substitutions); bool ResolveOrdinaryConversionTypes(const string& raw_parameter, const CPPGMAstNodePtr& argument, const string& context, const map<string, string>& substitutions, string* target_type, string* source_type, CPPGMAstNodePtr* source_declaration); bool ReplayOrdinaryConversion(const string& source_type, const string& target_type, const CPPGMAstNodePtr& source_declaration, const string& context, const map<string, string>& substitutions); bool TryOrdinaryConversionDefinition(const TemplateDefinition& definition, const string& source_type, const string& target_type, const string& expected_pattern, const string& context, const map<string, string>& substitutions);
@@ -752,34 +755,9 @@ private:
 	void EnsureForwardClass(const string& spelling, const string& context,
 		const string& owner);
 	void EnsureTypeDependency(const string& spelling, const string& context,
-		const string& owner)
-	{
-		const string qualified = QualifyTypeArgument(
-			NormalizeElaboratedSpelling(spelling, context), context);
-		if(!qualified.empty()) EnsureForwardClass(qualified, context, owner);
-	}
+		const string& owner);
 	void EnsureDeclarationDependencies(const CPPGMAstNodePtr& node,
-		const string& context, const string& owner)
-	{
-		if(!node) return;
-		string child_context = context;
-		if(node->kind == "class-specifier" || node->kind == "class-forward-declaration")
-			child_context = JoinPath(context, LastComponent(node->value));
-		if(node->kind == "function-definition" && !node->children.empty()) {
-			EnsureTypeDependency(NodeTypeSpelling(node->children[0]), context, owner);
-			if(node->children.size() > 1) {
-				const CPPGMAstNodePtr clause = DescendantOfKind(node->children[1], "parameter-clause");
-				if(clause) for(size_t i = 0; i < clause->children.size(); ++i)
-					if(clause->children[i] && clause->children[i]->kind == "parameter-declaration")
-						EnsureTypeDependency(ParameterTypeSpelling(clause->children[i]), context, owner);
-			}
-		}
-		if(node->kind == "simple-declaration" && !node->children.empty())
-			EnsureTypeDependency(NodeTypeSpelling(node->children[0]), context, owner);
-		if(node->kind == "base-name") EnsureTypeDependency(node->value, context, owner);
-		for(size_t i = 0; i < node->children.size(); ++i)
-			EnsureDeclarationDependencies(node->children[i], child_context, owner);
-	}
+		const string& context, const string& owner);
 	vector<TemplateParameter> Parameters(const CPPGMAstNodePtr& clause) const
 	{
 		vector<TemplateParameter> result;
@@ -1144,6 +1122,8 @@ private:
 		}
 		if(node->kind == "simple-declaration")
 			RecordFunctionSignature(node, context);
+		if(node->kind == "simple-declaration" && !node->children.empty())
+			EnsureTypeDependency(NodeTypeSpelling(node->children[0]), context, context);
 		if(node->kind == "simple-declaration")
 			RecordConstantDeclaration(node, context);
 		if(node->kind == "enum-specifier")

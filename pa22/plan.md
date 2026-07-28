@@ -4463,3 +4463,121 @@ Take the typed pack/array/explicit-alias slice first, starting with the two
 `get<0>` type-pack fixtures and the range-array deduction case.  Preserve the
 new template-template default normalization, then validate the focused slice,
 the full PA22 report, through-PA21, and the PA22 file audit.
+
+## Checkpoint 108 scope — 2026-07-27 (current-PA revalidation)
+
+### Remaining Work Map
+
+The required PA22 report is now **236/250**, up twelve from the turn-start
+214/250 baseline.  The complete 14-fixture residual groups as follows:
+
+- **Dependent value/SFINAE and owner result (3):**
+  `general/300-alias-sfinae-inherited-member-value`,
+  `general/500-owner-enum-nontype-result-sfinae`, and
+  `spec/300-conversion-function-template-owner-result-copy-init`.
+- **Constructor/member-template deduction (2):**
+  `general/500-index-sequence-alias-constructor-deduction` and
+  `spec/500-unqualified-member-template-local-alias-deduction`.
+- **Generated helper ownership and call selection (3):**
+  `general/400-function-assignment-invocable-and-helper`,
+  `spec/200-dependent-specialized-default-arg-deduction`, and
+  `spec/300-cross-specialization-converting-ctor-operator-template`.
+- **LowIR value/liveness materialization (6):**
+  `general/400-alias-template-function-argument-cv`,
+  `spec/100-explicit-specialization-dependent-param-typedef`,
+  `spec/100-function-template-array-parameter-string-literal`,
+  `spec/200-defaulted-class-template-argument-prefix-deduction`,
+  `spec/500-hidden-friend-query-free-decltype-noexcept`, and
+  `spec/500-type-pack-qualified-static-member-expansion`.
+
+### Checkpoint Scope
+
+Complete the dependent value/SFINAE and owner-result group.  Preserve deferred
+integral evaluation for unresolved type-ids while making concrete generated
+owner values, enum non-type arguments, and conversion-template result probes
+select the correct specialization.  Validate the three focused fixtures, the
+full PA22 report, through-PA21, and the PA22 file audit.
+
+### Checkpoint 108 result — 2026-07-27
+
+The dependent value/SFINAE and owner-result scope is complete.  The three
+focused fixtures all pass: the inherited-member alias value, owner-enum
+non-type result, and conversion-function-template owner-result copy-init
+cases.  Generated class replay now rejects only unresolved dependent type-id
+integral probes, and partial-specialization matching canonicalizes a malformed
+generated class only when a second replay has appended the original source
+`<...>` suffix; ordinary generated class names retain their typed qualified
+identity.  The exact PA22 report is **236/250**, above the turn-start
+214/250 baseline, and `make test-report-through-pa21` is **1850/1850**.
+The PA22 file audit is clean.
+
+### Remaining Work Map after Checkpoint 108
+
+The authoritative PA22 residual is 14 fixtures, grouped by shared behavior:
+
+- **Candidate viability, constructor, and member-template deduction (5):**
+  `general/300-static-member-template-function-pointer-nttp`,
+  `general/500-index-sequence-alias-constructor-deduction`,
+  `spec/300-expression-sfinae-decltype-conversion`,
+  `spec/300-nontemplate-constructor-beats-conversion-function-template`, and
+  `spec/500-unqualified-member-template-local-alias-deduction`.
+- **Generated helper ownership and conversion materialization (4):**
+  `general/400-function-assignment-invocable-and-helper`,
+  `spec/200-dependent-specialized-default-arg-deduction`,
+  `spec/300-cross-specialization-converting-ctor-operator-template`, and
+  `spec/500-template-template-conversion-operator-reference-target`.
+- **Typed LowIR value/materialization (4):**
+  `general/400-alias-template-function-argument-cv`,
+  `spec/100-explicit-specialization-dependent-param-typedef`,
+  `spec/100-function-template-array-parameter-string-literal`, and
+  `spec/500-type-pack-qualified-static-member-expansion`.
+- **Hidden-friend unevaluated lookup (1):**
+  `spec/500-hidden-friend-query-free-decltype-noexcept`.
+
+### Next Checkpoint Group
+
+Take the five candidate-viability, constructor, and member-template deduction
+fixtures as the next coherent group.  Preserve the completed dependent-value
+and generated-owner behavior, then validate the focused group, the full PA22
+report, through-PA21, and the PA22 file audit together.
+
+## Checkpoint 109 result — 2026-07-27 (current-PA implementation and audit)
+
+The dependent-value and generated-owner implementation remains stable after a
+cohesive source refactor required by the PA22 audit.  Template replay entry
+points, type-pattern matching, owner-pack materialization, and selection
+helpers now have dedicated translation-unit ownership; the new files are in
+the frontend source set, and no inline implementation includes were added.
+The three CP108 fixtures still pass.  The exact PA22 report is **236/250**,
+`make test-report-through-pa21` is **1850/1850**, and the PA22 file audit
+passes with warnings only.
+
+### Remaining Work Map after Checkpoint 109
+
+The authoritative PA22 residual is 14 fixtures, grouped by shared behavior:
+
+- **Candidate viability, constructor, and member-template deduction (5):**
+  `general/300-static-member-template-function-pointer-nttp`,
+  `general/500-index-sequence-alias-constructor-deduction`,
+  `spec/300-expression-sfinae-decltype-conversion`,
+  `spec/300-nontemplate-constructor-beats-conversion-function-template`, and
+  `spec/500-unqualified-member-template-local-alias-deduction`.
+- **Generated helper ownership and conversion materialization (4):**
+  `general/400-function-assignment-invocable-and-helper`,
+  `spec/200-dependent-specialized-default-arg-deduction`,
+  `spec/300-cross-specialization-converting-ctor-operator-template`, and
+  `spec/500-template-template-conversion-operator-reference-target`.
+- **Typed LowIR value/materialization (4):**
+  `general/400-alias-template-function-argument-cv`,
+  `spec/100-explicit-specialization-dependent-param-typedef`,
+  `spec/100-function-template-array-parameter-string-literal`, and
+  `spec/500-type-pack-qualified-static-member-expansion`.
+- **Hidden-friend unevaluated lookup (1):**
+  `spec/500-hidden-friend-query-free-decltype-noexcept`.
+
+### Next Checkpoint Group
+
+Take the five candidate-viability, constructor, and member-template deduction
+fixtures first.  Keep the completed dependent-value, owner-enum, and
+forwarding-reference behavior intact, then validate that group, the full PA22
+report, through-PA21, and the PA22 file audit together.

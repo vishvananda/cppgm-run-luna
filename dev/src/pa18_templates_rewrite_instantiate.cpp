@@ -59,10 +59,6 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformInstantiatedNode(
 			active_function_pack_substitutions_[identifier] = values->second;
 		else active_function_pack_substitutions_[identifier] = vector<string>();
 	}
-	if(!definition.class_template && GeneratedNodeHasUnavailableMemberType(
-		definition.declaration, context, substitutions)) {
-		throw PA18SubstitutionFailure("dependent type substitution failed");
-	}
 	try {
 		CPPGMAstNodePtr result = TransformNode(definition.declaration, context, substitutions);
 		active_integral_substitutions_ = previous;
@@ -409,7 +405,6 @@ string PA18TemplateExpander::NormalizeIntegralExpression(string raw) const
 		raw = CanonicalSpelling(raw.substr(comma + 1));
 	}
 }
-
 bool PA18TemplateExpander::ExpandIntegralPackExpression(const string& raw,
 	const string& context, const map<string, string>& substitutions,
 	string* expanded)
@@ -444,9 +439,8 @@ bool PA18TemplateExpander::ExpandIntegralPackExpression(const string& raw,
 		if(begin < raw.size() && raw[begin] == ',') ++begin;
 		else if(begin < raw.size() && raw[begin] == '(') ++begin;
 		const string source_expression = CanonicalSpelling(raw.substr(begin,
-			ellipsis - begin));
+		ellipsis - begin));
 		if(source_expression.empty()) continue;
-
 		string pack_name;
 		for(size_t position = 0; position < source_expression.size();) {
 			if(source_expression.compare(position, 9, "sizeof...") == 0) {
@@ -505,7 +499,6 @@ bool PA18TemplateExpander::ExpandIntegralPackExpression(const string& raw,
 	}
 	return false;
 }
-
 bool PA18TemplateExpander::EvaluateActivePackSize(string raw,
 	PA19IntegralValue* result) const
 {
@@ -546,7 +539,6 @@ bool PA18TemplateExpander::EvaluateActivePackSize(string raw,
 		static_cast<unsigned long long>(selected->size()), "unsigned long", 64);
 	return true;
 }
-
 string PA18TemplateExpander::RewriteActivePackSizes(string raw) const
 {
 	for(size_t search = raw.find("sizeof..."); search != string::npos; ) {
@@ -570,7 +562,6 @@ string PA18TemplateExpander::RewriteActivePackSizes(string raw) const
 	}
 	return raw;
 }
-
 bool PA18TemplateExpander::EvaluateUnqualifiedConstantMember(
 	const string& raw, const string& context,
 	const map<string, string>& substitutions, PA19IntegralValue* result,
@@ -622,10 +613,9 @@ bool PA18TemplateExpander::EvaluateUnqualifiedConstantMember(
 				if(!declarator || declarator->children.size() < 2 ||
 					LastComponent(FirstIdentifierLocal(declarator->children[0])) != raw)
 					continue;
-				const CPPGMAstNodePtr initializer = declarator->children[1];
-				if(!initializer || initializer->children.empty()) continue;
-
-				map<string, string> member_substitutions = substitutions;
+			const CPPGMAstNodePtr initializer = declarator->children[1];
+			if(!initializer || initializer->children.empty()) continue;
+			map<string, string> member_substitutions = substitutions;
 				map<string, string>::const_iterator base = specialization_bases_.find(
 					LastComponent(candidate->first));
 				map<string, vector<string> >::const_iterator arguments =
@@ -666,7 +656,6 @@ bool PA18TemplateExpander::EvaluateUnqualifiedConstantMember(
 						}
 					}
 				}
-
 				const map<string, vector<string> > previous_packs = active_pack_substitutions_;
 				for(map<string, vector<string> >::const_iterator pack = owner_packs.begin();
 					pack != owner_packs.end(); ++pack)
@@ -835,6 +824,13 @@ bool PA18TemplateExpander::EvaluateIntegralTextSpecialForms(const string& raw,
 	const string& context, const map<string, string>& substitutions,
 	PA19IntegralValue* result)
 {
+	// A dependent type-id can contain `::value` as part of a source template
+	// body, but it is not an integral expression until its enclosing class
+	// specialization supplies the template parameters.  Do not send that
+	// spelling through RewriteText: member replay would try to materialize the
+	// same dependent owner while evaluating the value that selects it.
+	if(raw.find("typename") != string::npos && HasUnresolvedTemplateParameter(
+		raw, context, substitutions)) return false;
 	if(EvaluateVariableTemplateValue(raw, context, substitutions, result)) return true;
 	if(raw.find('<') != string::npos) {
 		const string rewritten = CanonicalSpelling(RemoveMarker(

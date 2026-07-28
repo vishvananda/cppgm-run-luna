@@ -609,6 +609,16 @@ public:
 		size_t requested_arguments = static_cast<size_t>(-1))
 	{
 		if (!expression) throw logic_error("invalid expression type");
+		// PA18 attaches a concrete result type to replayed dependent calls.  It
+		// is typed compiler state, not source text: prefer it before ordinary
+		// lookup, which cannot see a member-template declaration that was
+		// intentionally omitted from the materialized class shell.
+		if (!expression->inferred_type.empty()) {
+			try {
+				TypePtr inferred = ResolveType(scope, expression->inferred_type);
+				if (inferred) return inferred;
+			} catch (const logic_error&) {}
+		}
 		if (expression->kind == "id-expression")
 		{
 			Binding* binding = ResolveBinding(scope, expression->value);
@@ -1069,9 +1079,9 @@ public:
 				return;
 			throw;
 		}
-		const bool known = value.integral.known || value.floating_known ||
-			(value.kind == ConstantValue::CONSTANT_OBJECT && value.object) ||
-			(value.kind == ConstantValue::CONSTANT_POINTER && value.pointer);
+			const bool known = value.integral.known || value.floating_known ||
+				(value.kind == ConstantValue::CONSTANT_OBJECT && value.object) ||
+				(value.kind == ConstantValue::CONSTANT_POINTER && value.pointer);
 		bool truth = false;
 		if (value.integral.known) truth = PA19Raw(value.integral) != 0;
 		else if (value.floating_known) truth = value.floating != 0;

@@ -19,66 +19,6 @@ using namespace std;
 
 namespace cppgm_pa14_lowering {
 
-namespace {
-
-enum FirstVariableUse {
-  FIRST_VARIABLE_USE_NOT_FOUND,
-  FIRST_VARIABLE_USE_ASSIGNMENT,
-  FIRST_VARIABLE_USE_READ
-};
-
-// A scalar with no initializer has an indeterminate value.  The old lowering
-// emitted a zero store for every such local, even when the first evaluation of
-// the local was the left side of a plain assignment.  Keep the zeroing for
-// genuinely read-before-write locals, but let the typed statement order make
-// the normal definite-assignment case observable in LowIR.
-FirstVariableUse FirstUseAfterDeclaration(const CPPGMAstNodePtr& node,
-                                          const CPPGMAstNodePtr& declaration,
-                                          const string& name, bool& after)
-{
-    if(!node) return FIRST_VARIABLE_USE_NOT_FOUND;
-    if(node.get() == declaration.get()) {
-      after = true;
-      return FIRST_VARIABLE_USE_NOT_FOUND;
-    }
-    if(!after) {
-      for(size_t child = 0; child < node->children.size(); ++child) {
-        const FirstVariableUse result = FirstUseAfterDeclaration(
-          node->children[child], declaration, name, after);
-        if(result != FIRST_VARIABLE_USE_NOT_FOUND) return result;
-      }
-      return FIRST_VARIABLE_USE_NOT_FOUND;
-    }
-    if(node->kind == "assignment-expression" &&
-       PA12Operator(node->value) == "=" && node->children.size() > 1 &&
-       node->children[0] && node->children[0]->kind == "id-expression" &&
-       node->children[0]->value == name) {
-      bool rhs_after = true;
-      const FirstVariableUse rhs = FirstUseAfterDeclaration(
-        node->children[1], declaration, name, rhs_after);
-      return rhs == FIRST_VARIABLE_USE_READ ? rhs : FIRST_VARIABLE_USE_ASSIGNMENT;
-    }
-    if(node->kind == "id-expression" && node->value == name)
-      return FIRST_VARIABLE_USE_READ;
-    for(size_t child = 0; child < node->children.size(); ++child) {
-      const FirstVariableUse result = FirstUseAfterDeclaration(
-        node->children[child], declaration, name, after);
-      if(result != FIRST_VARIABLE_USE_NOT_FOUND) return result;
-    }
-    return FIRST_VARIABLE_USE_NOT_FOUND;
-}
-
-bool DefinitelyAssignedBeforeRead(const CPPGMAstNodePtr& function_node,
-                                   const CPPGMAstNodePtr& declaration,
-                                   const string& name)
-{
-    bool after = false;
-    return FirstUseAfterDeclaration(function_node, declaration, name, after) ==
-      FIRST_VARIABLE_USE_ASSIGNMENT;
-}
-
-} // namespace
-
 PA14Lowerer::Value PA14Lowerer::ValueFromInfo(const ExprInfo& info) const
 {
     Value result;
@@ -102,8 +42,8 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
                                     bool value_initialization)
 {
     const size_t temporary_mark = state_ ? state_->temporary_objects.size() : 0;
-	TypePtr object_type = type_value(raw_object_type);
-	if(!object_type || object_type->kind != TYPE_CLASS) return false;
+    TypePtr object_type = type_value(raw_object_type);
+    if(!object_type || object_type->kind != TYPE_CLASS) return false;
     // Default construction is normally collected while walking a class body,
     // but a replayed specialization can first become observable through a
     // local whose only source use is unevaluated.  Materialize the implicit
@@ -178,7 +118,7 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
         (void)EnsureImplicitCopyConstructor(object_type, false);
     }
 	if(!raw_arguments.empty()) (void)EnsureAggregateConstructor(object_type);
-	vector<Binding*> candidates = MemberBindings(object_type, constructor_name);
+    vector<Binding*> candidates = MemberBindings(object_type, constructor_name);
     vector<ExprInfo> argument_infos;
     for(size_t i = 0; i < raw_arguments.size(); ++i) {
       ExprInfo info = Infer(raw_arguments[i], scope);
@@ -285,7 +225,7 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
 		throw logic_error("ambiguous constructor overload");
 		}
 	}
-	if(!best_binding) {
+    if(!best_binding) {
 	  bool has_nonstatic_data = false;
       for(size_t i = 0; i < object_type->class_members.size(); ++i)
         if(!object_type->class_members[i].is_static &&
@@ -472,7 +412,9 @@ bool PA14Lowerer::EmitObjectConstructor(VariablePlan* variable,
         has_constructor = true;
 		break;
       }
-	if(!has_constructor) return false;
+	if(!has_constructor) {
+	  return false;
+	}
     string address;
     if(!variable->initialization_address.empty()) {
       address = variable->initialization_address;
@@ -1454,9 +1396,7 @@ void PA14Lowerer::EmitStatement(const CPPGMAstNodePtr& node, Scope* scope)
                   found->second->type->kind != TYPE_ARRAY &&
                   !type_is_reference(found->second->type) &&
                   (!type_value(found->second->type) ||
-                   type_value(found->second->type)->kind != TYPE_CLASS) &&
-                  !DefinitelyAssignedBeforeRead(state_->record ? state_->record->node :
-                    CPPGMAstNodePtr(), node, found->second->source_name))
+                   type_value(found->second->type)->kind != TYPE_CLASS))
             emit_store(found->second->type, "0", StorageForVariable(*found->second));
         }
       }

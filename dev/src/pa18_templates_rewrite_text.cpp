@@ -30,11 +30,6 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 		raw.find("::") == string::npos && raw.find('<') == string::npos &&
 		raw.compare(0, 14, "TT_IDENTIFIER:") == 0) {
 		const string member_name = RemoveMarker(raw);
-		// A replayed class body records local typedefs in its substitution map
-		// before transforming later members.  Prefer that exact typed alias over
-		// looking up the same spelling in the source class: the source lookup can
-		// see the primary's dependent member and collapse a function-pointer alias
-		// to its return type before the concrete pack expansion is applied.
 		bool local_type_alias = false;
 		for(string current = context; !current.empty() && !local_type_alias; ) {
 			if(type_aliases_.find(JoinPath(current, member_name)) != type_aliases_.end())
@@ -60,11 +55,6 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			else current.erase(separator);
 		}
 	}
-	// The parser's compact type spelling can lose the token boundary between a
-	// user type and a following cv-qualifier in a nested template argument
-	// (`value const &` may arrive as `valueconst&`).  Recover that boundary only
-	// when the prefix is a known type in the current scope; identifiers such as
-	// `constant` must remain unchanged.
 	for(size_t qualifier = 0; qualifier < 2; ++qualifier) {
 		const string word = qualifier == 0 ? "const" : "volatile";
 		for(size_t at = raw.find(word); at != string::npos; ) {
@@ -80,10 +70,6 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				const string prefix = CanonicalSpelling(raw.substr(begin, at - begin));
 				if(IsKnownTypeSpelling(ReplaceIdentifiers(prefix, substitutions), context)) {
 					raw.insert(at, " ");
-					// The insertion shifts the end of the current word by one
-					// character.  Continue searching after that shifted end;
-					// treating it as the next match lets the loop index past the
-					// end of a spelling such as `Alias<T const>`.
 					at = raw.find(word, original_end + 1);
 					continue;
 				}
@@ -95,9 +81,6 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 		template_marker != string::npos;
 		template_marker = raw.find("::template ", template_marker))
 		raw.erase(template_marker + 2, 9);
-	// Expand a type pack embedded in a direct function type before parsing any
-	// nested template-id: `R(Args...)` becomes `R(A,B)`.  A standalone pack
-	// expansion stays on the existing path that emits separate outer arguments.
 	for(map<string, vector<string> >::const_iterator active_pack =
 		active_pack_substitutions_.begin(); active_pack != active_pack_substitutions_.end();
 		++active_pack) {
@@ -128,10 +111,6 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			}
 		}
 	raw = RewriteDecltypeText(raw, context, substitutions, template_replaced);
-	// A qualified use may start from a non-template alias owner rather than a
-	// scalar substitution (`lib::ordered_json::object_t`).  Resolve that owner
-	// first, then let the ordinary template-id/member path materialize the
-	// concrete class and its member type.
 	if(resolve_member) {
 		const size_t owner_separator = TopLevelScopeSeparator(raw);
 		if(owner_separator != string::npos && owner_separator + 2 < raw.size()) {
@@ -142,10 +121,6 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				raw = resolved_owner + "::" + member;
 		}
 	}
-	// A dependent nested class-template-id is scanned from the inside out by
-	// the ordinary template loop (`case_<Tag>` before its `Cases::` owner).
-	// Materialize the concrete owner first when a substitution gives us its
-	// template-id, so the nested specialization inherits the owner's bindings.
 	if(resolve_member) for(map<string, string>::const_iterator current = substitutions.begin();
 		current != substitutions.end(); ++current) {
 		if(current->first.empty() || current->second.find('<') == string::npos) continue;
@@ -183,21 +158,11 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			const string member = raw.substr(at + token.size(), end - at - token.size());
 			string member_type;
 			set<string> member_active;
-			// The generated nested specialization carries the enclosing class's
-			// bindings (for example `BaseHook` in `base_hook<Hook>::pack<Base>`).
-			// Prefer that typed declaration over replaying the source nested
-			// definition, whose own argument list cannot represent the outer
-			// binding.
 			FindClassMemberType(current->second, member, substitutions, context,
 				&member_type, &member_active, true);
 			if(member_type.empty()) member_type = TemplateMemberType(*definition,
 				arguments->second, member, context);
 			if(member_type.empty()) {
-				// A generated specialization can be used through a nested class
-				// (`Owner_T::traits::fn`) even when that nested class was omitted
-				// from the first replay because it was not needed by the class body.
-				// Materialize the requested nested declaration now so qualified
-				// static-member lookup sees its typed owner and bindings.
 				bool nested_class = false;
 				if(definition->declaration) for(size_t child = 0;
 					child < definition->declaration->children.size(); ++child) {
@@ -222,11 +187,6 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			if(word_begin >= 8 && raw.compare(word_begin - 8, 8, "typename") == 0 &&
 				(word_begin == 8 || !IsIdentifierCharacter(raw[word_begin - 9])))
 				replacement_begin = word_begin - 8;
-			// The substituted alias can be reached through a materialized owner,
-			// e.g. `tree_int_::traits_type::base_ptr`.  TemplateMemberType returns
-			// the actual member type (`node_base*`); retaining the generated owner
-			// would manufacture the unrelated nested type `tree_int_::node_base`.
-			// Drop that owner only when it is a known materialized specialization.
 			if(at >= 2 && raw.compare(at - 2, 2, "::") == 0) {
 				size_t owner_begin = at - 2;
 				int owner_angle = 0;
@@ -281,11 +241,6 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 		size_t close = string::npos;
 		const bool has_range = TemplateRange(raw, search, &arguments_text, &close);
 		if(!has_range) continue;
-		// A specialization that is already materialized is also a valid current
-		// instantiation when the reference appears through a nested dependent
-		// type.  In that path the local substitution map may contain only `T`,
-		// so the primary template name is not otherwise rewritten and would start
-		// the same instantiation again.
 		vector<string> current_arguments = SplitTemplateArguments(arguments_text);
 		if(!active_pack_substitutions_.empty()) {
 			vector<string> expanded_current_arguments;
@@ -352,10 +307,6 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			search = begin + raw.size();
 			continue;
 		}
-		// A qualified reference to the class currently being materialized must
-		// resolve to that concrete class.  Looking up the primary template again
-		// would recursively instantiate the same specialization while rewriting
-		// members such as `trait<T>::value`.
 		map<string, string>::const_iterator current_substitution =
 			substitutions.find(base);
 		string current_name = current_substitution == substitutions.end() ? string() :
@@ -497,21 +448,10 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 					if(viable_definition) definition = viable_definition;
 				}
 			}
-			// A nested member class template can be reached through a generated
-			// enclosing specialization (`scoped_outer0_::rebind<int>`).  The
-			// physical generated owner is typed state, not a source definition
-			// name, so recover its primary/selected owner before looking up the
-			// nested definition.
 				if(base.rfind("::") != string::npos) {
 					const size_t nested_separator = base.rfind("::");
 					if(nested_separator != string::npos) {
 						const string source_owner = base.substr(0, nested_separator);
-						// A dependent qualified-id is commonly spelled
-						// `Owner::member` while `Owner` is itself bound in the
-						// replay substitution map (for example
-						// `FactorySpecifier::apply`).  ResolveAlias only knows
-						// registered aliases, so consult the typed binding first;
-						// otherwise the nested definition is replayed under its
 						// source owner and enclosing non-type bindings are lost.
 						string concrete_owner;
 						map<string, string>::const_iterator owner_binding =
@@ -684,7 +624,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 					}
 				args.push_back(source_argument);
 					}
-					if(deferred_pack_argument) {
+			if(deferred_pack_argument) {
 				search = close + 1;
 				continue;
 			}
@@ -1280,7 +1220,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 					try {
 							string last_candidate_failure;
 							bool selected_candidate = false;
-							for(size_t candidate = 0; candidate < instantiation_candidates.size(); ++candidate) {
+								for(size_t candidate = 0; candidate < instantiation_candidates.size(); ++candidate) {
 								try {
 									// Validate the substituted function result before replaying
 									// the body.  A non-type result such as `sizeof(T)` is a
@@ -1309,7 +1249,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 									const string candidate_result = constructor_candidate || type_candidate ? "candidate" :
 										FunctionResultType(*candidate_definition, args, context,
 											&instantiation_substitutions);
-					if(candidate_result.empty())
+						if(candidate_result.empty())
 										throw PA18SubstitutionFailure("function result substitution failed");
 										local_name = Instantiate(*instantiation_candidates[candidate], args, context, false,
 										inferred_nested_parent_packs.empty() ? 0 : &inferred_nested_parent_packs,

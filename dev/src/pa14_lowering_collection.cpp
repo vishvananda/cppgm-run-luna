@@ -1,5 +1,7 @@
 #include "pa14_lowering.h"
 
+#include <functional>
+
 #include <cctype>
 
 using namespace std;
@@ -119,12 +121,6 @@ void PA14Lowerer::IndexCompleteTemplateObjectUses(const CPPGMAstNodePtr& node)
       if(found != class_types_by_name_.end())
         for(size_t type = 0; type < found->second.size(); ++type)
           complete_template_object_uses_.insert(found->second[type].get());
-		const CPPGMAstNodePtr arguments = node->kind == "call-expression" &&
-			node->children.size() > 1 ? node->children[1] :
-			ChildOfKind(node, "new-initializer");
-		if(arguments && arguments->children.empty() && found != class_types_by_name_.end())
-			for(size_t type = 0; type < found->second.size(); ++type)
-				complete_template_default_object_uses_.insert(found->second[type].get());
     }
     if(node->kind == "simple-declaration" && !node->children.empty() &&
        PA14NodeValues(node->children[0]).find("typedef") == string::npos &&
@@ -145,8 +141,6 @@ void PA14Lowerer::IndexCompleteTemplateObjectUses(const CPPGMAstNodePtr& node)
             const TypePtr value = found->second[type];
             if(value->template_specialization && value->template_primary.empty()) continue;
             complete_template_object_uses_.insert(value.get());
-			if(entry->children.size() == 1)
-				complete_template_default_object_uses_.insert(value.get());
           }
       }
     }
@@ -403,12 +397,6 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
 		}
 	}
     record->definition = record->definition || definition;
-    // A non-inline member defined outside its class is an ordinary emission
-    // root even when no in-TU call reaches it.  Keep that source definition
-    // available so its dependent call bodies are checked and lowered.
-    if(definition && is_member && raw_name.find("::") != string::npos &&
-       !record->template_instantiation)
-      record->needed = true;
     // A constexpr static member function is available to the semantic
     // constant evaluator without requiring a LowIR body.  Runtime calls and
     // address-takes mark the record through normal demand tracking; keeping
@@ -610,7 +598,7 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
         function = adjusted;
       }
     }
-    if(conversion_operator) for(size_t i = 0; i < declared_bindings.size(); ++i)
+	if(conversion_operator) for(size_t i = 0; i < declared_bindings.size(); ++i)
       if(declared_bindings[i] && declared_bindings[i]->kind == BIND_FUNCTION &&
          declared_bindings[i]->declaration.get() == node.get())
         declared_bindings[i]->type = function;
@@ -703,12 +691,7 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
 	if(record->defaulted && record->value_special_member)
       record->unwind_no = record->unwind_no || IsTrivialValueStorage(owner);
 	if(out_of_class_definition && (record->constructor || record->destructor) &&
-		(!record->template_instantiation || !node->template_instantiation ||
-		 node->explicit_specialization)) {
-		// An out-of-class definition for a non-template member of an explicit
-		// class specialization is still an ordinary definition.  The owner type
-		// carries template-specialization metadata for layout, but that must not
-		// suppress the source definition's demand root.
+		!record->template_instantiation) {
 		record->needed = true;
 	}
 	const bool constructor_record = record->constructor;
@@ -1157,13 +1140,6 @@ void PA14Lowerer::CollectGlobalDeclaration(const CPPGMAstNodePtr& node,
     const bool is_extern = HasStorageSpecifier(node, "extern");
     if(!is_extern && object) {
       const bool static_member_object = static_cast<bool>(record.template_owner);
-      CPPGMAstNodePtr object_expression = InitializerExpression(record.initializer);
-      const bool empty_value_initialization = object_expression &&
-        ((object_expression->kind == "call-expression" &&
-          object_expression->children.size() > 1 && object_expression->children[1] &&
-          object_expression->children[1]->children.empty()) ||
-         (object_expression->kind == "braced-init-list" &&
-          object_expression->children.empty()));
       record.dynamic_initializer = !static_member_object ||
         HasDefaultConstructionEffects(value_type) ||
         (value_type && value_type->kind == TYPE_CLASS &&
@@ -1175,6 +1151,13 @@ void PA14Lowerer::CollectGlobalDeclaration(const CPPGMAstNodePtr& node,
       // static storage.  Do not manufacture a runtime constructor call for
       // that case; nontrivial constexpr constructors (and aggregate values
       // with explicit data) still use the ordinary initialization path.
+      CPPGMAstNodePtr object_expression = InitializerExpression(record.initializer);
+      const bool empty_value_initialization = object_expression &&
+        ((object_expression->kind == "call-expression" &&
+          object_expression->children.size() > 1 && object_expression->children[1] &&
+          object_expression->children[1]->children.empty()) ||
+         (object_expression->kind == "braced-init-list" &&
+          object_expression->children.empty()));
       if(facts.is_constexpr && empty_value_initialization &&
          HasConstructor(value_type) && IsTrivialValueStorage(value_type) &&
          !HasUserProvidedConstructor(value_type))

@@ -826,6 +826,10 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 		}
 		const size_t open = expression.find('(');
 		if(open != string::npos && expression[expression.size() - 1] == ')') {
+			string constructed_result;
+			if(ResolveConstructedCallResult(Trim(expression.substr(0, open)),
+				context, substitutions, vector<string>(), &constructed_result))
+				return constructed_result;
 			string cast_type = ResolveDecltypeTypeName(Trim(expression.substr(0, open)),
 				context, substitutions);
 			if(IsKnownTypeSpelling(cast_type, context))
@@ -889,8 +893,19 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 		}
 		if(EvaluateNewExpression(normalized, context, substitutions, result)) return true;
 		const size_t direct_open = normalized.find('(');
+		size_t direct_close = string::npos;
+		if(direct_open != string::npos) {
+			int direct_depth = 0;
+			for(size_t position = direct_open; position < normalized.size(); ++position) {
+				if(normalized[position] == '(') ++direct_depth;
+				else if(normalized[position] == ')' && --direct_depth == 0) {
+					direct_close = position;
+					break;
+				}
+			}
+		}
 		if(direct_open != string::npos && direct_open > 0 &&
-			normalized[normalized.size() - 1] == ')') {
+			normalized[normalized.size() - 1] == ')' && direct_close + 1 == normalized.size()) {
 			const string constructed = ResolveDecltypeTypeName(
 				Trim(normalized.substr(0, direct_open)), context, substitutions);
 			if(IsKnownTypeSpelling(constructed, context) &&
