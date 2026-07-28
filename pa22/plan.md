@@ -4806,3 +4806,55 @@ reference fixtures were changed.
 Begin PA23 by reading its contract and relevant tests, then map the complete
 PA23 failure set before implementation.  Preserve the PA22 regression gate
 and use the same focused-report, through-PA22, and file-audit validation loop.
+
+## Architecture Review
+
+The final PA22 implementation follows the staged compiler boundary described
+by the assignment: PA11 owns semantic declarations, types, bindings, and
+constant facts; PA18 owns template deduction, substitution, candidate state,
+and typed replay; PA14 owns demand planning, object/constructor materialization,
+and LowIR emission.  PA22 extends those existing paths rather than adding an
+alternate template or output pipeline.
+
+The Checkpoint 111 lowering changes are represented by semantic fields and
+typed ownership:
+
+- `FunctionRecord` carries explicit-specialization and out-of-class-definition
+  facts, and constructor base entries inherit those facts;
+- `GlobalRecord` retains template-owner, initializer, and specialization
+  state for static-member demand;
+- argument/temporary boundaries use `Type`, `Binding`, and constructor
+  selection results, including the parenthesized-expression and empty-storage
+  cases;
+- default-initialized scalar slots remain indeterminate instead of receiving
+  a fabricated store;
+- qualified pack-expanded static members load their materialized globals;
+- unevaluated hidden-friend lookup does not create an initialization root.
+
+The final cleanup also makes the ownership and performance boundaries explicit.
+`IndexMaterializedMemberObjectUses` builds one non-owning `Type*` index from the
+analyzer's class/member graph; it does not copy AST or type ownership.  The
+empty-template transfer helper resolves a primary by its exact qualified
+semantic identity, and synthetic constructor/base-entry records preserve the
+specialization fact needed by downstream lowering.  No path reparses emitted
+LowIR or searches the test suite, and no broad catch converts hard semantic or
+lowering errors into success.
+
+## Final Architecture Review
+
+The complete stage is architecturally ready for the PA23 handoff.  All PA22
+features lower through the ordinary LowIR family and retain order-sensitive
+instruction, object, constructor, destructor, cleanup, and initialization
+behavior.  Demand remains fixed-point based: ordinary roots establish the
+frontier, selected template/member candidates add typed declarations, and
+synthetic constructors/base entries are emitted only when their semantic
+records are demanded.
+
+The final audit found and resolved the only new materialization risks in the
+checkpoint: repeated class/member rescanning and short-name primary recovery,
+plus loss of explicit-specialization state at synthetic constructor boundaries.
+The remaining file-audit output consists solely of the repository's existing
+12 structural warnings.  The stage preserves PA1–PA21, has no test or
+reference-fixture edits, and satisfies the PA22 contract and handoff: a
+complete single-feature template semantic/lowering layer ready to compose in
+PA23.

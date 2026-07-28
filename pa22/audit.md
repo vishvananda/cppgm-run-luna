@@ -971,3 +971,98 @@ the source-set/file-audit rules before the next materialization checkpoint.
   non-fatal warnings and no size or audit-bypass finding.
 - `make build` and `git diff --check` pass.  The refreshed residual map and
   next checkpoint group are recorded in [plan.md](plan.md).
+
+## Final Stage Audit — 2026-07-28
+
+### Audit Plan
+
+The final audit covered the complete PA22 stage, with particular attention to
+the Checkpoint 111 materialization implementation that closed the last eight
+LowIR comparisons.  The review used the PA22 contract in [README.md](README.md),
+the complete checkpoint history and handoff in [plan.md](plan.md), the
+Checkpoint 110 boundary audit above, commits `8ee1dfd`, `7f98f42`, `cc969a7`,
+`731277e`, `539bd1c`, `f899fc6`, `25e776b`, `9c35504`, and `8871644`, the
+complete primary report at
+`/home/vishvananda/work/.ralph/luna-gpt-5.6-luna-ultra/last-test.log`, the
+eight former Checkpoint 111 fixtures, and the full PA1–PA22 report.
+
+The implementation review followed these paths and invariants:
+
+- typed PA11 semantic declarations and type facts into PA14 collection;
+- PA18 deduction, substitution, candidate selection, and typed replay into
+  the ordinary PA14 LowIR path;
+- function, constructor, global, static-member, and temporary demand roots;
+- explicit-specialization and out-of-class-definition facts across synthetic
+  constructor/base-entry records;
+- non-owning indexes versus analyzer-owned AST/type/declaration storage;
+- repeated scans, recursion/fallback behavior, emitted-text recovery, and
+  file-audit ownership boundaries.
+
+### Findings
+
+- The Checkpoint 111 fixes preserve the intended architecture.  Constructor
+  arguments, empty-object transfers, scalar default-initialization, explicit
+  specialization pointer arithmetic, out-of-class definitions, unevaluated
+  hidden-friend probes, and qualified static-member expansion all continue
+  through typed PA11/PA18 facts and the existing PA14 LowIR emission path.
+  No output payload, reference-binary call, emitted-LowIR reparse, or
+  test-specific acceptance branch is involved.
+- The final review found a repeated full semantic-index scan in
+  `CollectSpecialMember`: every materialized zero-argument constructor could
+  rescan `class_types_by_name_` and all non-static class members.  That was a
+  performance and ownership concern because the same declaration fact was
+  rediscovered at each constructor boundary.  The scan is now performed once
+  after PA11 analysis in `IndexMaterializedMemberObjectUses`; the resulting
+  `set<const Type*>` is a non-owning index, while analyzer types remain the
+  sole owners.  Constructor collection performs only set membership checks.
+- The new empty-template transfer predicate looked up a primary through a
+  short-name bucket.  Classes with the same name in different namespaces
+  could therefore contribute an unrelated non-static member function fact.
+  The candidate is now admitted only when its full semantic name (or the
+  existing typed qualified-name projection) equals the specialization's
+  recorded `template_primary`; the short-name bucket is only an index narrow.
+- `explicit_specialization` is a lowering fact used by the pointer-arithmetic
+  materialization path.  The final review found that synthetic constructor
+  base entries, inherited constructor wrappers, and special-member records
+  did not consistently retain that fact.  It is now propagated at each of
+  those collection boundaries, so lowering does not silently fall back to a
+  primary-template interpretation.
+- Out-of-class roots remain derived from the collected member owner/scope and
+  typed `FunctionRecord::out_of_class_definition` state.  Qualified static
+  member materialization is guarded by the AST's qualified-use spelling only
+  to distinguish source-level qualified lookup; acceptance still requires the
+  typed binding, specialization, global, initializer, and template facts.
+- No broad exception catch, arbitrary candidate fallback, unbounded timeout
+  workaround, duplicated AST ownership, full-suite walk, or unchecked source
+  fragment was introduced.  The existing file-audit warnings are repository
+  structural warnings; the final changes added no warning or audit bypass.
+
+### Changes Made
+
+- Added the PA14 `materialized_member_object_uses_` non-owning semantic index
+  and built it once from analyzer-owned class/member types during lowering
+  preparation.
+- Replaced the per-constructor nested type/member scan with indexed typed
+  membership, preserving array-member handling and the non-template-container
+  rule.
+- Constrained `TemplatePrimaryHasNonstaticMemberFunction` to the exact
+  qualified primary declaration instead of accepting any same-short-name
+  primary.
+- Propagated `explicit_specialization` through special-member collection,
+  inherited constructor wrappers, and constructor base-entry creation/update.
+- Changed no tests or reference fixtures.  All implementation changes remain
+  under `dev/src`, and the documentation records the final PA22 handoff.
+
+### Validation
+
+- Checkpoint 111 regression set — **passed**: the eight former residual
+  fixtures pass (**8/8**).
+- Required file audit — **passed**:
+  `perl scripts/cppgm_file_audit.pl --stage pa22 --paths dev/src`.  It reports
+  only the 12 pre-existing non-fatal repository warnings.
+- Required exit criterion — **passed**:
+  `make test-report-through-pa22` reports **2100/2100** tests across PA1–PA22;
+  all 22 tracked stages pass.
+- Build and hygiene — **passed**: `make build` and `git diff --check`.
+- No PA1–PA21 regression is present; the through-stage report includes the
+  earlier **1850/1850** result, and no test or `.ref` file was modified.

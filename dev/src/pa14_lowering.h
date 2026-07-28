@@ -328,6 +328,7 @@ class PA14Lowerer
 	map<const CPPGMAstNode*, GlobalRecord*> local_static_plans_;
 	set<string> deferred_static_members_;
 	set<const Type*> complete_template_object_uses_;
+	set<const Type*> materialized_member_object_uses_;
 	bool needs_init_helper_;
 	bool needs_fini_helper_;
 	set<const Type*> emitted_vtables_;
@@ -341,6 +342,7 @@ class PA14Lowerer
 	mutable bool hidden_friend_binding_index_ready_;
 	void IndexFriendOwners();
 	void IndexClassTypesByName();
+	void IndexMaterializedMemberObjectUses();
 	void IndexCompleteTemplateObjectUses(const CPPGMAstNodePtr& node);
 	void PrepareLoweringProgram();
 	void EmitInitialFunctionRoots(vector<string>& entries);

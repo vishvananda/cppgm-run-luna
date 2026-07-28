@@ -1152,6 +1152,7 @@ void PA14Lowerer::EnsureConstructorBaseEntry(FunctionRecord* function)
       existing->defaulted = function->defaulted;
       existing->deleted = function->deleted;
       existing->template_instantiation = function->template_instantiation;
+      existing->explicit_specialization = function->explicit_specialization;
       existing->weak_binding = function->weak_binding;
       existing->out_of_class_definition = function->out_of_class_definition;
       existing->inherited_constructor_wrapper = function->inherited_constructor_wrapper;
@@ -1194,6 +1195,7 @@ void PA14Lowerer::EnsureConstructorBaseEntry(FunctionRecord* function)
     base_entry.special_initializer = function->special_initializer;
     base_entry.default_arguments = function->default_arguments;
     base_entry.template_instantiation = function->template_instantiation;
+    base_entry.explicit_specialization = function->explicit_specialization;
     base_entry.weak_binding = function->weak_binding;
     base_entry.out_of_class_definition = function->out_of_class_definition;
     base_entry.inherited_constructor_wrapper = function->inherited_constructor_wrapper;

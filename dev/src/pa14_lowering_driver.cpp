@@ -43,6 +43,26 @@ void PA14Lowerer::IndexClassTypesByName()
   }
 }
 
+void PA14Lowerer::IndexMaterializedMemberObjectUses()
+{
+  materialized_member_object_uses_.clear();
+  for(map<const CPPGMAstNode*, TypePtr>::const_iterator it = analyzer_.class_types_.begin();
+      it != analyzer_.class_types_.end(); ++it) {
+    const TypePtr container = type_value(it->second);
+    if(!container || container->kind != TYPE_CLASS || container->template_specialization)
+      continue;
+    for(size_t member = 0; member < container->class_members.size(); ++member) {
+      const ClassMemberInfo& field = container->class_members[member];
+      if(field.is_static || !field.type) continue;
+      TypePtr field_type = type_value(field.type);
+      while(field_type && field_type->kind == TYPE_ARRAY)
+        field_type = type_value(field_type->child);
+      if(field_type && field_type->kind == TYPE_CLASS)
+        materialized_member_object_uses_.insert(field_type.get());
+    }
+  }
+}
+
 void PA14Lowerer::PrepareLoweringProgram()
 {
   for(size_t i = 0; i < trees_.size(); ++i) {
@@ -53,6 +73,7 @@ void PA14Lowerer::PrepareLoweringProgram()
   }
   analyzer_.Analyze(program_);
   IndexClassTypesByName();
+  IndexMaterializedMemberObjectUses();
   complete_template_object_uses_.clear();
   IndexCompleteTemplateObjectUses(program_);
   IndexFriendOwners();

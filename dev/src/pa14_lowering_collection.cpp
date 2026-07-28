@@ -168,6 +168,8 @@ bool PA14Lowerer::TemplatePrimaryHasNonstaticMemberFunction(const TypePtr& raw_t
     for(size_t candidate = 0; candidate < group->second.size(); ++candidate) {
       const TypePtr primary = group->second[candidate];
       if(primary && primary.get() != type.get() && !primary->template_specialization &&
+         (primary->name == type->template_primary ||
+          TypeQualifiedName(primary) == type->template_primary) &&
          HasNonstaticMemberFunction(primary)) return true;
     }
     return false;
@@ -714,6 +716,8 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
     record->definition = record->definition || definition;
     record->node = node;
     record->variadic = function->variadic;
+    record->explicit_specialization = record->explicit_specialization ||
+      node->explicit_specialization;
     if(definition) record->unwind_no = record->unwind_no || HasNoexcept(declarator);
     RememberDefaults(record, declarator);
 	ClassifySpecialMember(record);
@@ -725,30 +729,8 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
 	if(record->constructor && !record->member_template &&
 		record->template_instantiation && owner->template_specialization &&
 		record->source_type && record->source_type->parameters.empty()) {
-		bool member_object_use = false;
-		for(map<string, vector<TypePtr> >::const_iterator type_group =
-			class_types_by_name_.begin(); type_group != class_types_by_name_.end() &&
-			!member_object_use; ++type_group) {
-			for(size_t type_index = 0; type_index < type_group->second.size() &&
-				!member_object_use; ++type_index) {
-				const TypePtr container = type_value(type_group->second[type_index]);
-					if(!container || container.get() == owner.get() ||
-						container->template_specialization) continue;
-				for(size_t member_index = 0; member_index < container->class_members.size();
-					++member_index) {
-					const ClassMemberInfo& member = container->class_members[member_index];
-					if(member.is_static || !member.type) continue;
-					TypePtr member_type = type_value(member.type);
-					while(member_type && member_type->kind == TYPE_ARRAY)
-						member_type = type_value(member_type->child);
-					if(member_type.get() == owner.get()) {
-						member_object_use = true;
-						break;
-					}
-				}
-			}
-		}
-		if(member_object_use) record->needed = true;
+		if(materialized_member_object_uses_.find(owner.get()) !=
+			materialized_member_object_uses_.end()) record->needed = true;
 	}
 	if(record->defaulted && record->value_special_member)
       record->unwind_no = record->unwind_no || IsTrivialValueStorage(owner);
@@ -1006,6 +988,8 @@ void PA14Lowerer::CollectInheritedConstructors(const TypePtr& raw_owner, Scope* 
       record->default_arguments = default_arguments;
       record->template_instantiation = owner->template_specialization ||
         (source_record && source_record->template_instantiation);
+      record->explicit_specialization = source_record &&
+        source_record->explicit_specialization;
       record->weak_binding = record->template_instantiation;
       if(owner->template_specialization) {
         record->template_primary = owner->template_primary;
