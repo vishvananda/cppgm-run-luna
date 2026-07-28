@@ -209,6 +209,69 @@ bool PA18TemplateExpander::SplitDirectFunctionType(const string& raw,
 		for(size_t i = 0; i < lhs_ordered.specialization_parameters.size(); ++i)
 			if(!lhs_ordered.specialization_parameters[i].empty()) lhs_names.insert(
 				lhs_ordered.specialization_parameters[i]);
+		const auto template_shape = [this](const TemplateDefinition& definition,
+			string* base, vector<string>* parts, bool* trailing_pack) {
+			for(size_t pattern = 0; pattern < definition.specialization_pattern.size(); ++pattern) {
+				const string raw = CanonicalSpelling(definition.specialization_pattern[pattern]);
+				const size_t open = raw.find('<');
+				if(open == string::npos) continue;
+				string arguments;
+				size_t close = string::npos;
+				if(!TemplateRange(raw, open, &arguments, &close)) continue;
+				*base = CanonicalSpelling(raw.substr(0, open));
+				*parts = SplitTemplateArguments(arguments);
+				*trailing_pack = !parts->empty() &&
+					IsTopLevelPackPattern(parts->back());
+				return true;
+			}
+			return false;
+		};
+		string lhs_base, rhs_base;
+		vector<string> lhs_parts, rhs_parts;
+		bool lhs_shape_pack = false, rhs_shape_pack = false;
+		if(template_shape(lhs_ordered, &lhs_base, &lhs_parts, &lhs_shape_pack) &&
+			template_shape(rhs_ordered, &rhs_base, &rhs_parts, &rhs_shape_pack) &&
+			lhs_base == rhs_base) {
+			const auto matches_ordering_pattern = [this](const string& pattern,
+				const string& actual, const set<string>& names) {
+				map<string, string> inferred;
+				return MatchOrderingTypePattern(pattern, actual, names, &inferred);
+			};
+			const auto accepts_fixed_shape = [&](const vector<string>& pattern_parts,
+				bool pattern_pack, const set<string>& pattern_names,
+				const string& pattern_pack_part, const vector<string>& actual_parts) {
+				const size_t fixed = pattern_parts.size() - (pattern_pack ? 1 : 0);
+				if(actual_parts.size() < fixed) return false;
+				for(size_t part = 0; part < fixed; ++part)
+					if(!matches_ordering_pattern(pattern_parts[part], actual_parts[part],
+						pattern_names)) return false;
+				if(!pattern_pack && actual_parts.size() != fixed) return false;
+				if(pattern_pack) for(size_t part = fixed; part < actual_parts.size(); ++part)
+					if(!matches_ordering_pattern(pattern_pack_part, actual_parts[part],
+						pattern_names)) return false;
+				return true;
+			};
+			const string lhs_pack_part = lhs_shape_pack ? CanonicalSpelling(
+				lhs_parts.back().substr(0, lhs_parts.back().size() - 3)) : string();
+			const string rhs_pack_part = rhs_shape_pack ? CanonicalSpelling(
+				rhs_parts.back().substr(0, rhs_parts.back().size() - 3)) : string();
+			if(!lhs_shape_pack && rhs_shape_pack && accepts_fixed_shape(rhs_parts,
+				true, rhs_names, rhs_pack_part, lhs_parts)) return true;
+			if(lhs_shape_pack && !rhs_shape_pack && accepts_fixed_shape(lhs_parts,
+				true, lhs_names, lhs_pack_part, rhs_parts)) return false;
+			if(lhs_shape_pack && rhs_shape_pack &&
+				lhs_parts.size() == rhs_parts.size()) {
+				vector<string> lhs_fixed(lhs_parts.begin(), lhs_parts.end() - 1);
+				vector<string> rhs_fixed(rhs_parts.begin(), rhs_parts.end() - 1);
+				const bool rhs_accepts_lhs = accepts_fixed_shape(rhs_parts, true,
+					rhs_names, rhs_pack_part, lhs_fixed) &&
+					matches_ordering_pattern(rhs_pack_part, lhs_pack_part, rhs_names);
+				const bool lhs_accepts_rhs = accepts_fixed_shape(lhs_parts, true,
+					lhs_names, lhs_pack_part, rhs_fixed) &&
+					matches_ordering_pattern(lhs_pack_part, rhs_pack_part, lhs_names);
+				if(rhs_accepts_lhs != lhs_accepts_rhs) return rhs_accepts_lhs;
+			}
+		}
 		map<string, string> rhs_inferred;
 		map<string, string> lhs_inferred;
 		return MatchOrderingPatternList(rhs_ordered.specialization_pattern,

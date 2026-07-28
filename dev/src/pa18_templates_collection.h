@@ -489,7 +489,7 @@ private:
 	map<string, TemplateDefinition> definitions_; map<const CPPGMAstNode*, TemplateDefinition> template_definitions_by_declaration_;
 	map<string, vector<string> > definitions_by_name_, pending_using_declarations_; map<string, vector<const TemplateDefinition*> > using_declaration_targets_, using_directive_exports_;
 	set<string> template_pack_names_, template_parameter_names_;
-	map<string, vector<TemplateDefinition> > class_specializations_;
+	map<string, vector<TemplateDefinition> > class_specializations_; map<string, set<string> > class_specialization_groups_by_name_;
 	map<const CPPGMAstNode*, string> lexical_contexts_; set<string> lexical_namespace_paths_;
 	map<string, string> lexical_namespace_logical_;
 	map<string, string> specializations_;
@@ -1027,9 +1027,9 @@ private:
 			// its concrete arguments are known.  Keep the primary's parameter
 			// contract for materialization, while retaining the specialization's
 			// own names/pattern for matching and body substitution.
-			if(prior != definitions_.end())
-				item.parameters = prior->second.parameters;
+			if(prior != definitions_.end()) item.parameters = prior->second.parameters;
 			class_specializations_[item.qualified_name].push_back(item);
+			class_specialization_groups_by_name_[item.name].insert(item.qualified_name);
 			Collect(declaration, JoinPath(item.owner, item.name));
 			return;
 		}

@@ -805,3 +805,91 @@ size limits, and preservation of PA1–PA21.
   the unchanged 12 warnings.
 - `make build`, `git diff --check`, and post-commit `git status --short` are
   clean.
+
+## Checkpoint 109 Audit — 2026-07-28
+
+### Scope Reviewed
+
+Reviewed the latest `Checkpoint Scope` and Checkpoint 109 result in
+[plan.md](plan.md), the PA22 contract in [README.md](README.md), commits
+`539bd1c`, `f899fc6`, `25e776b`, `9c35504`, and `8871644`, the full primary
+report at `/home/vishvananda/work/.ralph/luna-gpt-5.6-luna-ultra/last-test.log`,
+and the current implementation in the PA18 replay, collection, selection,
+call-materialization, PA11, and PA14 source sets.  The review followed the
+template collection-to-deduction-to-LowIR path and checked the source-set
+split, recent file ownership, candidate selection, generated-owner replay,
+hot-path scans, and preservation of PA1–PA21.
+
+### Findings
+
+- The latest source split had left an unused 85-line helper block duplicated
+  in `pa18_templates_rewrite_infer_types.cpp` even though its ownership still
+  belonged to `pa18_templates_rewrite_infer.cpp`.  That was a real duplicate
+  implementation fragment and a new file-audit warning; the duplicate was
+  removed and the owning translation unit retains the helper definitions.
+- `MaterializeFreeFunctionCandidates` rescanned the complete candidate vector
+  for every simple declaration to find a matching function definition.  The
+  declaration/definition pairing fact is now indexed once per candidate set,
+  reducing that path from repeated quadratic lookup to one signature-set build
+  plus membership checks.
+- The class-specialization fallback walked every specialization group to find
+  matching names.  A secondary name-to-group index now narrows the lookup;
+  `class_specializations_` remains the single storage owner and the index holds
+  only group keys, so ownership is not duplicated.
+- The old selection loop returned `matched[0]` when no candidate dominated the
+  others.  That was an arbitrary fallback-success path.  Selection now reports
+  ambiguity when multiple undominated candidates remain and reports a cyclic
+  ordering failure when no maximal candidate exists.  Equivalent redeclaration
+  candidates are collapsed using a structured identity that includes the
+  pattern, parameter bindings, and pack bindings.  The ordering relation also
+  handles fixed-arity versus trailing-pack and constrained-pack shapes, which
+  preserves valid PA21 selection instead of weakening the ambiguity check.
+- No compiler phase is skipped.  There is no dummy output, embedded payload,
+  interpreter/VM/trampoline substitute, timeout workaround, source/test-
+  specific acceptance gate, weakened check, or unchecked implementation path.
+  The active selection and alias sets are bounded semantic recursion guards,
+  not time limits.  The checkpoint does not reparse emitted LowIR or recover
+  ownership from generated output names.
+- The existing PA18 normalized type-spelling boundary remains the pre-PA14
+  expander’s semantic representation; this checkpoint added no new stringly
+  acceptance fact or downstream recovery of emitted text.  Existing
+  `inferred_type` handoff is populated before lowering and re-resolved at its
+  established PA11 boundary, rather than being used as a test gate.
+- The file audit passes with the repository’s unchanged 12 non-fatal
+  structural warnings.  No new warning, file-size bypass, hidden source
+  fragment, weakened audit check, or moved implementation was introduced.
+
+### Changes Made
+
+- Removed the duplicated unused inference helpers from
+  `pa18_templates_rewrite_infer_types.cpp`.
+- Indexed free-function definition signatures and class-specialization groups
+  in `pa18_templates_calls_transform.cpp` and
+  `pa18_templates_collection.h`.
+- Replaced arbitrary class-specialization fallback selection with explicit
+  ordering failure, structured redeclaration identity, and pack-aware partial
+  ordering in `pa18_templates_rewrite_selection.cpp` and
+  `pa18_templates_rewrite.cpp`.
+- Kept all implementation changes under `dev/src`; no tests or reference
+  fixtures were changed.  The concise residual map and next checkpoint group
+  were refreshed in [plan.md](plan.md).
+
+### Validation
+
+- Required active report — **passed for stage progress**:
+  `make test-report ACTIVE_TEST_REPORT_PAS='pa22'` reports **236/250**, equal
+  to the checkpoint baseline, with the complete 14-fixture residual and no
+  timeout failures.
+- Required prior-through check — **passed**:
+  `n=22; if [ "$n" -le 1 ]; then echo '===== ALL TESTS PASSED SUCCESSFULLY! (0/0) ====='; else make test-report-through-pa$((n - 1)); fi`
+  reports **1850/1850** through PA21.
+- Required file audit — **passed**:
+  `perl scripts/cppgm_file_audit.pl --stage pa22 --paths dev/src`, with 12
+  unchanged non-fatal warnings.
+- The two PA21 partial-ordering fixtures exposed during the audit both pass
+  after the semantic ordering refinement; the full through-report is green.
+  The current-PA report retains the checkpoint’s 236/250 baseline, and the
+  complete residual grouping and next substantial group are recorded in
+  [plan.md](plan.md).
+- `git diff --check` passes; the final commit leaves `git status --short`
+  empty.

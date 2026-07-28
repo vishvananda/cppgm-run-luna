@@ -119,16 +119,50 @@ const TemplateDefinition* PA18TemplateExpander::SelectClassTemplateDefinition(
 			};
 			const string primary_owner = collapse_repeated_owner(
 				strip_template_arguments(primary->owner));
-			for(map<string, vector<TemplateDefinition> >::const_iterator group =
-				class_specializations_.begin(); group != class_specializations_.end(); ++group)
-				for(size_t i = 0; i < group->second.size(); ++i) {
-					const TemplateDefinition& candidate = group->second[i];
-					if(candidate.name != primary->name) continue;
-					const string candidate_owner = collapse_repeated_owner(
-						strip_template_arguments(candidate.owner));
-					if(candidate_owner == primary_owner) candidates.push_back(&candidate);
+			map<string, set<string> >::const_iterator indexed_groups =
+				class_specialization_groups_by_name_.find(primary->name);
+			if(indexed_groups != class_specialization_groups_by_name_.end())
+				for(set<string>::const_iterator group = indexed_groups->second.begin();
+					group != indexed_groups->second.end(); ++group) {
+					map<string, vector<TemplateDefinition> >::const_iterator definitions =
+						class_specializations_.find(*group);
+					if(definitions == class_specializations_.end()) continue;
+					for(size_t i = 0; i < definitions->second.size(); ++i) {
+						const TemplateDefinition& candidate = definitions->second[i];
+						const string candidate_owner = collapse_repeated_owner(
+							strip_template_arguments(candidate.owner));
+						if(candidate_owner == primary_owner) candidates.push_back(&candidate);
+					}
 				}
 		}
+		struct CandidateIdentity {
+			string qualified_name;
+			vector<string> patterns;
+			vector<string> parameters;
+			vector<string> packs;
+			bool operator<(const CandidateIdentity& other) const
+			{
+				if(qualified_name != other.qualified_name)
+					return qualified_name < other.qualified_name;
+				if(patterns != other.patterns) return patterns < other.patterns;
+				if(parameters != other.parameters) return parameters < other.parameters;
+				return packs < other.packs;
+			}
+		};
+		set<CandidateIdentity> candidate_identities;
+		vector<const TemplateDefinition*> unique_candidates;
+		for(size_t candidate = 0; candidate < candidates.size(); ++candidate) {
+			CandidateIdentity identity;
+			identity.qualified_name = candidates[candidate]->qualified_name;
+			for(size_t pattern = 0; pattern < candidates[candidate]->specialization_pattern.size(); ++pattern)
+				identity.patterns.push_back(CanonicalSpelling(
+					candidates[candidate]->specialization_pattern[pattern]));
+			identity.parameters = candidates[candidate]->specialization_parameters;
+			identity.packs = candidates[candidate]->specialization_pack_names;
+			if(candidate_identities.insert(identity).second)
+				unique_candidates.push_back(candidates[candidate]);
+		}
+		candidates.swap(unique_candidates);
 		if(candidates.empty()) return primary;
 		vector<string> matching_arguments = arguments;
 		for(size_t argument = 0; argument < matching_arguments.size(); ++argument) {
@@ -165,6 +199,7 @@ const TemplateDefinition* PA18TemplateExpander::SelectClassTemplateDefinition(
 				matched.push_back(candidates[i]);
 		}
 		if(matched.empty()) return primary;
+		const TemplateDefinition* selected = 0;
 		for(size_t i = 0; i < matched.size(); ++i) {
 			bool dominated = false;
 			for(size_t j = 0; j < matched.size(); ++j) {
@@ -174,8 +209,14 @@ const TemplateDefinition* PA18TemplateExpander::SelectClassTemplateDefinition(
 					break;
 				}
 			}
-			if(!dominated) return matched[i];
+			if(dominated) continue;
+			if(selected)
+				throw PA18SubstitutionFailure(
+					"ambiguous class template partial specialization");
+			selected = matched[i];
 		}
-		return matched[0];
+		if(selected) return selected;
+		throw PA18SubstitutionFailure(
+			"cyclic class template partial specialization ordering");
 	}
 } // namespace

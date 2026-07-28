@@ -4581,3 +4581,44 @@ Take the five candidate-viability, constructor, and member-template deduction
 fixtures first.  Keep the completed dependent-value, owner-enum, and
 forwarding-reference behavior intact, then validate that group, the full PA22
 report, through-PA21, and the PA22 file audit together.
+
+## Checkpoint 109 audit follow-up — 2026-07-28
+
+The checkpoint audit removed the duplicated inference helper fragment, indexed
+free-function definition pairing and class-specialization group lookup, and
+replaced arbitrary partial-specialization fallback selection with explicit
+ambiguity/cycle handling plus pack-aware ordering.  The PA21 through-report
+remains **1850/1850**, the current PA22 report remains **236/250** (the
+turn-start baseline), and the PA22 file audit passes with the same 12
+non-fatal repository warnings.
+
+### Remaining Work Map (refreshed from the complete current-PA report)
+
+The authoritative residual is 14 fixtures: 5 exit-status failures and 9
+LowIR mismatches, grouped by shared behavior:
+
+- **Candidate viability, constructor, and member-template deduction (5):**
+  `general/300-static-member-template-function-pointer-nttp`,
+  `general/500-index-sequence-alias-constructor-deduction`,
+  `spec/300-expression-sfinae-decltype-conversion`,
+  `spec/300-nontemplate-constructor-beats-conversion-function-template`, and
+  `spec/500-unqualified-member-template-local-alias-deduction`.
+- **Generated helper ownership and conversion materialization (4):**
+  `general/400-function-assignment-invocable-and-helper`,
+  `spec/200-dependent-specialized-default-arg-deduction`,
+  `spec/300-cross-specialization-converting-ctor-operator-template`, and
+  `spec/500-template-template-conversion-operator-reference-target`.
+- **Typed LowIR value/materialization (4):**
+  `general/400-alias-template-function-argument-cv`,
+  `spec/100-explicit-specialization-dependent-param-typedef`,
+  `spec/100-function-template-array-parameter-string-literal`, and
+  `spec/500-type-pack-qualified-static-member-expansion`.
+- **Hidden-friend unevaluated lookup (1):**
+  `spec/500-hidden-friend-query-free-decltype-noexcept`.
+
+### Next substantial checkpoint group
+
+Take the five candidate-viability, constructor, and member-template deduction
+fixtures as one checkpoint group.  Preserve the completed dependent-value,
+owner-enum, forwarding-reference, and partial-ordering behavior, then rerun
+the focused group, full PA22 report, through-PA21, and file audit together.

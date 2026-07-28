@@ -839,20 +839,22 @@ bool PA18TemplateExpander::MaterializeFreeFunctionCandidates(
 {
 	const map<string, vector<string> > owner_pack_values =
 		BuildOwnerPackValues(qualified_callee_owner, context);
+	// Declaration/definition pairing is a lookup fact for this candidate set.
+	// Index the definition signatures once instead of rescanning every candidate
+	// for each declaration; this path is reached for ordinary calls and can sit
+	// on the template-deduction hot path.
+	set<string> defined_signatures;
+	for(size_t candidate = 0; candidate < definitions.size(); ++candidate) {
+		const TemplateDefinition* definition = definitions[candidate];
+		if(definition && definition->declaration &&
+			definition->declaration->kind == "function-definition")
+			defined_signatures.insert(MemberSignatureKey(*definition));
+	}
 	for(size_t candidate = 0; candidate < definitions.size(); ++candidate) {
 		const TemplateDefinition* definition = definitions[candidate];
 		if(definition->declaration && definition->declaration->kind == "simple-declaration") {
-			bool has_definition = false;
-			for(size_t other = 0; other < definitions.size(); ++other) {
-				const TemplateDefinition* replacement = definitions[other];
-				if(replacement == definition || !replacement->declaration ||
-					replacement->declaration->kind != "function-definition") continue;
-				if(MemberSignatureKey(*replacement) == MemberSignatureKey(*definition)) {
-					has_definition = true;
-					break;
-				}
-			}
-			if(has_definition) continue;
+			if(defined_signatures.find(MemberSignatureKey(*definition)) !=
+				defined_signatures.end()) continue;
 		}
 		if(MaterializeFreeFunctionCandidate(definition, result, result_callee,
 			callee_name, qualified_callee_owner, context, substitutions,
