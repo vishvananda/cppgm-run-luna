@@ -762,7 +762,7 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 		(context.size() > definition_owner.size() && context.compare(0,
 			definition_owner.size(), definition_owner) == 0 &&
 			context[definition_owner.size()] == ':');
-	if(!explicit_static_data && class_contexts_.find(context) != class_contexts_.end() && owner_is_context_ancestor &&
+	if(!explicit_static_data && !definition.owner.empty() && class_contexts_.find(context) != class_contexts_.end() && owner_is_context_ancestor &&
 		(!definition.class_template || !definition.owner.empty()) &&
 		context != definition.owner &&
 		!recursive_context_argument) {
@@ -806,7 +806,7 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 		 generated->kind == "simple-declaration")) {
 		RecordFunctionSignature(generated, generated_function_owner);
 		if(generated_owner != generated_function_owner)
-			RecordFunctionSignature(generated, generated_owner);
+		RecordFunctionSignature(generated, generated_owner);
 	}
 	generated_by_owner_[generated_function_owner].push_back(generated);
 	if(!enclosing_instantiation_name.empty() && generated_owner.empty() &&

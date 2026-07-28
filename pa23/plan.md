@@ -279,3 +279,54 @@ array/reference adjustment, and trailing-return replay.  Validate it first with
 the three remaining forwarding-pack fixtures and the related function-type and
 conversion fixtures, then rerun the full PA23 report and the through-PA22
 report before moving to the deferred-SFINAE group.
+
+## Checkpoint 2 result — 2026-07-28
+
+### Checkpoint Scope
+
+Completed the forwarding-pack/trailing-return integration group.  The compiler
+now preserves the typed distinction between a forwarding `T&&` and a deduced
+lvalue `T&`, including array references and nested pointer cv-qualification;
+binds an explicit template prefix when a type pack precedes a deduced fixed
+parameter; expands dependent call and cast operands that carry a pack; and
+replays trailing return types in the function's substitution context.  The
+same path now keeps qualified `async_result<...>::initiate` calls as member
+calls, queues generated free functions in their lexical owner, and retains
+dependent `decltype` expression children until semantic evaluation rather than
+turning them into an empty declaration node.
+
+### Validation
+
+The focused forwarding-pack, pointer-cast, array-reference, and cached async
+SFINAE fixtures pass.  The PA22 trailing-pack regression fixture also passes.
+The required through-PA22 report is **2100/2100**, and the full PA23 report is
+**274/396** (up from the turn-start **267/396**).  The remaining PA23 set is
+**122 fixtures**: 87 exit-status mismatches, 35 LowIR mismatches, and the two
+reentrant static-query timeouts.
+
+### Remaining Work Map
+
+- **Qualified owner/member replay:** the largest status group still loses
+  dependent owners or source namespaces across aliases, inherited/using member
+  templates, out-of-class definitions, and nested specialization replay.
+- **SFINAE and deferred instantiation:** detector/`enable_if`, dependent
+  `decltype`, cached result queries, deleted candidates, and the two reentrant
+  static-query cases still need scoped substitution state and cycle-safe query
+  identity.
+- **Deduction and overload composition:** conversion candidates, function-type
+  partial ordering, template-template arguments, defaults, and remaining
+  reference/cv normalization cases still fail in selection or LowIR replay.
+- **Typed aliases and non-type values:** variable templates, `sizeof`, pointer/
+  reference/integral values, pack-kind validation, and defaulted arguments still
+  lose typed semantic facts.
+- **Materialization:** the remaining comparison failures are concentrated in
+  explicit/extern specialization replay, constructors, member emission, and
+  generated declaration/argument metadata.
+
+### Next Checkpoint Group
+
+Take the non-timeout general/spec SFINAE and deferred-instantiation fixtures as
+the next substantial group, preserving candidate-local substitution failure and
+no-eager body instantiation.  Revisit the reentrant static-query timeout pair
+only with a stable semantic query identity, then rerun the complete PA23 report
+and the through-PA22 gate.

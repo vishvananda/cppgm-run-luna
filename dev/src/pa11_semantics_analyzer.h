@@ -348,6 +348,7 @@ public:
 			spelling = spelling.substr(9);
 		}
 		vector<char> suffixes;
+		vector<pair<size_t, pair<bool, bool> > > trailing_qualifiers;
 		vector<long long> array_bounds;
 		for (;;) {
 			while (!spelling.empty() && isspace(static_cast<unsigned char>(spelling[spelling.size() - 1])))
@@ -356,12 +357,12 @@ public:
 				(spelling.size() == 5 || spelling[spelling.size() - 6] == ' ' ||
 					(spelling[spelling.size() - 6] != '_' &&
 					 IsFundamentalWord(spelling.substr(0, spelling.size() - 5))))) {
-				info.is_const = true;
+				trailing_qualifiers.push_back(make_pair(suffixes.size(), make_pair(true, false))); info.is_const = true;
 				spelling.erase(spelling.size() - 5);
 				continue;
 			}
 			if (spelling.size() >= 8 && spelling.compare(spelling.size() - 8, 8, "volatile") == 0) {
-				info.is_volatile = true;
+				trailing_qualifiers.push_back(make_pair(suffixes.size(), make_pair(false, true))); info.is_volatile = true;
 				spelling.erase(spelling.size() - 8);
 				continue;
 			}
@@ -414,9 +415,16 @@ public:
 		else base = ResolveType(scope, spelling);
 		if (leading_const) base = CloneWithCv(base, true, false);
 		if (leading_volatile) base = CloneWithCv(base, false, true);
-		for (size_t i = suffixes.size(); i > 0; --i) {
-			if (suffixes[i - 1] == '*') base = PointerTo(base);
-			else base = ReferenceTo(suffixes[i - 1] == 'R' ? TYPE_RVALUE_REFERENCE : TYPE_LVALUE_REFERENCE, base);
+		// Apply trailing cv at its declarator boundary; references cannot carry cv.
+		for (size_t processed = 0; processed <= suffixes.size(); ++processed) {
+			for (size_t qualifier = 0; qualifier < trailing_qualifiers.size(); ++qualifier)
+				if (suffixes.size() - trailing_qualifiers[qualifier].first == processed)
+					base = CloneWithCv(base, trailing_qualifiers[qualifier].second.first,
+						trailing_qualifiers[qualifier].second.second);
+			if (processed == suffixes.size()) break;
+			const char suffix = suffixes[suffixes.size() - processed - 1];
+			if (suffix == '*') base = PointerTo(base);
+			else base = ReferenceTo(suffix == 'R' ? TYPE_RVALUE_REFERENCE : TYPE_LVALUE_REFERENCE, base);
 		}
 		for (size_t i = array_bounds.size(); i > 0; --i)
 			base = ArrayOf(array_bounds[i - 1], base);

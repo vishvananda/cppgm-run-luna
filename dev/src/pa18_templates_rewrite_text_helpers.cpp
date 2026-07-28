@@ -22,6 +22,106 @@ bool ContainsIdentifierTokenLocal(const string& text, const string& identifier)
 
 }
 
+string PA18TemplateExpander::ExpandPackCallText(string raw,
+	const map<string, vector<string> >& packs) const
+{
+	// Expand dependent template calls such as `declval<Args>()...` before the
+	// normal template-id pass.  Function-call operands use the same rule for
+	// `static_cast<Args&&>(args)...`.
+	for(size_t search = 0; search < raw.size(); ++search) {
+		if(raw[search] != '<') continue;
+		size_t begin = 0, close = string::npos;
+		string base, arguments;
+		if(!TemplateBase(raw, search, &begin, &base) ||
+			!TemplateRange(raw, search, &arguments, &close)) continue;
+		const vector<string> values = SplitTemplateArguments(arguments);
+		if(values.size() != 1) continue;
+		const string pack_name = CanonicalSpelling(values[0]);
+		map<string, vector<string> >::const_iterator pack = packs.find(pack_name);
+		if(pack == packs.end() || close + 5 >= raw.size() ||
+			raw[close + 1] != '(' || raw[close + 2] != ')' ||
+			raw.compare(close + 3, 3, "...") != 0) continue;
+		string expansion;
+		for(size_t value = 0; value < pack->second.size(); ++value) {
+			if(!expansion.empty()) expansion += ',';
+			expansion += base + "<" + pack->second[value] + ">()";
+		}
+		raw.replace(begin, close + 6 - begin, expansion);
+		search = begin + expansion.size();
+	}
+	for(size_t search = 0; search + 2 < raw.size();) {
+		const size_t ellipsis = raw.find("...", search);
+		if(ellipsis == string::npos) break;
+		if(ellipsis + 3 < raw.size() && raw[ellipsis + 3] == '(') {
+			search = ellipsis + 3;
+			continue;
+		}
+		int parentheses = 0, brackets = 0, braces = 0, angles = 0;
+		size_t begin = 0;
+		for(size_t position = ellipsis; position > 0; --position) {
+			const char ch = raw[position - 1];
+			if(ch == ')') ++parentheses;
+			else if(ch == '(') {
+				if(parentheses > 0) --parentheses;
+				else { begin = position; break; }
+			} else if(ch == ']') ++brackets;
+			else if(ch == '[' && brackets > 0) --brackets;
+			else if(ch == '}') ++braces;
+			else if(ch == '{' && braces > 0) --braces;
+			else if(ch == '>' && parentheses == 0 && brackets == 0 && braces == 0)
+				++angles;
+			else if(ch == '<' && angles > 0 && parentheses == 0 &&
+				brackets == 0 && braces == 0) --angles;
+			else if(ch == ',' && parentheses == 0 && brackets == 0 &&
+				braces == 0 && angles == 0) {
+				begin = position;
+				break;
+			}
+		}
+		while(begin < ellipsis && isspace(static_cast<unsigned char>(raw[begin]))) ++begin;
+		if(begin == ellipsis) {
+			search = ellipsis + 3;
+			continue;
+		}
+		const string source = raw.substr(begin, ellipsis - begin);
+		vector<string> pack_names;
+		for(map<string, vector<string> >::const_iterator pack = packs.begin();
+			pack != packs.end(); ++pack) {
+			if(pack->first.empty()) continue;
+			for(size_t at = source.find(pack->first); at != string::npos;
+				at = source.find(pack->first, at + pack->first.size())) {
+				const bool left = at == 0 || !IsIdentifierCharacter(source[at - 1]);
+				const size_t end = at + pack->first.size();
+				const bool right = end == source.size() || !IsIdentifierCharacter(source[end]);
+				if(left && right) {
+					pack_names.push_back(pack->first);
+					break;
+				}
+			}
+		}
+		if(pack_names.empty()) {
+			search = ellipsis + 3;
+			continue;
+		}
+		const vector<string>& first_pack = packs.find(pack_names[0])->second;
+		for(size_t pack = 1; pack < pack_names.size(); ++pack)
+			if(packs.find(pack_names[pack])->second.size() != first_pack.size())
+				throw PA18SubstitutionFailure("pack expansion length mismatch");
+		string expansion;
+		for(size_t element = 0; element < first_pack.size(); ++element) {
+			map<string, string> one;
+			for(size_t pack = 0; pack < pack_names.size(); ++pack)
+				one[pack_names[pack]] = packs.find(pack_names[pack])->second[element];
+			if(!expansion.empty()) expansion += ',';
+			expansion += CollapseReferenceSpelling(
+				ReplaceIdentifiersPreservingPackSizes(source, one));
+		}
+		raw.replace(begin, ellipsis + 3 - begin, expansion);
+		search = begin + expansion.size();
+	}
+	return raw;
+}
+
 const TemplateDefinition* PA18TemplateExpander::SelectFunctionTemplateOverload(
     const string& raw, const string& lookup_base,
     const vector<string>& explicit_arguments, const string& context,

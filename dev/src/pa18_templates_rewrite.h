@@ -538,36 +538,7 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 		return raw;
 	}
 	string ExpandPackCallText(string raw,
-		const map<string, vector<string> >& packs) const
-	{
-		// Textual unevaluated operands such as `declval<Args>()...` are
-		// encountered while resolving a default template argument, before the
-		// declaration AST is transformed.  Expand that complete call here so
-		// the ordinary template-id pass never tries to instantiate a dependent
-		// `declval<Args>` specialization.
-		for(size_t search = 0; search < raw.size(); ++search) {
-			if(raw[search] != '<') continue;
-			size_t begin = 0, close = string::npos;
-			string base, arguments;
-			if(!TemplateBase(raw, search, &begin, &base) ||
-				!TemplateRange(raw, search, &arguments, &close)) continue;
-			const vector<string> values = SplitTemplateArguments(arguments);
-			if(values.size() != 1) continue;
-			const string pack_name = CanonicalSpelling(values[0]);
-			map<string, vector<string> >::const_iterator pack = packs.find(pack_name);
-			if(pack == packs.end() || close + 5 >= raw.size() ||
-				raw[close + 1] != '(' || raw[close + 2] != ')' ||
-				raw.compare(close + 3, 3, "...") != 0) continue;
-			string expansion;
-			for(size_t value = 0; value < pack->second.size(); ++value) {
-				if(!expansion.empty()) expansion += ',';
-				expansion += base + "<" + pack->second[value] + ">()";
-			}
-			raw.replace(begin, close + 6 - begin, expansion);
-			search = begin + expansion.size();
-		}
-		return raw;
-	}
+		const map<string, vector<string> >& packs) const;
 	string RewriteText(string raw, const string& context,
 		const map<string, string>& substitutions, bool* template_replaced,
 		bool resolve_alias = true, bool resolve_member = true,
@@ -704,6 +675,16 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 	void CollapseForwardingReference(const CPPGMAstNodePtr& node) const
 	{
 		if(!node) return;
+		// The substituted template argument may already carry the lvalue
+		// reference (`T = U&`).  The semantic declarator builder performs the
+		// normal reference collapse when the source `&&` is retained; removing
+		// that operator here loses cv-qualification on nested objects such as
+		// `int * const &`.
+		const string spelling = ParameterTypeSpelling(node);
+		for(size_t position = 0; position < spelling.size(); ++position)
+			if(spelling[position] == '&' &&
+				(position == 0 || spelling[position - 1] != '&') &&
+				(position + 1 == spelling.size() || spelling[position + 1] != '&')) return;
 		const string declarator_kind = node->kind == "parameter-declaration" ?
 			"declarator" : "abstract-declarator";
 		const CPPGMAstNodePtr declarator = ChildOfKindLocal(node, declarator_kind);

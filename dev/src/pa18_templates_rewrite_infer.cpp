@@ -752,10 +752,15 @@ bool PA18TemplateExpander::InferFunctionParameter(
 				}
 				direct_function_type += ")&";
 				type = CanonicalSpelling(direct_function_type);
-			} else {
-				while(!type.empty() && type[type.size() - 1] == '&') type.erase(type.size() - 1);
-				type = CanonicalSpelling(type + "&");
-			}
+				} else {
+					const bool lvalue_reference_spelling = type.find('&') != string::npos &&
+						type.find("&&") == string::npos;
+					if(!lvalue_reference_spelling) {
+						while(!type.empty() && type[type.size() - 1] == '&')
+							type.erase(type.size() - 1);
+						type = CanonicalSpelling(type + "&");
+					}
+				}
 			// Forwarding-reference deduction changes the typed argument used for
 			// merging, not just the later replay fact.  Recompute the normalized
 			// spelling after adding the lvalue reference so `T&&` with an lvalue

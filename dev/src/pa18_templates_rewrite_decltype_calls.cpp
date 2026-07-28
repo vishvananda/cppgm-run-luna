@@ -335,7 +335,8 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 			}
 			try {
 				if(!FunctionArgumentsViable(definition, arguments, actual_types,
-					function_context, &candidate_substitutions)) {
+					function_context, &candidate_substitutions,
+					explicit_definition ? &explicit_arguments : 0)) {
 						continue;
 				}
 				if(HasAbstractFunctionParameter(definition, arguments,
@@ -347,8 +348,9 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 			}
 			string candidate_result;
 			try {
-			candidate_result = FunctionResultType(definition, arguments,
-					function_context, &candidate_substitutions);
+				candidate_result = FunctionResultType(definition, arguments,
+					function_context, &candidate_substitutions,
+					explicit_definition ? &explicit_arguments : 0);
 			} catch(const PA18SubstitutionFailure&) {
 				continue;
 			}

@@ -284,86 +284,8 @@ inline vector<string> SplitCallArguments(const string& raw)
 
 	string FunctionResultType(const TemplateDefinition& definition,
 		const vector<string>& arguments, const string& context,
-		const map<string, string>* outer_substitutions = 0)
-	{
-		if(!definition.declaration || definition.declaration->children.empty()) return string();
-		ostringstream result_key_stream;
-		result_key_stream << definition.qualified_name << "@" << definition.declaration.get()
-			<< "|" << context;
-		for(size_t argument = 0; argument < arguments.size(); ++argument)
-			result_key_stream << "|" << CanonicalSpelling(arguments[argument]);
-		const string result_key = result_key_stream.str();
-		if(!active_function_results_.insert(result_key).second) return string();
-		ActiveFunctionResultScope result_scope(this, result_key);
-		map<string, string> local = outer_substitutions ? *outer_substitutions :
-			map<string, string>();
-		const map<string, vector<string> > previous_packs = active_pack_substitutions_;
-		size_t argument_index = 0;
-		for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter) {
-			const TemplateParameter& detail = definition.parameters[parameter];
-			if(detail.pack) {
-				size_t trailing_fixed = 0;
-				for(size_t later = parameter + 1; later < definition.parameters.size(); ++later)
-					if(!definition.parameters[later].pack) ++trailing_fixed;
-				const size_t available = arguments.size() > argument_index ?
-					arguments.size() - argument_index : 0;
-				const size_t count = available > trailing_fixed ? available - trailing_fixed : 0;
-				vector<string> values;
-				for(size_t value = 0; value < count; ++value)
-					values.push_back(arguments[argument_index + value]);
-				if(!detail.name.empty()) {
-					active_pack_substitutions_[detail.name] = values;
-					if(!values.empty()) local[detail.name] = values[0];
-					else local.erase(detail.name);
-				}
-				argument_index += count;
-			} else {
-				if(argument_index < arguments.size() && !detail.name.empty())
-					local[detail.name] = arguments[argument_index];
-				if(argument_index < arguments.size()) ++argument_index;
-			}
-		}
-		for(map<string, string>::iterator binding = local.begin(); binding != local.end();
-			++binding) {
-			string value = CanonicalSpelling(binding->second);
-			set<string> seen;
-			while(!value.empty() && seen.insert(value).second) {
-				// A template argument may be a nominal class whose spelling is
-				// also the name of another parameter in the function template
-				// (`VertexProperty -> Vertex`, alongside `Vertex -> unsigned
-				// long`).  The class spelling is a typed fact, not an alias to
-				// the shadowing parameter, so do not flatten it through `local`.
-				if(class_contexts_.find(value) != class_contexts_.end() ||
-					FindClassDeclaration(value, context)) break;
-				map<string, string>::const_iterator next = local.find(value);
-				if(next == local.end() || next->first == binding->first) break;
-				value = CanonicalSpelling(next->second);
-			}
-			binding->second = value;
-		}
-		const CPPGMAstNodePtr declarator = FunctionDeclarator(definition.declaration);
-		const string result_context = definition.owner.empty() ? context : definition.owner;
-		string result;
-		const CPPGMAstNodePtr trailing_return = ChildOfKindLocal(declarator,
-			"trailing-return-type");
-		if(trailing_return) {
-			const CPPGMAstNodePtr type_id = ChildOfKindLocal(trailing_return, "type-id");
-			result = TypeIdSpelling(type_id);
-		} else {
-			result = NodeTypeSpelling(definition.declaration->children[0]);
-			result += DeclaratorSuffix(declarator);
-		}
-		try {
-			result = RewriteText(result, result_context, local, 0);
-		} catch(...) {
-			active_pack_substitutions_ = previous_packs;
-			throw;
-		}
-		result = CollapseReferenceSpelling(ReplaceIdentifiers(result, local));
-		result = ResolveDecltypeTypeName(result, result_context, local);
-		active_pack_substitutions_ = previous_packs;
-		return NormalizeTypeArgument(result);
-	}
+		const map<string, string>* outer_substitutions = 0,
+		const vector<string>* explicit_prefix = 0);
 	string FunctionLookupContext(const string& context) const;
 	const TemplateDefinition* FindExplicitFunctionTemplate(const string& base,
 		const string& context) const;
@@ -599,7 +521,8 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 	}
 	bool FunctionArgumentsViable(const TemplateDefinition& definition,
 		const vector<string>& arguments, const vector<string>& actual_types,
-		const string& context, const map<string, string>* outer_substitutions = 0)
+		const string& context, const map<string, string>* outer_substitutions = 0,
+		const vector<string>* explicit_prefix = 0)
 	{
 		if(!definition.declaration) return false;
 		for(size_t argument = 0; argument < arguments.size(); ++argument)
@@ -611,16 +534,54 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 		map<string, string> local = outer_substitutions ? *outer_substitutions :
 			map<string, string>();
 		map<string, vector<string> > pack_arguments;
+		map<string, size_t> explicit_pack_counts;
+		if(explicit_prefix) {
+			size_t explicit_index = 0;
+			bool explicit_pack_consumed = false;
+			for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter) {
+				const TemplateParameter& detail = definition.parameters[parameter];
+				if(detail.pack) {
+					bool pack_precedes_fixed = false;
+					for(size_t later = parameter + 1; later < definition.parameters.size(); ++later)
+						if(!definition.parameters[later].pack) {
+							pack_precedes_fixed = true;
+							break;
+						}
+					if(pack_precedes_fixed || explicit_index < explicit_prefix->size()) {
+						explicit_pack_counts[detail.name] = explicit_prefix->size() - explicit_index;
+						explicit_index = explicit_prefix->size();
+						if(pack_precedes_fixed) explicit_pack_consumed = true;
+					} else if(pack_precedes_fixed) {
+						explicit_pack_counts[detail.name] = 0;
+					}
+				} else if(!explicit_pack_consumed &&
+					explicit_index < explicit_prefix->size()) ++explicit_index;
+			}
+			if(explicit_index != explicit_prefix->size()) return false;
+		}
 		size_t template_argument = 0;
 		for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter) {
 			const TemplateParameter& detail = definition.parameters[parameter];
 			if(detail.pack) {
-				size_t trailing_fixed = 0;
-				for(size_t later = parameter + 1; later < definition.parameters.size(); ++later)
-					if(!definition.parameters[later].pack) ++trailing_fixed;
-				const size_t available = arguments.size() > template_argument ?
-					arguments.size() - template_argument : 0;
-				const size_t count = available > trailing_fixed ? available - trailing_fixed : 0;
+				size_t count = 0;
+				map<string, size_t>::const_iterator explicit_count =
+					explicit_pack_counts.find(detail.name);
+				if(explicit_count != explicit_pack_counts.end()) count = explicit_count->second;
+				else {
+					size_t trailing_fixed = 0, trailing_known_pack = 0;
+					for(size_t later = parameter + 1; later < definition.parameters.size(); ++later) {
+						if(!definition.parameters[later].pack) ++trailing_fixed;
+						else {
+							map<string, size_t>::const_iterator known = explicit_pack_counts.find(
+								definition.parameters[later].name);
+							if(known != explicit_pack_counts.end()) trailing_known_pack += known->second;
+						}
+					}
+					const size_t available = arguments.size() > template_argument ?
+						arguments.size() - template_argument : 0;
+					const size_t reserved = trailing_fixed + trailing_known_pack;
+					count = available > reserved ? available - reserved : 0;
+				}
 				for(size_t value = 0; value < count; ++value)
 					pack_arguments[detail.name].push_back(arguments[template_argument + value]);
 				template_argument += count;
@@ -855,8 +816,18 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 			current.erase(separator);
 		}
 		string variable_type;
-		if(LookupVariableType(expression, context, &variable_type))
-			return ReplaceIdentifiers(ResolveAlias(variable_type, context), substitutions);
+		if(LookupVariableType(expression, context, &variable_type)) {
+			variable_type = CanonicalSpelling(ReplaceIdentifiers(
+				ResolveAlias(variable_type, context), substitutions));
+			// A named reference parameter is an lvalue expression, even when its
+			// declared type is `T&&`.  Preserve that category for unevaluated calls
+			// such as `async_initiate(..., token, ...)`.
+			if(variable_type.size() > 1 &&
+				variable_type.compare(variable_type.size() - 2, 2, "&&") == 0)
+				variable_type = CanonicalSpelling(variable_type.substr(0,
+					variable_type.size() - 2) + "&");
+			return variable_type;
+		}
 		if(expression == "true" || expression == "false") return "bool";
 		if(expression == "nullptr") return "nullptr_t";
 		if(!expression.empty() && (isdigit(static_cast<unsigned char>(expression[0])) ||
@@ -928,9 +899,25 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 		}
 		if(direct_open != string::npos && direct_open > 0 &&
 			normalized[normalized.size() - 1] == ')' && direct_close + 1 == normalized.size()) {
+			const string constructed_callee = Trim(normalized.substr(0, direct_open));
 			const string constructed = ResolveDecltypeTypeName(
-				Trim(normalized.substr(0, direct_open)), context, substitutions);
-			if(IsKnownTypeSpelling(constructed, context) &&
+				constructed_callee, context, substitutions);
+			// `Owner::member(...)` is a qualified call even when resolving the
+			// owner spelling happens to produce a known class.  Only a callee whose
+			// final component is the resolved class name can be a functional cast or
+			// constructor expression; otherwise let member-function overload lookup
+			// handle it (for example `async_result<...>::initiate(...)`).
+			const size_t qualified_separator = TopLevelScopeSeparator(constructed_callee);
+			const string qualified_owner = qualified_separator == string::npos ? string() :
+				Trim(constructed_callee.substr(0, qualified_separator));
+			const string resolved_owner = qualified_owner.empty() ? string() :
+				ResolveDecltypeTypeName(qualified_owner, context, substitutions);
+			const bool final_component_is_class =
+				FindClassDeclaration(LastComponent(constructed_callee), context) != 0;
+			const bool qualified_member_function = qualified_separator != string::npos &&
+				!final_component_is_class && !resolved_owner.empty() &&
+				FindClassDeclaration(resolved_owner, context) != 0;
+			if(!qualified_member_function && IsKnownTypeSpelling(constructed, context) &&
 				FindClassDeclaration(constructed, context)) {
 				string expanded = ExpandPackCallText(normalized,
 					active_pack_substitutions_);

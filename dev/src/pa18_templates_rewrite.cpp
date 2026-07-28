@@ -424,13 +424,14 @@ void PA18TemplateExpander::TransformRegularChildren(const CPPGMAstNodePtr& input
 	map<string, string>* local_substitutions,
 	const CPPGMAstNodePtr& result)
 {
-		for(size_t i = 0; i < input->children.size(); ++i) { const CPPGMAstNodePtr original_child = input->children[i];
-		const bool transformed_pack_child = TransformPackChild(input, original_child, child_context, substitutions, local_substitutions, result);
-		if(transformed_pack_child) continue;
+	const CPPGMAstNodePtr source_declarator = FunctionDeclarator(input); const bool function_declaration = input && input->kind == "function-definition"; for(size_t i = 0; i < input->children.size(); ++i) { const CPPGMAstNodePtr original_child = input->children[i];
+		const bool transformed_pack_child = TransformPackChild(input, original_child, child_context, substitutions, local_substitutions, result); if(transformed_pack_child) continue;
 			if(input->kind == "decl-specifier" && input->value.find("decltype(") != string::npos &&
 				original_child && (original_child->kind == "call-expression" ||
 				original_child->kind == "binary-expression" || original_child->kind == "conditional-expression" ||
-				original_child->kind == "member-expression")) continue;
+				original_child->kind == "member-expression")) {
+				result->children.push_back(CloneNode(original_child)); continue;
+			}
 				if(SkipUnusedNestedClass(input, original_child, child_context, substitutions, i)) continue; if(original_child && original_child->kind == "namespace-alias-definition") {
 				const CPPGMAstNodePtr target = ChildOfKindLocal(original_child, "target");
 				if(target && !target->value.empty() && local_substitutions)
@@ -438,8 +439,8 @@ void PA18TemplateExpander::TransformRegularChildren(const CPPGMAstNodePtr& input
 						target->value, child_context, *local_substitutions, 0, false);
 				continue;
 			}
-			const bool declarator_with_trailing_return = input->kind == "function-definition" && original_child && original_child->kind == "declarator" && DescendantOfKind(original_child, "trailing-return-type");
-			const bool function_child_context = input->kind == "function-definition" && original_child && (original_child->kind == "compound-statement" || declarator_with_trailing_return || original_child->kind == "trailing-return-type");
+			const bool declarator_with_trailing_return = function_declaration && original_child && original_child->kind == "declarator" && DescendantOfKind(original_child, "trailing-return-type");
+			const bool function_child_context = function_declaration && original_child && (original_child->kind == "compound-statement" || declarator_with_trailing_return || original_child->kind == "trailing-return-type");
 			const string node_context = function_child_context ? function_context : child_context;
 			const CPPGMAstNodePtr using_target = original_child && original_child->kind == "using-declaration" ? ChildOfKindLocal(original_child, "target") : CPPGMAstNodePtr();
 			const size_t using_separator = using_target ? using_target->value.rfind("::") : string::npos;
@@ -606,13 +607,14 @@ CPPGMAstNodePtr PA18TemplateExpander::FinishRegularNode(
 		string child_context = context;
 		if(input->kind == "class-specifier" || input->kind == "class-forward-declaration")
 			child_context = JoinPath(context, LastComponent(input->value));
+		const CPPGMAstNodePtr source_declarator = FunctionDeclarator(input); const bool function_declaration = input->kind == "function-definition";
 		string function_context = context;
-		if(input->kind == "function-definition") {
+		if(function_declaration) {
 			const string function_name = DeclarationName(input);
 			string function_owner;
-			if(input->children.size() > 1 && input->children[1]) {
+			if(source_declarator) {
 				const string qualified_name = RewriteText(
-					FirstIdentifierLocal(input->children[1]), context, substitutions, 0,
+					FirstIdentifierLocal(source_declarator), context, substitutions, 0,
 					false, false);
 				function_owner = PrefixComponent(qualified_name);
 				if(!function_owner.empty()) function_owner = ResolveGeneratedFunctionOwner(
@@ -623,8 +625,7 @@ CPPGMAstNodePtr PA18TemplateExpander::FinishRegularNode(
 			if(!function_name.empty() && LastComponent(context) == function_name)
 				function_context = context;
 		}
-		if(input->kind == "function-definition") {
-			const CPPGMAstNodePtr source_declarator = FunctionDeclarator(input);
+		if(function_declaration) {
 			const CPPGMAstNodePtr source_parameters = DescendantOfKind(
 				source_declarator, "parameter-clause");
 			if(source_parameters) for(size_t parameter = 0;

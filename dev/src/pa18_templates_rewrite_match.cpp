@@ -217,6 +217,14 @@ int PA18TemplateExpander::MatchTypePatternSimpleCases(const string& pattern,
 	const size_t pattern_array_open = pattern.rfind('[');
 	const size_t actual_array_open = actual.rfind('[');
 	if(pattern_array_open == string::npos && actual_array_open == string::npos) return -1;
+	// An lvalue array passed to a forwarding reference is represented by the
+	// typed call fact as `U(&)[N]`.  Handle that dependent reference before the
+	// ordinary array matcher, which otherwise rejects the scalar `T&&` pattern
+	// merely because only the actual spelling contains brackets.
+	if(pattern_array_open == string::npos && actual_array_open != string::npos &&
+		pattern.size() > 2 && pattern.compare(pattern.size() - 2, 2, "&&") == 0 &&
+		parameter_names.find(pattern.substr(0, pattern.size() - 2)) != parameter_names.end())
+		return MatchForwardingReferencePattern(pattern, actual, parameter_names, inferred) ? 1 : 0;
 	if(pattern_array_open == string::npos || actual_array_open == string::npos ||
 		pattern.empty() || actual.empty() || pattern[pattern.size() - 1] != ']' ||
 		actual[actual.size() - 1] != ']') return 0;
