@@ -4734,3 +4734,75 @@ argument/constructor materialization cases first, then the hidden-friend and
 qualified static-member lookup cases, while preserving the 242/250 baseline.
 Validate the focused group, full PA22 report, through-PA21, and file audit as a
 single checkpoint.
+
+## Checkpoint 111 scope — 2026-07-28 (before implementation)
+
+### Remaining Work Map
+
+The clean required report is **242/250** with earlier assignments passing and
+eight LowIR comparison failures, all in the current PA22 stage:
+
+- **Generated argument/constructor materialization (6):**
+  `general/400-alias-template-function-argument-cv`,
+  `general/400-function-assignment-invocable-and-helper`,
+  `spec/100-explicit-specialization-dependent-param-typedef`,
+  `spec/100-function-template-array-parameter-string-literal`,
+  `spec/200-dependent-specialized-default-arg-deduction`, and
+  `spec/300-cross-specialization-converting-ctor-operator-template`.
+  These compare typed temporary/argument demand, selected constructor and
+  helper ownership, explicit-specialization identity, and generated-body
+  materialization.
+- **Hidden-friend unevaluated lookup (1):**
+  `spec/500-hidden-friend-query-free-decltype-noexcept`, where the result is
+  semantically correct but an unnecessary anonymous-namespace init function
+  is materialized.
+- **Qualified type-pack static-member materialization (1):**
+  `spec/500-type-pack-qualified-static-member-expansion`, where qualified
+  `Bools::value...` lowering must preserve typed static-member loads rather
+  than replacing them with literal constants.
+
+No PA22 fixture is omitted; all eight failures are LowIR mismatches, not
+rejections or timeouts.
+
+### Checkpoint Scope
+
+Complete the bundled LowIR materialization/ownership slice. First make
+generated calls and constructor bodies materialize only the typed argument,
+temporary, helper, and explicit-specialization facts required by the semantic
+graph; then suppress empty initialization for an unevaluated anonymous
+namespace object; finally preserve qualified static-member lvalues through
+pack expansion so constant values lower through their typed globals. This
+scope covers all eight remaining fixtures and their shared lowering/demand
+paths, while retaining the already passing 242 fixtures. Validation is the
+focused eight-test set, the full PA22 report, through-PA21, and the PA22 file
+audit.
+
+## Checkpoint 111 result — 2026-07-28
+
+The bundled materialization/ownership scope is complete.  The eight residual
+fixtures now pass: constructor arguments preserve the final object boundary,
+default-initialized scalar slots remain indeterminate, explicit-specialization
+pointer arithmetic retains typed conversions, ordinary out-of-class members
+and concrete special-member definitions are emitted at the right demand
+frontier, empty template object transfers preserve only the required lvalue
+evaluation, unevaluated hidden-friend probes do not create an init root, and
+qualified pack-expanded static members lower through their materialized
+globals.  The implementation retains these facts in typed function, global,
+type, and binding state rather than matching fixture spellings.
+
+Validation completed:
+
+- PA22: **250/250** (`make test-report ACTIVE_TEST_REPORT_PAS='pa22'`).
+- Earlier assignments: **1850/1850** (`make test-report-through-pa21`).
+- File audit: pass with the repository's 12 existing non-fatal warnings.
+
+### Remaining Work Map
+
+No PA22 failures remain.  The current PA22 stage is complete; no tests or
+reference fixtures were changed.
+
+### Next Checkpoint Group
+
+Begin PA23 by reading its contract and relevant tests, then map the complete
+PA23 failure set before implementation.  Preserve the PA22 regression gate
+and use the same focused-report, through-PA22, and file-audit validation loop.

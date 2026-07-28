@@ -38,6 +38,15 @@ PA14Lowerer::Value PA14Lowerer::EmitObjectValueArgument(
     TypePtr object_type = type_value(target);
     if(!object_type || object_type->kind != TYPE_CLASS)
       return EmitValue(node, scope, target);
+    // Parentheses do not introduce another object boundary.  In particular,
+    // the direct-initialization spelling `X x((Y()))` still constructs the
+    // value argument in its final ABI object.  Looking only at the wrapper
+    // makes the ordinary address path materialize a second temporary and then
+    // passes the uninitialized argument slot to the constructor.
+    CPPGMAstNodePtr source_node = node;
+    while(source_node && source_node->kind == "parenthesized-expression" &&
+          source_node->children.size() == 1 && source_node->children[0])
+      source_node = source_node->children[0];
     const string slot = new_special_slot("argobj", low_type(object_type));
     const string address = new_temp();
     AddInstruction(address + " = addr $" + slot);
@@ -84,13 +93,13 @@ PA14Lowerer::Value PA14Lowerer::EmitObjectValueArgument(
       }
     }
     if(empty_storage && IsTrivialValueStorage(object_type)) {
-      const TypePtr constructed = node && node->kind == "call-expression" &&
-        !node->children.empty() ? ConstructorObjectType(node->children[0], scope) : TypePtr();
+      const TypePtr constructed = source_node && source_node->kind == "call-expression" &&
+        !source_node->children.empty() ? ConstructorObjectType(source_node->children[0], scope) : TypePtr();
       if((constructed && PA12SameType(constructed, object_type, true)) ||
-         (node && node->kind == "call-expression" && source_type &&
+         (source_node && source_node->kind == "call-expression" && source_type &&
           source_type->kind == TYPE_CLASS &&
           PA12SameType(source_type, object_type, true))) {
-        if(!EmitObjectTransferAt(object_type, address, node, scope, true))
+        if(!EmitObjectTransferAt(object_type, address, source_node, scope, true))
           return EmitValue(node, scope, target);
       } else {
         const string source_address = EmitAddress(node, scope);

@@ -1396,8 +1396,12 @@ void PA14Lowerer::EmitStatement(const CPPGMAstNodePtr& node, Scope* scope)
                   found->second->type->kind != TYPE_ARRAY &&
                   !type_is_reference(found->second->type) &&
                   (!type_value(found->second->type) ||
-                   type_value(found->second->type)->kind != TYPE_CLASS))
-            emit_store(found->second->type, "0", StorageForVariable(*found->second));
+                   type_value(found->second->type)->kind != TYPE_CLASS)) {
+            // Default-initialization of an automatic scalar leaves it
+            // indeterminate.  Do not manufacture a zero store: apart from
+            // being semantically wrong, it creates a dead store before a
+            // subsequent assignment such as `invoker = &F::call`.
+          }
         }
       }
       return;

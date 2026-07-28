@@ -157,6 +157,22 @@ bool PA14Lowerer::HasInline(const CPPGMAstNodePtr& node) const
     return false;
   }
 
+bool PA14Lowerer::TemplatePrimaryHasNonstaticMemberFunction(const TypePtr& raw_type) const
+{
+    const TypePtr type = type_value(raw_type);
+    if(!type || !type->template_specialization || type->template_primary.empty())
+      return false;
+    map<string, vector<TypePtr> >::const_iterator group = class_types_by_name_.find(
+      LastComponent(type->template_primary));
+    if(group == class_types_by_name_.end()) return false;
+    for(size_t candidate = 0; candidate < group->second.size(); ++candidate) {
+      const TypePtr primary = group->second[candidate];
+      if(primary && primary.get() != type.get() && !primary->template_specialization &&
+         HasNonstaticMemberFunction(primary)) return true;
+    }
+    return false;
+}
+
 void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, bool definition)
 {
     if(!node || node->children.size() < 2) throw logic_error("invalid function declaration");
@@ -336,11 +352,24 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
 	record->template_instantiation = record->template_instantiation ||
 		node->template_instantiation ||
 		(member_owner && member_owner->template_specialization);
+	record->explicit_specialization = record->explicit_specialization ||
+		node->explicit_specialization;
 	record->extern_template = record->extern_template || node->extern_instantiation;
 	record->object_root = record->object_root || node->explicit_instantiation;
 	if(node->explicit_instantiation || node->extern_instantiation) record->needed = true;
 	record->weak_binding = record->template_instantiation && !record->extern_template;
 	record->inline_definition = record->inline_definition || HasInline(node) || facts.is_constexpr;
+	const bool out_of_class_definition = definition && is_member && member_owner &&
+		member_owner->owned_scope && scope != member_owner->owned_scope;
+	record->out_of_class_definition = record->out_of_class_definition ||
+		out_of_class_definition;
+	// A concrete out-of-class member definition is an emission root.  Primary
+	// template bodies and member-template instantiations remain demand-driven,
+	// while ordinary members and members of an already materialized class
+	// specialization retain their typed definition.
+	if(out_of_class_definition && !record->member_template &&
+		!record->template_instantiation && !member_owner->template_specialization)
+		record->needed = true;
 	if(node->template_instantiation || node->extern_instantiation) {
 		record->template_primary = node->template_primary;
 		record->template_arguments = node->template_arguments;
@@ -687,11 +716,46 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
     record->variadic = function->variadic;
     if(definition) record->unwind_no = record->unwind_no || HasNoexcept(declarator);
     RememberDefaults(record, declarator);
-    ClassifySpecialMember(record);
+	ClassifySpecialMember(record);
+	// A materialized class specialization used as a concrete data member has a
+	// real constructor definition even when the containing aggregate's own
+	// default construction is trivial.  Retain the empty in-class constructor
+	// body in the emission frontier; this is also the definition needed by the
+	// typed template closure for such a member object.
+	if(record->constructor && !record->member_template &&
+		record->template_instantiation && owner->template_specialization &&
+		record->source_type && record->source_type->parameters.empty()) {
+		bool member_object_use = false;
+		for(map<string, vector<TypePtr> >::const_iterator type_group =
+			class_types_by_name_.begin(); type_group != class_types_by_name_.end() &&
+			!member_object_use; ++type_group) {
+			for(size_t type_index = 0; type_index < type_group->second.size() &&
+				!member_object_use; ++type_index) {
+				const TypePtr container = type_value(type_group->second[type_index]);
+					if(!container || container.get() == owner.get() ||
+						container->template_specialization) continue;
+				for(size_t member_index = 0; member_index < container->class_members.size();
+					++member_index) {
+					const ClassMemberInfo& member = container->class_members[member_index];
+					if(member.is_static || !member.type) continue;
+					TypePtr member_type = type_value(member.type);
+					while(member_type && member_type->kind == TYPE_ARRAY)
+						member_type = type_value(member_type->child);
+					if(member_type.get() == owner.get()) {
+						member_object_use = true;
+						break;
+					}
+				}
+			}
+		}
+		if(member_object_use) record->needed = true;
+	}
 	if(record->defaulted && record->value_special_member)
       record->unwind_no = record->unwind_no || IsTrivialValueStorage(owner);
 	if(out_of_class_definition && (record->constructor || record->destructor) &&
-		!record->template_instantiation) {
+		(!record->template_instantiation ||
+		 (owner->template_specialization && record->source_type &&
+		  !record->source_type->parameters.empty()))) {
 		record->needed = true;
 	}
 	const bool constructor_record = record->constructor;
@@ -1158,9 +1222,14 @@ void PA14Lowerer::CollectGlobalDeclaration(const CPPGMAstNodePtr& node,
           object_expression->children[1]->children.empty()) ||
          (object_expression->kind == "braced-init-list" &&
           object_expression->children.empty()));
-      if(facts.is_constexpr && empty_value_initialization &&
-         HasConstructor(value_type) && IsTrivialValueStorage(value_type) &&
-         !HasUserProvidedConstructor(value_type))
+      const bool constexpr_empty_initialization = facts.is_constexpr &&
+         HasConstructor(value_type) && IsTrivialValueStorage(value_type);
+      const bool static_empty_initialization = facts.is_const &&
+         HasStorageSpecifier(node, "static") &&
+         IsEmptyBaseStorage(value_type) && IsTrivialValueStorage(value_type) &&
+         !HasUserProvidedConstructor(value_type);
+      if((constexpr_empty_initialization || static_empty_initialization) &&
+         empty_value_initialization && !static_member_object)
         record.dynamic_initializer = false;
       record.dynamic_finalizer = HasDestructor(value_type) &&
         (!static_member_object || DestructorHasEffects(value_type));

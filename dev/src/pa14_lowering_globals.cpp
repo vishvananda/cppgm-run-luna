@@ -1019,6 +1019,17 @@ string PA14Lowerer::EmitPointerOffset(const CPPGMAstNodePtr& node, Scope* scope)
     }
     if(offset_conversion)
       offset = ConvertValue(offset, Fundamental("long int"), false, true);
+    else if(state_ && state_->record && state_->record->explicit_specialization) {
+      // An explicit specialization has already resolved the dependent
+      // parameter type.  Preserve that typed conversion at the byte-pointer
+      // boundary instead of relying on the old same-width copy shortcut.
+      const TypePtr offset_value_type = type_value(offset.type);
+      const TypePtr index_type = Fundamental("long int");
+      if(offset_value_type && is_integral_type(offset_value_type) &&
+         !offset.known_constant &&
+         !PA12SameType(offset_value_type, index_type, true))
+        offset = ConvertValue(offset, index_type, false, true);
+    }
     // Pointer arithmetic is performed in signed ptrdiff_t-sized units.  Keep
     // the typed conversion visible when an unsigned size/count expression
     // arrives with the same LowIR width; otherwise the later multiplication
@@ -1040,7 +1051,9 @@ string PA14Lowerer::EmitPointerOffset(const CPPGMAstNodePtr& node, Scope* scope)
     }
     string scaled;
     if(size == 1 && !subtract &&
-       (!pointer_node || pointer_node->kind != "binary-expression")) scaled = offset.operand;
+       ((!pointer_node || pointer_node->kind != "binary-expression") ||
+        (state_ && state_->record && state_->record->explicit_specialization &&
+         low_type(offset.type) == "i64"))) scaled = offset.operand;
     else {
       const string scale = new_temp();
       if(size == 1)

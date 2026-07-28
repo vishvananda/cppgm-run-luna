@@ -697,7 +697,14 @@ bool PA14Lowerer::EmitObjectTransferAt(const TypePtr& raw_target,
       // contains an aggregate construction.
       VariablePlan* source_local = source->kind == "id-expression" ?
         FindLocalPlan(source->value) : 0;
-      if((source_local && (source_local->parameter || implicit_return_move)) ||
+      const bool materialized_empty_template_reference = source_local &&
+        source_local->parameter &&
+        target->template_specialization &&
+        HasConstructor(target) &&
+        !TemplatePrimaryHasNonstaticMemberFunction(target) &&
+        !HasUserProvidedConstructor(target);
+      if((source_local && (implicit_return_move ||
+           (source_local->parameter && !materialized_empty_template_reference))) ||
          (source->kind == "binary-expression" && PA12Operator(source->value) == ","))
         (void)EmitAddress(source, scope);
       return true;

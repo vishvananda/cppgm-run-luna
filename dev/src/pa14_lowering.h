@@ -99,8 +99,9 @@ class PA14Lowerer
     bool hidden_friend;
     bool explicit_constructor;
 	bool builtin;
-	bool template_instantiation;
-	bool member_template;
+    bool template_instantiation;
+    bool explicit_specialization;
+    bool member_template;
 	bool extern_template;
 	bool inline_definition;
 	bool object_root;
@@ -138,7 +139,7 @@ class PA14Lowerer
         hidden_friend(false),
         explicit_constructor(false),
 		builtin(false),
-		template_instantiation(false), member_template(false), extern_template(false), inline_definition(false), object_root(false), weak_binding(false),
+        template_instantiation(false), explicit_specialization(false), member_template(false), extern_template(false), inline_definition(false), object_root(false), weak_binding(false),
         defaulted(false), deleted(false),
 		destructor(false), deleting_entry(false), needed(false),
         emitted(false), variadic(false), unwind_no(false), noreturn(false), base_entry(false),
@@ -648,6 +649,8 @@ bool HasDefaultConstructionEffects(const TypePtr& type) const;
 bool HasClassArrayMember(const TypePtr& type) const;
 
 bool HasNonstaticMemberFunction(const TypePtr& type) const;
+
+bool TemplatePrimaryHasNonstaticMemberFunction(const TypePtr& type) const;
 
 bool HasDestructor(const TypePtr& type) const;
 
