@@ -4699,3 +4699,38 @@ checkpoint.  First compare the generated argument ABI and constructor
 boundaries, then handle hidden-friend and qualified static-member lookup while
 preserving the completed 242/250 behavior.  Validate the full PA22 report,
 through-PA21, and the PA22 file audit together.
+
+## Checkpoint 110 audit result — 2026-07-28
+
+The checkpoint audit fixed the constructor-probe exception boundary, replaced
+token-spelling null-pointer classification with typed constant evaluation,
+constrained member-alias recovery by owner identity, and made generated-owner
+deduplication linear.  The implementation remains ready for the next
+materialization checkpoint: no phase skip, fallback-success shortcut, timeout
+workaround, emitted-text reparse, or file-audit bypass remains.  The PA22
+report stays at **242/250**, the PA21 through-report is **1850/1850**, and the
+file audit passes with 12 non-fatal warnings.
+
+### Remaining Work Map (refreshed from the complete current-PA report)
+
+The authoritative residual is eight LowIR comparisons:
+
+- **Generated argument/constructor materialization (6):**
+  `general/400-alias-template-function-argument-cv`,
+  `general/400-function-assignment-invocable-and-helper`,
+  `spec/100-explicit-specialization-dependent-param-typedef`,
+  `spec/100-function-template-array-parameter-string-literal`,
+  `spec/200-dependent-specialized-default-arg-deduction`, and
+  `spec/300-cross-specialization-converting-ctor-operator-template`.
+- **Hidden-friend unevaluated lookup (1):**
+  `spec/500-hidden-friend-query-free-decltype-noexcept`.
+- **Qualified type-pack static-member LowIR (1):**
+  `spec/500-type-pack-qualified-static-member-expansion`.
+
+### Next substantial checkpoint group
+
+Bundle all eight remaining LowIR fixtures: resolve the six generated
+argument/constructor materialization cases first, then the hidden-friend and
+qualified static-member lookup cases, while preserving the 242/250 baseline.
+Validate the focused group, full PA22 report, through-PA21, and file audit as a
+single checkpoint.

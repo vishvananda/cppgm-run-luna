@@ -5,6 +5,7 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -13,6 +14,16 @@
 namespace cppgm_pa14_lowering {
 
 using namespace std;
+
+// Constructor lookup is also used as a conversion probe.  Keep the ordinary
+// non-viable-candidate result distinct from ambiguity and other lowering
+// failures so a probe can try the language's next conversion candidate without
+// turning a hard semantic error into success.
+class PA14NoViableConstructor : public logic_error
+{
+public:
+  explicit PA14NoViableConstructor(const string& message) : logic_error(message) {}
+};
 
 string trim_type_name(const string& name);
 bool type_is_reference(const TypePtr& type);

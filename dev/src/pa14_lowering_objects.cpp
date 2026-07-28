@@ -654,9 +654,10 @@ bool PA14Lowerer::EmitObjectTransferAt(const TypePtr& raw_target,
         try {
           constructed = EmitConstructorAt(target, destination,
             constructor_arguments, scope, false);
-        } catch(const logic_error&) {
-          // EmitConstructorAt reports a non-viable overload set as an error,
-          // but this probe must fall through to a source conversion operator.
+        } catch(const PA14NoViableConstructor&) {
+          // A failed destination-constructor candidate permits the source
+          // conversion-function candidate.  Ambiguity and other lowering
+          // failures remain hard errors and are deliberately not caught.
         }
         if(constructed) return true;
       }

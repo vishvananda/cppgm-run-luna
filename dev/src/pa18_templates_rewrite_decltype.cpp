@@ -20,6 +20,7 @@ bool PA18TemplateExpander::GeneratedFunctionCallResultType(
 	if(object_separator != string::npos)
 		callee_name.erase(0, object_separator + 1);
 	vector<string> generated_owner_order;
+	set<string> generated_owner_seen;
 	const string source_context = FunctionLookupContext(function_context);
 	for(map<string, string>::const_iterator substitution = substitutions.begin();
 		substitution != substitutions.end(); ++substitution) {
@@ -29,15 +30,14 @@ bool PA18TemplateExpander::GeneratedFunctionCallResultType(
 		if(base == specialization_bases_.end() ||
 			LastComponent(base->second) != LastComponent(source_context) ||
 			generated_by_owner_.find(candidate) == generated_by_owner_.end() ||
-			find(generated_owner_order.begin(), generated_owner_order.end(), candidate) !=
-			generated_owner_order.end()) continue;
+			!generated_owner_seen.insert(candidate).second) continue;
 		generated_owner_order.push_back(candidate);
 	}
 	const size_t preferred_owner_count = generated_owner_order.size();
 	for(map<string, vector<CPPGMAstNodePtr> >::const_iterator owner =
 		generated_by_owner_.begin(); owner != generated_by_owner_.end(); ++owner)
-		if(find(generated_owner_order.begin(), generated_owner_order.end(), owner->first) ==
-			generated_owner_order.end()) generated_owner_order.push_back(owner->first);
+		if(generated_owner_seen.insert(owner->first).second)
+			generated_owner_order.push_back(owner->first);
 	for(size_t owner_index = 0; owner_index < generated_owner_order.size(); ++owner_index) {
 		map<string, vector<CPPGMAstNodePtr> >::const_iterator owner =
 			generated_by_owner_.find(generated_owner_order[owner_index]);

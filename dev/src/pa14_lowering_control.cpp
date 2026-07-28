@@ -251,7 +251,7 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
           if(RecordForBinding(candidates[i])->defaulted) continue;
           if(!allow_explicit && RecordForBinding(candidates[i])->explicit_constructor) continue;
           if(RecordForBinding(candidates[i])->aggregate_constructor) aggregate_candidate = true;
-          else throw logic_error("no viable constructor");
+          else throw PA14NoViableConstructor("no viable constructor");
         }
       if(aggregate_candidate) return false;
       return false;

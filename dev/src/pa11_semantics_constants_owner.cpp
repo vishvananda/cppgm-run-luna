@@ -1,6 +1,25 @@
 #include "pa11_semantics_constants_helpers.h"
 #include <functional>
 
+bool Analyzer::IsNullPointerConstantExpression(
+	const CPPGMAstNodePtr& expression, Scope* scope)
+{
+	if(!expression) return false;
+	ConstantValue value;
+	try {
+		value = Evaluate(expression, scope);
+	} catch(const logic_error&) {
+		// This is a classification query: unevaluable expressions are not
+		// null pointer constants, while normal diagnostics stay on the caller.
+		return false;
+	}
+	if(value.integral.known && value.integral.type.integral)
+		return PA19Raw(value.integral) == 0;
+	return value.kind == ConstantValue::CONSTANT_POINTER && value.pointer &&
+		value.pointer->null_pointer && value.type &&
+		value.type->kind == TYPE_FUNDAMENTAL && value.type->name == "nullptr_t";
+}
+
 void PA11BeginConstantFunctionReturn(Analyzer* analyzer, Binding* function)
 {
 	TypePtr function_return = function->type && function->type->kind == TYPE_FUNCTION ?

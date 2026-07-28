@@ -605,6 +605,8 @@ public:
 	size_t TypeAlignment(const TypePtr& type) const;
 	TypePtr ExpressionCallType(const CPPGMAstNodePtr& expression, Scope* scope,
 		size_t arity);
+	bool IsNullPointerConstantExpression(const CPPGMAstNodePtr& expression,
+		Scope* scope);
 	TypePtr ExpressionType(const CPPGMAstNodePtr& expression, Scope* scope,
 		size_t requested_arguments = static_cast<size_t>(-1))
 	{

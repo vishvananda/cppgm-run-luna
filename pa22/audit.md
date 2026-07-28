@@ -893,3 +893,81 @@ hot-path scans, and preservation of PA1–PA21.
   [plan.md](plan.md).
 - `git diff --check` passes; the final commit leaves `git status --short`
   empty.
+
+## Checkpoint 110 Audit — 2026-07-28
+
+### Scope Reviewed
+
+Reviewed the latest Checkpoint 110 scope and implementation result in
+[plan.md](plan.md), the PA22 contract in [README.md](README.md), commits
+`cc969a7`, `731277e`, `539bd1c`, `f899fc6`, and `25e776b`, the changed PA11,
+PA14, and PA18 source files, and the complete primary report at
+`/home/vishvananda/work/.ralph/luna-gpt-5.6-luna-ultra/last-test.log`.
+The review traced static-member candidate ranking, expression-SFINAE probes,
+constructor/conversion selection, member-alias and index-sequence replay,
+generated-owner result lookup, typed LowIR materialization boundaries, and
+the source-set/file-audit rules before the next materialization checkpoint.
+
+### Findings
+
+- `EmitObjectTransferAt` caught every `logic_error` from a destination
+  constructor probe.  That could turn an ambiguous or otherwise hard lowering
+  failure into a successful conversion-function fallback.  The probe now
+  catches only the typed non-viable-constructor result; ambiguity and other
+  lowering failures remain errors.
+- Static-member overload scoring classified null pointer constants from a
+  short list of token spellings.  That was a stringly, incomplete semantic
+  fact.  Classification now uses the existing typed `ConstantValue`/PA19
+  integral representation and the typed null-pointer value, with the helper
+  owned by the constants-owner translation unit.
+- Member-alias replay recovered the first alias sharing a short name, without
+  proving that it belonged to the member-template owner.  The lookup now
+  constrains candidates by normalized typed owner identity, rejects unrelated
+  or competing aliases, and preserves an already-resolved non-alias class
+  template as the intended pattern.
+- Generated-owner result lookup used a vector scan for every duplicate owner.
+  A set-backed membership index now preserves declaration order while making
+  deduplication linear in the owner list rather than quadratic.
+- No compiler phase is skipped.  There is no dummy output, embedded payload,
+  interpreter/VM/trampoline substitute, emitted-text reparse, timeout
+  workaround, source/test-specific acceptance gate, weakened check, or
+  unchecked implementation fragment.  AST and template-definition ownership
+  remains in the existing indexes; downstream paths consume typed facts.
+- The initial placement of the new semantic helper would have exceeded the
+  analyzer translation-unit limit.  It was moved to the responsibility-named
+  constants-owner unit before completion; the final file audit has no fatal
+  issue and reports only the repository's 12 non-fatal structural warnings.
+
+### Changes Made
+
+- Added `PA14NoViableConstructor` and narrowed the constructor-probe catch in
+  `pa14_lowering.h`, `pa14_lowering_control.cpp`, and
+  `pa14_lowering_objects.cpp`.
+- Replaced token-spelling null-pointer detection with typed constant
+  evaluation in `pa11_semantics_analyzer.cpp` and
+  `pa11_semantics_constants_owner.cpp`, with its declaration in the analyzer
+  interface.
+- Added owner-constrained alias replay in
+  `pa18_templates_rewrite_infer.cpp` and set-backed generated-owner
+  deduplication in `pa18_templates_rewrite_decltype.cpp`.
+- Changed no tests or reference fixtures; all implementation changes remain
+  under `dev/src`.
+
+### Validation
+
+- Checkpoint-focused tests — **passed**: the five PA22 scope fixtures pass;
+  the two local-alias owner-collision cases also pass (**5/5** and **2/2**;
+  one fixture is shared).
+- Required prior-through check — **passed**:
+  `n=22; if [ "$n" -le 1 ]; then echo '===== ALL TESTS PASSED SUCCESSFULLY! (0/0) ====='; else make test-report-through-pa$((n - 1)); fi`
+  reports **1850/1850** through PA21.
+- Required active report — **passed for stage progress**:
+  `make test-report ACTIVE_TEST_REPORT_PAS='pa22'` reports **242/250**, equal
+  to the checkpoint baseline, with the same eight LowIR residuals and no
+  timeout failures.  The command returns the expected nonzero status because
+  those eight comparisons remain; no earlier-PA regression is present.
+- Required file audit — **passed**:
+  `perl scripts/cppgm_file_audit.pl --stage pa22 --paths dev/src`, with 12
+  non-fatal warnings and no size or audit-bypass finding.
+- `make build` and `git diff --check` pass.  The refreshed residual map and
+  next checkpoint group are recorded in [plan.md](plan.md).

@@ -156,7 +156,7 @@ TypePtr Analyzer::ExpressionCallType(const CPPGMAstNodePtr& expression,
 			while (formal && (formal->kind == TYPE_LVALUE_REFERENCE || formal->kind == TYPE_RVALUE_REFERENCE)) formal = formal->child;
 			while (actual && (actual->kind == TYPE_LVALUE_REFERENCE || actual->kind == TYPE_RVALUE_REFERENCE)) actual = actual->child;
 			const CPPGMAstNodePtr actual_expression = expression->children[1]->children[argument];
-			const bool null_pointer_constant = actual_expression && ((actual_expression->kind == "literal" && (actual_expression->value == "0" || actual_expression->value == "0L" || actual_expression->value == "0LL" || actual_expression->value == "0u")) || (actual_expression->kind == "keyword-literal" && actual_expression->value.find("nullptr") != string::npos));
+			const bool null_pointer_constant = IsNullPointerConstantExpression(actual_expression, scope);
 			if (formal && formal->kind == TYPE_TEMPLATE_PARAMETER) score += 10;
 			else if (SameTypeIgnoringTopCv(actual, formal)) {} else if (null_pointer_constant && formal && formal->kind == TYPE_POINTER) score += 3;
 			else if (actual && formal && actual->kind == TYPE_FUNDAMENTAL && formal->kind == TYPE_FUNDAMENTAL) score += 2;

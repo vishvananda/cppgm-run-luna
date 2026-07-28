@@ -298,17 +298,37 @@ bool PA18TemplateExpander::MergeInferredFunctionArgument(
 		size_t close = string::npos;
 		if(TemplateRange(matching_pattern, open, &alias_arguments, &close)) {
 			const string alias_base = CanonicalSpelling(matching_pattern.substr(0, open));
+			const string member_owner = StripTemplateArgumentsForValidation(definition.owner);
+			const auto owner_matches = [this, &member_owner](const string& raw_owner) {
+				const string owner = StripTemplateArgumentsForValidation(raw_owner);
+				if(owner.empty() || member_owner.empty()) return false;
+				if(owner == member_owner) return true;
+				return owner == member_owner + "::" + LastComponent(member_owner) ||
+					member_owner == owner + "::" + LastComponent(owner);
+			};
 			const TemplateDefinition* alias_definition = FindDefinition(alias_base, context);
+			// A typed non-alias result (for example the namespace class template
+			// `detail::matcher`) is already the intended pattern.  Only recover a
+			// member alias when normal lookup found no entity, or found an alias
+			// whose owner is provably unrelated.
+			if(alias_definition && alias_definition->alias_template &&
+				!alias_definition->owner.empty() && !owner_matches(alias_definition->owner))
+				alias_definition = 0;
 			if(!alias_definition) {
 				map<string, vector<string> >::const_iterator indexed =
 					definitions_by_name_.find(LastComponent(alias_base));
-				if(indexed != definitions_by_name_.end())
+				if(indexed != definitions_by_name_.end() && !member_owner.empty())
 					for(size_t candidate = 0; candidate < indexed->second.size(); ++candidate) {
 						map<string, TemplateDefinition>::const_iterator found =
 							definitions_.find(indexed->second[candidate]);
-						if(found != definitions_.end() && found->second.alias_template) {
-							alias_definition = &found->second;
+						if(found == definitions_.end() || !found->second.alias_template ||
+							!owner_matches(found->second.owner)) continue;
+						if(alias_definition && alias_definition != &found->second) {
+							alias_definition = 0;
 							break;
+						}
+						if(!alias_definition) {
+							alias_definition = &found->second;
 						}
 					}
 			}
