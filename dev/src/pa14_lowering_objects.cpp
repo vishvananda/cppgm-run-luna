@@ -644,6 +644,22 @@ bool PA14Lowerer::EmitObjectTransferAt(const TypePtr& raw_target,
     // the conversion's ABI result slot skips that boundary and changes both
     // object lifetime and the generated call sequence.
     if(target && target->kind == TYPE_CLASS) {
+      vector<CPPGMAstNodePtr> constructor_arguments;
+      constructor_arguments.push_back(source);
+      // This is the copy-initialization boundary between two class values.
+      // Its destination constructor set excludes explicit constructors even
+      // when the surrounding lowering path permits explicit initialization.
+      if(!PA12SameType(source_type, target, true)) {
+        bool constructed = false;
+        try {
+          constructed = EmitConstructorAt(target, destination,
+            constructor_arguments, scope, false);
+        } catch(const logic_error&) {
+          // EmitConstructorAt reports a non-viable overload set as an error,
+          // but this probe must fall through to a source conversion operator.
+        }
+        if(constructed) return true;
+      }
       Binding* conversion = FindConversionOperator(source_type, target, true);
       if(conversion) {
         FunctionRecord* conversion_record = RecordForBinding(conversion);

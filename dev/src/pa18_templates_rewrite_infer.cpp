@@ -284,6 +284,61 @@ bool PA18TemplateExpander::MergeInferredFunctionArgument(
 			result += (argument ? "," : string()) + arguments[argument];
 		return result + ">" + suffix;
 	};
+	if(pattern.find("...") != string::npos) {
+		deduction_type = NormalizeTypeArgument(
+			RestoreSpecializationSpelling(deduction_type));
+	}
+	// A member alias template can hide the actual deducible class pattern. For
+	// example, `matcher<B>` may alias `matcher_impl<T,B>` while the call only
+	// exposes the concrete owner specialization. Expand that alias with the
+	// enclosing bindings before matching its member template parameters.
+	if(definition.member_template && matching_pattern.find('<') != string::npos) {
+		const size_t open = matching_pattern.find('<');
+		string alias_arguments;
+		size_t close = string::npos;
+		if(TemplateRange(matching_pattern, open, &alias_arguments, &close)) {
+			const string alias_base = CanonicalSpelling(matching_pattern.substr(0, open));
+			const TemplateDefinition* alias_definition = FindDefinition(alias_base, context);
+			if(!alias_definition) {
+				map<string, vector<string> >::const_iterator indexed =
+					definitions_by_name_.find(LastComponent(alias_base));
+				if(indexed != definitions_by_name_.end())
+					for(size_t candidate = 0; candidate < indexed->second.size(); ++candidate) {
+						map<string, TemplateDefinition>::const_iterator found =
+							definitions_.find(indexed->second[candidate]);
+						if(found != definitions_.end() && found->second.alias_template) {
+							alias_definition = &found->second;
+							break;
+						}
+					}
+			}
+			if(alias_definition && alias_definition->alias_template &&
+				alias_definition->declaration && !alias_definition->declaration->children.empty()) {
+				map<string, string> alias_substitutions = substitutions;
+				const vector<string> alias_parts = SplitTemplateArguments(alias_arguments);
+				for(size_t parameter = 0;
+					parameter < alias_definition->parameters.size() &&
+					parameter < alias_parts.size(); ++parameter)
+					if(!alias_definition->parameters[parameter].name.empty())
+						alias_substitutions[alias_definition->parameters[parameter].name] =
+							alias_parts[parameter];
+				string alias_target = TypeIdSpelling(
+					alias_definition->declaration->children[0]);
+				alias_target = ReplaceIdentifiersPreservingPackSizes(
+					alias_target, alias_substitutions);
+				alias_target += matching_pattern.substr(close + 1);
+				matching_pattern = NormalizeTypeArgument(alias_target);
+			}
+		}
+	}
+	if(definition.member_template) try {
+		matching_pattern = NormalizeTypeArgument(
+			ResolveAlias(matching_pattern, context));
+		const string size_type = ResolveAlias("size_t", context);
+		if(!size_type.empty() && size_type != "size_t")
+			matching_pattern = ReplaceIdentifiers(matching_pattern,
+				map<string, string>{{"size_t", size_type}});
+	} catch(const PA18SubstitutionFailure&) {}
 	const string completed_type = complete_class_template_type(deduction_type);
 	const bool matched = MatchTypePattern(matching_pattern, completed_type,
 		matching_parameter_names, &one, context);

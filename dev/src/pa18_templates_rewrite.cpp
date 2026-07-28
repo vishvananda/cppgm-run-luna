@@ -467,9 +467,8 @@ void PA18TemplateExpander::TransformRegularChildren(const CPPGMAstNodePtr& input
 						child->children[0] = CPPGMAstNodePtr(new CPPGMAstNode(
 							"literal", IntegralValueSpelling(bound)));
 				}
-			if(child && input->kind == "class-specifier" && child->kind == "simple-declaration" && HasReplayContext(substitutions)) RecordConstantDeclaration(child, child_context, *local_substitutions);
-			if(child && input->kind == "class-specifier" && child->kind == "simple-declaration")
-				RecordConstantArrayDeclaration(child, child_context, *local_substitutions);
+			if(child && input->kind == "class-specifier" && child->kind == "simple-declaration" && HasReplayContext(substitutions)) RecordConstantDeclaration(child, active_instantiation_name_.empty() ? child_context : active_instantiation_name_, *local_substitutions);
+			if(child && input->kind == "class-specifier" && child->kind == "simple-declaration") RecordConstantArrayDeclaration(child, active_instantiation_name_.empty() ? child_context : active_instantiation_name_, *local_substitutions);
 				if(!child && input->kind == "decl-specifier-seq" && original_child &&
 					(original_child->kind == "class-specifier" ||
 						original_child->kind == "class-forward-declaration")) {

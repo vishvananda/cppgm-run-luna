@@ -4582,6 +4582,45 @@ fixtures first.  Keep the completed dependent-value, owner-enum, and
 forwarding-reference behavior intact, then validate that group, the full PA22
 report, through-PA21, and the PA22 file audit together.
 
+## Checkpoint 110 scope — 2026-07-28 (before implementation)
+
+### Remaining Work Map
+
+The clean-worktree PA22 report is **236/250**; the complete residual is 14
+fixtures, grouped by shared compiler behavior:
+
+- **Candidate viability and conversion probing (3):**
+  `general/300-static-member-template-function-pointer-nttp`,
+  `spec/300-expression-sfinae-decltype-conversion`, and
+  `spec/300-nontemplate-constructor-beats-conversion-function-template`.
+- **Constructor/member-template deduction and alias replay (2):**
+  `general/500-index-sequence-alias-constructor-deduction` and
+  `spec/500-unqualified-member-template-local-alias-deduction`.
+- **Generated helper ownership and conversion materialization (4):**
+  `general/400-function-assignment-invocable-and-helper`,
+  `spec/200-dependent-specialized-default-arg-deduction`,
+  `spec/300-cross-specialization-converting-ctor-operator-template`, and
+  `spec/500-template-template-conversion-operator-reference-target`.
+- **Typed LowIR value/liveness and unevaluated lookup (5):**
+  `general/400-alias-template-function-argument-cv`,
+  `spec/100-explicit-specialization-dependent-param-typedef`,
+  `spec/100-function-template-array-parameter-string-literal`,
+  `spec/500-hidden-friend-query-free-decltype-noexcept`, and
+  `spec/500-type-pack-qualified-static-member-expansion`.
+
+### Checkpoint Scope
+
+Complete the first two groups as one candidate-viability increment: carry the
+expected function-pointer type into static-member template address deduction,
+preserve expression-SFINAE substitution failure while probing dependent
+`decltype` calls, rank a non-template converting constructor over an equally
+viable conversion-function template, and replay constructor/member-template
+arguments through aliases and index-sequence packs.  This scope covers five
+currently failing fixtures and their shared candidate-state, constructor
+selection, and member-alias deduction paths.  Validate the focused five,
+then the full PA22 report, through-PA21, and the PA22 file audit before the
+next checkpoint.
+
 ## Checkpoint 109 audit follow-up — 2026-07-28
 
 The checkpoint audit removed the duplicated inference helper fragment, indexed
@@ -4622,3 +4661,41 @@ Take the five candidate-viability, constructor, and member-template deduction
 fixtures as one checkpoint group.  Preserve the completed dependent-value,
 owner-enum, forwarding-reference, and partial-ordering behavior, then rerun
 the focused group, full PA22 report, through-PA21, and file audit together.
+
+## Checkpoint 110 implementation result — 2026-07-28
+
+The selected candidate-viability and constructor/member-template group is
+complete.  The five scoped fixtures pass, and the expanded regression-focused
+set of 11 fixtures also passes.  Static-member function-pointer deduction now
+keeps the expected pointer fact for a null pointer constant; dependent
+expression probes retain substitution failure; copy-initialization probes
+non-explicit destination constructors before source conversion functions; and
+member alias/index-sequence replay preserves typed pack bindings and raw
+argument slots.  The PA22 report improved from **236/250** to **242/250**.
+Earlier assignments remain **1850/1850**, and the PA22 file audit passes with
+12 existing warnings.
+
+### Remaining Work Map after Checkpoint 110
+
+The authoritative residual is 8 LowIR comparisons, grouped by shared
+behavior:
+
+- **Generated argument/constructor LowIR materialization (6):**
+  `general/400-alias-template-function-argument-cv`,
+  `general/400-function-assignment-invocable-and-helper`,
+  `spec/100-explicit-specialization-dependent-param-typedef`,
+  `spec/100-function-template-array-parameter-string-literal`,
+  `spec/200-dependent-specialized-default-arg-deduction`, and
+  `spec/300-cross-specialization-converting-ctor-operator-template`.
+- **Hidden-friend unevaluated lookup (1):**
+  `spec/500-hidden-friend-query-free-decltype-noexcept`.
+- **Qualified type-pack static-member LowIR (1):**
+  `spec/500-type-pack-qualified-static-member-expansion`.
+
+### Next Checkpoint Group
+
+Bundle the eight remaining LowIR fixtures into one materialization/ownership
+checkpoint.  First compare the generated argument ABI and constructor
+boundaries, then handle hidden-friend and qualified static-member lookup while
+preserving the completed 242/250 behavior.  Validate the full PA22 report,
+through-PA21, and the PA22 file audit together.

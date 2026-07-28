@@ -586,6 +586,17 @@ vector<string> SplitTemplateArguments(const string& raw)
 	return result;
 }
 
+string PreservePackSubstitution(const string& word, const string& replacement,
+	bool pack_operand)
+{
+	// The source operand already owns its ellipsis; avoid turning `I` -> `I1...`
+	// into the malformed `I1......` during dependent alias replay.
+	if(pack_operand && replacement.size() > 3 &&
+		replacement.compare(replacement.size() - 3, 3, "...") == 0)
+		return replacement.substr(0, replacement.size() - 3);
+	return word;
+}
+
 string ReplaceIdentifiersPreservingPackSizes(const string& raw,
 	const map<string, string>& substitutions)
 {
@@ -648,7 +659,8 @@ string ReplaceIdentifiersPreservingPackSizes(const string& raw,
 				replaced.compare(replaced.size() - 2, 2, "::") == 0;
 			if(found != substitutions.end() && !pack_operand && !already_qualified)
 				replaced += found->second;
-			else if(found != substitutions.end()) replaced += word;
+			else if(found != substitutions.end())
+				replaced += PreservePackSubstitution(word, found->second, pack_operand);
 			else {
 				bool compact_substitution = false;
 				if(!pack_operand) for(map<string,string>::const_iterator it = substitutions.begin();

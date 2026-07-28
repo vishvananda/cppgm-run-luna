@@ -12,9 +12,36 @@ bool PA18TemplateExpander::GeneratedFunctionCallResultType(
 {
 	if(!result) return false;
 	string generated_ellipsis_result;
-	const string callee_name = LastComponent(callee);
+	// A dependent member call can retain the source object's dot-qualified
+	// spelling after its member template has been generated. Lookup indexes
+	// generated declarations by the member component itself.
+	string callee_name = LastComponent(callee);
+	const size_t object_separator = callee_name.rfind('.');
+	if(object_separator != string::npos)
+		callee_name.erase(0, object_separator + 1);
+	vector<string> generated_owner_order;
+	const string source_context = FunctionLookupContext(function_context);
+	for(map<string, string>::const_iterator substitution = substitutions.begin();
+		substitution != substitutions.end(); ++substitution) {
+		const string candidate = CanonicalSpelling(substitution->second);
+		map<string, string>::const_iterator base = specialization_bases_.find(
+			LastComponent(candidate));
+		if(base == specialization_bases_.end() ||
+			LastComponent(base->second) != LastComponent(source_context) ||
+			generated_by_owner_.find(candidate) == generated_by_owner_.end() ||
+			find(generated_owner_order.begin(), generated_owner_order.end(), candidate) !=
+			generated_owner_order.end()) continue;
+		generated_owner_order.push_back(candidate);
+	}
+	const size_t preferred_owner_count = generated_owner_order.size();
 	for(map<string, vector<CPPGMAstNodePtr> >::const_iterator owner =
 		generated_by_owner_.begin(); owner != generated_by_owner_.end(); ++owner)
+		if(find(generated_owner_order.begin(), generated_owner_order.end(), owner->first) ==
+			generated_owner_order.end()) generated_owner_order.push_back(owner->first);
+	for(size_t owner_index = 0; owner_index < generated_owner_order.size(); ++owner_index) {
+		map<string, vector<CPPGMAstNodePtr> >::const_iterator owner =
+			generated_by_owner_.find(generated_owner_order[owner_index]);
+		if(owner == generated_by_owner_.end()) continue;
 		for(size_t generated = 0; generated < owner->second.size(); ++generated) {
 			const CPPGMAstNodePtr declaration = owner->second[generated];
 			if(!declaration || (declaration->kind != "function-definition" &&
@@ -107,6 +134,12 @@ bool PA18TemplateExpander::GeneratedFunctionCallResultType(
 			}
 			if(generated_ellipsis_result.empty()) generated_ellipsis_result = generated_result;
 		}
+		if(preferred_owner_count && owner_index + 1 == preferred_owner_count) {
+			if(generated_ellipsis_result.empty()) return false;
+			*result = generated_ellipsis_result;
+			return true;
+		}
+	}
 	if(generated_ellipsis_result.empty()) return false;
 	*result = generated_ellipsis_result;
 	return true;

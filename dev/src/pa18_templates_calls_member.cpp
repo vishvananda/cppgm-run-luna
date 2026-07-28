@@ -49,6 +49,45 @@ string NormalizedConversionMemberName(const TemplateDefinition& definition)
 	return name.substr(0, operator_position + 8) + suffix;
 }
 
+// `InferFunctionArguments` returns deduced pack elements flattened in
+// template-parameter order. A pack inherited from an enclosing replay is
+// intentionally absent from that vector, so reconstruct the raw argument
+// stream with empty slots for those typed bindings. ResolveTemplateArguments
+// then fills those slots from its pack hints without mistaking the first
+// inferred inner-pack element for an enclosing one.
+vector<string> BuildInstantiationRawArguments(
+	const TemplateDefinition& definition, const vector<string>& member_arguments,
+	const map<string, vector<string> >& inferred_pack_values,
+	const map<string, vector<string> >& bound_pack_values)
+{
+	vector<string> result;
+	size_t member_index = 0;
+	for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter) {
+		const TemplateParameter& detail = definition.parameters[parameter];
+		if(detail.pack) {
+			map<string, vector<string> >::const_iterator bound =
+				bound_pack_values.find(detail.name);
+			if(bound != bound_pack_values.end()) {
+				result.insert(result.end(), bound->second.size(), string());
+				continue;
+			}
+			map<string, vector<string> >::const_iterator inferred =
+				inferred_pack_values.find(detail.name);
+			const size_t count = inferred == inferred_pack_values.end() ? 0 :
+				inferred->second.size();
+			for(size_t element = 0; element < count; ++element)
+				if(member_index < member_arguments.size())
+					result.push_back(member_arguments[member_index++]);
+		} else if(member_index < member_arguments.size())
+			result.push_back(member_arguments[member_index++]);
+	}
+	// Keep unusual explicit/defaulted paths lossless when their completed
+	// vector is not represented by inferred_pack_values.
+	while(member_index < member_arguments.size())
+		result.push_back(member_arguments[member_index++]);
+	return result;
+}
+
 } // namespace
 
 struct MemberCallState
@@ -955,6 +994,22 @@ bool PA18TemplateExpander::DeduceMemberCandidate(
 		} catch(const logic_error&) {
 			inferred = false;
 		}
+		// The active enclosing pack is a typed replay fact for materialization.
+		// Leave deduction free to inspect the concrete call arguments first: an
+		// inner template may reuse the enclosing pack's spelling, while its own
+		// pack still needs to be inferred from the call.
+		for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter) {
+			const TemplateParameter& detail = definition.parameters[parameter];
+			if(!detail.pack || detail.name.empty() ||
+				bound_pack_values.find(detail.name) != bound_pack_values.end()) continue;
+			map<string, vector<string> >::const_iterator active =
+				active_pack_substitutions_.find(detail.name);
+			map<string, vector<string> >::const_iterator inferred_pack =
+				inferred_pack_values.find(detail.name);
+			if(active != active_pack_substitutions_.end() && !active->second.empty() &&
+				(inferred_pack == inferred_pack_values.end() || inferred_pack->second.empty()))
+				bound_pack_values[detail.name] = active->second;
+		}
 	// An explicit member-template-id already fixes every template parameter.
 	// Function-pointer expressions can still be intentionally deferred by the
 	// general deduction path (notably an address of an overloaded function),
@@ -1082,12 +1137,15 @@ bool PA18TemplateExpander::EmitMemberCandidate(
 				// The enclosing class binding is more specific than a same-named
 				// pack inferred from the member call's arguments.
 				instantiation_pack_hints[bound->first] = bound->second;
+		vector<string> raw_instantiation_arguments = BuildInstantiationRawArguments(
+			inference_definition, instantiation_member_arguments, inferred_pack_values,
+			bound_pack_values);
 		string& generated_name = candidate->generated_name;
 	const ConcreteOwnerContext previous_concrete_owner = active_concrete_owner_;
 		if(requested_owner_pointer) SetActiveConcreteOwner(requested_owner, context);
 	try {
 			generated_name = Instantiate(restored_function_defaults ? materialization_definition :
-				inference_definition, instantiation_member_arguments, context,
+				inference_definition, raw_instantiation_arguments, context,
 				 explicit_instantiation, &instantiation_pack_hints, &candidate_substitutions,
 				 requested_owner_pointer, &inferred_function_values,
 				 &forwarding_pack_values);
