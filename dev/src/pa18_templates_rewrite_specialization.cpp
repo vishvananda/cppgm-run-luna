@@ -558,8 +558,25 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 		const bool lvalue_reference_pattern = pattern.size() > 0 &&
 			pattern[pattern.size() - 1] == '&' &&
 			!(pattern.size() > 1 && pattern[pattern.size() - 2] == '&');
+		const bool rvalue_reference_pattern = pattern.size() > 1 &&
+			pattern.compare(pattern.size() - 2, 2, "&&") == 0;
+		const bool actual_lvalue_reference = actual.size() > 0 &&
+			actual[actual.size() - 1] == '&' &&
+			!(actual.size() > 1 && actual[actual.size() - 2] == '&');
+		const bool actual_rvalue_reference = actual.size() > 1 &&
+			actual.compare(actual.size() - 2, 2, "&&") == 0;
 		if(lvalue_reference_pattern &&
 			(actual.empty() || actual[actual.size() - 1] != '&')) return false;
+		// MatchTypePattern deliberately strips a reference while comparing
+		// ordinary function argument types.  Class-template arguments retain
+		// their reference category, so an explicit `X<int>` specialization
+		// must not also match `X<int&>` (or the rvalue-reference equivalent).
+		if(parameter_names.empty() &&
+			((actual_lvalue_reference && !lvalue_reference_pattern && !rvalue_reference_pattern) ||
+			 (actual_rvalue_reference && !rvalue_reference_pattern && !lvalue_reference_pattern) ||
+			 (lvalue_reference_pattern && actual_rvalue_reference) ||
+			 (rvalue_reference_pattern && actual_lvalue_reference)))
+			return false;
 		if(template_parameter) {
 			map<string, string>::const_iterator prior = local.find(pattern);
 			if(prior != local.end() && CanonicalSpelling(prior->second) != actual) return false;

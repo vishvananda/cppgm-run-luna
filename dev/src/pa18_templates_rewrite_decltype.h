@@ -876,7 +876,29 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 				return false;
 			return EvaluateDecltypeExpression(tail, context, substitutions, result);
 		}
-		string normalized = StripTextParentheses(expression);
+		const string stripped = StripTextParentheses(expression);
+		if(stripped != expression) {
+			string inner_type;
+			if(!EvaluateDecltypeExpression(stripped, context, substitutions, &inner_type))
+				return false;
+			const string operand = CanonicalSpelling(stripped);
+			bool lvalue = !operand.empty() && operand[0] == '*';
+			if(!lvalue && !operand.empty() &&
+				operand.find_first_not_of(
+					"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") == string::npos) {
+				string variable_type;
+				lvalue = LookupVariableType(operand, context, &variable_type);
+			}
+			if(!lvalue && (operand.find("->") != string::npos ||
+				operand.find('.') != string::npos ||
+				(!operand.empty() && operand[operand.size() - 1] == ']')))
+				lvalue = true;
+			if(lvalue && inner_type.find('&') == string::npos)
+				inner_type = CanonicalSpelling(inner_type + "&");
+			*result = inner_type;
+			return !result->empty();
+		}
+		string normalized = stripped;
 		if(normalized.compare(0, 6, "delete") == 0 && normalized.size() > 6 &&
 			normalized[6] != ' ')
 			normalized.insert(6, " ");
