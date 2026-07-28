@@ -92,8 +92,9 @@ class PA14Lowerer
 	bool member_template;
 	bool extern_template;
 	bool inline_definition;
-	bool object_root;
-	bool weak_binding;
+    bool object_root;
+    bool complete_object_constructor;
+    bool weak_binding;
 	bool defaulted;
 	bool deleted;
 	bool destructor;
@@ -127,7 +128,7 @@ class PA14Lowerer
         hidden_friend(false),
         explicit_constructor(false),
 		builtin(false),
-		template_instantiation(false), member_template(false), extern_template(false), inline_definition(false), object_root(false), weak_binding(false),
+		template_instantiation(false), member_template(false), extern_template(false), inline_definition(false), object_root(false), complete_object_constructor(false), weak_binding(false),
         defaulted(false), deleted(false),
 		destructor(false), deleting_entry(false), needed(false),
         emitted(false), variadic(false), unwind_no(false), noreturn(false), base_entry(false),
@@ -316,6 +317,7 @@ class PA14Lowerer
 	map<const CPPGMAstNode*, GlobalRecord*> local_static_plans_;
 	set<string> deferred_static_members_;
 	set<const Type*> complete_template_object_uses_;
+	set<const Type*> complete_template_default_object_uses_;
 	bool needs_init_helper_;
 	bool needs_fini_helper_;
 	set<const Type*> emitted_vtables_;

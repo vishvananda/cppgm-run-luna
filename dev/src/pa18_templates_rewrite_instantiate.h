@@ -1,104 +1,10 @@
 #pragma once
-	string NodeTypeSpelling(const CPPGMAstNodePtr& sequence) const
-	{
-		if(!sequence) return string();
-		string result;
-		for(size_t i = 0; i < sequence->children.size(); ++i) {
-		const CPPGMAstNodePtr child = sequence->children[i];
-		if(!child) continue;
-		string spelling = RemoveMarker(child->value); if(spelling == "friend") continue; if(spelling.compare(0, 7, "friend ") == 0) spelling.erase(0, 7);
-		if(child->kind == "decl-specifier" &&
-			(spelling == "typedef" || spelling == "static" || spelling == "inline" ||
-			 spelling == "constexpr" || spelling == "extern" ||
-			 spelling == "thread_local" || spelling == "register" || spelling == "mutable"))
-			continue;
-		if(child->kind == "class-forward-declaration" ||
-			child->kind == "class-specifier") {
-			// An elaborated declaration such as `const struct Foo x` stores
-			// `Foo` as a declaration-specifier child.  The previous spelling
-			// filter discarded that child and left only `const`, which made
-			// deduction compare unrelated variables as if they had the same
-			// incomplete type.
-			spelling = LastComponent(RemoveMarker(child->value));
-		} else if(child->kind != "decl-specifier" && child->kind != "type-name" &&
-			child->kind != "type-specifier" && child->kind != "decltype-specifier" &&
-			child->kind != "cv-qualifier") continue;
-		if(spelling.empty()) continue;
-			if(!result.empty()) result += ' ';
-			result += spelling;
-		}
-		return CanonicalSpelling(result);
-	}
-	string IntegralValueSpelling(const PA19IntegralValue& value) const
-	{
-		if(!value.known) return string();
-		const PA19IntegralType type = value.type;
-		if(type.name == "bool") return PA19Raw(value) ? "true" : "false";
-		ostringstream result;
-		if(type.is_unsigned) result << PA19Raw(value);
-		else result << PA19Signed(value);
-		if(type.is_unsigned) {
-			if(type.bits > 32) result << "ULL";
-			else result << "u";
-		} else if(type.bits > 32) result << "LL";
-		return result.str();
-	}
-	string TemplateIntegralValueSpelling(const PA19IntegralValue& value) const
-	{
-		if(!value.known) return string();
-		if(value.type.name == "bool") return PA19Raw(value) ? "true" : "false";
-		ostringstream result;
-		if(value.type.is_unsigned) result << PA19Raw(value);
-		else result << PA19Signed(value);
-		return result.str();
-	}
-	string ConstantExpressionSpelling(const CPPGMAstNodePtr& node) const
-	{
-		if(!node) return string();
-		if(node->kind == "literal" || node->kind == "keyword-literal" ||
-			node->kind == "id-expression" || node->kind == "template-id")
-			return RemoveMarker(node->value);
-		if(node->kind == "parenthesized-expression" && !node->children.empty())
-			return "(" + ConstantExpressionSpelling(node->children[0]) + ")";
-		if(node->kind == "unary-expression" && !node->children.empty())
-			return RemoveMarker(node->value) + ConstantExpressionSpelling(node->children[0]);
-		if((node->kind == "binary-expression" || node->kind == "assignment-expression") &&
-			node->children.size() >= 2)
-			return "(" + ConstantExpressionSpelling(node->children[0]) + " " +
-				RemoveMarker(node->value) + " " +
-				ConstantExpressionSpelling(node->children[1]) + ")";
-		if(node->kind == "conditional-expression" && node->children.size() >= 3)
-			return "(" + ConstantExpressionSpelling(node->children[0]) + " ? " +
-				ConstantExpressionSpelling(node->children[1]) + " : " +
-				ConstantExpressionSpelling(node->children[2]) + ")";
-		if(node->kind == "sizeof-expression" && !node->children.empty())
-			return "sizeof(" + ConstantExpressionSpelling(node->children[0]) + ")";
-		if(node->kind == "type-trait-expression" && !node->children.empty())
-			return "alignof(" + SpellNode(node->children[0]) + ")";
-		if(node->kind == "sizeof-pack-expression" && !node->children.empty())
-			return "sizeof...(" + ConstantExpressionSpelling(node->children[0]) + ")";
-		if(node->kind == "cast-expression" && node->children.size() >= 2)
-			return "static_cast<" + SpellNode(node->children[0]) + ">("
-				+ ConstantExpressionSpelling(node->children[1]) + ")";
-		if(node->kind == "subscript-expression" && node->children.size() >= 2)
-			return ConstantExpressionSpelling(node->children[0]) + "[" +
-				ConstantExpressionSpelling(node->children[1]) + "]";
-		if(node->kind == "call-expression" && !node->children.empty()) {
-			string result = ConstantExpressionSpelling(node->children[0]) + "(";
-			if(node->children.size() > 1 && node->children[1]) {
-				const CPPGMAstNodePtr arguments = node->children[1];
-				for(size_t i = 0; i < arguments->children.size(); ++i) {
-					if(i) result += ", ";
-					result += ConstantExpressionSpelling(arguments->children[i]);
-				}
-			}
-			return result + ")";
-		}
-		if(node->kind == "member-expression" && node->children.size() >= 2)
-			return ConstantExpressionSpelling(node->children[0]) +
-				RemoveMarker(node->value) + ConstantExpressionSpelling(node->children[1]);
-		return SpellNode(node);
-	}
+	string NodeTypeSpelling(const CPPGMAstNodePtr& sequence) const; string IntegralValueSpelling(const PA19IntegralValue& value) const; string TemplateIntegralValueSpelling(const PA19IntegralValue& value) const; string ConstantExpressionSpelling(const CPPGMAstNodePtr& node) const;
+	string MaterializedTypeBase(string spelling) const;
+	bool PreservesMaterializedTypeName(const string& spelling,
+		const map<string, string>& substitutions, const string& context) const;
+	bool IsSubstitutedTypeName(const string& spelling,
+		const map<string, string>& substitutions, const string& context) const;
 	void RecordConstantArrayDeclaration(const CPPGMAstNodePtr& node,
 		const string& context, const map<string, string>& substitutions);
 	const vector<PA19IntegralValue>* FindConstantArray(const string& raw,
@@ -135,7 +41,12 @@
 		const map<string, string>& substitutions, string* expanded);
 	bool EvaluateUnqualifiedConstantMember(const string& raw,
 		const string& context, const map<string, string>& substitutions,
-		PA19IntegralValue* result);
+		PA19IntegralValue* result, const string& preferred_owner = string());
+	bool EvaluateInheritedSourceMember(const string& raw, const string& context,
+		const map<string, string>& substitutions, PA19IntegralValue* result);
+	bool EvaluatePreferredOwnerConstantExpression(const string& expression,
+		const string& raw, const string& preferred_owner,
+		const map<string, string>& substitutions, PA19IntegralValue* result);
 	bool EvaluateQualifiedConstantMember(const string& raw,
 		const map<string, string>& substitutions,
 		PA19IntegralValue* result);
@@ -161,64 +72,11 @@
 		const map<string, vector<string> >& pack_substitutions);
 	void RecordConstantDeclaration(const CPPGMAstNodePtr& node, const string& context,
 		const map<string, string>& substitutions = map<string, string>());
-	void RecordEnumConstants(const CPPGMAstNodePtr& node, const string& context)
-	{
-		if(!node || node->kind != "enum-specifier") return;
-		long long next = 0;
-		const string enum_name = LastComponent(node->value);
-		for(size_t i = 0; i < node->children.size(); ++i) {
-			const CPPGMAstNodePtr enumerator = node->children[i];
-			if(!enumerator || enumerator->kind != "enumerator") continue;
-			PA19IntegralValue value = PA19IntegralValue::Signed(next, "int", 32);
-			bool evaluated = false;
-			if(!enumerator->children.empty())
-				evaluated = EvaluateIntegralText(ConstantExpressionSpelling(enumerator->children[0]), context,
-					map<string,string>(), &value);
-			if(evaluated && !enumerator->children.empty())
-				enumerator->children[0] = CPPGMAstNodePtr(new CPPGMAstNode(
-					"literal", TemplateIntegralValueSpelling(value)));
-			const string unqualified = JoinPath(context, enumerator->value); const string enum_type = enum_name.empty() ? string("int") : JoinPath(context, enum_name); enumerator_types_[unqualified] = enum_type; if(enumerator_types_.find(enumerator->value) == enumerator_types_.end()) enumerator_types_[enumerator->value] = enum_type; if(!enum_name.empty()) enumerator_types_[JoinPath(JoinPath(context, enum_name), enumerator->value)] = enum_type;
-			constant_values_[unqualified] = value;
-			if(constant_values_.find(enumerator->value) == constant_values_.end())
-				constant_values_[enumerator->value] = value;
-			if(!enum_name.empty()) constant_values_[JoinPath(JoinPath(context, enum_name), enumerator->value)] = value;
-			next = PA19Signed(value) + 1;
-		}
-	}
+	void RecordEnumConstants(const CPPGMAstNodePtr& node, const string& context);
 	bool FunctionParameterCounts(const CPPGMAstNodePtr& parameters,
-		size_t* total, size_t* required) const
-	{
-		if(!parameters || !total || !required) return false;
-		*total = 0;
-		*required = 0;
-		for(size_t i = 0; i < parameters->children.size(); ++i) {
-			const CPPGMAstNodePtr parameter = parameters->children[i];
-			if(!parameter || parameter->kind != "parameter-declaration") continue;
-			++*total;
-			if(!ChildOfKindLocal(parameter, "default-argument")) ++*required;
-		}
-		return true;
-	}
+		size_t* total, size_t* required) const;
 	string ResolveGeneratedFunctionOwner(const string& owner, const string& context,
-		string* child_context) const
-	{
-		if(class_contexts_.find(owner) != class_contexts_.end()) {
-			if(child_context) *child_context = owner;
-			return owner;
-		}
-		for(string current = context; ; ) {
-			const string candidate = JoinPath(current, owner);
-			if(class_contexts_.find(candidate) != class_contexts_.end()) {
-				if(child_context) *child_context = candidate;
-				return candidate;
-			}
-			if(current.empty()) break;
-			const size_t separator = current.rfind("::");
-			if(separator == string::npos) current.clear();
-			else current.erase(separator);
-		}
-		return owner;
-	}
+		string* child_context) const;
 	bool DefinitionHasDependentBase(const TemplateDefinition& definition) const
 	{
 		if(!definition.declaration) return false;
@@ -383,11 +241,41 @@
 			if(!MemberOwnerPattern(member, parent, parent_args, &owner_substitutions)) continue;
 			map<string, vector<string> > pack_substitutions;
 			map<string, PA19IntegralValue> integral_substitutions;
+			// An out-of-class member of a class specialization can introduce a
+			// pack through a nested owner pattern, such as
+			// `literal<bytes<Bytes...>>::data`.  MemberOwnerPattern records that
+			// typed owner match separately from the enclosing class arguments;
+			// carry it into replay's pack state so the static definition expands
+			// its initializer with the concrete NTTP values.
+			for(size_t parameter = 0; parameter < member.parameters.size(); ++parameter)
+				if(member.parameters[parameter].pack && !member.parameters[parameter].name.empty()) {
+					map<string, string>::const_iterator owner_value = owner_substitutions.find(
+						member.parameters[parameter].name);
+					if(owner_value == owner_substitutions.end()) continue;
+					string packed = CanonicalSpelling(owner_value->second);
+					const size_t open = packed.find('<');
+					if(open != string::npos && packed[packed.size() - 1] == '>') {
+						string inner;
+						size_t close = string::npos;
+						if(TemplateRange(packed, open, &inner, &close) &&
+							close + 1 == packed.size()) packed = inner;
+					}
+					pack_substitutions[member.parameters[parameter].name] =
+						SplitTemplateArguments(packed);
+				}
 			size_t parent_argument = 0;
 			for(size_t parameter = 0; parameter < parent.parameters.size(); ++parameter) {
 				const TemplateParameter& parent_parameter = parent.parameters[parameter]; if(parent_parameter.pack) {
 					vector<string>& values = pack_substitutions[parent_parameter.name];
-					while(parent_argument < parent_args.size()) values.push_back(parent_args[parent_argument++]);
+					// MemberOwnerPattern already records a concrete enclosing pack
+					// under the same name when the out-of-class member owner carries
+					// that pack.  Do not append the enclosing values a second time;
+					// doing so recursively grows `Box<Args...>` into
+					// `Box<int,float,int,float>`.  The parent pack is otherwise the
+					// source of truth for this member replay.
+					if(values.empty()) while(parent_argument < parent_args.size())
+						values.push_back(parent_args[parent_argument++]);
+					else parent_argument = min(parent_args.size(), parent_argument + values.size());
 					if(!parent_parameter.name.empty() && !values.empty()) substitutions[parent_parameter.name] = values[0];
 				} else if(parent_argument < parent_args.size()) {
 					if(!parent_parameter.name.empty()) substitutions[parent_parameter.name] = parent_args[parent_argument];
@@ -552,7 +440,7 @@
 				!MentionsGeneratedTypeOutsideFunctionBodies(nested_declaration,
 					candidates[i]->name)) continue;
 			InstantiateNestedClass(parent, parent_args, parent_local_name,
-				candidates[i]->name, context);
+					candidates[i]->name, context);
 		}
 		const string generated_context = JoinPath(GeneratedOwner(parent),
 			parent_local_name);
@@ -681,6 +569,12 @@
 			raw = ReplaceIdentifiersPreservingPackSizes(raw, expression_substitutions);
 		}
 		PA19IntegralValue value; bool evaluated = false;
+		if(raw.find("::") == string::npos &&
+			raw.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") == string::npos) {
+			const string preferred_owner = PrefixComponent(context);
+			if(!preferred_owner.empty() && EvaluateUnqualifiedConstantMember(raw, context,
+				substitutions, &value, preferred_owner)) evaluated = true;
+		}
 		if(raw.find("&&") != string::npos || raw.find("||") != string::npos) {
 			try { evaluated = EvaluateIntegralText(NormalizeIntegralArgumentExpression(raw, context), context, substitutions, &value); } catch(...) { evaluated = false; }
 		}
@@ -910,7 +804,74 @@
 			position = raw.find("::template ", position + 2))
 			raw.erase(position + 2, 9);
 		const TemplateDefinition* definition = FindDefinition(raw, context);
+		string concrete_member_argument;
+		// A dependent template-template argument can name a member alias through
+		// an inherited nested class (`args::binding::fn`).  The ordinary definition
+		// index intentionally stores that declaration under its source owner (and
+		// some parser scopes repeat the enclosing class name), so a textual lookup
+		// of the complete dependent path misses it.  Resolve the nested class in
+		// typed class state first, then match the source member template to that
+		// selected owner.
+		if(!definition) {
+			const size_t member_separator = raw.rfind("::");
+			if(member_separator != string::npos) {
+				const string member = raw.substr(member_separator + 2);
+				const string nested_owner = raw.substr(0, member_separator);
+				const size_t owner_separator = nested_owner.rfind("::");
+				if(owner_separator != string::npos) {
+					const string parent = nested_owner.substr(0, owner_separator);
+					const string nested = nested_owner.substr(owner_separator + 2);
+					string resolved_nested;
+					set<string> active_nested;
+					const bool materialized_nested_owner = class_declarations_.find(
+						nested_owner) != class_declarations_.end();
+					if(materialized_nested_owner || FindClassMemberType(parent, nested,
+						map<string, string>(), context, &resolved_nested, &active_nested,
+						false)) {
+						if(materialized_nested_owner) resolved_nested = nested_owner;
+						resolved_nested = CanonicalSpelling(resolved_nested);
+						const string resolved_prefix = PrefixComponent(resolved_nested);
+						const string repeated_owner = resolved_prefix.empty() ? resolved_nested :
+							JoinPath(resolved_prefix, JoinPath(LastComponent(resolved_prefix),
+							LastComponent(resolved_nested)));
+						map<string, vector<string> >::const_iterator indexed =
+							definitions_by_name_.find(LastComponent(member));
+						if(indexed != definitions_by_name_.end()) for(size_t candidate_index = 0;
+							candidate_index < indexed->second.size(); ++candidate_index) {
+							map<string, TemplateDefinition>::const_iterator candidate = definitions_.find(
+								indexed->second[candidate_index]);
+							if(candidate == definitions_.end() ||
+								(!candidate->second.alias_template && !candidate->second.class_template &&
+									!candidate->second.variable_template)) continue;
+							string candidate_owner = candidate->second.owner;
+							const size_t candidate_open = candidate_owner.find('<');
+							if(candidate_open != string::npos) candidate_owner.erase(candidate_open);
+							bool generated_owner_match = false;
+							const string generated_parent = PrefixComponent(resolved_nested);
+							map<string, string>::const_iterator generated_source =
+								specialization_bases_.find(LastComponent(generated_parent));
+							if(generated_source != specialization_bases_.end()) {
+								const string source_parent = generated_source->second;
+								generated_owner_match = candidate_owner == JoinPath(source_parent,
+									LastComponent(resolved_nested)) || candidate_owner ==
+									JoinPath(source_parent, JoinPath(LastComponent(source_parent),
+										LastComponent(resolved_nested)));
+							}
+							if(candidate_owner == resolved_nested || candidate_owner == repeated_owner ||
+								generated_owner_match) {
+								definition = &candidate->second;
+								if(specialization_bases_.find(LastComponent(
+									PrefixComponent(resolved_nested))) != specialization_bases_.end())
+									concrete_member_argument = resolved_nested + "::" + member;
+								break;
+							}
+						}
+					}
+				}
+			}
+		}
 		if(!definition) return string();
+		if(!concrete_member_argument.empty()) return concrete_member_argument;
 		// Keep the concrete owner on a member template entity.  The registry
 		// definition is keyed by its source owner (`quote::quote::fn`), but a
 		// template-template argument such as `quote<X>::fn` also carries the
@@ -986,6 +947,43 @@
 		const string argument = NormalizeTemplateTemplateArgument(raw, context, substitutions);
 		if(argument.empty()) return false;
 		const TemplateDefinition* definition = FindDefinition(argument, context);
+		if(!definition) {
+			const size_t member_separator = argument.rfind("::");
+			if(member_separator != string::npos) {
+				const string owner = argument.substr(0, member_separator);
+				const string member = argument.substr(member_separator + 2);
+				const string generated_parent = PrefixComponent(owner);
+				map<string, string>::const_iterator generated_source =
+					specialization_bases_.find(LastComponent(generated_parent));
+				if(generated_source != specialization_bases_.end()) {
+					const string source_parent = generated_source->second;
+					const string source_nested = JoinPath(source_parent,
+						LastComponent(owner));
+					const string repeated_source_nested = JoinPath(source_parent,
+						JoinPath(LastComponent(source_parent), LastComponent(owner)));
+					map<string, vector<string> >::const_iterator indexed =
+						definitions_by_name_.find(member);
+					if(indexed != definitions_by_name_.end())
+						for(size_t candidate_index = 0;
+							candidate_index < indexed->second.size(); ++candidate_index) {
+							map<string, TemplateDefinition>::const_iterator candidate =
+								definitions_.find(indexed->second[candidate_index]);
+							if(candidate == definitions_.end() ||
+								(!candidate->second.alias_template &&
+								 !candidate->second.class_template &&
+								 !candidate->second.variable_template)) continue;
+							string candidate_owner = candidate->second.owner;
+							const size_t candidate_open = candidate_owner.find('<');
+							if(candidate_open != string::npos) candidate_owner.erase(candidate_open);
+							if(candidate_owner == source_nested || candidate_owner ==
+								repeated_source_nested) {
+								definition = &candidate->second;
+								break;
+							}
+						}
+				}
+			}
+		}
 		if(!definition || (!definition->class_template && !definition->alias_template &&
 			!definition->variable_template)) return false;
 		if(!CompatibleTemplateParameterList(parameter.template_parameters,
@@ -1148,6 +1146,8 @@
 		const map<string, FunctionSignature>* function_hints = 0,
 		const map<string, vector<string> >* forwarding_pack_hints = 0,
 		bool defer_class_definition = false);
+	void RecoverNestedVectorArgument(const TemplateDefinition& definition,
+		vector<string>* arguments, const string& context) const;
 	string MaterializeExternInstantiation(const TemplateDefinition& definition,
 		const vector<string>& args, const vector<string>& metadata_args,
 		map<string, string> substitutions,
@@ -1167,9 +1167,9 @@
 			map<string, FunctionSignature>(),
 		bool defer_class_definition = false);
 	void ReplayCachedInstantiation(const TemplateDefinition& definition,
-		const vector<string>& args, const string& cached, const string& context,
-		bool explicit_instantiation,
-		const map<string, vector<string> >& pack_substitutions);
+			const vector<string>& args, const string& cached, const string& context,
+			bool explicit_instantiation,
+			const map<string, vector<string> >& pack_substitutions);
 	void RegisterGeneratedSpecialization(const TemplateDefinition& definition,
 		const vector<string>& metadata_args, const string& local_name);
 	void AddConcreteOwnerSubstitutions(const string& concrete_owner,

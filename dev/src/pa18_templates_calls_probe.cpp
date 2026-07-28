@@ -100,6 +100,37 @@ bool PA18TemplateExpander::FunctionTemplateMoreSpecialized(
 	set<string> ordering_names;
 	if(!parameter_patterns(lhs, &lhs_patterns, &lhs_packs, &ordering_names) ||
 		!parameter_patterns(rhs, &rhs_patterns, &rhs_packs, &ordering_names)) return false;
+	// Some dependent prefixes are textually identical in both declarations but
+	// cannot be replayed by the compact type matcher (for example,
+	// `graph_traits<G>::vertex_descriptor`).  If the only remaining difference
+	// is a fixed class-template pattern versus a bare template parameter, the
+	// former is the standard partial-ordering winner.  Keep this typed
+	// comparison local to an otherwise identical parameter list.
+	if(lhs_patterns.size() == rhs_patterns.size() &&
+		lhs_patterns.size() == lhs_packs.size() &&
+		rhs_patterns.size() == rhs_packs.size()) {
+		const auto is_bare_parameter = [](const TemplateDefinition& definition,
+			const string& pattern) {
+			for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter)
+				if(!definition.parameters[parameter].pack &&
+					definition.parameters[parameter].name == pattern) return true;
+			return false;
+		};
+		size_t differing = 0;
+		size_t difference_index = string::npos;
+		for(size_t parameter = 0; parameter < lhs_patterns.size(); ++parameter)
+			if(lhs_patterns[parameter] != rhs_patterns[parameter] ||
+				lhs_packs[parameter] != rhs_packs[parameter]) {
+				++differing;
+				difference_index = parameter;
+			}
+		if(differing == 1 && difference_index != string::npos &&
+			!lhs_packs[difference_index] && !rhs_packs[difference_index]) {
+			const bool lhs_bare = is_bare_parameter(lhs, lhs_patterns[difference_index]);
+			const bool rhs_bare = is_bare_parameter(rhs, rhs_patterns[difference_index]);
+			if(lhs_bare != rhs_bare) return !lhs_bare;
+		}
+	}
 	const bool lhs_trailing_pack = !lhs_packs.empty() && lhs_packs.back();
 	const bool rhs_trailing_pack = !rhs_packs.empty() && rhs_packs.back();
 	// A function parameter pack broadens the callable's arity.  Preserve
@@ -590,7 +621,9 @@ bool PA18TemplateExpander::HasAbstractFunctionParameter(
 		} catch(const PA18SubstitutionFailure&) {
 			return true;
 		}
-		if(IsAbstractObjectSpelling(resolved, context)) return true;
+		if(IsAbstractObjectSpelling(resolved, context)) {
+			return true;
+		}
 	}
 	return false;
 }
@@ -625,40 +658,83 @@ bool PA18TemplateExpander::ValidateExplicitFunctionCandidate(
 	const vector<string>& raw_explicit_args, vector<string>* arguments)
 {
 	if(!arguments) return false;
+	const map<string, vector<string> > previous_packs = active_pack_substitutions_;
 	try {
 		if(!InferFunctionArguments(definition, input, arguments, substitutions, context,
-			&raw_explicit_args)) return false;
+			&raw_explicit_args, 0)) {
+			active_pack_substitutions_ = previous_packs;
+			return false;
+		}
 		map<string, string> bindings;
-		for(size_t parameter = 0; parameter < definition.parameters.size() &&
-			parameter < arguments->size(); ++parameter)
-			if(!definition.parameters[parameter].name.empty())
-				bindings[definition.parameters[parameter].name] = (*arguments)[parameter];
-		for(size_t parameter = raw_explicit_args.size();
-			parameter < definition.parameters.size(); ++parameter) {
+		size_t argument_index = 0;
+		for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter) {
 			const TemplateParameter& detail = definition.parameters[parameter];
-			if(detail.default_type.empty() || parameter >= arguments->size()) continue;
-			string value;
-			const string default_type = CanonicalSpelling(detail.default_type);
-			if(default_type.compare(0, 9, "decltype(") == 0 &&
-				default_type.size() > 10 && default_type[default_type.size() - 1] == ')') {
-				const string expression = default_type.substr(9, default_type.size() - 10);
-				if(!EvaluateDecltypeExpression(expression, context, bindings, &value)) return false;
-			} else value = RewriteText(detail.default_type, context, bindings, 0);
-			if(value.empty()) return false;
-			(*arguments)[parameter] = NormalizeTypeArgument(value);
-			if(!detail.name.empty()) bindings[detail.name] = (*arguments)[parameter];
+			if(detail.pack) {
+				size_t trailing_fixed = 0;
+				for(size_t later = parameter + 1; later < definition.parameters.size(); ++later)
+					if(!definition.parameters[later].pack) ++trailing_fixed;
+				const size_t available = arguments->size() > argument_index ?
+					arguments->size() - argument_index : 0;
+				const size_t count = available > trailing_fixed ? available - trailing_fixed : 0;
+				vector<string> values;
+				for(size_t value = 0; value < count; ++value)
+					values.push_back((*arguments)[argument_index + value]);
+				if(!detail.name.empty()) {
+					active_pack_substitutions_[detail.name] = values;
+					if(!values.empty()) bindings[detail.name] = values[0];
+				}
+				argument_index += count;
+				continue;
+			}
+			if(argument_index >= arguments->size()) {
+				active_pack_substitutions_ = previous_packs;
+				return false;
+			}
+			// The completed argument vector contains every expanded pack element,
+			// while raw_explicit_args contains only the arguments written by the
+			// caller.  Comparing the flattened position, rather than the template
+			// parameter index, correctly identifies a default following a pack.
+			const bool supplied = argument_index < raw_explicit_args.size();
+			if(!supplied && !detail.default_type.empty()) {
+				string value;
+				const string default_type = CanonicalSpelling(detail.default_type);
+				if(default_type.compare(0, 9, "decltype(") == 0 &&
+					default_type.size() > 10 && default_type[default_type.size() - 1] == ')') {
+					const string expression = default_type.substr(9, default_type.size() - 10);
+					if(!EvaluateDecltypeExpression(expression, context, bindings, &value)) {
+						active_pack_substitutions_ = previous_packs;
+						return false;
+					}
+				} else value = RewriteText(detail.default_type, context, bindings, 0);
+				if(value.empty()) {
+					active_pack_substitutions_ = previous_packs;
+					return false;
+				}
+				(*arguments)[argument_index] = NormalizeTypeArgument(value);
+			}
+			if(!detail.name.empty()) bindings[detail.name] = (*arguments)[argument_index];
+			++argument_index;
 		}
 		if(!raw_explicit_args.empty() &&
-			!ValidateTemplateDefaults(definition, *arguments, context, substitutions)) return false;
+			!ValidateTemplateDefaults(definition, *arguments, context, substitutions)) {
+			active_pack_substitutions_ = previous_packs;
+			return false;
+		}
 		try {
 			const string result = FunctionResultType(definition, *arguments, context, &substitutions);
 			string probe = result;
 			while(!probe.empty() && (probe[probe.size() - 1] == '*' || probe[probe.size() - 1] == '&')) probe.erase(probe.size() - 1);
 			while(probe.size() > 6 && probe.compare(probe.size() - 6, 6, " const") == 0) probe.erase(probe.size() - 6);
 			if(HasUnavailableGeneratedMemberType(probe, context, substitutions)) return false;
-			return !result.empty();
-		} catch(const PA18SubstitutionFailure&) { return false; }
+			const bool valid = !result.empty();
+			active_pack_substitutions_ = previous_packs;
+			return valid;
+		} catch(const PA18SubstitutionFailure&) {
+			active_pack_substitutions_ = previous_packs;
+			return false;
+		}
 	} catch(const PA18SubstitutionFailure&) {
+		active_pack_substitutions_ = previous_packs;
 		return false;
 	}
 }

@@ -1123,6 +1123,48 @@ bool PA18TemplateExpander::HasPackBeforeFixed(const TemplateDefinition& definiti
 	return false;
 }
 
+bool PA18TemplateExpander::ResolveGeneratedMemberAlias(const string& class_key,
+	const string& member, const string& context, string* member_type) const
+{
+	map<string, string>::const_iterator generated_base =
+		specialization_bases_.find(LastComponent(class_key));
+	map<string, vector<string> >::const_iterator generated_arguments =
+		specialization_arguments_.find(LastComponent(class_key));
+	if(generated_base == specialization_bases_.end() ||
+		generated_arguments == specialization_arguments_.end()) return false;
+	string source_class = generated_base->second;
+	if(source_class.find('<') == string::npos) {
+		source_class += "<";
+		for(size_t argument = 0; argument < generated_arguments->second.size(); ++argument)
+			source_class += (argument ? "," : "") + generated_arguments->second[argument];
+		source_class += ">";
+	}
+	map<string, string> source_substitutions;
+	set<string> source_active;
+	bool found = FindClassMemberType(source_class, member, source_substitutions,
+		context, member_type, &source_active, true);
+	if(!found && member_type->empty() && !PrefixComponent(class_key).empty()) {
+		const string scoped_source = JoinPath(PrefixComponent(class_key), source_class);
+		source_substitutions.clear();
+		source_active.clear();
+		found = FindClassMemberType(scoped_source, member, source_substitutions,
+			context, member_type, &source_active, true);
+	}
+	return found;
+}
+
+bool PA18TemplateExpander::ResolveContextMemberAlias(const string& class_key,
+	const string& member, const string& context, string* member_type) const
+{
+	for(string current = context; member_type && member_type->empty() && !current.empty(); ) {
+		*member_type = MemberAliasType(JoinPath(current, class_key), member);
+		const size_t parent = current.rfind("::");
+		if(parent == string::npos) current.clear();
+		else current.erase(parent);
+	}
+	return member_type && !member_type->empty();
+}
+
 string PA18TemplateExpander::ResolveAlias(string spelling, const string& context) const
 {
 	const bool reference_alias_specialization =
@@ -1198,19 +1240,24 @@ string PA18TemplateExpander::ResolveAlias(string spelling, const string& context
 			}
 				spelling = CanonicalSpelling(target); continue;
 		}
-		const size_t separator = spelling.rfind("::");
+		// A qualified member can contain nested template arguments with their
+		// own `::` (for example `enable_if<accepts<Args...>::value,int>::type`).
+		// Split only at the scope separator outside all template ranges; using
+		// the last textual separator treats the nested trait member as the class
+		// owner and recursively re-enters generated-member alias lookup.
+		const size_t separator = TopLevelScopeSeparator(spelling);
 		if(separator == string::npos) break;
 		string class_key = spelling.substr(0, separator);
 		const string member = spelling.substr(separator + 2);
 		string member_type = MemberAliasType(class_key, member);
 		if(member_type.empty()) {
-			for(string current = context; member_type.empty() && !current.empty(); ) {
-				member_type = MemberAliasType(JoinPath(current, class_key), member);
-				const size_t parent = current.rfind("::");
-				if(parent == string::npos) current.clear();
-				else current.erase(parent);
-			}
+			map<string, string> member_substitutions;
+			set<string> member_active;
+			FindClassMemberType(class_key, member, member_substitutions, context,
+				&member_type, &member_active, true);
 		}
+		if(member_type.empty()) ResolveGeneratedMemberAlias(class_key, member, context, &member_type);
+		if(member_type.empty()) ResolveContextMemberAlias(class_key, member, context, &member_type);
 		if(member_type.empty()) {
 			const size_t owner_separator = class_key.rfind("::");
 			if(owner_separator != string::npos) {

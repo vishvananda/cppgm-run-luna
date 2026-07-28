@@ -2,29 +2,22 @@
 #include "pa18_templates_rewrite_lookup.h"
 #include "pa18_templates_rewrite_decltype.h"
 #include "pa18_templates_rewrite_instantiate.h"
-bool MatchOrderingTypePattern(const string& raw_pattern, const string& raw_actual, const set<string>& parameter_names, map<string, string>* inferred) const;
-bool MatchOrderingPatternList(const vector<string>& patterns, const vector<string>& actual, const set<string>& parameter_names,
-	map<string, string>* inferred) const;
+bool MatchOrderingTypePattern(const string& raw_pattern, const string& raw_actual, const set<string>& parameter_names, map<string, string>* inferred) const; bool MatchOrderingPatternList(const vector<string>& patterns, const vector<string>& actual, const set<string>& parameter_names, map<string, string>* inferred) const;
 bool ClassPartialMoreSpecialized(const TemplateDefinition& lhs,
 	const TemplateDefinition& rhs, const string& context) const;
 string ExpandAliasPattern(string pattern, const string& context,
 	set<string>* active, bool include_defaults = false) const;
-bool MatchClassSpecializationPattern(const TemplateDefinition& definition,
-	const vector<string>& arguments, map<string, string>* inferred,
-	const string& context) const;
+bool MatchClassSpecializationPattern(const TemplateDefinition& definition, const vector<string>& arguments, map<string, string>* inferred, const string& context) const;
 bool MatchTypePattern(string pattern, string actual,
 		const set<string>& parameter_names, map<string, string>* inferred, const string& context, bool class_pattern = false) const;
-	bool MatchForwardingReferencePattern(const string& pattern, const string& actual,
-		const set<string>& parameter_names, map<string, string>* inferred) const;
+	bool MatchForwardingReferencePattern(const string& pattern, const string& actual, const set<string>& parameter_names, map<string, string>* inferred) const;
 	bool MatchNestedFunctionPointerPattern(const string& pattern, const string& actual,
 		const set<string>& parameter_names, map<string, string>* inferred,
 		const string& context, bool class_pattern) const;
 	string ArrayPatternElement(const string& raw) const;
 	bool FunctionOwnerCompatible(const string& pattern, const string& actual,
 		bool class_pattern) const;
-	bool PreserveEvaluatedDecltype(const CPPGMAstNodePtr& input,
-		const map<string, string>& substitutions,
-		const CPPGMAstNodePtr& result) const;
+	bool PreserveEvaluatedDecltype(const CPPGMAstNodePtr& input, const map<string, string>& substitutions, const CPPGMAstNodePtr& result) const;
 		int MatchDirectTypeParameter(const string& pattern, const string& actual,
 			const set<string>& parameter_names, map<string, string>* inferred,
 			const string& context, bool class_pattern) const;
@@ -52,6 +45,87 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 		if(!primary) return primary;
 		if(!primary->class_template && !primary->alias_template &&
 			!primary->variable_template) return primary;
+		const auto dependent_argument = [this, &context](const string& raw) {
+			for(size_t position = 0; position < raw.size();) {
+				if(!IsIdentifierCharacter(raw[position])) {
+					++position;
+					continue;
+				}
+				const size_t begin = position;
+				while(position < raw.size() && IsIdentifierCharacter(raw[position])) ++position;
+				const string word = raw.substr(begin, position - begin);
+				if(!word.empty() && isdigit(static_cast<unsigned char>(word[0]))) continue;
+				size_t next = position;
+				while(next < raw.size() && isspace(static_cast<unsigned char>(raw[next]))) ++next;
+				if(next + 1 < raw.size() && raw.compare(next, 2, "::") == 0) continue;
+				// A qualified component can be a concrete static member of a known
+				// class template (`trait<T>::value`).  It is not itself a dependent
+				// template argument when the typed member index already contains that
+				// member.  Keep unknown qualified members dependent so an unresolved
+				// probe still routes through substitution failure.
+				bool known_qualified_member = false;
+				if(begin >= 2 && raw.compare(begin - 2, 2, "::") == 0) {
+					const string owner = Trim(raw.substr(0, begin - 2));
+					if(!owner.empty() && IsKnownTypeSpelling(owner, context)) {
+						string member_type;
+						set<string> active_members;
+						known_qualified_member = FindClassMemberType(owner, word,
+							map<string, string>(), context, &member_type, &active_members,
+							false) && !member_type.empty();
+						if(!known_qualified_member) {
+							const CPPGMAstNodePtr owner_declaration = FindClassDeclaration(
+								owner, context);
+							const function<bool(const CPPGMAstNodePtr&)> declares_member =
+								[&](const CPPGMAstNodePtr& node) {
+								if(!node) return false;
+								if(node->kind == "enumerator" && LastComponent(node->value) == word)
+									return true;
+								if(node->kind == "alias-declaration" &&
+									LastComponent(RemoveMarker(node->value)) == word) return true;
+								if(node->kind == "simple-declaration") {
+									const CPPGMAstNodePtr list = ChildOfKindLocal(node,
+										"init-declarator-list");
+									if(list) for(size_t item = 0; item < list->children.size(); ++item)
+										if(list->children[item] && !list->children[item]->children.empty() &&
+											LastComponent(FirstIdentifierLocal(
+												list->children[item]->children[0])) == word) return true;
+								}
+								for(size_t child = 0; child < node->children.size(); ++child)
+									if(declares_member(node->children[child])) return true;
+								return false;
+							};
+						known_qualified_member = declares_member(owner_declaration);
+						}
+					}
+				}
+				const bool known = word == "typename" || word == "const" || word == "volatile" ||
+					word == "true" || word == "false" || word == "void" || word == "bool" ||
+					word == "char" || word == "short" || word == "int" || word == "long" ||
+					word == "signed" || word == "unsigned" ||
+					class_contexts_.find(word) != class_contexts_.end() ||
+					class_declarations_.find(word) != class_declarations_.end() ||
+					FindClassDeclaration(word, context) != CPPGMAstNodePtr() ||
+					definitions_by_name_.find(word) != definitions_by_name_.end() ||
+					type_aliases_.find(word) != type_aliases_.end() ||
+					known_qualified_member ||
+					specialization_bases_.find(word) != specialization_bases_.end();
+				if(!known) return true;
+			}
+			return false;
+		};
+		for(size_t argument = 0; argument < arguments.size(); ++argument)
+			if(dependent_argument(arguments[argument])) return primary;
+		string selection_key = primary->qualified_name + "|" + context;
+		for(size_t argument = 0; argument < arguments.size(); ++argument)
+			selection_key += "|" + arguments[argument];
+		if(!active_class_template_selections_.insert(selection_key).second)
+			return primary;
+		struct SelectionScope {
+			set<string>* active;
+			string key;
+			SelectionScope(set<string>* value, const string& name) : active(value), key(name) {}
+			~SelectionScope() { active->erase(key); }
+		} selection_scope(&active_class_template_selections_, selection_key);
 		vector<const TemplateDefinition*> candidates;
 		map<string, vector<TemplateDefinition> >::const_iterator direct_candidates =
 			class_specializations_.find(primary->qualified_name);
@@ -90,6 +164,18 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 		}
 		if(candidates.empty()) return primary;
 		vector<string> matching_arguments = arguments;
+		for(size_t argument = 0; argument < matching_arguments.size(); ++argument) {
+			// A template-template argument is a template entity, not the type
+			// produced by resolving an alias body.  Preserve its identity while
+			// matching a class partial specialization; resolving `pointer_member`
+			// here would turn it into the dependent `T::pointer` and erase the
+			// detection idiom's substitution boundary.
+			if(argument < primary->parameters.size() &&
+				primary->parameters[argument].template_template) continue;
+			const string resolved = NormalizeTypeArgument(ResolveAlias(
+				matching_arguments[argument], context));
+			if(!resolved.empty()) matching_arguments[argument] = resolved;
+		}
 		map<string, string> default_substitutions;
 		for(size_t parameter = 0; parameter < primary->parameters.size() && parameter < arguments.size(); ++parameter)
 			if(!primary->parameters[parameter].name.empty()) default_substitutions[primary->parameters[parameter].name] = arguments[parameter];
@@ -542,9 +628,10 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 			map<string, vector<string> > inferred_pack_values;
 			map<string, FunctionSignature> inferred_function_values;
 			map<string, vector<string> > forwarding_pack_values;
-			if(!InferFunctionArguments(*candidates[i], call, &inferred,
+			const bool inferred_ok = InferFunctionArguments(*candidates[i], call, &inferred,
 				substitutions, context, 0, &inferred_pack_values,
-				&inferred_function_values, 0, &forwarding_pack_values)) continue;
+				&inferred_function_values, 0, &forwarding_pack_values);
+			if(!inferred_ok) continue;
 			Instantiate(*candidates[i], inferred, context, false, &inferred_pack_values,
 				0, 0, &inferred_function_values, &forwarding_pack_values);
 			return;
@@ -618,10 +705,9 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 		const map<string, string>& substitutions, bool* template_replaced,
 		bool resolve_alias = true, bool resolve_member = true,
 		bool defer_class_definition = false);
-	bool RewriteConcreteNestedMember(string* raw, size_t begin, size_t close,
-		const string& base, const string& context,
-		const map<string, string>& substitutions, bool* template_replaced,
-		size_t* search);
+	bool RewriteConcreteNestedMember(string* raw, size_t begin, size_t close, const string& base, const string& context, const map<string, string>& substitutions, bool* template_replaced, size_t* search);
+	const TemplateDefinition* SelectFunctionTemplateOverload(const string& raw, const string& lookup_base, const vector<string>& explicit_arguments, const string& context, const map<string, string>& substitutions, const vector<const TemplateDefinition*>& overloads);
+	void ProtectMaterializedSubstitutions(const string& source_spelling, const string& raw, const string& context, const map<string, string>& substitutions, bool materialized_member_type, map<string, string>* final_substitutions) const;
 	bool RewriteResolvedTemplateMember(string* raw, size_t begin, size_t close,
 		const string& context, const map<string, string>& substitutions,
 		const TemplateDefinition* definition, const vector<string>& args,

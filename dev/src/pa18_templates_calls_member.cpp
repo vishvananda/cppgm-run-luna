@@ -38,6 +38,17 @@ string ConversionOwnerBase(const TemplateDefinition& definition)
 	return owner;
 }
 
+string NormalizedConversionMemberName(const TemplateDefinition& definition)
+{
+	string name = LastComponent(definition.name);
+	const size_t operator_position = name.find("operator");
+	if(operator_position == string::npos) return name;
+	string suffix = name.substr(operator_position + 8);
+	while(!suffix.empty() && isspace(static_cast<unsigned char>(suffix[0])))
+		suffix.erase(suffix.begin());
+	return name.substr(0, operator_position + 8) + suffix;
+}
+
 } // namespace
 
 struct MemberCallState
@@ -98,8 +109,11 @@ bool PA18TemplateExpander::ReplayMemberCall(
 	if(!call || !callee) return false;
 	MemberCallState state(call, callee, original_member, context, substitutions,
 		explicit_instantiation, constructor_replay);
-	if(!ParseMemberCall(&state) || !ResolveMemberObject(&state) ||
-		!ResolveMemberOwner(&state) || !CollectMemberCallCandidates(&state))
+	const bool parsed = ParseMemberCall(&state);
+	const bool object_resolved = parsed && ResolveMemberObject(&state);
+	const bool owner_resolved = object_resolved && ResolveMemberOwner(&state);
+	const bool candidates_collected = owner_resolved && CollectMemberCallCandidates(&state);
+	if(!parsed || !object_resolved || !owner_resolved || !candidates_collected)
 		return false;
 	for(size_t candidate = 0; candidate < state.candidates.size(); ++candidate)
 		if(TryMemberCandidate(&state, candidate)) return true;
@@ -310,7 +324,18 @@ bool PA18TemplateExpander::ResolveMemberOwner(MemberCallState* state)
 				}
 			}
 		}
-		if(!parent->partial_specialization) {
+		if(parent->partial_specialization) {
+			// `parent_arguments` are the primary template's arguments, while
+			// member lookup in a selected partial specialization needs bindings
+			// from its pattern (for example `function<R()>` must bind `R`).
+			map<string, string> specialized;
+			if(MatchClassSpecializationPattern(*parent, parent_arguments,
+				&specialized, context))
+				for(map<string, string>::const_iterator binding = specialized.begin();
+					binding != specialized.end(); ++binding)
+					if(!binding->second.empty())
+						member_substitutions[binding->first] = binding->second;
+		} else {
 			for(size_t parameter = 0; parameter < enclosing_parameters->size() &&
 				parameter < parent_arguments.size(); ++parameter)
 				if(!(*enclosing_parameters)[parameter].name.empty() &&
@@ -374,7 +399,9 @@ bool PA18TemplateExpander::CollectMemberCallCandidates(MemberCallState* state)
 			definition_member_base.erase(definition_member_angle);
 		if(definition.class_template || definition.alias_template ||
 			definition.variable_template || definition.parameters.empty() ||
-			(definition_member_base != member_name && LastComponent(definition.name) != member_name) ||
+			(definition_member_base != member_name &&
+			 LastComponent(definition.name) != member_name &&
+			 NormalizedConversionMemberName(definition) != member_name) ||
 			!definition.declaration)
 			continue;
 		const bool declaration_kind = definition.declaration->kind == "function-definition" ||
@@ -420,6 +447,7 @@ bool PA18TemplateExpander::CollectMemberCallCandidates(MemberCallState* state)
 			conversion_member_base.erase(conversion_member_angle);
 		if(conversion_pattern.empty() || (definition_member_base != member_name &&
 			LastComponent(definition.name) != member_name &&
+			NormalizedConversionMemberName(definition) != member_name &&
 			LastComponent(conversion_member_base) != member_name)) continue;
 		string owner = ConversionOwnerBase(definition);
 		const size_t owner_angle = owner.find('<');
@@ -454,7 +482,12 @@ bool PA18TemplateExpander::CollectMemberCallCandidates(MemberCallState* state)
 	const vector<const TemplateDefinition*>& direct_member_candidates = state->direct_candidates;
 	const bool ordinary_callable = HasViableOrdinaryCallableMember(call, object_type, member_name,
 		context, substitutions, object_const, object_volatile, constructor_replay);
-	if(ordinary_callable) return false;
+	// Constructor overload resolution must see member-template constructors
+	// alongside ordinary constructors.  A concrete fallback such as `long`
+	// cannot suppress a template constructor whose substituted parameter is an
+	// exact `int` match; ordinary member calls retain the fast path because
+	// their non-template body is already sufficient.
+	if(ordinary_callable && !constructor_replay) return false;
 	vector<const TemplateDefinition*> inherited_candidates;
 	set<string> inherited_active;
 	map<const TemplateDefinition*, string> inherited_owners;
@@ -614,6 +647,26 @@ bool PA18TemplateExpander::PrepareMemberCandidate(MemberCallState* state,
 			}
 			if(has_definition) return false;
 		}
+		if(definition.declaration->kind == "special-member-declaration") {
+			bool has_definition = false;
+			for(size_t other_index = 0; other_index < candidates.size(); ++other_index) {
+				const TemplateDefinition& other = *candidates[other_index];
+				if(other.declaration->kind != "special-member-definition") continue;
+				string other_owner = LastComponent(ConversionOwnerBase(other));
+				string definition_owner = LastComponent(ConversionOwnerBase(definition));
+				const size_t other_angle = other_owner.find('<');
+				const size_t definition_angle = definition_owner.find('<');
+				if(other_angle != string::npos) other_owner.erase(other_angle);
+				if(definition_angle != string::npos) definition_owner.erase(definition_angle);
+				if(MemberSignatureKey(other) == MemberSignatureKey(definition) ||
+					(ConversionOperatorPattern(other) == ConversionOperatorPattern(definition) &&
+					 other_owner == definition_owner)) {
+					has_definition = true;
+					break;
+				}
+			}
+			if(has_definition) return false;
+		}
 
 	return true;
 }
@@ -690,13 +743,18 @@ bool PA18TemplateExpander::PrepareMemberCandidateArguments(
 						binding != specialized.end(); ++binding)
 						if(!binding->second.empty())
 							member_substitutions[binding->first] = binding->second;
-					for(size_t pack = 0; pack < parent->specialization_pack_names.size();
-						++pack) {
-						const string& name = parent->specialization_pack_names[pack];
-						if(name.empty()) continue;
-						map<string, string>::const_iterator binding = specialized.find(name);
-						if(binding == specialized.end() || binding->second.empty()) continue;
-						bound_pack_values[name] = SplitTemplateArguments(binding->second);
+						for(size_t pack = 0; pack < parent->specialization_pack_names.size();
+							++pack) {
+							const string& name = parent->specialization_pack_names[pack];
+							if(name.empty()) continue;
+							map<string, string>::const_iterator binding = specialized.find(name);
+							if(binding == specialized.end()) continue;
+							// Preserve an empty enclosing pack as a typed fact too.  If
+							// the member reuses that spelling for a function pack, the
+							// empty owner pack must clear the surrounding specialization's
+							// active values during body replay.
+							bound_pack_values[name] = binding->second.empty() ?
+								vector<string>() : SplitTemplateArguments(binding->second);
 					}
 				}
 			} else {
@@ -875,10 +933,10 @@ bool PA18TemplateExpander::DeduceMemberCandidate(
 	const vector<string>* explicit_prefix = !conversion_explicit_arguments.empty() ?
 		&conversion_explicit_arguments : (explicit_arguments.empty() ? 0 :
 		&explicit_arguments);
-		try {
+	try {
 			inferred = InferFunctionArguments(inference_definition, call, &member_arguments,
-			deduction_substitutions, context, explicit_prefix, &inferred_pack_values,
-			&inferred_function_values, &bound_pack_values, &forwarding_pack_values);
+				deduction_substitutions, context, explicit_prefix, &inferred_pack_values,
+				&inferred_function_values, &bound_pack_values, &forwarding_pack_values);
 		} catch(const logic_error&) {
 			inferred = false;
 		}
@@ -887,15 +945,21 @@ bool PA18TemplateExpander::DeduceMemberCandidate(
 	// general deduction path (notably an address of an overloaded function),
 	// but that must not prevent the explicit specialization from being
 	// materialized under its concrete member owner.
-	if(!inferred && !explicit_arguments.empty() &&
-		explicit_arguments.size() == definition.parameters.size() &&
-		find_if(definition.parameters.begin(), definition.parameters.end(),
-			[](const TemplateParameter& parameter) { return parameter.pack; }) ==
-		definition.parameters.end()) {
-		member_arguments = explicit_arguments;
-		inferred = true;
-	}
+		if(!inferred && !explicit_arguments.empty() &&
+			explicit_arguments.size() == definition.parameters.size() &&
+			find_if(definition.parameters.begin(), definition.parameters.end(),
+				[](const TemplateParameter& parameter) { return parameter.pack; }) ==
+			definition.parameters.end()) {
+			member_arguments = explicit_arguments;
+			inferred = true;
+		}
 		if(!inferred) return false;
+		// Member-template deduction can produce a syntactically complete
+		// argument vector while a defaulted enable-if is not viable.  Validate
+		// that candidate before materialization; otherwise a constructor body
+		// recursively selects itself (the inherited-constructor `tag` case).
+		if(!ValidateTemplateDefaults(inference_definition, member_arguments, context,
+			deduction_substitutions)) return false;
 		bool dependent_member_arguments = false;
 		for(size_t parameter = 0; parameter < definition.parameters.size() &&
 			!dependent_member_arguments; ++parameter) {
@@ -923,7 +987,8 @@ bool PA18TemplateExpander::DeduceMemberCandidate(
 		if(dependent_member_arguments && !constructor_template) return false;
 		vector<string>& instantiation_member_arguments = candidate->instantiation_member_arguments;
 	instantiation_member_arguments = member_arguments;
-		if(constructor_template && explicit_arguments.empty()) {
+		if(constructor_template && explicit_arguments.empty() &&
+			!candidate->owner->constructor_replay) {
 			size_t supplied = 0;
 			for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter) {
 				const TemplateParameter& formal = definition.parameters[parameter];
@@ -995,12 +1060,12 @@ bool PA18TemplateExpander::EmitMemberCandidate(
 				specialization_arguments_.end();
 		const string* requested_owner_pointer = concrete_owner ? &requested_owner : 0;
 		map<string, vector<string> > instantiation_pack_hints = inferred_pack_values;
-		for(map<string, vector<string> >::const_iterator bound = bound_pack_values.begin();
-			bound != bound_pack_values.end(); ++bound)
-			instantiation_pack_hints[bound->first].insert(
-				instantiation_pack_hints[bound->first].end(), bound->second.begin(),
-				bound->second.end());
-	string& generated_name = candidate->generated_name;
+			for(map<string, vector<string> >::const_iterator bound = bound_pack_values.begin();
+				bound != bound_pack_values.end(); ++bound)
+				// The enclosing class binding is more specific than a same-named
+				// pack inferred from the member call's arguments.
+				instantiation_pack_hints[bound->first] = bound->second;
+		string& generated_name = candidate->generated_name;
 	const ConcreteOwnerContext previous_concrete_owner = active_concrete_owner_;
 		if(requested_owner_pointer) SetActiveConcreteOwner(requested_owner, context);
 	try {
@@ -1009,7 +1074,7 @@ bool PA18TemplateExpander::EmitMemberCandidate(
 				explicit_instantiation, &instantiation_pack_hints, &candidate_substitutions,
 				requested_owner_pointer, &inferred_function_values,
 				&forwarding_pack_values);
-		} catch(const logic_error&) {
+	} catch(const logic_error&) {
 			active_concrete_owner_ = previous_concrete_owner;
 			return false;
 		}

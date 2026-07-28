@@ -4,6 +4,135 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
+namespace {
+
+string CollapseRepeatedMemberPaths(string value)
+{
+	bool changed = false;
+	do {
+		changed = false;
+		for(size_t start = 0; !changed && start < value.size(); ++start)
+			for(size_t separator = value.find("::", start);
+				separator != string::npos;
+				separator = value.find("::", separator + 2)) {
+				const size_t prefix_size = separator + 2 - start;
+				if(separator + 2 + prefix_size > value.size() ||
+					value.compare(separator + 2, prefix_size, value, start,
+						prefix_size) != 0) continue;
+				value.erase(separator + 2, prefix_size);
+				changed = true;
+				break;
+			}
+	} while(changed);
+	return value;
+}
+
+} // namespace
+
+bool PA18TemplateExpander::RewriteMemberTemplateAliasApplication(string* raw,
+	size_t begin, size_t close, const string& base, const string& context,
+	const map<string, string>& substitutions, bool* template_replaced, size_t* search)
+{
+	if(!raw || close <= begin || LastComponent(base) != "mp_apply_q") return false;
+	const size_t open = raw->find('<', begin);
+	if(open == string::npos || open >= close) return false;
+	const vector<string> apply_arguments = SplitTemplateArguments(raw->substr(
+		open + 1, close - open - 1));
+	if(apply_arguments.size() != 2) return false;
+	string q = CanonicalSpelling(ReplaceIdentifiers(apply_arguments[0], substitutions));
+	while(q.compare(0, 8, "typename") == 0)
+		q = CanonicalSpelling(q.substr(8));
+	if(q.compare(0, 9, "template ") == 0) q = CanonicalSpelling(q.substr(9));
+	const size_t list_open = q.empty() ? string::npos :
+		apply_arguments[1].find('<');
+	if(list_open == string::npos) return false;
+	string list_arguments_text;
+	size_t list_close = string::npos;
+	if(!TemplateRange(apply_arguments[1], list_open, &list_arguments_text,
+		&list_close)) return false;
+	vector<string> call_arguments = SplitTemplateArguments(list_arguments_text);
+	if(call_arguments.empty()) return false;
+	for(size_t argument = 0; argument < call_arguments.size(); ++argument)
+		call_arguments[argument] = CanonicalSpelling(ReplaceIdentifiers(
+			call_arguments[argument], substitutions));
+	const string callable_source = q + "::fn";
+	const string callable = NormalizeTemplateTemplateArgument(callable_source,
+		context, substitutions);
+	if(callable.empty()) return false;
+	const size_t callable_separator = callable.rfind("::");
+	if(callable_separator == string::npos) return false;
+	const string callable_owner = callable.substr(0, callable_separator);
+	const string callable_name = callable.substr(callable_separator + 2);
+	string target = MemberAliasType(callable_owner, callable_name);
+	if(target.empty()) {
+		set<string> active;
+		FindClassMemberType(callable_owner, callable_name, substitutions, context,
+			&target, &active, true);
+	}
+	if(target.empty()) return false;
+	map<string, string> local = substitutions;
+	const string source_parent = [&]() {
+		const string parent = PrefixComponent(callable_owner);
+		map<string, string>::const_iterator generated = specialization_bases_.find(
+			LastComponent(parent));
+		return generated == specialization_bases_.end() ? string() : generated->second;
+	}();
+	const map<string, vector<string> >::const_iterator indexed = definitions_by_name_.find(
+		callable_name);
+	const TemplateDefinition* callable_definition = FindDefinition(callable_source,
+		context);
+	int callable_definition_score = callable_definition ? 1 : 0;
+	if(indexed != definitions_by_name_.end()) for(size_t candidate = 0;
+		candidate < indexed->second.size(); ++candidate) {
+		map<string, TemplateDefinition>::const_iterator found = definitions_.find(
+			indexed->second[candidate]);
+		if(found == definitions_.end() || !found->second.alias_template) continue;
+		const string owner = found->second.owner;
+		if(LastComponent(owner) != LastComponent(callable_owner)) continue;
+		int score = 1;
+		const string candidate_parent = PrefixComponent(owner);
+		if(!source_parent.empty() && LastComponent(candidate_parent) ==
+			LastComponent(source_parent)) score = 3;
+		if(!source_parent.empty() && candidate_parent.find(source_parent + "::") == 0)
+			score = 4;
+		if(score > callable_definition_score) {
+			callable_definition = &found->second;
+			callable_definition_score = score;
+		}
+	}
+	if(callable_definition) for(size_t parameter = 0;
+		parameter < callable_definition->parameters.size() &&
+		parameter < call_arguments.size(); ++parameter)
+		if(!callable_definition->parameters[parameter].name.empty())
+			local[callable_definition->parameters[parameter].name] = call_arguments[parameter];
+	const char* const member_names[] = {"key_type", "value_type", "reference", "next_binding"};
+	for(size_t name = 0; name < sizeof(member_names) / sizeof(member_names[0]); ++name) {
+		const string owner = name == 3 ? callable_owner : PrefixComponent(callable_owner);
+		string member_type = MemberAliasType(owner, member_names[name]);
+		if(member_type.empty()) {
+			set<string> active;
+			FindClassMemberType(owner, member_names[name], substitutions, context,
+				&member_type, &active, true);
+		}
+		if(member_type.empty()) continue;
+		try {
+			member_type = CanonicalSpelling(RewriteText(member_type, context, local, 0));
+		} catch(const PA18SubstitutionFailure&) {}
+		local[member_names[name]] = member_type;
+	}
+	string rewritten;
+	try {
+		rewritten = CanonicalSpelling(RewriteText(target, context, local, 0));
+	} catch(const PA18SubstitutionFailure&) {
+		return false;
+	}
+	if(rewritten.empty() || rewritten == target) return false;
+	raw->replace(begin, close - begin + 1, rewritten);
+	if(template_replaced) *template_replaced = true;
+	if(search) *search = begin + rewritten.size();
+	return true;
+}
+
 bool PA18TemplateExpander::RewriteResolvedTemplateMember(string* raw, size_t begin,
 	size_t close, const string& context, const map<string, string>& substitutions,
 	const TemplateDefinition* definition, const vector<string>& args,
@@ -39,10 +168,10 @@ bool PA18TemplateExpander::RewriteResolvedTemplateMember(string* raw, size_t beg
 				for(size_t parameter = 0; parameter < outer_definition->parameters.size() &&
 					parameter < outer_arguments.size(); ++parameter)
 					if(!outer_definition->parameters[parameter].name.empty())
-						inherited_owner_bindings[outer_definition->parameters[parameter].name] =
-							outer_arguments[parameter];
+							inherited_owner_bindings[outer_definition->parameters[parameter].name] =
+								outer_arguments[parameter];
+				}
 			}
-		}
 	}
 	string member_type;
 	set<string> member_active;
@@ -252,8 +381,68 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 					}
 				if(class_declarations_.find(class_key) != class_declarations_.end()) break;
 			}
+			// A source class whose requested alias contains a dependent member
+			// call needs a concrete owner while that call is evaluated.  Materialize
+			// only this expression-bearing case; eagerly materializing every source
+			// template-id changes lookup and overload visibility for ordinary aliases.
+			const TemplateDefinition* source_definition = FindDefinition(
+				source_template_base, context);
+			if(source_definition && source_definition->class_template) {
+				const TemplateDefinition* selected_source = SelectClassTemplateDefinition(
+					source_definition, requested_arguments, context);
+				if(selected_source) source_definition = selected_source;
+				string source_member_type;
+				if(source_definition->declaration) for(size_t child_index = 0;
+					child_index < source_definition->declaration->children.size(); ++child_index) {
+					CPPGMAstNodePtr child = source_definition->declaration->children[child_index];
+					if(!child) continue;
+					while(child->kind == "template-declaration" && child->children.size() > 1)
+						child = child->children[1];
+					if(child->kind == "alias-declaration" &&
+						LastComponent(RemoveMarker(child->value)) == member &&
+						!child->children.empty()) {
+						source_member_type = TypeIdSpelling(child->children[0]);
+						break;
+					}
+					if(child->kind != "simple-declaration" || child->children.empty() ||
+						SpellNode(child->children[0]).find("typedef") == string::npos) continue;
+					const CPPGMAstNodePtr list = ChildOfKindLocal(child, "init-declarator-list");
+					if(!list) continue;
+					for(size_t item_index = 0; item_index < list->children.size(); ++item_index) {
+						const CPPGMAstNodePtr item = list->children[item_index];
+						if(!item || item->children.empty() ||
+							LastComponent(FirstIdentifierLocal(item->children[0])) != member) continue;
+						source_member_type = DeclaratorTypeSpelling(
+							NodeTypeSpelling(child->children[0]), item->children[0]);
+						break;
+					}
+					if(!source_member_type.empty()) break;
+				}
+				bool contains_call = false;
+				for(size_t at = source_member_type.find('('); at != string::npos;
+					at = source_member_type.find('(', at + 1)) {
+					size_t before = at;
+					while(before > 0 && isspace(static_cast<unsigned char>(source_member_type[before - 1])))
+						--before;
+					if(before > 0 && IsIdentifierCharacter(source_member_type[before - 1])) {
+						contains_call = true;
+						break;
+					}
+				}
+				if(contains_call) try {
+					const string generated = const_cast<PA18TemplateExpander*>(this)->Instantiate(
+						*source_definition, requested_arguments, context, false, 0,
+						&substitutions);
+					const string qualified_generated = source_definition->owner.empty() ? generated :
+						JoinPath(source_definition->owner, generated);
+					if(class_declarations_.find(qualified_generated) != class_declarations_.end())
+						class_key = qualified_generated;
+					else if(class_declarations_.find(generated) != class_declarations_.end())
+						class_key = generated;
+				} catch(const PA18SubstitutionFailure&) {}
+			}
+			}
 		}
-	}
 	// A member replay can leave the source argument list attached to an
 	// already materialized generated name (`expr_<...><Tag,Args>`).  The
 	// generated name is the nominal class key; discard only that redundant
@@ -466,11 +655,23 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 						}
 					}
 					}
-					for(size_t parameter = 0; parameter < class_definition->parameters.size() &&
-						parameter < class_arguments.size(); ++parameter)
-						if(!class_definition->parameters[parameter].name.empty()) {
-							const string argument = CanonicalSpelling(ReplaceIdentifiers(
-								class_arguments[parameter], class_substitutions));
+						const auto preserves_materialized_argument = [&](const string& spelling) {
+							if(spelling.empty() || spelling.find_first_not_of(
+								"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") != string::npos)
+								return false;
+							if(class_contexts_.find(spelling) == class_contexts_.end() &&
+								!FindClassDeclaration(spelling, context)) return false;
+							for(map<string, string>::const_iterator binding = class_substitutions.begin();
+								binding != class_substitutions.end(); ++binding)
+								if(binding->first != spelling && binding->second == spelling) return true;
+							return false;
+						};
+						for(size_t parameter = 0; parameter < class_definition->parameters.size() &&
+							parameter < class_arguments.size(); ++parameter)
+							if(!class_definition->parameters[parameter].name.empty()) {
+								const string argument = preserves_materialized_argument(class_arguments[parameter]) ?
+									CanonicalSpelling(class_arguments[parameter]) : CanonicalSpelling(ReplaceIdentifiers(
+									class_arguments[parameter], class_substitutions));
 							class_substitutions[class_definition->parameters[parameter].name] =
 								class_definition->parameters[parameter].template_template ? argument :
 								CanonicalSpelling(ResolveAlias(argument, context));
@@ -609,9 +810,13 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 			SelectClassTemplateDefinition(specialization_definition,
 				specialization_arguments->second, context);
 		if(selected_specialization && selected_specialization->partial_specialization) {
-			if(specialization_definition &&
+			// A generated specialization may be registered as a forward while its
+			// class body is being replayed.  In that window, continue lookup through
+			// the selected source partial so inherited members remain visible; the
+			// generated declaration will take over once materialization completes.
+			if(incomplete_concrete || (specialization_definition &&
 				(specialization_definition->name.find("enable_if") != string::npos ||
-					specialization_definition->name.find("disable_if") != string::npos))
+					specialization_definition->name.find("disable_if") != string::npos)))
 				selected_specialization_declaration = selected_specialization->declaration;
 			map<string, string> specialized_bindings;
 			if(MatchClassSpecializationPattern(*selected_specialization,
@@ -631,16 +836,33 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 		active->erase(active_key);
 		return false;
 	}
+	map<string, string> declaration_substitutions = class_substitutions;
+	map<string, vector<string> >::const_iterator materialized_arguments =
+		specialization_arguments_.find(LastComponent(class_key));
+	if(materialized_arguments != specialization_arguments_.end())
+		for(size_t argument = 0; argument < materialized_arguments->second.size(); ++argument) {
+			const string value = CanonicalSpelling(materialized_arguments->second[argument]);
+			if(value.empty() || value.find_first_not_of(
+				"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") != string::npos ||
+				(class_contexts_.find(value) == class_contexts_.end() &&
+					!FindClassDeclaration(value, context))) continue;
+			if(declaration_substitutions.find(value) != declaration_substitutions.end())
+				declaration_substitutions.erase(value);
+		}
 	const string declaration_context = PrefixComponent(class_key).empty() ?
 		context : PrefixComponent(class_key);
 	string fallback_type;
 	for(size_t i = 0; i < declaration->children.size(); ++i) {
 		const CPPGMAstNodePtr child = declaration->children[i];
 		if(!child) continue;
-		if(!aliases_only && (child->kind == "class-specifier" ||
-			child->kind == "class-forward-declaration" ||
-			child->kind == "enum-specifier") &&
-			LastComponent(child->value) == member) {
+		CPPGMAstNodePtr direct_child = child;
+		while(direct_child && direct_child->kind == "template-declaration" &&
+			direct_child->children.size() > 1)
+			direct_child = direct_child->children[1];
+		if(!aliases_only && direct_child && (direct_child->kind == "class-specifier" ||
+			direct_child->kind == "class-forward-declaration" ||
+			direct_child->kind == "enum-specifier") &&
+			LastComponent(direct_child->value) == member) {
 			*result = JoinPath(class_key, member);
 			active->erase(active_key);
 			return true;
@@ -656,13 +878,13 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 					fallback_type = type;
 				continue;
 			}
-				*result = CanonicalSpelling(ReplaceIdentifiers(type, class_substitutions));
+				*result = CanonicalSpelling(ReplaceIdentifiers(type, declaration_substitutions));
 				if(result->find("::") != string::npos && result->find('<') != string::npos)
 					*result = NormalizeTypeArgument(const_cast<PA18TemplateExpander*>(this)->RewriteText(
-						*result, context, class_substitutions, 0));
+						*result, context, declaration_substitutions, 0));
 				active->erase(active_key);
-			return !result->empty();
-		}
+				return !result->empty();
+			}
 		if(child->kind != "simple-declaration" || child->children.empty()) continue;
 		if(aliases_only && SpellNode(child->children[0]).find("typedef") == string::npos)
 			continue;
@@ -676,16 +898,16 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 				continue;
 			if(LastComponent(FirstIdentifierLocal(init->children[0])) != member) continue;
 				*result = CanonicalSpelling(ReplaceIdentifiers(
-					DeclaratorTypeSpelling(base, init->children[0]), class_substitutions));
-			if(result->find("::") != string::npos && result->find('<') != string::npos)
-				*result = NormalizeTypeArgument(const_cast<PA18TemplateExpander*>(this)->RewriteText(
-					*result, context, class_substitutions, 0));
+					DeclaratorTypeSpelling(base, init->children[0]), declaration_substitutions));
+				if(result->find("::") != string::npos && result->find('<') != string::npos)
+					*result = NormalizeTypeArgument(const_cast<PA18TemplateExpander*>(this)->RewriteText(
+						*result, context, declaration_substitutions, 0));
 				active->erase(active_key);
-			return !result->empty();
-		}
+				return !result->empty();
+			}
 	}
 	if(!fallback_type.empty()) {
-		*result = CanonicalSpelling(ReplaceIdentifiers(fallback_type, class_substitutions));
+		*result = CanonicalSpelling(ReplaceIdentifiers(fallback_type, declaration_substitutions));
 		active->erase(active_key);
 		return !result->empty();
 	}
@@ -704,8 +926,8 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 			string base_spelling = NormalizeElaboratedSpelling(
 				ReplaceIdentifiersPreservingPackSizes(base_name->value, base_name_substitutions),
 				declaration_context);
-			base_spelling = CanonicalSpelling(base_spelling);
-			const size_t open = base_spelling.find('<');
+				base_spelling = CanonicalSpelling(base_spelling);
+				const size_t open = base_spelling.find('<');
 			const TemplateDefinition* base_definition = 0;
 			bool base_is_partial_specialization = false;
 			vector<string> base_arguments;
@@ -758,14 +980,241 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 					for(size_t parameter = 0; parameter < base_definition->parameters.size() &&
 						parameter < base_arguments.size(); ++parameter)
 						if(!base_definition->parameters[parameter].name.empty())
+						{
+							// `base_spelling` has already been formed from the concrete
+							// enclosing bindings.  Reapplying those bindings here can
+							// reinterpret a nominal class that shadows a parameter name:
+							// `VertexProperty -> Vertex` followed by `Vertex -> unsigned
+							// long` would corrupt the nested graph argument.  Carry the
+							// typed argument forward as-is; only normalize its spelling
+							// and scope below.
 							base_substitutions[base_definition->parameters[parameter].name] =
 								QualifyTypeArgument(NormalizeElaboratedSpelling(
-								ReplaceIdentifiersPreservingPackSizes(base_arguments[parameter],
-									class_substitutions), declaration_context),
+								base_arguments[parameter], declaration_context),
 								declaration_context, base_definition->owner);
+				}
 				}
 			}
 			if(base_definition && !base_arguments.empty()) {
+				// Prefer a concrete replay of an inherited class specialization.
+				// Looking through the source primary loses the enclosing bindings of
+				// nested members such as `arg_list<Tag>::binding::fn`; the generated
+				// declaration carries the typed `key_type`, `next_binding`, and other
+				// aliases needed by the member-template body.
+				if(base_definition->class_template) {
+					map<string, vector<string> >::const_iterator generated_names =
+						specialization_names_by_base_.find(LastComponent(
+							base_definition->qualified_name));
+						if(generated_names != specialization_names_by_base_.end())
+					for(size_t generated_index = 0;
+							generated_index < generated_names->second.size(); ++generated_index) {
+							const string& generated_name = generated_names->second[generated_index];
+							map<string, vector<string> >::const_iterator generated_arguments =
+								specialization_arguments_.find(generated_name);
+							if(generated_arguments == specialization_arguments_.end() ||
+								generated_arguments->second.size() < base_arguments.size()) continue;
+							bool omitted_defaults = true;
+							for(size_t omitted = base_arguments.size(); omitted <
+								generated_arguments->second.size(); ++omitted)
+								if(omitted >= base_definition->parameters.size() ||
+									(!base_definition->parameters[omitted].pack &&
+									 base_definition->parameters[omitted].default_type.empty())) {
+									omitted_defaults = false;
+									break;
+								}
+							if(!omitted_defaults) continue;
+							bool same_arguments = true;
+							for(size_t argument = 0; argument < base_arguments.size(); ++argument) {
+								const string actual = CollapseRepeatedMemberPaths(CollapseRepeatedQualifier(
+									NormalizeTypeArgument(CanonicalSpelling(ReplaceIdentifiers(
+										base_arguments[argument], class_substitutions)))));
+								const string expected = CollapseRepeatedMemberPaths(CollapseRepeatedQualifier(
+									NormalizeTypeArgument(CanonicalSpelling(
+										generated_arguments->second[argument]))));
+								if(actual != expected && RestoreSpecializationSpelling(actual) !=
+									RestoreSpecializationSpelling(expected) &&
+									LastComponent(actual) != LastComponent(expected)) {
+									same_arguments = false;
+									break;
+								}
+							}
+							if(!same_arguments) continue;
+							string generated_path = JoinPath(base_definition->owner, generated_name);
+							if(class_declarations_.find(generated_path) == class_declarations_.end())
+								generated_path = generated_name;
+							bool requested_nested_class = false;
+							if(base_definition->declaration) for(size_t child = 0;
+								child < base_definition->declaration->children.size(); ++child) {
+								const CPPGMAstNodePtr nested = base_definition->declaration->children[child];
+								if(nested && (nested->kind == "class-specifier" ||
+									nested->kind == "class-forward-declaration") &&
+									LastComponent(nested->value) == member) {
+									requested_nested_class = true;
+									break;
+								}
+							}
+			if(requested_nested_class) try {
+					const_cast<PA18TemplateExpander*>(this)->InstantiateNestedClass(
+						*base_definition, generated_arguments->second, generated_name,
+						member, declaration_context);
+			} catch(const PA18SubstitutionFailure&) {}
+			if(requested_nested_class && !aliases_only) {
+				const string generated_nested = JoinPath(generated_name, member);
+				const string qualified_generated_nested = JoinPath(generated_path, member);
+				if(class_declarations_.find(generated_nested) != class_declarations_.end()) {
+					*result = generated_nested;
+					active->erase(active_key);
+					return true;
+				}
+				if(class_declarations_.find(qualified_generated_nested) !=
+					class_declarations_.end()) {
+					*result = qualified_generated_nested;
+					active->erase(active_key);
+					return true;
+				}
+			}
+			const bool generated_member_found = FindClassMemberType(generated_path,
+								member, class_substitutions, declaration_context, result, active,
+								aliases_only);
+								if(generated_member_found) {
+								active->erase(active_key);
+								return true;
+							}
+						}
+				}
+				if(base_definition->alias_template) {
+					// `mp_defer<F, T...>` is an inherited alias whose selected
+					// branch is `mp_defer_impl<F, T...>`.  Its useful member is
+					// therefore the result of invoking the template-template
+					// argument, not the generated spelling of the alias itself.
+					// Evaluate that typed result while following an inherited
+					// member so a valid F remains visible to the surrounding
+					// substitution probe.  An invalid F naturally fails through
+					// the normal alias replay below.
+					if(base_definition->name == "mp_defer" && base_arguments.size() > 1) {
+						string deferred_callable = const_cast<PA18TemplateExpander*>(this)->
+							NormalizeTemplateTemplateArgument(base_arguments[0],
+								declaration_context, base_substitutions);
+						if(deferred_callable.empty()) deferred_callable = base_arguments[0];
+						bool deferred_concrete = true;
+						for(size_t argument = 1; argument < base_arguments.size(); ++argument)
+							if(base_arguments[argument].find("...") != string::npos ||
+								HasUnresolvedTemplateParameter(base_arguments[argument],
+									declaration_context, class_substitutions)) {
+								deferred_concrete = false;
+								break;
+							}
+						string deferred_member_target;
+						map<string, string> deferred_substitutions = base_substitutions;
+						const size_t deferred_member_separator = deferred_callable.rfind("::");
+						if(deferred_member_separator != string::npos && deferred_concrete) {
+							const string deferred_owner = deferred_callable.substr(0,
+								deferred_member_separator);
+							const string deferred_member = deferred_callable.substr(
+								deferred_member_separator + 2);
+							deferred_member_target = MemberAliasType(deferred_owner, deferred_member);
+							const string deferred_parent = PrefixComponent(deferred_owner);
+							const map<string, vector<string> >::const_iterator member_candidates =
+								definitions_by_name_.find(deferred_member);
+							const TemplateDefinition* deferred_definition = 0;
+							int deferred_definition_score = 0;
+							string deferred_source_parent;
+							map<string, string>::const_iterator deferred_parent_base =
+								specialization_bases_.find(LastComponent(deferred_parent));
+							if(deferred_parent_base != specialization_bases_.end())
+								deferred_source_parent = deferred_parent_base->second;
+							if(member_candidates != definitions_by_name_.end())
+								for(size_t candidate = 0; candidate < member_candidates->second.size(); ++candidate) {
+									map<string, TemplateDefinition>::const_iterator found = definitions_.find(
+										member_candidates->second[candidate]);
+									if(found == definitions_.end() || !found->second.alias_template) continue;
+									if(LastComponent(found->second.owner) != LastComponent(deferred_owner) &&
+										LastComponent(found->second.owner) != deferred_member) continue;
+									int score = 1;
+									const string candidate_parent = PrefixComponent(found->second.owner);
+									if(!deferred_source_parent.empty() &&
+										(candidate_parent == deferred_source_parent ||
+										 LastComponent(candidate_parent) == LastComponent(deferred_source_parent)))
+										score = 3;
+									if(!deferred_source_parent.empty() &&
+										candidate_parent.find(deferred_source_parent + "::") == 0)
+										score = 4;
+									if(score > deferred_definition_score) {
+										deferred_definition = &found->second;
+										deferred_definition_score = score;
+									}
+								}
+							if(deferred_definition) for(size_t parameter = 0;
+								parameter < deferred_definition->parameters.size() &&
+								parameter + 1 < base_arguments.size(); ++parameter)
+								if(!deferred_definition->parameters[parameter].name.empty())
+									deferred_substitutions[deferred_definition->parameters[parameter].name] =
+										base_arguments[parameter + 1];
+						const char* deferred_names[] = {"key_type", "value_type", "reference", "next_binding"};
+						for(size_t name = 0; name < sizeof(deferred_names) / sizeof(deferred_names[0]); ++name) {
+							string alias_type = name == 3 ? MemberAliasType(deferred_owner,
+								deferred_names[name]) : MemberAliasType(deferred_parent, deferred_names[name]);
+							if(alias_type.empty()) {
+								set<string> alias_active;
+								FindClassMemberType(name == 3 ? deferred_owner : deferred_parent,
+									deferred_names[name], map<string, string>(), declaration_context,
+									&alias_type, &alias_active, true);
+							}
+							if(alias_type.empty()) continue;
+							try {
+								alias_type = CanonicalSpelling(const_cast<PA18TemplateExpander*>(this)->RewriteText(
+									alias_type, declaration_context, deferred_substitutions, 0));
+							} catch(const PA18SubstitutionFailure&) {}
+							deferred_substitutions[deferred_names[name]] = alias_type;
+						}
+						if(!deferred_member_target.empty()) {
+							try {
+								const string replayed_target = CanonicalSpelling(
+									const_cast<PA18TemplateExpander*>(this)->RewriteText(
+										deferred_member_target, declaration_context,
+										deferred_substitutions, 0));
+								if(!replayed_target.empty() && replayed_target != deferred_member_target) {
+									*result = CanonicalSpelling(ResolveAlias(replayed_target,
+										declaration_context));
+									if(result->empty()) *result = replayed_target;
+										active->erase(active_key);
+										return true;
+									}
+								} catch(const PA18SubstitutionFailure&) {}
+							}
+						}
+						string deferred_call = deferred_callable + "<";
+						for(size_t argument = 1; argument < base_arguments.size(); ++argument) {
+							if(argument != 1) deferred_call += ',';
+							deferred_call += base_arguments[argument];
+						}
+						deferred_call += '>';
+						try {
+							string deferred_type = CanonicalSpelling(
+								const_cast<PA18TemplateExpander*>(this)->RewriteText(
+									deferred_call, declaration_context, base_substitutions, 0));
+							if(!deferred_type.empty() && deferred_type != deferred_call) {
+								const string resolved_deferred_type = CanonicalSpelling(
+									ResolveAlias(deferred_type, declaration_context));
+								*result = resolved_deferred_type.empty() ? deferred_type :
+									resolved_deferred_type;
+								active->erase(active_key);
+								return true;
+							}
+						} catch(const PA18SubstitutionFailure&) {}
+					}
+					try {
+						string expanded_alias = CanonicalSpelling(
+							const_cast<PA18TemplateExpander*>(this)->RewriteText(
+								base_spelling, declaration_context, base_substitutions, 0));
+						if(!expanded_alias.empty() && expanded_alias != base_spelling &&
+							FindClassMemberType(expanded_alias, member, base_substitutions,
+								declaration_context, result, active, aliases_only)) {
+							active->erase(active_key);
+							return true;
+						}
+					} catch(const PA18SubstitutionFailure&) {}
+				}
 				const TemplateDefinition* selected_base = SelectClassTemplateDefinition(
 					base_definition, base_arguments, declaration_context);
 				if(selected_base && selected_base != base_definition &&

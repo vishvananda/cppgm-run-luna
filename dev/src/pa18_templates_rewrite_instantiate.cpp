@@ -59,6 +59,10 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformInstantiatedNode(
 			active_function_pack_substitutions_[identifier] = values->second;
 		else active_function_pack_substitutions_[identifier] = vector<string>();
 	}
+	if(!definition.class_template && GeneratedNodeHasUnavailableMemberType(
+		definition.declaration, context, substitutions)) {
+		throw PA18SubstitutionFailure("dependent type substitution failed");
+	}
 	try {
 		CPPGMAstNodePtr result = TransformNode(definition.declaration, context, substitutions);
 		active_integral_substitutions_ = previous;
@@ -569,7 +573,8 @@ string PA18TemplateExpander::RewriteActivePackSizes(string raw) const
 
 bool PA18TemplateExpander::EvaluateUnqualifiedConstantMember(
 	const string& raw, const string& context,
-	const map<string, string>& substitutions, PA19IntegralValue* result)
+	const map<string, string>& substitutions, PA19IntegralValue* result,
+	const string& preferred_owner)
 {
 	if(!result || raw.empty()) return false;
 	// Collection visits the primary/partial declaration before it has a
@@ -584,9 +589,23 @@ bool PA18TemplateExpander::EvaluateUnqualifiedConstantMember(
 	map<string, vector<string> >::const_iterator owners =
 		constant_member_owners_.find(raw);
 	if(owners == constant_member_owners_.end()) return false;
-
-	for(size_t owner_index = 0; owner_index < owners->second.size(); ++owner_index) {
+	vector<size_t> owner_order;
+	for(size_t owner = 0; owner < owners->second.size(); ++owner)
+		owner_order.push_back(owner);
+	if(!preferred_owner.empty()) for(size_t owner = 0; owner < owner_order.size(); ++owner) {
+		const string& owner_name = owners->second[owner_order[owner]];
+		if(owner_name != preferred_owner) continue;
+		if(owner != 0) swap(owner_order[0], owner_order[owner]);
+		break;
+	}
+	for(size_t ordered = 0; ordered < owner_order.size(); ++ordered) {
+		const size_t owner_index = owner_order[ordered];
 		const string& owner_name = owners->second[owner_index];
+		if(!preferred_owner.empty() && ordered > 0) {
+			// The source class that owns the replayed specialization is the only
+			// valid unqualified scope for this targeted member-argument lookup.
+			continue;
+		}
 		map<string, CPPGMAstNodePtr>::const_iterator candidate =
 			class_declarations_.find(owner_name);
 		if(candidate == class_declarations_.end() || !candidate->second) continue;
@@ -654,7 +673,9 @@ bool PA18TemplateExpander::EvaluateUnqualifiedConstantMember(
 					if(!pack->first.empty()) active_pack_substitutions_[pack->first] = pack->second;
 				const string expression = ConstantExpressionSpelling(initializer->children[0]);
 				bool evaluated = false;
-				if(expression != raw)
+					evaluated = EvaluatePreferredOwnerConstantExpression(expression, raw,
+						preferred_owner, member_substitutions, result);
+				if(expression != raw && !evaluated)
 					evaluated = EvaluateIntegralText(expression, candidate->first,
 						member_substitutions, result);
 			active_pack_substitutions_ = previous_packs;
@@ -1479,7 +1500,5 @@ string PA18TemplateExpander::FindConcreteInstantiationOwner(
 		}
 		if(same) return materialized_context(candidate);
 	}
-	return string();
-}
-
+	return string(); }
 } // namespace pa18_templates_internal

@@ -328,6 +328,13 @@ inline vector<string> SplitCallArguments(const string& raw)
 			string value = CanonicalSpelling(binding->second);
 			set<string> seen;
 			while(!value.empty() && seen.insert(value).second) {
+				// A template argument may be a nominal class whose spelling is
+				// also the name of another parameter in the function template
+				// (`VertexProperty -> Vertex`, alongside `Vertex -> unsigned
+				// long`).  The class spelling is a typed fact, not an alias to
+				// the shadowing parameter, so do not flatten it through `local`.
+				if(class_contexts_.find(value) != class_contexts_.end() ||
+					FindClassDeclaration(value, context)) break;
 				map<string, string>::const_iterator next = local.find(value);
 				if(next == local.end() || next->first == binding->first) break;
 				value = CanonicalSpelling(next->second);
@@ -364,6 +371,9 @@ inline vector<string> SplitCallArguments(const string& raw)
 		const map<string, string>& substitutions, const vector<string>& actual_types, string* result,
 		const string* known_object_type = 0);
 	bool ResolveCallableVariableCallResult(const string& callee, const string& function_context, const string& context, const map<string, string>& substitutions, const vector<string>& actual_types, string* result);
+	void ApplyFriendClassSubstitutions(const TemplateDefinition& definition,
+		const vector<string>& actual_types, const string& context,
+		map<string, string>* substitutions) const;
 	bool ResolveConstructedCallResult(const string& callee, const string& context,
 		const map<string, string>& substitutions, const vector<string>& actual_types, string* result);
 	void ExpandExplicitFunctionArguments(const string& raw, const string& context,
@@ -555,15 +565,51 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 		const string& context) const;
 	bool FunctionArgumentViable(const string& parameter, const string& actual,
 		const string& context) const;
+	bool TemplateArgumentArityValid(const string& raw, const string& context,
+		const map<string, string>& substitutions) const
+	{
+		for(size_t position = 0; position < raw.size(); ++position) {
+			if(raw[position] != '<') continue;
+			string base, arguments_text; size_t begin = 0, close = string::npos;
+			if(!TemplateBase(raw, position, &begin, &base) ||
+				!TemplateRange(raw, position, &arguments_text, &close)) continue;
+			const TemplateDefinition* definition = FindDefinition(base, context);
+			if(definition && definition->alias_template) {
+				const vector<string> arguments = SplitTemplateArguments(arguments_text);
+				bool dependent = false;
+				for(size_t argument = 0; argument < arguments.size(); ++argument)
+					if(arguments[argument].find("...") != string::npos ||
+						HasUnresolvedTemplateParameter(arguments[argument], context,
+							substitutions)) { dependent = true; break; }
+				if(!dependent) {
+					size_t required = 0; bool has_pack = false;
+					for(size_t parameter = 0; parameter < definition->parameters.size(); ++parameter) {
+						const TemplateParameter& item = definition->parameters[parameter];
+						if(item.pack) has_pack = true;
+						else if(item.default_type.empty()) ++required;
+					}
+					if(arguments.size() < required || (!has_pack &&
+						arguments.size() > definition->parameters.size())) return false;
+				}
+			}
+			if(!TemplateArgumentArityValid(arguments_text, context, substitutions)) return false;
+			position = close;
+		}
+		return true;
+	}
 	bool FunctionArgumentsViable(const TemplateDefinition& definition,
 		const vector<string>& arguments, const vector<string>& actual_types,
-		const string& context)
+		const string& context, const map<string, string>* outer_substitutions = 0)
 	{
 		if(!definition.declaration) return false;
+		for(size_t argument = 0; argument < arguments.size(); ++argument)
+			if(!TemplateArgumentArityValid(arguments[argument], context,
+				outer_substitutions ? *outer_substitutions : map<string, string>())) return false;
 		const CPPGMAstNodePtr declarator = FunctionDeclarator(definition.declaration);
 		const CPPGMAstNodePtr parameters = DescendantOfKind(declarator, "parameter-clause");
 		if(!parameters) return false;
-		map<string, string> local;
+		map<string, string> local = outer_substitutions ? *outer_substitutions :
+			map<string, string>();
 		map<string, vector<string> > pack_arguments;
 		size_t template_argument = 0;
 		for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter) {
@@ -844,13 +890,37 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 		if(EvaluateNewExpression(normalized, context, substitutions, result)) return true;
 		const size_t direct_open = normalized.find('(');
 		if(direct_open != string::npos && direct_open > 0 &&
-			normalized.find('.') == string::npos && normalized.find("->") == string::npos &&
 			normalized[normalized.size() - 1] == ')') {
 			const string constructed = ResolveDecltypeTypeName(
 				Trim(normalized.substr(0, direct_open)), context, substitutions);
-			if(IsKnownTypeSpelling(constructed, context)) {
-				if(!IsDefaultConstructibleType(constructed, context)) return false;
-				*result = constructed;
+			if(IsKnownTypeSpelling(constructed, context) &&
+				FindClassDeclaration(constructed, context)) {
+				string expanded = ExpandPackCallText(normalized,
+					active_pack_substitutions_);
+				const size_t expanded_open = expanded.find('(');
+				const string argument_text = expanded_open == string::npos ? string() :
+					Trim(expanded.substr(expanded_open + 1,
+						expanded.size() - expanded_open - 2));
+				vector<string> actual_expressions = SplitCallArguments(argument_text);
+				vector<string> actual_types;
+				for(size_t argument = 0; argument < actual_expressions.size(); ++argument) {
+					const string actual = ExpressionTypeSpelling(actual_expressions[argument],
+						context, substitutions);
+					if(actual.empty()) return false;
+					actual_types.push_back(actual);
+				}
+				string constructed_result;
+				if(ResolveConstructedCallResult(
+					Trim(expanded.substr(0, expanded_open)), context, substitutions,
+					actual_types, &constructed_result)) {
+					*result = constructed_result;
+					return true;
+				}
+				return false;
+			}
+			string call_result;
+			if(FunctionCallResultType(normalized, context, substitutions, &call_result)) {
+				*result = call_result;
 				return true;
 			}
 		}
@@ -884,6 +954,10 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 	bool FindInheritedTemplateMemberType(const TemplateDefinition& definition,
 		const string& member, const string& context,
 		const map<string, string>& local, string* result);
+	bool RewriteMemberTemplateAliasApplication(string* raw, size_t begin, size_t close,
+		const string& base, const string& context,
+		const map<string, string>& substitutions, bool* template_replaced,
+		size_t* search);
 
 	void ReifyReferenceType(const CPPGMAstNodePtr& result) const
 	{

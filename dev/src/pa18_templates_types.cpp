@@ -19,8 +19,14 @@ string PA18TemplateExpander::MemberAliasType(const string& class_key, const stri
 	const CPPGMAstNodePtr& declaration = declaration_it->second;
 	if(declaration) {
 		for(size_t i = 0; i < declaration->children.size(); ++i) {
-			const CPPGMAstNodePtr child = declaration->children[i];
+			CPPGMAstNodePtr child = declaration->children[i];
 			if(!child) continue;
+			// A member alias template is represented by a wrapper node around
+			// the alias declaration.  Materialized nested classes use that same
+			// AST shape, so inspect the wrapped declaration before falling through
+			// to inherited-member lookup.
+			while(child->kind == "template-declaration" && child->children.size() > 1)
+				child = child->children[1];
 			if(child->kind == "alias-declaration" &&
 				LastComponent(RemoveMarker(child->value)) == member_name &&
 				!child->children.empty()) {

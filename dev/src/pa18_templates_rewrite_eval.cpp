@@ -55,6 +55,61 @@ bool PA18TemplateExpander::EvaluateSourceArrayFunction(
 	if(!function || function->children.size() < 3 ||
 		!HasDeclarationSpecifier(function->children[0], "constexpr"))
 		return false;
+	// A constexpr member copied from a concrete class-template specialization is
+	// indexed by its source declaration.  Recover the specialization's typed
+	// bindings before evaluating its body; otherwise a pack such as `Types...`
+	// is replayed as an empty pack and a dependent conjunction selects its
+	// ellipsis fallback.
+	const map<string, vector<string> > previous_function_packs =
+		active_pack_substitutions_;
+	struct FunctionPackScope {
+		PA18TemplateExpander* owner;
+		map<string, vector<string> > previous;
+		~FunctionPackScope() { owner->active_pack_substitutions_ = previous; }
+	} function_pack_scope = { this, previous_function_packs };
+	map<string, string> function_substitutions = substitutions;
+	const size_t scope_separator = callee.rfind("::");
+	if(scope_separator != string::npos) {
+		const string generated_owner = callee.substr(0, scope_separator);
+		map<string, string>::const_iterator generated_base =
+			specialization_bases_.find(LastComponent(generated_owner));
+		map<string, vector<string> >::const_iterator generated_arguments =
+			specialization_arguments_.find(LastComponent(generated_owner));
+		if(generated_base != specialization_bases_.end() &&
+			generated_arguments != specialization_arguments_.end()) {
+			const TemplateDefinition* owner_definition = FindDefinition(
+				generated_base->second, context);
+			if(owner_definition) {
+				size_t argument_index = 0;
+				for(size_t parameter = 0; parameter < owner_definition->parameters.size();
+					++parameter) {
+					const TemplateParameter& detail = owner_definition->parameters[parameter];
+					if(detail.pack) {
+						size_t trailing_fixed = 0;
+						for(size_t later = parameter + 1;
+							later < owner_definition->parameters.size(); ++later)
+							if(!owner_definition->parameters[later].pack) ++trailing_fixed;
+						const size_t available = generated_arguments->second.size() > argument_index ?
+							generated_arguments->second.size() - argument_index : 0;
+						const size_t count = available > trailing_fixed ? available - trailing_fixed : 0;
+						vector<string> values;
+						for(size_t value = 0; value < count; ++value)
+							values.push_back(generated_arguments->second[argument_index++]);
+						if(!detail.name.empty()) {
+							active_pack_substitutions_[detail.name] = values;
+							if(!values.empty()) function_substitutions[detail.name] = values[0];
+						}
+					} else {
+						if(argument_index < generated_arguments->second.size()) {
+							if(!detail.name.empty()) function_substitutions[detail.name] =
+								generated_arguments->second[argument_index];
+							++argument_index;
+						}
+					}
+				}
+			}
+		}
+	}
 
 	struct SourceValue {
 		PA19IntegralValue integral;
@@ -129,7 +184,7 @@ bool PA18TemplateExpander::EvaluateSourceArrayFunction(
 			return value;
 		}
 		PA19IntegralValue integral;
-		if(EvaluateIntegralText(name, context, substitutions, &integral))
+		if(EvaluateIntegralText(name, context, function_substitutions, &integral))
 			value.integral = integral;
 		return value;
 	};
@@ -193,7 +248,7 @@ bool PA18TemplateExpander::EvaluateSourceArrayFunction(
 
 	source_text_value = [&](const string& raw_text) {
 		SourceValue value;
-		string text = CanonicalSpelling(ReplaceIdentifiers(raw_text, substitutions));
+		string text = CanonicalSpelling(ReplaceIdentifiers(raw_text, function_substitutions));
 		while(text.size() >= 2 && text[0] == '(' && text[text.size() - 1] == ')') {
 			int depth = 0;
 			bool encloses_all = true;
@@ -226,7 +281,7 @@ bool PA18TemplateExpander::EvaluateSourceArrayFunction(
 				offset = static_cast<long long>(array->size());
 			} else {
 				PA19IntegralValue offset_value;
-				if(!EvaluateIntegralText(raw_offset, context, substitutions, &offset_value))
+				if(!EvaluateIntegralText(raw_offset, context, function_substitutions, &offset_value))
 					return SourceValue();
 				offset = static_cast<long long>(PA19Signed(offset_value));
 			}
@@ -237,14 +292,14 @@ bool PA18TemplateExpander::EvaluateSourceArrayFunction(
 			return value;
 		}
 		PA19IntegralValue integral;
-		if(EvaluateIntegralText(text, context, substitutions, &integral))
+		if(EvaluateIntegralText(text, context, function_substitutions, &integral))
 			value.integral = integral;
 		return value;
 	};
 
 	const auto source_noexcept = [&](const CPPGMAstNodePtr& expression) {
 		string raw = CanonicalSpelling(ReplaceIdentifiers(
-			ConstantExpressionSpelling(expression), substitutions));
+			ConstantExpressionSpelling(expression), function_substitutions));
 		string callee, arguments_text;
 		if(!SplitTextCall(raw, &callee, &arguments_text)) return false;
 		vector<string> argument_text = SplitTemplateArguments(arguments_text);

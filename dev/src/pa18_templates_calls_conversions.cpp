@@ -287,4 +287,59 @@ void PA18TemplateExpander::MaterializeOrdinaryConversion(
 	catch(const PA18SubstitutionFailure&) {}
 }
 
+void PA18TemplateExpander::MaterializeReturnConversions(
+	const CPPGMAstNodePtr& function, const CPPGMAstNodePtr& result,
+	const string& context, const string& function_context,
+	const map<string, string>& substitutions)
+{
+	if(!function || function->kind != "function-definition" || !result) return;
+	const CPPGMAstNodePtr declarator = FunctionDeclarator(function);
+	if(!declarator || function->children.empty()) return;
+	string target_type;
+	const CPPGMAstNodePtr trailing_return = ChildOfKindLocal(declarator,
+		"trailing-return-type");
+	if(trailing_return) target_type = TypeIdSpelling(
+		ChildOfKindLocal(trailing_return, "type-id"));
+	else target_type = NodeTypeSpelling(function->children[0]) +
+		ReturnDeclaratorSuffix(declarator);
+	try {
+		target_type = CanonicalSpelling(ResolveAlias(RewriteText(target_type,
+			context, substitutions, 0), context));
+	} catch(const PA18SubstitutionFailure&) { return; }
+	if(target_type.empty() || target_type == "void") return;
+	const CPPGMAstNodePtr body = ChildOfKindLocal(result, "compound-statement");
+	if(!body) return;
+	std::function<void(const CPPGMAstNodePtr&)> visit = [&](const CPPGMAstNodePtr& node) {
+		if(!node) return;
+		if(node->kind == "return-statement" && !node->children.empty()) {
+			const CPPGMAstNodePtr expression = node->children[0];
+			string source_type;
+			try {
+				if(InferArgument(expression, &source_type, substitutions,
+					function_context)) {
+					source_type = CanonicalSpelling(ResolveAlias(RewriteText(
+						source_type, function_context, substitutions, 0),
+						function_context));
+					while(source_type.compare(0, 6, "const ") == 0 ||
+						source_type.compare(0, 9, "volatile ") == 0)
+						source_type = CanonicalSpelling(source_type.substr(
+							source_type.find(' ') + 1));
+					while(!source_type.empty() && (source_type[source_type.size() - 1] == '&' ||
+						source_type[source_type.size() - 1] == '*'))
+						source_type = CanonicalSpelling(source_type.substr(0,
+							source_type.size() - 1));
+					const CPPGMAstNodePtr source_declaration = FindClassDeclaration(
+						source_type, function_context);
+					if(source_declaration && source_type != target_type)
+						ReplayOrdinaryConversion(source_type, target_type,
+							source_declaration, function_context, substitutions);
+				}
+			} catch(const PA18SubstitutionFailure&) {}
+		}
+		for(size_t child = 0; child < node->children.size(); ++child)
+			visit(node->children[child]);
+	};
+	visit(body);
+}
+
 }

@@ -238,8 +238,9 @@ bool PA18TemplateExpander::InferTemplateOperatorResult(const string& operation,
 	call->children.push_back(arguments);
 	for(size_t i = 0; i < candidates.size(); ++i) {
 		vector<string> inferred;
-		if(!InferFunctionArguments(*candidates[i], call, &inferred,
-			substitutions, context)) continue;
+		const bool inferred_ok = InferFunctionArguments(*candidates[i], call, &inferred,
+			substitutions, context);
+		if(!inferred_ok) continue;
 		if(!candidates[i]->declaration || candidates[i]->declaration->children.empty()) continue;
 		string type = NodeTypeSpelling(candidates[i]->declaration->children[0]);
 		const CPPGMAstNodePtr declarator = FunctionDeclarator(candidates[i]->declaration);

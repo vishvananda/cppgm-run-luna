@@ -230,6 +230,26 @@ bool PA18TemplateExpander::FunctionArgumentViable(const string& parameter,
 		return true;
 	if(IsBuiltinArithmeticType(expected) && FindClassDeclaration(received, context))
 		return false;
+	// A hidden friend may deliberately take a lightweight proxy object while
+	// callers probe it with the associated property type.  Model the ordinary
+	// converting-constructor path before looking for conversion operators on the
+	// received class; both are user-defined conversions in the candidate probe.
+	const CPPGMAstNodePtr expected_class = FindClassDeclaration(expected, context);
+	if(expected_class) {
+		const string expected_name = LastComponent(expected);
+		for(size_t child = 0; child < expected_class->children.size(); ++child) {
+			const CPPGMAstNodePtr member = expected_class->children[child];
+			if(!member || (member->kind != "special-member-definition" &&
+				member->kind != "special-member-declaration") ||
+				LastComponent(RemoveMarker(member->value)) != expected_name) continue;
+			const CPPGMAstNodePtr parameters = DescendantOfKind(
+				FunctionDeclarator(member), "parameter-clause");
+			if(!parameters || parameters->children.empty()) continue;
+			const CPPGMAstNodePtr first = parameters->children[0];
+			if(first && first->kind == "parameter-declaration" &&
+				FunctionArgumentViable(ParameterTypeSpelling(first), received, context)) return true;
+		}
+	}
 	// Expression-SFINAE needs to reject an attempted conversion between two
 	// unrelated complete class types.  The typed class conversion index admits
 	// only a conversion operator whose target matches the expected object.
@@ -533,6 +553,83 @@ bool PA18TemplateExpander::ResolveConstructedCallResult(
 	if(!IsKnownTypeSpelling(constructed, context)) return false;
 	bool viable = actual_types.empty() && IsDefaultConstructibleType(constructed, context);
 	const CPPGMAstNodePtr declaration = FindClassDeclaration(constructed, context);
+	// A generated class declaration retains constructor templates as a wrapped
+	// `template-declaration`, while a primary class declaration is also returned
+	// for a source spelling such as `tuple_like<int>`.  In both cases reconstruct
+	// the enclosing class packs before probing constructor defaults; otherwise an
+	// expansion such as `is_convertible<U, T>...` sees only the constructor pack
+	// U and accepts unequal pack lengths instead of treating the candidate as
+	// SFINAE-invalid.
+	string class_primary = declaration ? declaration->template_primary : string();
+	vector<string> class_arguments = declaration ? declaration->template_arguments :
+		vector<string>();
+	if(class_primary.empty()) {
+		const size_t class_open = constructed.find('<');
+		if(class_open != string::npos) {
+			string class_argument_text;
+			size_t class_close = string::npos;
+			if(TemplateRange(constructed, class_open, &class_argument_text, &class_close)) {
+				class_primary = CanonicalSpelling(constructed.substr(0, class_open));
+				class_arguments = SplitTemplateArguments(class_argument_text);
+			}
+		}
+	}
+	const TemplateDefinition* class_definition = class_primary.empty() ? 0 :
+		FindDefinition(class_primary, context);
+	if(!class_definition && !class_primary.empty())
+		class_definition = FindDefinition(LastComponent(class_primary), context);
+	if(declaration && class_definition) {
+		map<string, vector<string> > constructor_packs = active_pack_substitutions_;
+		size_t class_argument = 0;
+		for(size_t parameter = 0; parameter < class_definition->parameters.size(); ++parameter) {
+			const TemplateParameter& detail = class_definition->parameters[parameter];
+			if(detail.pack) {
+				vector<string>& values = constructor_packs[detail.name];
+				while(class_argument < class_arguments.size())
+					values.push_back(class_arguments[class_argument++]);
+			} else if(class_argument < class_arguments.size()) ++class_argument;
+		}
+		const vector<const TemplateDefinition*> constructor_definitions =
+			FindFunctionDefinitions(LastComponent(class_primary), context);
+		for(size_t candidate = 0; candidate < constructor_definitions.size(); ++candidate) {
+			const TemplateDefinition* constructor = constructor_definitions[candidate];
+			if(!constructor || !constructor->member_template || constructor->owner.empty()) continue;
+			bool same_owner = LastComponent(constructor->owner) ==
+				LastComponent(class_primary);
+			if(!same_owner) continue;
+			map<string, vector<string> > candidate_packs = constructor_packs;
+			for(size_t parameter = 0; parameter < constructor->parameters.size(); ++parameter)
+				if(constructor->parameters[parameter].pack &&
+					!constructor->parameters[parameter].name.empty())
+					candidate_packs[constructor->parameters[parameter].name] = actual_types;
+			for(size_t parameter = 0; parameter < constructor->parameters.size(); ++parameter) {
+				const string& default_type = constructor->parameters[parameter].default_type;
+				if(default_type.empty()) continue;
+				vector<string> referenced_packs;
+				for(map<string, vector<string> >::const_iterator pack = candidate_packs.begin();
+					pack != candidate_packs.end(); ++pack) {
+					for(size_t at = default_type.find(pack->first); at != string::npos;
+						at = default_type.find(pack->first, at + pack->first.size())) {
+						const bool left = at == 0 || !IsIdentifierCharacter(default_type[at - 1]);
+						const size_t end = at + pack->first.size();
+						const bool right = end == default_type.size() ||
+							!IsIdentifierCharacter(default_type[end]);
+						if(left && right) {
+							referenced_packs.push_back(pack->first);
+							break;
+						}
+					}
+				}
+				if(referenced_packs.size() > 1) {
+					const size_t pack_size = candidate_packs[referenced_packs[0]].size();
+					for(size_t pack = 1; pack < referenced_packs.size(); ++pack)
+						if(candidate_packs[referenced_packs[pack]].size() != pack_size) {
+							return false;
+						}
+				}
+			}
+		}
+	}
 	if(declaration) for(size_t member = 0;
 		member < declaration->children.size() && !viable; ++member) {
 		const CPPGMAstNodePtr candidate = declaration->children[member];
@@ -907,11 +1004,33 @@ bool PA18TemplateExpander::FindInheritedTemplateMemberType(
 				}
 				base_arguments.push_back(raw_base_arguments[raw_argument]);
 			}
-			for(size_t argument = 0; argument < base_arguments.size(); ++argument) {
-				base_arguments[argument] = NormalizeTypeArgument(RewriteText(
-					base_arguments[argument], context, local, 0, false, false));
-				base_arguments[argument] = NormalizeTypeArgument(ReplaceIdentifiers(
-					base_arguments[argument], local));
+				for(size_t argument = 0; argument < base_arguments.size(); ++argument) {
+					const string source_argument = CanonicalSpelling(base_arguments[argument]);
+					base_arguments[argument] = NormalizeTypeArgument(RewriteText(
+						base_arguments[argument], context, local, 0, false, false));
+					map<string, string> second_pass_local = local;
+					for(map<string, string>::const_iterator substitution = local.begin();
+						substitution != local.end(); ++substitution) {
+						if(substitution->first.empty() || substitution->first == substitution->second)
+							continue;
+						map<string, string>::const_iterator introduced = local.find(
+							substitution->second);
+						if(introduced == local.end() || introduced->second == introduced->first)
+							continue;
+						for(size_t at = source_argument.find(substitution->first);
+							at != string::npos;
+							at = source_argument.find(substitution->first,
+								at + substitution->first.size())) {
+							if(at > 0 && IsIdentifierCharacter(source_argument[at - 1])) continue;
+							const size_t after = at + substitution->first.size();
+							if(after < source_argument.size() &&
+								IsIdentifierCharacter(source_argument[after])) continue;
+							second_pass_local.erase(substitution->second);
+							break;
+						}
+					}
+					base_arguments[argument] = NormalizeTypeArgument(ReplaceIdentifiers(
+						base_arguments[argument], second_pass_local));
 				const bool template_entity = argument < base_definition->parameters.size() &&
 					base_definition->parameters[argument].template_template;
 				if(!template_entity)
@@ -986,10 +1105,32 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 		(!nested_template_id && nested_name.empty()) || nested_member.empty()) return false;
 	vector<string> owner_arguments = SplitTemplateArguments(owner_arguments_text);
 	for(size_t owner_argument = 0; owner_argument < owner_arguments.size(); ++owner_argument) {
+		const string source_owner_argument = CanonicalSpelling(owner_arguments[owner_argument]);
 		owner_arguments[owner_argument] = NormalizeTypeArgument(RewriteText(
 			owner_arguments[owner_argument], context, substitutions, 0, false, false));
+		map<string, string> second_pass_substitutions = substitutions;
+		for(map<string, string>::const_iterator substitution = substitutions.begin();
+			substitution != substitutions.end(); ++substitution) {
+			if(substitution->first.empty() || substitution->first == substitution->second)
+				continue;
+			map<string, string>::const_iterator introduced = substitutions.find(
+				substitution->second);
+			if(introduced == substitutions.end() || introduced->second == introduced->first)
+				continue;
+			for(size_t at = source_owner_argument.find(substitution->first);
+				at != string::npos;
+				at = source_owner_argument.find(substitution->first,
+					at + substitution->first.size())) {
+				if(at > 0 && IsIdentifierCharacter(source_owner_argument[at - 1])) continue;
+				const size_t after = at + substitution->first.size();
+				if(after < source_owner_argument.size() &&
+					IsIdentifierCharacter(source_owner_argument[after])) continue;
+				second_pass_substitutions.erase(substitution->second);
+				break;
+			}
+		}
 		owner_arguments[owner_argument] = NormalizeTypeArgument(ReplaceIdentifiers(
-			owner_arguments[owner_argument], substitutions));
+			owner_arguments[owner_argument], second_pass_substitutions));
 		const bool template_entity = owner_argument < owner_definition->parameters.size() &&
 			owner_definition->parameters[owner_argument].template_template;
 		if(!template_entity)
@@ -1150,7 +1291,8 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 			}
 		}
 	}
-	InstantiateNestedClass(*selected_owner, owner_arguments, owner_local_name, nested_name, context);
+	InstantiateNestedClass(*selected_owner, owner_arguments, owner_local_name, nested_name,
+		context);
 	const string concrete_nested = JoinPath(owner_local_name, nested_name);
 	map<string, string> concrete_substitutions = substitutions;
 	map<string, string> owner_specialized;

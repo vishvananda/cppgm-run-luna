@@ -274,17 +274,17 @@ bool PA18TemplateExpander::EvaluateLogicalIntegralText(const string& raw,
 		}
 		while(begin > 0 && (IsIdentifierCharacter(expanded[begin - 1]) ||
 			expanded[begin - 1] == ':')) --begin;
-			const size_t length = marker + 7 - begin;
-			const string operand = expanded.substr(begin, length);
-			PA19IntegralValue operand_value;
-			if(operand.empty() || operand == expanded ||
-				!EvaluateIntegralText(operand, context, substitutions, &operand_value)) {
-				marker = expanded.find("::value", marker + 7);
-				continue;
-			}
-			expanded.replace(begin, length, IntegralValueSpelling(operand_value));
-			expanded_any = true;
-			marker = expanded.find("::value", begin);
+		const size_t length = marker + 7 - begin;
+		const string operand = expanded.substr(begin, length);
+		PA19IntegralValue operand_value;
+		if(operand.empty() || operand == expanded ||
+			!EvaluateIntegralText(operand, context, substitutions, &operand_value)) {
+			marker = expanded.find("::value", marker + 7);
+			continue;
+		}
+		expanded.replace(begin, length, IntegralValueSpelling(operand_value));
+		expanded_any = true;
+		marker = expanded.find("::value", begin);
 		}
 		if(expanded_any) {
 			PA19ConstantExpressionParser expanded_parser(constant_values_, substitutions,
@@ -319,11 +319,38 @@ bool PA18TemplateExpander::EvaluateLogicalIntegralText(const string& raw,
 						break;
 					}
 				}
-				string base_spelling = CanonicalSpelling(ReplaceIdentifiers(
-					base_name->value, base_substitutions));
-				base_spelling = CanonicalSpelling(RemoveMarker(RewriteText(
-					base_spelling, context, base_substitutions, 0)));
-				base_spelling = ResolveAlias(base_spelling, context);
+					string base_spelling = CanonicalSpelling(ReplaceIdentifiers(
+						base_name->value, base_substitutions));
+					// The first pass above substitutes source parameters
+					// simultaneously.  If one binding introduces the spelling of
+					// another binding (`VertexProperty -> Vertex`, `Vertex ->
+					// unsigned long`), do not let the follow-up template rewrite
+					// reinterpret that already-materialized nominal type.
+					map<string, string> base_rewrite_substitutions = base_substitutions;
+					for(map<string, string>::const_iterator substitution = base_substitutions.begin();
+						substitution != base_substitutions.end(); ++substitution) {
+						if(substitution->first.empty() || substitution->first == substitution->second)
+							continue;
+						map<string, string>::const_iterator introduced =
+							base_substitutions.find(substitution->second);
+						if(introduced == base_substitutions.end() ||
+							introduced->second == introduced->first)
+							continue;
+						for(size_t at = base_name->value.find(substitution->first);
+							at != string::npos;
+							at = base_name->value.find(substitution->first,
+								at + substitution->first.size())) {
+							if(at > 0 && IsIdentifierCharacter(base_name->value[at - 1])) continue;
+							const size_t after = at + substitution->first.size();
+							if(after < base_name->value.size() &&
+								IsIdentifierCharacter(base_name->value[after])) continue;
+							base_rewrite_substitutions.erase(substitution->second);
+							break;
+						}
+					}
+					base_spelling = CanonicalSpelling(RemoveMarker(RewriteText(
+						base_spelling, context, base_rewrite_substitutions, 0)));
+					base_spelling = ResolveAlias(base_spelling, context);
 				// A still-dependent base from a partial specialization is only a
 				// declaration-time relationship.  Do not try to materialize its
 				// nested pack expression as a concrete template argument while the
@@ -410,9 +437,10 @@ bool PA18TemplateExpander::EvaluateLogicalIntegralText(const string& raw,
 								if(concrete) {
 									const TemplateDefinition* selected = SelectClassTemplateDefinition(
 										base_definition, base_arguments, context);
-									try {
-										if(selected) materialized_base = Instantiate(*selected,
-											base_arguments, context);
+						try {
+							if(selected) {
+								materialized_base = Instantiate(*selected, base_arguments, context);
+							}
 									} catch(const logic_error&) {
 										materialized_base.clear();
 									}
@@ -454,9 +482,11 @@ bool PA18TemplateExpander::EvaluateLogicalIntegralText(const string& raw,
 										return result->known;
 									}
 							}
-							if(!materialized_base.empty() && EvaluateIntegralText(
-								materialized_base + "::value", context, member_substitutions, result))
-								return true;
+			if(!materialized_base.empty() && EvaluateIntegralText(
+				materialized_base + "::value", context, member_substitutions, result))
+			{
+				return true;
+			}
 						}
 					}
 		return false;

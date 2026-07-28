@@ -413,6 +413,13 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 	const string& context, bool class_pattern) const
 {
 	pattern = NormalizeTypeArgument(pattern);
+	// A bare template parameter is already the complete deduction pattern.
+	// Match it before alias/class resolution of the actual spelling; resolving
+	// a dependent specialization here can recursively re-enter the partial
+	// specialization probe that is trying to bind the parameter.
+	if(parameter_names.find(pattern) != parameter_names.end())
+		return MatchDirectTypeParameter(pattern, actual, parameter_names, inferred,
+			context, class_pattern);
 	if(pattern.find('<') != string::npos) {
 		set<string> active_aliases;
 		pattern = ExpandAliasPattern(pattern, context, &active_aliases);
@@ -430,8 +437,38 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 			break;
 		}
 	}
-	if(!dependent_pattern) pattern = NormalizeTypeArgument(ResolveAlias(pattern, context));
-	actual = NormalizeTypeArgument(ResolveAlias(actual, context));
+	if(!dependent_pattern) pattern = NormalizeTypeArgument(CollapseRepeatedQualifier(
+		ResolveAlias(pattern, context)));
+	const auto has_dependent_identifier = [this, &parameter_names](const string& raw) {
+		for(size_t position = 0; position < raw.size();) {
+			if(!IsIdentifierCharacter(raw[position])) {
+				++position;
+				continue;
+			}
+			const size_t begin = position;
+			while(position < raw.size() && IsIdentifierCharacter(raw[position])) ++position;
+			const string word = raw.substr(begin, position - begin);
+			if(parameter_names.find(word) != parameter_names.end() ||
+				template_parameter_names_.find(word) != template_parameter_names_.end()) return true;
+			size_t next = position;
+			while(next < raw.size() && isspace(static_cast<unsigned char>(raw[next]))) ++next;
+			if(next + 1 < raw.size() && raw.compare(next, 2, "::") == 0) continue;
+			const bool known = word == "typename" || word == "const" || word == "volatile" ||
+				word == "true" || word == "false" || word == "void" || word == "bool" ||
+				word == "char" || word == "short" || word == "int" || word == "long" ||
+				word == "signed" || word == "unsigned" ||
+				class_contexts_.find(word) != class_contexts_.end() ||
+				class_declarations_.find(word) != class_declarations_.end() ||
+				definitions_by_name_.find(word) != definitions_by_name_.end() ||
+				type_aliases_.find(word) != type_aliases_.end() ||
+				constant_values_.find(word) != constant_values_.end();
+			if(!known) return true;
+		}
+		return false;
+	};
+	const bool dependent_actual = has_dependent_identifier(actual);
+	actual = NormalizeTypeArgument(CollapseRepeatedQualifier(dependent_actual ? actual :
+		ResolveAlias(actual, context)));
 	const auto pointer_depth = [](const string& spelling) {
 		size_t depth = 0;
 		int angle_depth = 0, parenthesis_depth = 0, bracket_depth = 0;
@@ -938,9 +975,26 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 				if(parameter_names.find(pattern_base) == parameter_names.end())
 					actual_parts = explicit_actual_parts;
 			}
+				for(size_t actual_part = 0; actual_part < actual_parts.size(); ++actual_part)
+					actual_parts[actual_part] = NormalizeTypeArgument(
+						CollapseRepeatedQualifier(actual_parts[actual_part]));
 				const TemplateDefinition* pattern_definition = find_class_definition(template_base(pattern.substr(0, pattern_open)));
 				const TemplateDefinition* actual_definition = actual_open == string::npos ? 0 : find_class_definition(template_base(actual.substr(0, actual_open)));
-				expand_defaults(pattern_definition, &pattern_parts);
+				bool pattern_omits_defaults = pattern_definition &&
+					pattern_parts.size() < pattern_definition->parameters.size();
+				if(pattern_omits_defaults) for(size_t parameter = pattern_parts.size();
+					parameter < pattern_definition->parameters.size(); ++parameter) {
+					const TemplateParameter& omitted = pattern_definition->parameters[parameter];
+					if(!omitted.pack && omitted.default_type.empty()) {
+						// A compact generated alias spelling can expose fewer
+						// arguments than the underlying class template.  That is not
+						// default-argument omission unless every hidden fixed argument
+						// is actually defaulted.
+						pattern_omits_defaults = false;
+						break;
+					}
+				}
+				if(!pattern_omits_defaults) expand_defaults(pattern_definition, &pattern_parts);
 				expand_defaults(actual_definition, &actual_parts);
 				if(!pattern_parts.empty() && pattern_parts.back().size() > 3 &&
 				pattern_parts.back().compare(pattern_parts.back().size() - 3, 3, "...") == 0) {
@@ -953,6 +1007,47 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 					return matched_pack;
 				}
 			}
+			if(pattern_omits_defaults) {
+				if(actual_parts.size() < pattern_parts.size()) return false;
+				for(size_t i = 0; i < pattern_parts.size(); ++i)
+					if(!MatchTypePattern(pattern_parts[i], actual_parts[i], parameter_names,
+						inferred, context, class_pattern)) return false;
+				map<string, string> default_bindings = *inferred;
+				// The omitted default belongs to the class template, so its
+				// parameter names are not the function-template names stored in
+				// `inferred`.  Seed the class binding map from the concrete prefix
+				// that was just matched before rewriting the later defaults.
+				for(size_t parameter = 0; parameter < pattern_parts.size() &&
+					parameter < pattern_definition->parameters.size() &&
+					parameter < actual_parts.size(); ++parameter) {
+					const string& name = pattern_definition->parameters[parameter].name;
+					if(!name.empty()) default_bindings[name] = actual_parts[parameter];
+				}
+				size_t actual_index = pattern_parts.size();
+				for(size_t parameter = pattern_parts.size(); parameter <
+					pattern_definition->parameters.size(); ++parameter) {
+					const TemplateParameter& detail = pattern_definition->parameters[parameter];
+					if(detail.pack) return actual_index == actual_parts.size();
+					if(detail.default_type.empty() || actual_index >= actual_parts.size()) return false;
+					// Keep this comparison structural as well.  Full source
+					// rewriting can turn a dependent default such as `Alloc<T>` into
+					// a generated specialization spelling before the class-template
+					// matcher sees it.
+					string expected = NormalizeTypeArgument(ResolveAlias(
+						ReplaceIdentifiers(detail.default_type, default_bindings), context));
+					// The concrete argument may be a generated specialization rather
+					// than the source spelling of the default (and inline namespaces
+					// can make the two qualified spellings differ).  Compare the
+					// completed default through the normal typed matcher so generated
+					// class metadata and aliases remain part of deduction.
+					map<string, string> ignored;
+					if(!MatchTypePattern(expected, actual_parts[actual_index], set<string>(),
+						&ignored, context, class_pattern)) return false;
+					if(!detail.name.empty()) default_bindings[detail.name] = actual_parts[actual_index];
+					++actual_index;
+				}
+				return actual_index == actual_parts.size();
+			}
 			if(pattern_parts.size() != actual_parts.size()) return false;
 			for(size_t i = 0; i < pattern_parts.size(); ++i)
 				if(!MatchTypePattern(pattern_parts[i], actual_parts[i], parameter_names,
@@ -960,7 +1055,25 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 					return false;
 			return true;
 		}
-		return pattern == actual;
+		if(pattern == actual) return true;
+		// A template-template argument's default can be a bare class template
+		// name (`allocator`), while the concrete generated specialization records
+		// its namespace-qualified type fact.  Compare those two spellings through
+		// the same lexical type qualification used by instantiation, without
+		// accepting unrelated short names from different namespaces.
+		if(pattern.find("::") == string::npos && actual.find("::") != string::npos) {
+			const TemplateDefinition* actual_definition = FindDefinition(actual, context);
+			if(actual_definition && actual_definition->class_template &&
+				LastComponent(actual_definition->qualified_name) == pattern)
+				return true;
+			const string qualified_pattern = CanonicalSpelling(QualifyTypeArgument(
+				pattern, context));
+			const string qualified_actual = CanonicalSpelling(QualifyTypeArgument(
+				actual, context));
+			if(!qualified_pattern.empty() && qualified_pattern == qualified_actual)
+				return true;
+		}
+		return false;
 	}
 bool PA18TemplateExpander::TransformPackChild(
 	const CPPGMAstNodePtr& input, const CPPGMAstNodePtr& original_child,
@@ -1302,6 +1415,7 @@ CPPGMAstNodePtr PA18TemplateExpander::FinishRegularNode(
 		map<string, string> local_substitutions = substitutions;
 		struct TypeOnlyScope { size_t& depth; const size_t saved; TypeOnlyScope(size_t& d, bool active) : depth(d), saved(d) { if(active) ++depth; } ~TypeOnlyScope() { depth = saved; } } type_only_scope(defer_type_only_class_definitions_, defer_type_only_classes);
 		TransformRegularChildren(input, child_context, function_context, substitutions, &local_substitutions, result);
+		if(input->kind == "function-definition") MaterializeReturnConversions(input, result, context, function_context, local_substitutions);
 		if(input->kind == "class-specifier" || input->kind == "class-forward-declaration") {
 			string class_name = LastComponent(input->value);
 			const size_t class_angle = class_name.find('<');
@@ -1319,8 +1433,7 @@ CPPGMAstNodePtr PA18TemplateExpander::FinishRegularNode(
 				}
 			}
 		}
-		if(ConsumeMaterializedStaticAssert(input, result, child_context,
-			local_substitutions)) return CPPGMAstNodePtr();
+		if(ConsumeMaterializedStaticAssert(input, result, child_context, local_substitutions)) return CPPGMAstNodePtr();
 		if(input->kind == "array-suffix" && !result->children.empty() && result->children[0]) { PA19IntegralValue bound;
 			if(EvaluateIntegralText(ConstantExpressionSpelling(result->children[0]), child_context, local_substitutions, &bound))
 				result->children[0] = CPPGMAstNodePtr(new CPPGMAstNode("literal", IntegralValueSpelling(bound)));

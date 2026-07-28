@@ -64,7 +64,8 @@ void PA18TemplateExpander::RecordTemplateArrayValues(
 	for(size_t child_index = 0; child_index < definition.declaration->children.size(); ++child_index) {
 		const CPPGMAstNodePtr child = definition.declaration->children[child_index];
 		if(!child || child->kind != "simple-declaration" || child->children.empty() ||
-			!HasDeclarationSpecifier(child->children[0], "constexpr")) continue;
+			(!HasDeclarationSpecifier(child->children[0], "constexpr") &&
+				!HasDeclarationSpecifier(child->children[0], "const"))) continue;
 		const CPPGMAstNodePtr list = ChildOfKindLocal(child, "init-declarator-list");
 		if(!list) continue;
 		for(size_t item_index = 0; item_index < list->children.size(); ++item_index) {

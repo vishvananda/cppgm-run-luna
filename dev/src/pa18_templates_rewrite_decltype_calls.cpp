@@ -5,6 +5,55 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
+void PA18TemplateExpander::ApplyFriendClassSubstitutions(
+	const TemplateDefinition& definition, const vector<string>& actual_types,
+	const string& context, map<string, string>* substitutions) const
+{
+	if(!substitutions || !definition.friend_declaration) return;
+	string friend_owner = definition.lexical_owner.empty() ? definition.owner :
+		definition.lexical_owner;
+	const size_t owner_angle = friend_owner.find('<');
+	if(owner_angle != string::npos) friend_owner.erase(owner_angle);
+	friend_owner = CanonicalSpelling(friend_owner);
+	for(size_t actual = 0; actual < actual_types.size(); ++actual) {
+		string spelling = CanonicalSpelling(actual_types[actual]);
+		while(spelling.compare(0, 6, "const ") == 0)
+			spelling = CanonicalSpelling(spelling.substr(6));
+		while(spelling.compare(0, 9, "volatile ") == 0)
+			spelling = CanonicalSpelling(spelling.substr(9));
+		while(!spelling.empty() && (spelling[spelling.size() - 1] == '&' ||
+			spelling[spelling.size() - 1] == '*')) spelling.erase(spelling.size() - 1);
+		spelling = CanonicalSpelling(spelling);
+		const CPPGMAstNodePtr class_node = FindClassDeclaration(spelling, context);
+		if(!class_node || class_node->template_primary.empty() ||
+			class_node->template_arguments.empty()) continue;
+		const TemplateDefinition* class_definition = FindDefinition(
+			class_node->template_primary, context);
+		if(!class_definition || !class_definition->class_template ||
+			(!friend_owner.empty() && LastComponent(friend_owner) !=
+				LastComponent(class_definition->qualified_name))) continue;
+		if(!friend_owner.empty() && class_definition->qualified_name != friend_owner &&
+			PrefixComponent(class_definition->qualified_name) != PrefixComponent(friend_owner))
+			continue;
+		size_t argument = 0;
+		for(size_t parameter = 0; parameter < class_definition->parameters.size() &&
+			argument < class_node->template_arguments.size(); ++parameter) {
+			const TemplateParameter& detail = class_definition->parameters[parameter];
+			if(detail.name.empty()) {
+				if(!detail.pack) ++argument;
+				continue;
+			}
+			if(detail.pack) {
+				if(argument < class_node->template_arguments.size())
+					(*substitutions)[detail.name] = class_node->template_arguments[argument];
+				break;
+			}
+			(*substitutions)[detail.name] = class_node->template_arguments[argument++];
+		}
+		return;
+	}
+}
+
 	bool PA18TemplateExpander::FunctionCallResultType(string expression, const string& context, const map<string, string>& substitutions, string* result)
 	{
 		if(!result) return false;
@@ -128,10 +177,31 @@ namespace pa18_templates_internal {
 					function_context, &inherited, &active, &concrete_owners);
 				if(!inherited.empty()) explicit_definition = inherited[0];
 			}
-		if(!explicit_definition || explicit_definition->class_template) return false;
-			explicit_arguments = SplitTemplateArguments(base_arguments);
-			ExpandExplicitFunctionArguments(base_arguments, function_context,
-				substitutions, &explicit_arguments);
+			if(!explicit_definition) return false;
+			if(explicit_definition->class_template) {
+				// A class-template-id followed by `()` is a functional cast.  It is
+				// not a function-template call, so let the typed constructor probe
+				// below decide whether the class can be initialized.
+				explicit_definition = 0;
+				explicit_base_name.clear();
+			} else {
+				explicit_arguments = SplitTemplateArguments(base_arguments);
+				ExpandExplicitFunctionArguments(base_arguments, function_context,
+					substitutions, &explicit_arguments);
+				// A template-template argument denotes the template entity itself,
+				// not the type produced by resolving its alias body.  In particular,
+				// resolving `F` after `F -> two` turns the fixed-arity alias into its
+				// target `A` and loses the arity check for `G<T...>`.
+				const vector<string> source_explicit = SplitTemplateArguments(base_arguments);
+				for(size_t explicit_index = 0; explicit_index < explicit_arguments.size() &&
+					explicit_index < source_explicit.size() && explicit_definition &&
+					explicit_index < explicit_definition->parameters.size(); ++explicit_index)
+					if(explicit_definition->parameters[explicit_index].template_template) {
+						const string normalized = NormalizeTemplateTemplateArgument(
+							source_explicit[explicit_index], function_context, substitutions);
+						if(!normalized.empty()) explicit_arguments[explicit_index] = normalized;
+					}
+			}
 		}
 		vector<string> actual_types;
 		const vector<string> actual_expressions = SplitCallArguments(argument_text);
@@ -252,26 +322,36 @@ namespace pa18_templates_internal {
 		bool selected_ellipsis = true;
 		for(size_t i = 0; i < candidates.size(); ++i) {
 			const TemplateDefinition& definition = *candidates[i];
+			map<string, string> candidate_substitutions = substitutions;
+			ApplyFriendClassSubstitutions(definition, actual_types, function_context,
+				&candidate_substitutions);
 			vector<string> arguments;
 			const bool complete = explicit_definition &&
 				explicit_arguments.size() == definition.parameters.size();
 			if(complete) arguments = explicit_arguments;
 			else if(!InferFunctionTypeArguments(definition, actual_types, &arguments,
-					substitutions, function_context, explicit_definition ? &explicit_arguments : 0))
+					candidate_substitutions, function_context, explicit_definition ? &explicit_arguments : 0)) {
 				continue;
+			}
 			try {
 				if(!FunctionArgumentsViable(definition, arguments, actual_types,
-					function_context)) continue;
+					function_context, &candidate_substitutions)) {
+						continue;
+				}
 				if(HasAbstractFunctionParameter(definition, arguments,
-					function_context, substitutions)) continue;
-			} catch(const PA18SubstitutionFailure&) {
+					function_context, candidate_substitutions)) {
+					continue;
+				}
+		} catch(const PA18SubstitutionFailure&) {
 				continue;
 			}
 			string candidate_result;
 			try {
-				candidate_result = FunctionResultType(definition, arguments,
-					function_context, &substitutions);
-				} catch(const PA18SubstitutionFailure&) { continue; }
+			candidate_result = FunctionResultType(definition, arguments,
+					function_context, &candidate_substitutions);
+			} catch(const PA18SubstitutionFailure&) {
+				continue;
+			}
 			if(candidate_result.empty()) continue;
 			bool candidate_ellipsis = false;
 			const CPPGMAstNodePtr candidate_clause = DescendantOfKind(

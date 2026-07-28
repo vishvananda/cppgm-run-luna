@@ -38,6 +38,9 @@ PA14Lowerer::Value PA14Lowerer::EmitObjectValueArgument(
     TypePtr object_type = type_value(target);
     if(!object_type || object_type->kind != TYPE_CLASS)
       return EmitValue(node, scope, target);
+	CPPGMAstNodePtr effective_node = node;
+	while(effective_node && effective_node->kind == "parenthesized-expression" &&
+		!effective_node->children.empty()) effective_node = effective_node->children[0];
     const string slot = new_special_slot("argobj", low_type(object_type));
     const string address = new_temp();
     AddInstruction(address + " = addr $" + slot);
@@ -84,14 +87,15 @@ PA14Lowerer::Value PA14Lowerer::EmitObjectValueArgument(
       }
     }
     if(empty_storage && IsTrivialValueStorage(object_type)) {
-      const TypePtr constructed = node && node->kind == "call-expression" &&
-        !node->children.empty() ? ConstructorObjectType(node->children[0], scope) : TypePtr();
+      const TypePtr constructed = effective_node && effective_node->kind == "call-expression" &&
+        !effective_node->children.empty() ? ConstructorObjectType(effective_node->children[0], scope) : TypePtr();
       if((constructed && PA12SameType(constructed, object_type, true)) ||
-         (node && node->kind == "call-expression" && source_type &&
+         (effective_node && effective_node->kind == "call-expression" && source_type &&
           source_type->kind == TYPE_CLASS &&
           PA12SameType(source_type, object_type, true))) {
-        if(!EmitObjectTransferAt(object_type, address, node, scope, true))
-          return EmitValue(node, scope, target);
+		if(!EmitObjectTransferAt(object_type, address, effective_node, scope, true)) {
+			return EmitValue(node, scope, target);
+		}
       } else {
         const string source_address = EmitAddress(node, scope);
         if(source_type && source_type->kind == TYPE_CLASS &&

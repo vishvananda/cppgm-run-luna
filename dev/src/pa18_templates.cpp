@@ -293,7 +293,7 @@ bool PA18TemplateExpander::EvaluateExpandedSizeofText(const string& raw,
 			operand.find("**") == string::npos && FunctionCallResultType(operand, context,
 				substitutions, &call_type)) {
 			call_type = ResolveAlias(CanonicalSpelling(RemoveMarker(RewriteText(
-				call_type, context, substitutions, 0))), context);
+			call_type, context, substitutions, 0))), context);
 			size = EstimateTypeSize(call_type, context);
 		}
 		if(size) {

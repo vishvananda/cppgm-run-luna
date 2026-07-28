@@ -4244,3 +4244,222 @@ on hidden-friend scope lookup, template-template owner matching, pack-size
 discarding, and class-valued conversion candidate selection.  Then address
 the 15 typed LowIR alias/template replay cases as a separate materialization
 group.
+
+## Checkpoint 105 scope — 2026-07-27 (before implementation)
+
+### Remaining Work Map
+
+The revalidated PA22 report is **227/250**, with the same 23-fixture residual
+and no timeout.  The first candidate/SFINAE group is the complete eight-fixture
+set below:
+
+- value-dependent template-template deduction must reject a non-template base
+  argument while retaining the partial `is_same` candidate;
+- explicit boolean/pack alias substitution must preserve the dependent result
+  tag and expression-call SFINAE;
+- hidden friends must retain enclosing class-template facts during member and
+  free-function expression probes, including ADL and `noexcept`;
+- member alias template-template matching must use the concrete partial-owner
+  template interface and defaults;
+- simultaneous pack expansions of unequal lengths must discard the candidate;
+- conversion-function template results must identify the class owner for
+  copy-initialization; and
+- substituted function result template-ids must not let a shadowed argument
+  hide the selected specialization.
+
+The remaining 15 typed LowIR/alias replay fixtures stay out of this
+checkpoint and remain the next materialization group.
+
+### Checkpoint Scope
+
+Repair the shared typed candidate viability path covering expression-SFINAE
+substitution, hidden-friend ADL lookup, template-template owner matching,
+pack-length failure, and class-valued function/conversion result selection.
+Validate the eight focused status fixtures, then the full PA22 report,
+through-PA21, and the PA22 file audit.  Any passing fixture in this scope is
+an accepted increment; the checkpoint is complete when the PA22 count exceeds
+227/250 without a prior-PA regression.
+
+## Checkpoint 106 scope — 2026-07-27 (after the candidate increment)
+
+### Remaining Work Map
+
+The authoritative PA22 report is now **234/250**; the candidate increment
+raised the count by seven from the previous 227/250 report.  The complete
+16-fixture residual is grouped as follows:
+
+- **Template candidate status and deduction (2):**
+  `spec/200-function-template-class-template-param-partial-order` and
+  `spec/300-detected-or-sfinae-fallback` still exit unsuccessfully.
+- **Generated-call ownership and helper demand (3):**
+  `general/100-function-parameter-empty-middle-pack-alias`,
+  `general/400-function-assignment-invocable-and-helper`, and
+  `spec/200-dependent-specialized-default-arg-deduction` lose selected
+  generated helper bodies or retain the wrong specialization identity.
+- **Typed value/static-data replay (5):**
+  `general/400-static-data-nttp-pack-sizeof-bound`,
+  `spec/100-explicit-specialization-dependent-param-typedef`,
+  `spec/200-member-template-nontype-param-shadows-inherited-value-sum`,
+  `spec/500-type-pack-qualified-static-member-expansion`, and
+  `spec/100-function-template-array-parameter-string-literal` differ in
+  typed constants, index conversions, or dead value loads.
+- **Alias, template-template, and default deduction (4):**
+  `general/400-alias-template-function-argument-cv`,
+  `general/400-template-template-alias-default-arity-sfinae`,
+  `spec/100-explicit-template-argument-overload-rejects-short-candidate`, and
+  `spec/200-defaulted-class-template-argument-prefix-deduction`.
+- **Hidden-friend/member SFINAE (2):**
+  `spec/300-qualified-member-function-value-fallback-sfinae` and
+  `spec/500-hidden-friend-query-free-decltype-noexcept`.
+
+### Checkpoint Scope
+
+Complete the typed value/static-data replay group: preserve concrete NTTP pack
+values through generated static-array definitions and qualified static-member
+expansion, retain the selected explicit-specialization parameter conversions,
+and avoid lowering discarded value-only expressions.  The scope also covers
+the shared generated-body demand needed by those values.  Validate the focused
+five-fixture group, then the full PA22 report, through-PA21, and the PA22 file
+audit.
+
+## Checkpoint 106 result — 2026-07-27
+
+The typed replay increment is complete.  Nested owner substitutions now carry
+concrete NTTP pack values into generated static-array definitions, substituted
+numeric id-expressions are replayed as typed literals, const-qualified static
+arrays are recorded, and explicit-specialization pointer indexing uses the
+required index width.  Out-of-class template static definitions retain their
+storage loads, while inherited integral members resolve through the selected
+typed base owner.  Empty-class member transfer no longer materializes a plain
+reference-parameter load when the object has no payload.
+
+The five focused fixtures pass, including
+`general/400-static-data-nttp-pack-sizeof-bound`,
+`spec/100-explicit-specialization-dependent-param-typedef`,
+`spec/200-member-template-nontype-param-shadows-inherited-value-sum`,
+`spec/500-type-pack-qualified-static-member-expansion`, and
+`spec/100-function-template-array-parameter-string-literal`.  The full PA22
+report is **239/250**, up five from the 234/250 checkpoint baseline and 25
+from the 214/250 turn-start baseline.
+
+### Remaining Work Map
+
+The authoritative residual is 11 fixtures:
+
+- **Template candidate status and deduction (2):**
+  `spec/200-function-template-class-template-param-partial-order` and
+  `spec/300-detected-or-sfinae-fallback` still exit unsuccessfully.
+- **Generated-call ownership and helper demand (3):**
+  `general/100-function-parameter-empty-middle-pack-alias`,
+  `general/400-function-assignment-invocable-and-helper`, and
+  `spec/200-dependent-specialized-default-arg-deduction` lose selected
+  generated helper bodies or retain the wrong specialization identity.
+- **Alias, template-template, and default deduction (4):**
+  `general/400-alias-template-function-argument-cv`,
+  `general/400-template-template-alias-default-arity-sfinae`,
+  `spec/100-explicit-template-argument-overload-rejects-short-candidate`, and
+  `spec/200-defaulted-class-template-argument-prefix-deduction` differ in
+  alias argument typing or candidate-prefix deduction.
+- **Hidden-friend/member SFINAE (2):**
+  `spec/300-qualified-member-function-value-fallback-sfinae` and
+  `spec/500-hidden-friend-query-free-decltype-noexcept` differ in qualified
+  lookup or hidden-friend expression probing.
+
+### Next Checkpoint Group
+
+Repair the three generated-call ownership/helper-demand fixtures first,
+keeping their concrete specialization identity through helper collection and
+call emission.  Then take the two remaining candidate-status exit failures as
+the next small bundled group.  Validate the focused group, the full PA22
+report, through-PA21, and the PA22 file audit.
+
+## Checkpoint 107 scope — 2026-07-27 (after deduction-boundary recovery)
+
+### Remaining Work Map
+
+The revalidated PA22 report is **220/250**, with 30 residual fixtures.  They
+cluster into four shared behaviors:
+
+- **Function/template argument completion (8):** defaulted class and
+  template-template arguments, structured type-pack element preservation,
+  array-reference deduction, nested/local alias explicit calls, and the
+  explicit-pack member result cases.
+- **Expression-SFINAE and candidate viability (10):** dependent `enable_if`
+  result expressions, detector/void fallback, pack-size rejection, static
+  member function-pointer probes, qualified return probes, and constructor
+  value candidates.
+- **Generated owner/alias replay (10):** member alias template-template
+  deduction, canonical alias defaults, dependent member-alias returns,
+  inherited constructor/member packs, and related defaulted constructor
+  ownership (including the current timeout).
+- **LowIR materialization (2):** the array-reference partial-ordering and
+  defaulted-class-prefix comparison fixtures.
+
+The complete current residual is recorded by the required report; no test or
+reference fixture was changed.  The next group is the generated-call slice,
+with the local function-template deduction boundary kept intact.
+
+### Checkpoint Scope
+
+Complete the shared generated-call ownership and helper-demand behavior for
+`general/100-function-parameter-empty-middle-pack-alias`,
+`general/400-function-assignment-invocable-and-helper`,
+`spec/200-dependent-specialized-default-arg-deduction`, and
+`general/500-inherited-constructor-template-member-alias-pack`; preserve the
+newly recovered nested `unwrap_iter` deduction demonstrated by
+`general/100-bound-structured-template-arg-deduction`.  Validate the focused
+fixtures, then the full PA22 report, through-PA21, and the PA22 file audit.
+
+### Checkpoint 107 result — 2026-07-27
+
+The scoped generated-call group is complete: all four focused fixtures pass,
+the specialized default-deduction case emits its concrete `assign_op` helper,
+the inherited-constructor replay completes without looping, and the recovered
+`100-bound-structured-template-arg-deduction` behavior remains intact.  The
+template-template/default-deduction follow-on also now materializes
+`ttp_default_arg::pass` and its `interval_map::clear` helper.  The current PA22
+report is **224/250**, up ten from the 214/250 turn baseline; no test or
+reference fixture was changed.
+
+### Remaining Work Map
+
+The authoritative residual is 26 fixtures, grouped by shared behavior:
+
+- **Typed pack, array, and explicit-alias deduction (8):**
+  `general/100-type-pack-element-preserves-concrete-argument`,
+  `general/100-type-pack-element-result-selects-copy-ctor`,
+  `general/200-range-array-reference-mutable-begin`,
+  `general/300-function-template-nested-alias-explicit-call`,
+  `general/300-local-alias-explicit-template-pack-decltype`,
+  `spec/300-template-id-direct-parameter-same-name-deduction`,
+  `spec/500-defaulted-rebind-constructor-deduction`, and
+  `spec/500-unqualified-member-template-local-alias-deduction`.
+- **Expression-SFINAE and candidate viability (11):**
+  `general/300-boost-enable-if-type-condition-static-keyword-overload`,
+  `general/300-dependent-enable-if-return-less-equal`,
+  `general/300-dependent-enable-if-return-nontype-less-pack`,
+  `general/300-dependent-enable-if-return-sizeof-less`,
+  `general/300-pack-alias-enable-if-bool-constant`,
+  `general/300-single-element-detector-idiom-sfinae-false`,
+  `general/300-static-member-template-function-pointer-nttp`,
+  `general/500-constructor-sfinae-member-template-value`,
+  `general/500-owner-enum-nontype-result-sfinae`,
+  `spec/300-detected-or-sfinae-fallback`, and
+  `spec/300-qualified-function-template-return-sfinae-overloads`.
+- **Generated owner/alias replay (6):**
+  `general/400-member-alias-template-template-partial-deduction-owner`,
+  `general/500-alias-template-template-defaulted-sfinae-canonical-args`,
+  `general/500-boost-mp11-conditional-alias-reference-set`,
+  `general/500-dependent-member-alias-function-return`,
+  `general/500-index-sequence-alias-constructor-deduction`, and
+  `spec/500-member-alias-pack-owner-sfinae`.
+- **LowIR materialization (1):**
+  `spec/200-array-reference-cv-partial-ordering` (the Boost enable-if case
+  also reaches the report's LowIR sanity checker).
+
+### Next Checkpoint Group
+
+Take the typed pack/array/explicit-alias slice first, starting with the two
+`get<0>` type-pack fixtures and the range-array deduction case.  Preserve the
+new template-template default normalization, then validate the focused slice,
+the full PA22 report, through-PA21, and the PA22 file audit.

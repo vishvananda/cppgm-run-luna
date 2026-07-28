@@ -164,8 +164,13 @@ bool PA18TemplateExpander::ValidateTemplateDefaults(
 			}
 			if(argument >= arguments.size()) continue;
 			if(default_index < defaulted.size() && defaulted[default_index]) {
-				string declared = CanonicalSpelling(ReplaceIdentifiers(
-					item.non_type_type, local));
+					// Keep a function-pack operand intact while checking a defaulted
+					// enable-if.  The scalar binding stored in `local` is only the
+					// first pack element; replacing `Args` in `Args&&...` here would
+					// turn the whole condition into `first&&&...` and discard the
+					// typed pack before the evaluator can expand it.
+					string declared = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(
+						item.non_type_type, local));
 				size_t open = declared.find('<');
 				const bool logical_non_type = !item.type &&
 					(declared.find("&&") != string::npos || declared.find("||") != string::npos);
@@ -298,6 +303,52 @@ string PA18TemplateExpander::NormalizeIntegralArgumentExpression(
 	return evaluator_raw;
 }
 
+string PA18TemplateExpander::MaterializedTypeBase(string spelling) const
+{
+	spelling = CanonicalSpelling(spelling);
+	while(spelling.compare(0, 6, "const ") == 0)
+		spelling = CanonicalSpelling(spelling.substr(6));
+	while(spelling.compare(0, 9, "volatile ") == 0)
+		spelling = CanonicalSpelling(spelling.substr(9));
+	while(!spelling.empty() && (spelling[spelling.size() - 1] == '*' ||
+		spelling[spelling.size() - 1] == '&'))
+		spelling = CanonicalSpelling(spelling.substr(0, spelling.size() - 1));
+	while(spelling.size() > 6 && spelling.compare(spelling.size() - 6, 6, " const") == 0)
+		spelling = CanonicalSpelling(spelling.substr(0, spelling.size() - 6));
+	while(spelling.size() > 9 && spelling.compare(spelling.size() - 9, 9, " volatile") == 0)
+		spelling = CanonicalSpelling(spelling.substr(0, spelling.size() - 9));
+	if(spelling.empty() || spelling.find_first_not_of(
+		"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") != string::npos)
+		return string();
+	return spelling;
+}
+
+bool PA18TemplateExpander::PreservesMaterializedTypeName(const string& spelling,
+	const map<string, string>& substitutions, const string& context) const
+{
+	const string base = MaterializedTypeBase(spelling);
+	if(base.empty()) return false;
+	map<string, string>::const_iterator collision = substitutions.find(base);
+	if(collision == substitutions.end() || collision->second == base) return false;
+	for(map<string, string>::const_iterator substitution = substitutions.begin();
+		substitution != substitutions.end(); ++substitution)
+		if(substitution->first != base && substitution->second == base) return true;
+	return class_contexts_.find(base) != class_contexts_.end() ||
+		FindClassDeclaration(base, context);
+}
+
+bool PA18TemplateExpander::IsSubstitutedTypeName(const string& spelling,
+	const map<string, string>& substitutions, const string& context) const
+{
+	const string base = MaterializedTypeBase(spelling);
+	if(base.empty() || (class_contexts_.find(base) == class_contexts_.end() &&
+		!FindClassDeclaration(base, context))) return false;
+	for(map<string, string>::const_iterator substitution = substitutions.begin();
+		substitution != substitutions.end(); ++substitution)
+		if(substitution->first != base && substitution->second == base) return true;
+	return false;
+}
+
 void PA18TemplateExpander::ResolveTemplateArguments(const TemplateDefinition& definition,
 	const vector<string>& raw_args, const string& context,
 	vector<string>* args, vector<string>* metadata_args,
@@ -339,10 +390,10 @@ void PA18TemplateExpander::ResolveTemplateArguments(const TemplateDefinition& de
 				} else if(parameter.type) {
 					argument = RewriteText(argument, context, *substitutions, 0);
 					argument = NormalizeTypeArgument(argument);
-					argument = NormalizeTypeArgument(ReplaceIdentifiers(argument, *substitutions));
+				if(!PreservesMaterializedTypeName(argument, *substitutions, context)) argument = NormalizeTypeArgument(ReplaceIdentifiers(argument, *substitutions));
 					const string function_pointer_alias = FunctionPointerAliasSpelling(argument, context);
 					argument = ResolveAlias(argument, context);
-					argument = RewriteText(argument, context, *substitutions, 0);
+					if(!PreservesMaterializedTypeName(argument, *substitutions, context)) argument = RewriteText(argument, context, *substitutions, 0);
 					argument = NormalizeTypeArgument(argument);
 					if(!function_pointer_alias.empty()) argument = function_pointer_alias;
 					argument = QualifyTypeArgument(argument, context, definition.owner);
@@ -353,8 +404,8 @@ void PA18TemplateExpander::ResolveTemplateArguments(const TemplateDefinition& de
 							*substitutions, &integral_value);
 						} catch(const PA18SubstitutionFailure& error) { throw PA18SubstitutionFailure("definition=" + definition.qualified_name + " " + error.what());
 						} catch(const logic_error& error) { throw logic_error("definition=" + definition.qualified_name + " " + error.what()); }
-					if(!parameter.name.empty()) (*integral_substitutions)[parameter.name] = integral_value;
-				}
+		if(!parameter.name.empty()) (*integral_substitutions)[parameter.name] = integral_value;
+		}
 				if(argument.empty()) throw logic_error("missing template argument");
 				values.push_back(argument);
 				args->push_back(argument);
@@ -381,6 +432,8 @@ void PA18TemplateExpander::ResolveTemplateArguments(const TemplateDefinition& de
 		if(!parameter.default_type.empty() && argument == parameter.default_type)
 			from_default = true;
 		const string argument_context = from_default && !definition.owner.empty() ? definition.owner : context;
+		const bool preserve_source_type = parameter.type &&
+			IsSubstitutedTypeName(source_type_argument, *substitutions, context);
 		if(parameter.template_template) {
 			string normalized;
 			if(!CompatibleTemplateTemplateArgument(parameter, argument, context,
@@ -389,14 +442,15 @@ void PA18TemplateExpander::ResolveTemplateArguments(const TemplateDefinition& de
 			argument = normalized;
 		} else if(parameter.type) {
 			argument = ExpandPackCallText(argument, *pack_substitutions);
-			argument = RewriteText(argument, context, *substitutions, 0);
+			if(!preserve_source_type)
+				argument = RewriteText(argument, context, *substitutions, 0);
 			argument = NormalizeTypeArgument(argument);
-			argument = NormalizeTypeArgument(ReplaceIdentifiers(argument, *substitutions));
-			string function_pointer_alias = FunctionPointerAliasSpelling(source_type_argument, context);
-			if(function_pointer_alias.empty()) function_pointer_alias =
-				FunctionPointerAliasSpelling(argument, context);
-			argument = ResolveAlias(argument, context);
-			argument = RewriteText(argument, context, *substitutions, 0);
+			if(!PreservesMaterializedTypeName(argument, *substitutions, context))
+				argument = NormalizeTypeArgument(ReplaceIdentifiers(argument, *substitutions));
+			string function_pointer_alias = FunctionPointerAliasSpelling(source_type_argument, context); if(function_pointer_alias.empty()) function_pointer_alias = FunctionPointerAliasSpelling(argument, context);
+				argument = ResolveAlias(argument, context);
+				if(!preserve_source_type && !PreservesMaterializedTypeName(argument, *substitutions, context))
+					argument = RewriteText(argument, context, *substitutions, 0);
 			argument = NormalizeTypeArgument(argument);
 			if(!function_pointer_alias.empty()) argument = function_pointer_alias;
 			argument = QualifyTypeArgument(argument, context, definition.owner);
@@ -415,12 +469,9 @@ void PA18TemplateExpander::ResolveTemplateArguments(const TemplateDefinition& de
 			} catch(const logic_error& error) { throw logic_error("definition=" + definition.qualified_name + " " + error.what()); }
 			if(!parameter.name.empty()) (*integral_substitutions)[parameter.name] = integral_value;
 		}
-		if(definition.alias_template && parameter.type && !source_type_argument.empty() &&
-			!ResolveAlias(source_type_argument, context).empty() &&
-			ResolveAlias(source_type_argument, context).back() == '&') argument = source_type_argument;
+		if(definition.alias_template && parameter.type && !source_type_argument.empty() && !ResolveAlias(source_type_argument, context).empty() && ResolveAlias(source_type_argument, context).back() == '&') argument = source_type_argument;
 		if(argument.empty()) throw logic_error("missing template argument");
-		args->push_back(argument);
-		metadata_args->push_back(TemplateArgumentMetadata(parameter, argument,
+		args->push_back(argument); metadata_args->push_back(TemplateArgumentMetadata(parameter, argument,
 			integral_value, context, *substitutions));
 		if(!parameter.name.empty()) (*substitutions)[parameter.name] = argument; }
 	if(raw_index != raw_args.size()) throw logic_error("too many template arguments");

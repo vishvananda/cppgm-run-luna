@@ -257,6 +257,12 @@ bool PA18TemplateExpander::TransformUnqualifiedMemberTemplateCall(
 	// id-expression; replay it through typed `this` lookup before free lookup.
 	if(input_callee && input_callee->kind == "id-expression") {
 		const string raw_member_id = RemoveMarker(input_callee->value);
+		// A qualified template-id already carries its lookup owner.  Treating it
+		// as an unqualified member call would invent a `this` receiver in a free
+		// function (and, in particular, turn `C::static_member<T>` into an
+		// invalid non-static call).  Dependent qualified member-ids have their
+		// own owner-aware replay path above.
+		if(raw_member_id.find("::") != string::npos) return false;
 		const size_t member_id_open = raw_member_id.find('<');
 		if(member_id_open != string::npos) {
 			string member_id_base, member_id_arguments; size_t member_id_begin = 0, member_id_close = string::npos;
@@ -504,9 +510,9 @@ CPPGMAstNodePtr PA18TemplateExpander::MaterializeOperatorCallTargets(
 			result_callee = operator_member;
 		}
 	}
-	if(input_callee && input_callee->kind == "id-expression" &&
-		input_callee->value.compare(0, 7, "super::") == 0 &&
-		result_callee && result_callee->kind == "id-expression") {
+		if(input_callee && input_callee->kind == "id-expression" &&
+			input_callee->value.compare(0, 7, "super::") == 0 &&
+			result_callee && result_callee->kind == "id-expression") {
 		string this_type;
 		vector<const TemplateDefinition*> inherited;
 		set<string> inherited_active;
@@ -661,6 +667,55 @@ bool PA18TemplateExpander::MaterializeFreeFunctionCandidates(
 	const string& context, const map<string, string>& substitutions,
 	const map<const TemplateDefinition*, string>& inherited_owners)
 {
+	map<string, vector<string> > owner_pack_values;
+	if(!qualified_callee_owner.empty()) {
+		map<string, string>::const_iterator owner_base = specialization_bases_.find(
+			LastComponent(qualified_callee_owner));
+		map<string, vector<string> >::const_iterator owner_arguments =
+			specialization_arguments_.find(LastComponent(qualified_callee_owner));
+		if(owner_base != specialization_bases_.end() &&
+			owner_arguments != specialization_arguments_.end()) {
+			const TemplateDefinition* owner_definition = FindDefinition(
+				owner_base->second, context);
+			if(owner_definition && owner_definition->class_template) {
+				size_t owner_argument = 0;
+				for(size_t parameter = 0; parameter < owner_definition->parameters.size(); ++parameter) {
+					const TemplateParameter& owner_parameter = owner_definition->parameters[parameter];
+					if(owner_parameter.pack) {
+						size_t trailing_fixed = 0;
+						for(size_t later = parameter + 1; later < owner_definition->parameters.size(); ++later)
+							if(!owner_definition->parameters[later].pack) ++trailing_fixed;
+						const size_t available = owner_arguments->second.size() > owner_argument ?
+							owner_arguments->second.size() - owner_argument : 0;
+						const size_t count = available > trailing_fixed ? available - trailing_fixed : 0;
+						vector<string>& values = owner_pack_values[owner_parameter.name];
+						for(size_t element = 0; element < count; ++element)
+							values.push_back(owner_arguments->second[owner_argument++]);
+					} else if(owner_argument < owner_arguments->second.size()) ++owner_argument;
+				}
+				const TemplateDefinition* selected_owner = SelectClassTemplateDefinition(
+					owner_definition, owner_arguments->second, context);
+				if(selected_owner && selected_owner->partial_specialization) {
+					owner_pack_values.clear();
+					size_t selected_argument = 0;
+					for(size_t parameter = 0; parameter < selected_owner->specialization_parameter_details.size(); ++parameter) {
+						const TemplateParameter& detail = selected_owner->specialization_parameter_details[parameter];
+						if(detail.pack) {
+							size_t trailing_fixed = 0;
+							for(size_t later = parameter + 1; later < selected_owner->specialization_parameter_details.size(); ++later)
+								if(!selected_owner->specialization_parameter_details[later].pack) ++trailing_fixed;
+							const size_t available = owner_arguments->second.size() > selected_argument ?
+								owner_arguments->second.size() - selected_argument : 0;
+							const size_t count = available > trailing_fixed ? available - trailing_fixed : 0;
+							vector<string>& values = owner_pack_values[detail.name];
+							for(size_t element = 0; element < count; ++element)
+								values.push_back(owner_arguments->second[selected_argument++]);
+						} else if(selected_argument < owner_arguments->second.size()) ++selected_argument;
+					}
+				}
+			}
+		}
+	}
 			for(size_t candidate = 0; candidate < definitions.size(); ++candidate) {
 				const TemplateDefinition* definition = definitions[candidate];
 				if(definition->declaration && definition->declaration->kind == "simple-declaration") {
@@ -675,12 +730,16 @@ bool PA18TemplateExpander::MaterializeFreeFunctionCandidates(
 						}
 					}
 					if(has_definition) continue;
-				}
-				vector<string> inferred; map<string, vector<string> > inferred_pack_values; map<string, FunctionSignature> inferred_function_values; map<string, vector<string> > forwarding_pack_values; bool inferred_ok = false;
-				try { inferred_ok = InferFunctionArguments(*definition, result, &inferred, substitutions, context, 0, &inferred_pack_values, &inferred_function_values, 0, &forwarding_pack_values); }
+					}
+					vector<string> inferred; map<string, vector<string> > inferred_pack_values; map<string, FunctionSignature> inferred_function_values; map<string, vector<string> > forwarding_pack_values; bool inferred_ok = false;
+					map<string, string> candidate_substitutions = substitutions;
+					if(definition->member_template && !qualified_callee_owner.empty())
+						AddConcreteOwnerSubstitutions(qualified_callee_owner, context,
+							&candidate_substitutions);
+				try { inferred_ok = InferFunctionArguments(*definition, result, &inferred, candidate_substitutions, context, 0, &inferred_pack_values, &inferred_function_values, owner_pack_values.empty() ? 0 : &owner_pack_values, &forwarding_pack_values); }
 				catch(const PA18SubstitutionFailure&) { inferred_ok = false; }
 				if(!inferred_ok) continue;
-				if(!ValidateTemplateDefaults(*definition, inferred, context, substitutions)) continue;
+					if(!ValidateTemplateDefaults(*definition, inferred, context, candidate_substitutions)) continue;
 				const TemplateDefinition* selected_definition =
 					FindExplicitFunctionSpecialization(definition->qualified_name, inferred, context);
 				if(!selected_definition) selected_definition = definition;
@@ -695,8 +754,19 @@ bool PA18TemplateExpander::MaterializeFreeFunctionCandidates(
 					specialization_bases_.end() && !selected_definition->owner.empty();
 				const string* requested_owner = concrete_member_owner ? &requested_owner_name : 0;
 				try {
-					const string local_name = Instantiate(*selected_definition, inferred, context, false,
-						&inferred_pack_values, 0, requested_owner, &inferred_function_values,
+							map<string, vector<string> > instantiation_pack_hints = inferred_pack_values;
+							for(map<string, vector<string> >::const_iterator owner_pack = owner_pack_values.begin();
+								owner_pack != owner_pack_values.end(); ++owner_pack)
+								// A member template can reuse the enclosing class-pack's
+								// spelling as a function parameter pack.  The owner is
+								// already a concrete typed fact, so it must win over a
+								// same-named pack inferred from the call arguments.
+								instantiation_pack_hints[owner_pack->first] = owner_pack->second;
+						const map<string, string>* materialization_substitutions =
+							selected_definition->member_template && !qualified_callee_owner.empty() ?
+							&candidate_substitutions : 0;
+						const string local_name = Instantiate(*selected_definition, inferred, context, false,
+							&instantiation_pack_hints, materialization_substitutions, requested_owner, &inferred_function_values,
 						&forwarding_pack_values);
 					string inferred_result_type;
 					if(selected_definition->declaration &&
@@ -781,14 +851,73 @@ void PA18TemplateExpander::MaterializeFreeFunctionCall(
 	if(!constructor_replayed && !implicit_member_instantiated && result_callee &&
 		result_callee->kind == "id-expression" &&
 		result_callee->value.find('<') == string::npos) {
-			const string callee_name = result_callee->value;
-			vector<const TemplateDefinition*> definitions =
-				FindFunctionDefinitions(callee_name, context);
-			// PA14 owns overload ranking; replay only a unique ordinary signature here.
-		MaterializeOrdinaryCallConversions(callee_name, result, context, substitutions);
-		map<const TemplateDefinition*, string> inherited_owners;
-		const string qualified_callee_owner = PrefixComponent(callee_name);
-		if(!qualified_callee_owner.empty()) {
+				const string callee_name = result_callee->value;
+				vector<const TemplateDefinition*> definitions =
+					FindFunctionDefinitions(callee_name, context);
+				// PA14 owns overload ranking; replay only a unique ordinary signature here.
+			MaterializeOrdinaryCallConversions(callee_name, result, context, substitutions);
+			map<const TemplateDefinition*, string> inherited_owners;
+			const string qualified_callee_owner = PrefixComponent(callee_name);
+			// A concrete qualified static call is looked up after the enclosing class
+			// specialization has been selected.  The ordinary name index contains the
+			// primary member template as well as members collected from partial class
+			// specializations; retaining the primary here makes a call such as
+			// `arg_list_factory<...>::reverse` use the primary's empty-pack body.
+			// Rebuild this small owner slice from the selected class specialization so
+			// member-template deduction sees its fixed enclosing parameters.
+			if(!qualified_callee_owner.empty()) {
+				map<string, string>::const_iterator owner_base = specialization_bases_.find(
+					LastComponent(qualified_callee_owner));
+				map<string, vector<string> >::const_iterator owner_arguments =
+					specialization_arguments_.find(LastComponent(qualified_callee_owner));
+				if(owner_base != specialization_bases_.end() &&
+					owner_arguments != specialization_arguments_.end()) {
+					const TemplateDefinition* primary = FindDefinition(owner_base->second, context);
+					const TemplateDefinition* selected = primary && primary->class_template ?
+						SelectClassTemplateDefinition(primary, owner_arguments->second, context) : 0;
+						if(selected && selected->partial_specialization) {
+							const string selected_class_scope = JoinPath(selected->owner, selected->name);
+						string selected_owner = JoinPath(selected_class_scope, selected->name);
+						selected_owner += "<";
+						for(size_t argument = 0; argument < selected->specialization_pattern.size(); ++argument) {
+							if(argument) selected_owner += ",";
+							selected_owner += selected->specialization_pattern[argument];
+						}
+						selected_owner += ">";
+						vector<const TemplateDefinition*> selected_definitions;
+						const string member_name = LastComponent(callee_name);
+						map<string, vector<string> >::const_iterator indexed =
+							definitions_by_name_.find(member_name);
+						if(indexed != definitions_by_name_.end()) for(size_t candidate = 0;
+							candidate < indexed->second.size(); ++candidate) {
+							map<string, TemplateDefinition>::const_iterator found = definitions_.find(
+								indexed->second[candidate]);
+							if(found == definitions_.end() || !found->second.member_template) continue;
+							if(found->second.owner == selected_owner)
+								selected_definitions.push_back(&found->second);
+						}
+						if(!selected_definitions.empty()) {
+							vector<const TemplateDefinition*> filtered;
+							string selected_base = selected_owner;
+							const size_t selected_open = selected_base.find('<');
+							if(selected_open != string::npos) selected_base.erase(selected_open);
+							for(size_t candidate = 0; candidate < definitions.size(); ++candidate) {
+								const TemplateDefinition* definition = definitions[candidate];
+								string definition_base = definition->owner;
+								const size_t open = definition_base.find('<');
+								if(open != string::npos) definition_base.erase(open);
+								if(definition->member_template && definition_base == selected_base) continue;
+								filtered.push_back(definition);
+							}
+							for(size_t selected_index = 0; selected_index < selected_definitions.size(); ++selected_index)
+								if(find(filtered.begin(), filtered.end(), selected_definitions[selected_index]) == filtered.end())
+									filtered.push_back(selected_definitions[selected_index]);
+							definitions.swap(filtered);
+						}
+					}
+				}
+			}
+			if(!qualified_callee_owner.empty()) {
 			vector<const TemplateDefinition*> inherited;
 			set<string> active;
 			CollectInheritedMemberTemplates(qualified_callee_owner,

@@ -226,9 +226,9 @@ void PA18TemplateExpander::MaterializeInitializerConstructor(
 			conversion_call->children.push_back(member);
 			conversion_call->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
 				"argument-list")));
-			try {
-				if(InstantiateMemberCall(conversion_call, member, conversion_name,
-					context, substitutions, false)) break;
+				try {
+					if(InstantiateMemberCall(conversion_call, member, conversion_name,
+						context, substitutions, false)) break;
 			} catch(const PA18SubstitutionFailure&) {
 			} catch(const logic_error&) {
 			}
@@ -453,7 +453,12 @@ void PA18TemplateExpander::MaterializeInitializerConstructor(
 	CPPGMAstNodePtr argument_list(new CPPGMAstNode("argument-list"));
 	argument_list->children = arguments;
 	call->children.push_back(argument_list);
-	InstantiateMemberCall(call, member, source_constructor_name, context, substitutions);
+	// This synthetic call represents constructor overload resolution for the
+	// initializer itself.  Keep the replay marker so an ordinary fallback
+	// constructor does not hide a better member-template constructor.
+	const bool initialized = InstantiateMemberCall(call, member, source_constructor_name, context,
+		substitutions, false, true);
+	(void)initialized;
 }
 
 } // namespace pa18_templates_internal

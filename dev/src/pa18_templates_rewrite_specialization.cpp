@@ -12,6 +12,7 @@ int PA18TemplateExpander::MatchDirectTypeParameter(const string& pattern,
 		(!class_pattern && pattern.find('<') != string::npos)) return -1;
 	map<string, string>::const_iterator prior = inferred->find(pattern);
 	if(prior != inferred->end()) {
+		if(CanonicalSpelling(prior->second) == CanonicalSpelling(actual)) return 1;
 		const string prior_type = CanonicalSpelling(ResolveAlias(prior->second, context));
 		string actual_type = CanonicalSpelling(ResolveAlias(actual, context));
 		if(prior_type != actual_type && actual.find("::") == string::npos) {
@@ -275,6 +276,32 @@ string PA18TemplateExpander::ExpandAliasPattern(string pattern, const string& co
 	const string active_key = definition->qualified_name + "<" + arguments_text + ">";
 	if(!active->insert(active_key).second) return pattern;
 	const vector<string> arguments = SplitTemplateArguments(arguments_text);
+	// Alias-template substitution is a SFINAE boundary too.  Expanding a
+	// fixed-arity alias with an omitted argument used to leave the missing
+	// identifiers in its target (`two<>` became `A`), which could accidentally
+	// match the `void_t` specialization used by the detection idiom.  Keep the
+	// alias-id opaque until its required arguments are present; a dependent pack
+	// remains open for the later concrete replay.
+	bool dependent_pack_argument = false;
+	for(size_t argument = 0; argument < arguments.size(); ++argument)
+		if(arguments[argument].find("...") != string::npos) {
+			dependent_pack_argument = true;
+			break;
+		}
+	if(!dependent_pack_argument) {
+		size_t required = 0;
+		bool has_pack = false;
+		for(size_t parameter = 0; parameter < definition->parameters.size(); ++parameter) {
+			const TemplateParameter& item = definition->parameters[parameter];
+			if(item.pack) has_pack = true;
+			else if(item.default_type.empty()) ++required;
+		}
+		if(arguments.size() < required || (!has_pack &&
+			arguments.size() > definition->parameters.size())) {
+			active->erase(active_key);
+			return pattern;
+		}
+	}
 	map<string, string> substitutions;
 	size_t argument = 0;
 	for(size_t parameter = 0; parameter < definition->parameters.size(); ++parameter) {
@@ -563,8 +590,9 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 		const string substituted_pattern = ReplaceIdentifiersPreservingPackSizes(
 			CanonicalSpelling(source_pattern), local);
 		try {
-			const_cast<PA18TemplateExpander*>(this)->RewriteText(
+			const string rewritten = const_cast<PA18TemplateExpander*>(this)->RewriteText(
 				substituted_pattern, context, local, 0);
+			(void)rewritten;
 		} catch(const PA18SubstitutionFailure&) {
 			return false;
 		}

@@ -61,6 +61,19 @@ CPPGMAstNodePtr PA18TemplateExpander::RewriteRegularNodeValue(
 			literal->initializer_form = input->initializer_form;
 			return literal;
 		}
+		// A non-type pack expansion is carried through the ordinary substitution
+		// map because each element is replayed as a fresh scalar spelling.  The
+		// parser originally classified the pack identifier as an id-expression;
+		// once its spelling is a concrete integer, retain the typed literal node so
+		// aggregate initializers and global data lowering can fold it.
+		const string spelling = RemoveMarker(result->value);
+		size_t digit = (spelling.size() > 0 &&
+			(spelling[0] == '+' || spelling[0] == '-')) ? 1 : 0;
+		bool integer_spelling = digit < spelling.size();
+		for(; integer_spelling && digit < spelling.size(); ++digit)
+			if(!isdigit(static_cast<unsigned char>(spelling[digit]))) integer_spelling = false;
+		if(integer_spelling)
+			return CPPGMAstNodePtr(new CPPGMAstNode("literal", spelling));
 	}
 	if((type_spelling || input->kind == "id-expression") &&
 		result->value.find('<') != string::npos)

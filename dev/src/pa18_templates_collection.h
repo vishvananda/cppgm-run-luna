@@ -306,6 +306,17 @@ string ReplaceIdentifiersPreservingPackSizes(const string& raw,
 inline string TypeSuffix(string raw, bool preserve_trailing_underscores = false)
 {
 	raw = CanonicalSpelling(raw);
+	// Keep rvalue references as one generated-name component.  Replaying the
+	// older `_ref_ref` spelling loses the reference category and can turn the
+	// second `_ref` into a nominal type during nested constructor replay.
+	string collapsed;
+	for(size_t i = 0; i < raw.size(); ++i) {
+		if(i + 1 < raw.size() && raw[i] == '&' && raw[i + 1] == '&') {
+			collapsed += "&&";
+			++i;
+		} else collapsed += raw[i];
+	}
+	raw.swap(collapsed);
 	const bool array_type = raw.find('[') != string::npos;
 	string result;
 	for(size_t i = 0; i < raw.size(); ++i) {
@@ -319,7 +330,12 @@ inline string TypeSuffix(string raw, bool preserve_trailing_underscores = false)
 			result += "__";
 			++i;
 		} else if(ch == '*') result += "_ptr";
-		else if(ch == '&') result += "_ref";
+		else if(ch == '&') {
+			if(i + 1 < raw.size() && raw[i + 1] == '&') {
+				result += "_rref";
+				++i;
+			} else result += "_ref";
+		}
 		else result += '_';
 	}
 	while(!array_type && !preserve_trailing_underscores && result.size() > 1 &&
@@ -543,7 +559,9 @@ private:
 	map<string, CPPGMAstNodePtr> extern_instantiation_declarations_;
 	map<string, set<string> > requested_nested_classes_;
 	set<string> materialized_nested_classes_, materialized_member_definitions_, deferred_class_instantiations_; size_t defer_type_only_class_definitions_ = 0; size_t active_template_declaration_depth_ = 0; set<string> active_template_member_types_;
-	mutable set<string> active_member_type_lookups_, active_function_results_;
+	mutable set<string> active_member_type_lookups_, active_function_results_,
+		active_class_template_selections_, active_class_specialization_matches_;
+	mutable size_t active_class_specialization_depth_ = 0;
 	struct ActiveFunctionResultScope { PA18TemplateExpander* owner; string key; ActiveFunctionResultScope(PA18TemplateExpander* value, const string& name) : owner(value), key(name) {} ~ActiveFunctionResultScope() { owner->active_function_results_.erase(key); } };
 	map<string, FunctionSignature> active_function_substitutions_;
 	size_t EstimateTypeSize(string raw, const string& context) const;
@@ -620,8 +638,9 @@ private:
 	bool PreserveUnresolvedExplicitTemplateCall(const CPPGMAstNodePtr& input, const CPPGMAstNodePtr& result, const vector<string>& explicit_arguments, const string& context, const map<string, string>& explicit_substitutions, const map<string, string>& substitutions);
 	void MaterializeOrdinaryCallConversions(const string& callee_name, const CPPGMAstNodePtr& result, const string& context, const map<string, string>& substitutions);
 	void MaterializeOrdinaryConversion(const string& raw_parameter, const CPPGMAstNodePtr& argument, const string& context, const map<string, string>& substitutions); bool ResolveOrdinaryConversionTypes(const string& raw_parameter, const CPPGMAstNodePtr& argument, const string& context, const map<string, string>& substitutions, string* target_type, string* source_type, CPPGMAstNodePtr* source_declaration); bool ReplayOrdinaryConversion(const string& source_type, const string& target_type, const CPPGMAstNodePtr& source_declaration, const string& context, const map<string, string>& substitutions); bool TryOrdinaryConversionDefinition(const TemplateDefinition& definition, const string& source_type, const string& target_type, const string& expected_pattern, const string& context, const map<string, string>& substitutions);
+	void MaterializeReturnConversions(const CPPGMAstNodePtr& function, const CPPGMAstNodePtr& result, const string& context, const string& function_context, const map<string, string>& substitutions);
 	bool ValidateExplicitFunctionCandidate(const TemplateDefinition& definition, const CPPGMAstNodePtr& input, const string& context, const map<string, string>& substitutions, const vector<string>& raw_explicit_args, vector<string>* arguments); bool HasAbstractFunctionParameter(const TemplateDefinition& definition, const vector<string>& arguments, const string& context, const map<string, string>& substitutions);
-	bool IsAbstractClassType(const string& raw, const string& context, set<string>* active) const; bool IsAbstractObjectSpelling(const string& raw, const string& context) const; string ResolveAlias(string spelling, const string& context) const; bool FindLogicalNamespaceAlias(const string& spelling, string* alias_key) const; bool IsArrayTypeAlias(const string& alias_name, const string& context) const; bool HasPackBeforeFixed(const TemplateDefinition& definition) const;
+	bool IsAbstractClassType(const string& raw, const string& context, set<string>* active) const; bool IsAbstractObjectSpelling(const string& raw, const string& context) const; string ResolveAlias(string spelling, const string& context) const; bool FindLogicalNamespaceAlias(const string& spelling, string* alias_key) const; bool IsArrayTypeAlias(const string& alias_name, const string& context) const; bool HasPackBeforeFixed(const TemplateDefinition& definition) const; bool ResolveGeneratedMemberAlias(const string& class_key, const string& member, const string& context, string* member_type) const; bool ResolveContextMemberAlias(const string& class_key, const string& member, const string& context, string* member_type) const;
 	bool LookupVariableType(const string& name, const string& context,
 		string* result) const;
 	bool ContainsName(const CPPGMAstNodePtr& node, const string& name) const;
@@ -1179,8 +1198,7 @@ private:
 		if(!elaborated_type_reference && (node->kind == "class-specifier" || node->kind == "class-forward-declaration"))
 			RecordClassTypeSize(node, context, JoinPath(context, LastComponent(node->value)));
 	}
-	void CollectVariables(const CPPGMAstNodePtr& node, const string& context);
-	void CountNamespaceOccurrences(const CPPGMAstNodePtr& node, const string& context);
+	void CollectVariables(const CPPGMAstNodePtr& node, const string& context); void CountNamespaceOccurrences(const CPPGMAstNodePtr& node, const string& context);
 	CPPGMAstNodePtr TransformTranslationUnit(const CPPGMAstNodePtr& input);
 	bool TypeOnlyNode(const CPPGMAstNodePtr& node) const;
 	void InsertGenerated(vector<CPPGMAstNodePtr>* children, const string& owner);

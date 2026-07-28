@@ -379,8 +379,25 @@ bool PA18TemplateExpander::InferMemberArgument(const CPPGMAstNodePtr& expression
 	const string member = expression->children[1] ?
 		LastComponent(expression->children[1]->value) : string();
 	set<string> active;
-	if(!object_type.empty() && !member.empty() && FindClassMemberType(
-		object_type, member, substitutions, context, result, &active)) {
+	string lookup_object_type = object_type;
+	if(!substitutions.empty()) {
+		const size_t object_open = object_type.find('<');
+		const string object_base = object_open == string::npos ? object_type :
+			object_type.substr(0, object_open);
+		map<string, string>::const_iterator concrete = substitutions.find(object_base);
+		if(object_open != string::npos && concrete != substitutions.end() &&
+			(specialization_bases_.find(LastComponent(concrete->second)) !=
+				specialization_bases_.end() || class_declarations_.find(concrete->second) !=
+				class_declarations_.end())) lookup_object_type = concrete->second;
+		else if(object_open != string::npos) {
+			map<string, string> lookup_substitutions = substitutions;
+			lookup_substitutions.erase(object_base);
+			lookup_object_type = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(
+				object_type, lookup_substitutions));
+		}
+	}
+	if(!lookup_object_type.empty() && !member.empty() && FindClassMemberType(
+		lookup_object_type, member, substitutions, context, result, &active)) {
 		return true;
 	}
 	if(!object_type.empty() && named_type_contexts_.find(
@@ -806,7 +823,55 @@ bool PA18TemplateExpander::MergeInferredFunctionArgument(
 			matching_parameter_names.erase(binding->first);
 		}
 	}
-	const bool matched = MatchTypePattern(matching_pattern, type,
+	// Function-template deduction sees the complete specialization represented
+	// by an object expression.  The compact type fact may omit class-template
+	// defaults (`queue<int>`), while a parameter pattern can mention the
+	// defaulted tail (`queue<T, Container>`).  Complete that typed fact at this
+	// deduction boundary so prefix deduction remains structural.
+	const auto complete_class_template_type = [this, &context](string spelling) {
+		string suffix;
+		while(!spelling.empty() && (spelling[spelling.size() - 1] == '&' ||
+			spelling[spelling.size() - 1] == '*')) {
+			suffix = spelling[spelling.size() - 1] + suffix;
+			spelling.erase(spelling.size() - 1);
+		}
+		const size_t open = spelling.find('<');
+		if(open == string::npos) return spelling + suffix;
+		string argument_text;
+		size_t close = string::npos;
+		if(!TemplateRange(spelling, open, &argument_text, &close)) return spelling + suffix;
+		const string base = CanonicalSpelling(spelling.substr(0, open));
+		const TemplateDefinition* class_definition = FindDefinition(base, context);
+		if(!class_definition || !class_definition->class_template) return spelling + suffix;
+		vector<string> arguments = SplitTemplateArguments(argument_text);
+		if(arguments.size() >= class_definition->parameters.size()) return spelling + suffix;
+		map<string, string> bindings;
+		for(size_t parameter = 0; parameter < arguments.size() &&
+			parameter < class_definition->parameters.size(); ++parameter)
+			if(!class_definition->parameters[parameter].name.empty())
+				bindings[class_definition->parameters[parameter].name] = arguments[parameter];
+		for(size_t parameter = arguments.size(); parameter < class_definition->parameters.size(); ++parameter) {
+			const TemplateParameter& detail = class_definition->parameters[parameter];
+			if(detail.pack || detail.default_type.empty()) return spelling + suffix;
+			// This is only completion of the typed class specialization used for
+			// deduction.  Re-running the full source rewriter here can materialize
+			// a generated class name (`Alloc_Info_ptr_`) instead of preserving the
+			// default's structural template spelling, which makes the subsequent
+			// class-pattern comparison fail.  Identifier substitution plus alias
+			// resolution is sufficient at this boundary.
+			string value = NormalizeTypeArgument(ResolveAlias(
+				ReplaceIdentifiers(detail.default_type, bindings), context));
+			if(value.empty()) return spelling + suffix;
+			arguments.push_back(value);
+			if(!detail.name.empty()) bindings[detail.name] = value;
+		}
+		string result = base + "<";
+		for(size_t argument = 0; argument < arguments.size(); ++argument)
+			result += (argument ? "," : string()) + arguments[argument];
+		return result + ">" + suffix;
+	};
+	const string completed_type = complete_class_template_type(type);
+	const bool matched = MatchTypePattern(matching_pattern, completed_type,
 		matching_parameter_names, &one, context);
 	if(!matched) {
 		const bool lvalue = match_pattern.size() > 0 && match_pattern[match_pattern.size() - 1] == '&' &&
@@ -1006,6 +1071,16 @@ bool PA18TemplateExpander::InferFunctionParameter(
 		FunctionSignature signature;
 		bool inferred_argument = InferArgument(argument, &type, parameter_substitutions,
 			context, &signature);
+		if(inferred_argument && !type.empty()) {
+			string resolved_type = ReplaceIdentifiersPreservingPackSizes(type,
+				parameter_substitutions);
+			try {
+				resolved_type = const_cast<PA18TemplateExpander*>(this)->RewriteText(
+					resolved_type, context, parameter_substitutions, 0);
+			} catch(const PA18SubstitutionFailure&) {}
+			resolved_type = CanonicalSpelling(ResolveAlias(resolved_type, context));
+			if(!resolved_type.empty()) type = resolved_type;
+		}
 		// An empty braced-init-list is a non-deduced argument, but it still
 		// participates in viability once the other template arguments have
 		// supplied every dependent part of this parameter.  Carry the resolved
@@ -1114,6 +1189,25 @@ bool PA18TemplateExpander::InferFunctionParameter(
 		deduction_pattern = normalize_pointer_pointee_cv(
 			normalize_builtin(deduction_pattern));
 		string deduction_type = normalize_pointer_pointee_cv(normalize_builtin(type));
+		// The compact semantic type fact for a named object is its referred-to
+		// type; the reference is a property of the expression category.  Preserve
+		// that category at the deduction boundary for a non-const lvalue
+		// reference parameter.  Without it, a pattern such as `Vec<P>&` is matched
+		// against `Vec<Info*>` as though the call supplied a prvalue, so the class
+		// specialization cannot contribute its template argument.
+		const bool nonconst_lvalue_reference = !pack_parameter &&
+			!deduction_pattern.empty() &&
+			deduction_pattern[deduction_pattern.size() - 1] == '&' &&
+			(deduction_pattern.size() < 2 ||
+			 deduction_pattern[deduction_pattern.size() - 2] != '&') &&
+			!ConstReferenceParameterPattern(deduction_pattern) &&
+			IsLvalueTemplateArgument(argument) && !enumerator_prvalue;
+		if(inferred_argument && nonconst_lvalue_reference &&
+			type.find('[') == string::npos &&
+			(deduction_type.empty() || deduction_type[deduction_type.size() - 1] != '&')) {
+			type = CanonicalSpelling(type + "&");
+			deduction_type = normalize_pointer_pointee_cv(normalize_builtin(type));
+		}
 		if(deduction_pattern.compare(0, 6, "const ") == 0 &&
 			deduction_pattern.size() > 6 && deduction_pattern[deduction_pattern.size() - 1] == '*' &&
 			deduction_type.compare(0, 6, "const ") != 0)
@@ -1212,7 +1306,9 @@ bool PA18TemplateExpander::InferFunctionParameter(
 				deduction_type, signature, parameter_substitutions, context, parameter_names,
 				inferred, inferred_packs, inferred_functions, bound_pack_values,
 				fixed_template_parameters);
-			if(!merged) return false;
+				if(!merged) {
+					return false;
+			}
 		}
 		++*argument_index;
 	}
@@ -1304,7 +1400,6 @@ bool PA18TemplateExpander::CompleteFunctionArguments(
 			(*inferred)[parameter.name] = value;
 			result->push_back(value);
 		}
-		else return false;
 	}
 	return true;
 }
@@ -1336,6 +1431,21 @@ bool PA18TemplateExpander::InferFunctionArguments(const TemplateDefinition& defi
 	}
 	if(arguments->children.size() < required_parameters ||
 		(!has_pack && arguments->children.size() > parameters->children.size())) return false;
+	// An explicit template-id cannot bind arguments past a fixed template
+	// parameter list.  The call-parameter pass below only consumes the prefix
+	// positionally, so without this check a candidate such as `pick<A>` would
+	// remain viable for `pick<A,B,C>` and steal the overload from the
+	// three-parameter template.
+	if(explicit_prefix) {
+		bool template_pack = false;
+		for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter)
+			if(definition.parameters[parameter].pack) {
+				template_pack = true;
+				break;
+			}
+		if(!template_pack && explicit_prefix->size() > definition.parameters.size())
+			return false;
+	}
 	bool only_ellipsis = !parameters->children.empty();
 	for(size_t parameter = 0; parameter < parameters->children.size(); ++parameter)
 		if(!parameters->children[parameter] ||
@@ -1383,15 +1493,27 @@ bool PA18TemplateExpander::InferFunctionArguments(const TemplateDefinition& defi
 			}
 	}
 	if(only_ellipsis && explicit_prefix) {
-		if(explicit_prefix->size() > definition.parameters.size()) return false;
-		for(size_t parameter = 0; parameter < explicit_prefix->size(); ++parameter)
-			result->push_back((*explicit_prefix)[parameter]);
-		for(size_t parameter = explicit_prefix->size();
-			parameter < definition.parameters.size(); ++parameter) {
-			if(definition.parameters[parameter].default_type.empty()) return false;
-			result->push_back(definition.parameters[parameter].default_type);
+		// Explicit arguments for a trailing template pack are flattened in the
+		// completed argument vector.  The old parameter-count check rejected a
+		// valid fallback such as `template<class, class...> f(...)` as soon as
+		// more than two explicit arguments were supplied, leaving an invalid
+		// overload selected when a preceding candidate's default SFINAE failed.
+		size_t explicit_index = 0;
+		bool explicit_pack_consumed = false;
+		for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter) {
+			const TemplateParameter& detail = definition.parameters[parameter];
+			if(detail.pack) {
+				while(explicit_index < explicit_prefix->size())
+					result->push_back((*explicit_prefix)[explicit_index++]);
+				explicit_pack_consumed = true;
+				continue;
+			}
+			if(!explicit_pack_consumed && explicit_index < explicit_prefix->size())
+				result->push_back((*explicit_prefix)[explicit_index++]);
+			else if(!detail.default_type.empty()) result->push_back(detail.default_type);
+			else return false;
 		}
-		return result->size() == definition.parameters.size();
+		return explicit_index == explicit_prefix->size();
 	}
 	if(only_ellipsis)
 		return CompleteFunctionArguments(definition, deferred_patterns, deferred_arguments,
@@ -1410,8 +1532,8 @@ bool PA18TemplateExpander::InferFunctionArguments(const TemplateDefinition& defi
 		return false;
 	}
 	const bool complete = CompleteFunctionArguments(definition, deferred_patterns, deferred_arguments,
-		parameter_names, &inferred, inferred_packs, result, inferred_pack_values, context,
-		forwarding_pack_values);
+			parameter_names, &inferred, inferred_packs, result, inferred_pack_values,
+			context, forwarding_pack_values);
 	return complete;
 	} catch(const PA18SubstitutionFailure&) {
 		throw;

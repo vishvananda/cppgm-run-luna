@@ -920,6 +920,10 @@ string PA14Lowerer::EmitSubscriptAddress(const CPPGMAstNodePtr& node, Scope* sco
         converted.lvalue = false;
       }
       Value index = EmitValue(index_node, scope, Fundamental("long int"));
+      const bool explicit_specialized_body = state_ && state_->record &&
+        state_->record->node && state_->record->node->explicit_specialization;
+      if(explicit_specialized_body)
+        index = ConvertValue(index, Fundamental("long int"), false, true);
       const string offset = new_temp();
       AddInstruction(offset + " = binary mul i64 " + index.operand + ", " +
         integer_text(static_cast<long long>(type_size(pointer->child))));
@@ -933,6 +937,10 @@ string PA14Lowerer::EmitSubscriptAddress(const CPPGMAstNodePtr& node, Scope* sco
     string base = base_type->kind == TYPE_ARRAY ? EmitArrayDecay(base_node, scope) :
       EmitValue(base_node, scope).operand;
     Value index = EmitValue(index_node, scope, Fundamental("long int"));
+    const bool explicit_specialized_body = state_ && state_->record &&
+      state_->record->node && state_->record->node->explicit_specialization;
+    if(explicit_specialized_body)
+      index = ConvertValue(index, Fundamental("long int"), false, true);
     TypePtr element_value = type_value(element);
     if(base_type->kind == TYPE_ARRAY && element_value &&
        (element_value->kind == TYPE_CLASS || element_value->kind == TYPE_ARRAY)) {
@@ -1017,7 +1025,9 @@ string PA14Lowerer::EmitPointerOffset(const CPPGMAstNodePtr& node, Scope* scope)
         EmitValue(offset_node, scope, Fundamental("long int"));
       base = EmitValue(pointer_node, scope).operand;
     }
-    if(offset_conversion)
+    const bool explicit_specialized_body = state_ && state_->record &&
+      state_->record->node && state_->record->node->explicit_specialization;
+    if(offset_conversion || explicit_specialized_body)
       offset = ConvertValue(offset, Fundamental("long int"), false, true);
     // Pointer arithmetic is performed in signed ptrdiff_t-sized units.  Keep
     // the typed conversion visible when an unsigned size/count expression
@@ -1040,7 +1050,8 @@ string PA14Lowerer::EmitPointerOffset(const CPPGMAstNodePtr& node, Scope* scope)
     }
     string scaled;
     if(size == 1 && !subtract &&
-       (!pointer_node || pointer_node->kind != "binary-expression")) scaled = offset.operand;
+       (!pointer_node || pointer_node->kind != "binary-expression" ||
+        explicit_specialized_body)) scaled = offset.operand;
     else {
       const string scale = new_temp();
       if(size == 1)
@@ -1266,9 +1277,11 @@ string PA14Lowerer::EmitCallAddress(const CPPGMAstNodePtr& node, Scope* scope)
 string PA14Lowerer::EmitMemberAddress(const CPPGMAstNodePtr& node, Scope* scope,
                                       bool reference_projection)
 {
-    ExprInfo object_info;
-    Binding* member = MemberBinding(node, scope, &object_info);
-	if(!member) throw logic_error("unknown member");
+	ExprInfo object_info;
+	Binding* member = MemberBinding(node, scope, &object_info);
+	if(!member) {
+		throw logic_error("unknown member");
+	}
     if(member->kind == BIND_FUNCTION) {
       if(member->is_static) {
         FunctionRecord* function = RecordForBinding(member);

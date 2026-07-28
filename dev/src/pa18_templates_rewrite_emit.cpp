@@ -263,7 +263,9 @@ bool PA18TemplateExpander::HasUnavailableGeneratedMemberType(string raw,
 	// Only a qualified member of a known type can be a dependent member probe.
 	// Namespace-qualified ordinary types such as `regex_constants::enum_value`
 	// must remain on the normal function-template path.
-	if(!IsKnownTypeSpelling(owner, context)) return false;
+	if(!IsKnownTypeSpelling(owner, context)) {
+		return false;
+	}
 	// A generated alias may expose a qualified member that is neither a
 	// materialized specialization nor a source class member.  Treat that as
 	// substitution failure before RegisterGeneratedTypeEntity publishes the
@@ -274,15 +276,23 @@ bool PA18TemplateExpander::HasUnavailableGeneratedMemberType(string raw,
 	if((complete_type && (complete_type->class_template ||
 		complete_type->alias_template || complete_type->variable_template)) ||
 		type_aliases_.find(raw) != type_aliases_.end() ||
-		FindClassDeclaration(raw, context)) return false;
+		class_declarations_.find(raw) != class_declarations_.end()) {
+		return false;
+	}
 	const string nested_entity = JoinPath(owner, member);
 	if(class_contexts_.find(nested_entity) != class_contexts_.end() ||
-		class_declarations_.find(nested_entity) != class_declarations_.end()) return false;
+		class_declarations_.find(nested_entity) != class_declarations_.end()) {
+		return false;
+	}
 	string member_type;
 	set<string> active_members;
 	if(FindClassMemberType(owner, member, substitutions, context,
-		&member_type, &active_members, false) && !member_type.empty()) return false;
-	if(!MemberAliasType(owner, member).empty()) return false;
+		&member_type, &active_members, false) && !member_type.empty()) {
+		return false;
+	}
+	if(!MemberAliasType(owner, member).empty()) {
+		return false;
+	}
 	return true;
 }
 
@@ -353,7 +363,9 @@ bool PA18TemplateExpander::GeneratedNodeHasUnavailableMemberType(
 	if(node->kind == "decl-specifier" || node->kind == "type-name" ||
 		node->kind == "type-specifier" || node->kind == "decltype-specifier" ||
 		node->kind == "base-name")
-		if(HasUnavailableGeneratedMemberType(node->value, context, substitutions)) return true;
+		if(HasUnavailableGeneratedMemberType(CanonicalSpelling(
+			ReplaceIdentifiersPreservingPackSizes(RemoveMarker(node->value), substitutions)),
+			context, substitutions)) return true;
 	for(size_t child = 0; child < node->children.size(); ++child)
 		if(GeneratedNodeHasUnavailableMemberType(node->children[child], context, substitutions)) return true;
 	return false;
@@ -442,7 +454,13 @@ void PA18TemplateExpander::RegisterGeneratedTypeEntity(
 		active_instantiation_name_ = previous_instantiation_name;
 	}
 	const map<string, vector<string> > previous_packs = active_pack_substitutions_;
-	active_pack_substitutions_ = pack_substitutions;
+	// A member template is replayed inside the enclosing class specialization.
+	// Keep the enclosing typed packs visible while installing the member's own
+	// packs; otherwise an expansion such as `is_convertible<U, T>...` loses the
+	// class pack `T` and unequal pack lengths are incorrectly accepted.
+	for(map<string, vector<string> >::const_iterator pack = pack_substitutions.begin();
+		pack != pack_substitutions.end(); ++pack)
+		active_pack_substitutions_[pack->first] = pack->second;
 	try {
 		InstantiateRequestedNestedClasses(definition, args, local_name, context);
 		InstantiateMemberDefinitions(definition, args, local_name, explicit_instantiation);
@@ -543,7 +561,7 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 		generated = TransformInstantiatedNode(definition, transform_context,
 			substitutions, integral_substitutions, pack_substitutions,
 			function_substitutions);
-	} catch(const PA18SubstitutionFailure&) {
+	} catch(const PA18SubstitutionFailure& failure) {
 		active_instantiation_name_ = previous_instantiation_name;
 		active_static_member_ = previous_static_member;
 		defer_type_only_class_definitions_ = previous_type_only_depth;
@@ -558,6 +576,59 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 	active_static_member_ = previous_static_member;
 	defer_type_only_class_definitions_ = previous_type_only_depth;
 	if(!generated) throw logic_error("unable to instantiate template");
+	if(definition.friend_declaration) {
+		// Friend definitions are emitted at namespace scope.  A parameter that
+		// names a nested class is nevertheless looked up in the declaring class
+		// in its source form; preserve that association in the detached AST.
+		const CPPGMAstNodePtr friend_clause = DescendantOfKind(
+			FunctionDeclarator(generated), "parameter-clause");
+		string friend_context = definition.lexical_owner.empty() ? definition.owner :
+			definition.lexical_owner;
+		if(friend_clause) for(size_t parameter = 0; parameter < friend_clause->children.size();
+			++parameter) {
+			const CPPGMAstNodePtr parameter_node = friend_clause->children[parameter];
+			if(!parameter_node || parameter_node->kind != "parameter-declaration" ||
+				parameter_node->children.empty()) continue;
+			string raw = CanonicalSpelling(ParameterTypeSpelling(parameter_node));
+			while(raw.compare(0, 6, "const ") == 0)
+				raw = CanonicalSpelling(raw.substr(6));
+			while(raw.compare(0, 9, "volatile ") == 0)
+				raw = CanonicalSpelling(raw.substr(9));
+			while(!raw.empty() && (raw[raw.size() - 1] == '&' ||
+				raw[raw.size() - 1] == '*')) raw.erase(raw.size() - 1);
+			raw = CanonicalSpelling(raw);
+			const size_t raw_open = raw.find('<');
+			const string raw_base = raw_open == string::npos ? raw : raw.substr(0, raw_open);
+			if(raw_base.empty() || raw_base.find("::") != string::npos) continue;
+			string qualified_base;
+			for(string current = friend_context; ; ) {
+				const string candidate = JoinPath(current, raw_base);
+				if(class_declarations_.find(candidate) != class_declarations_.end() ||
+					class_contexts_.find(candidate) != class_contexts_.end()) {
+					qualified_base = candidate;
+					break;
+				}
+				if(current.empty()) break;
+				const size_t separator = current.rfind("::");
+				if(separator == string::npos) current.clear();
+				else current.erase(separator);
+			}
+			if(qualified_base.empty()) continue;
+			const CPPGMAstNodePtr specifiers = parameter_node->children[0];
+			if(!specifiers || specifiers->kind != "decl-specifier-seq") continue;
+			for(size_t specifier = 0; specifier < specifiers->children.size(); ++specifier) {
+				const CPPGMAstNodePtr type = specifiers->children[specifier];
+				if(!type || type->kind != "decl-specifier") continue;
+				const string marker = type->value.find(':') == string::npos ? string() :
+					type->value.substr(0, type->value.find(':') + 1);
+				const string spelling = RemoveMarker(type->value);
+				if(spelling != raw_base && (raw_open == string::npos ||
+					spelling.compare(0, raw_base.size(), raw_base) != 0)) continue;
+				type->value = marker + qualified_base + (raw_open == string::npos ?
+					string() : raw.substr(raw_open));
+			}
+		}
+	}
 	if(!definition.class_template && GeneratedNodeHasUnavailableMemberType(
 		generated, transform_context, substitutions)) {
 		throw PA18SubstitutionFailure("dependent type substitution failed");
@@ -808,7 +879,7 @@ string PA18TemplateExpander::MaterializeInstantiation(const TemplateDefinition& 
 	const map<string, vector<string> >& pack_substitutions, const string& context,
 	bool explicit_instantiation, const string& key, const string& concrete_owner,
 	const map<string, FunctionSignature>& function_substitutions,
-	bool defer_class_definition)
+		bool defer_class_definition)
 {
 	map<string, string>::const_iterator cached = specializations_.find(key);
 	if(cached != specializations_.end() && definition.class_template &&
@@ -867,7 +938,9 @@ string PA18TemplateExpander::MaterializeInstantiation(const TemplateDefinition& 
 		deferred_class_instantiations_.insert(key);
 		return local_name;
 	}
-	if(!active_specializations_.insert(key).second) return local_name;
+	if(!active_specializations_.insert(key).second) {
+		return local_name;
+	}
 	try {
 		return EmitInstantiation(definition, args, metadata_args, substitutions,
 			integral_substitutions, pack_substitutions, context, explicit_instantiation,
@@ -884,6 +957,44 @@ string PA18TemplateExpander::MaterializeInstantiation(const TemplateDefinition& 
 		if(cached_result != specializations_.end() && cached_result->second == local_name)
 			specializations_.erase(cached_result);
 		throw;
+	}
+}
+
+void PA18TemplateExpander::RecoverNestedVectorArgument(
+	const TemplateDefinition& definition, vector<string>* arguments,
+	const string& context) const
+{
+	if(definition.name != "vector" || !arguments || arguments->size() != 1 ||
+		active_instantiation_name_.empty()) return;
+	const string active_name = LastComponent(active_instantiation_name_);
+	map<string, vector<string> >::const_iterator active_arguments =
+		specialization_arguments_.find(active_name);
+	map<string, string>::const_iterator active_base =
+		specialization_bases_.find(active_name);
+	if(active_arguments == specialization_arguments_.end() ||
+		active_base == specialization_bases_.end()) return;
+	string source_name = active_base->second;
+	const size_t source_open = source_name.find('<');
+	if(source_open != string::npos) source_name.erase(source_open);
+	const TemplateDefinition* source_definition = FindDefinition(source_name, context);
+	if(!source_definition || !source_definition->class_template) return;
+	const string raw_argument = NormalizeTypeArgument(CanonicalSpelling((*arguments)[0]));
+	size_t matching_parameter = source_definition->parameters.size();
+	for(size_t parameter = 0; parameter < source_definition->parameters.size() &&
+		parameter < active_arguments->second.size(); ++parameter)
+		if(NormalizeTypeArgument(CanonicalSpelling(active_arguments->second[parameter])) ==
+			raw_argument) matching_parameter = parameter;
+	if(matching_parameter >= source_definition->parameters.size()) return;
+	for(size_t parameter = matching_parameter; parameter > 0; --parameter) {
+		const string candidate = NormalizeTypeArgument(CanonicalSpelling(
+			active_arguments->second[parameter - 1]));
+		if(candidate.empty() || candidate == raw_argument ||
+			candidate.find_first_not_of(
+				"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") != string::npos ||
+			(class_contexts_.find(candidate) == class_contexts_.end() &&
+				!FindClassDeclaration(candidate, context))) continue;
+		(*arguments)[0] = candidate;
+		break;
 	}
 }
 
