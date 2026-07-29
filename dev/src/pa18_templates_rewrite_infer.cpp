@@ -543,8 +543,15 @@ bool PA18TemplateExpander::InferFunctionParameter(
 			bound_pack_names[0]);
 		if(bound != bound_pack_values->end()) bound_pack_count = bound->second.size();
 	}
-	const size_t visits = pack_parameter ? bound_pack_count :
-		(*argument_index < arguments->children.size() ? 1 : 0);
+	// A function parameter pack followed by a fixed parameter is a
+	// non-deduced context.  Without an explicit binding (or an enclosing typed
+	// pack binding), deduction must leave it empty; consuming the leading call
+	// arguments here incorrectly makes `f(1, 2, 3)` viable for
+	// `f(Types..., T1)`.
+	const bool nondeduced_nonterminal_pack = pack_parameter && trailing_fixed > 0 &&
+		!explicit_pack_values && bound_pack_names.empty();
+	const size_t visits = nondeduced_nonterminal_pack ? 0 : (pack_parameter ? bound_pack_count :
+		(*argument_index < arguments->children.size() ? 1 : 0));
 	if(explicit_pack_values && visits != explicit_pack_values->size()) return false;
 	for(size_t visit = 0; visit < visits; ++visit) {
 		if(*argument_index >= arguments->children.size()) return false;

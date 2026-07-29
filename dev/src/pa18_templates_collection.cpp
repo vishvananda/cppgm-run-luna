@@ -1122,9 +1122,10 @@ void PA18TemplateExpander::ValidateDependentMemberTemplateNode(
 			LastComponent(node->children[0]->value));
 		if(variable != local_variables.end() &&
 			ValidationDependentName(variable->second, local_parameters)) {
-			const string member = CanonicalSpelling(RemoveMarker(node->children[1]->value));
-			const bool disambiguated = member.compare(0, 8, "template") == 0 &&
-				(member.size() == 8 || isspace(static_cast<unsigned char>(member[8])));
+			const string raw_member = RemoveMarker(node->children[1]->value);
+			const string member = CanonicalSpelling(raw_member);
+			const bool disambiguated = raw_member.compare(0, 8, "template") == 0 &&
+				(raw_member.size() == 8 || isspace(static_cast<unsigned char>(raw_member[8])));
 			if(!disambiguated)
 				throw logic_error("dependent member template requires template keyword");
 		}

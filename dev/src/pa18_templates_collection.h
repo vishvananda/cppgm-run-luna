@@ -488,7 +488,7 @@ private:
 		const string& inherited_context,
 		const map<string, bool>& inherited_parameters) const;
 	map<string, TemplateDefinition> definitions_; map<const CPPGMAstNode*, TemplateDefinition> template_definitions_by_declaration_;
-	map<string, vector<string> > definitions_by_name_, pending_using_declarations_; map<string, vector<const TemplateDefinition*> > using_declaration_targets_, using_directive_exports_;
+	map<string, vector<string> > definitions_by_name_, pending_using_declarations_, using_namespace_directives_; map<string, vector<const TemplateDefinition*> > using_declaration_targets_, using_directive_exports_;
 	set<string> template_pack_names_, template_parameter_names_;
 	map<string, vector<TemplateDefinition> > class_specializations_; map<string, set<string> > class_specialization_groups_by_name_;
 	map<const CPPGMAstNode*, string> lexical_contexts_; set<string> lexical_namespace_paths_;
@@ -1079,7 +1079,7 @@ private:
 	{
 		if(!node) return;
 		const bool elaborated_type_reference = type_reference && node->kind == "class-forward-declaration";
-		if(node->kind == "using-declaration") { const CPPGMAstNodePtr target = ChildOfKindLocal(node, "target"); if(target) { const string target_name = RemoveMarker(target->value); if(!target_name.empty() && target_name.find("::") != string::npos) pending_using_declarations_[context].push_back(target_name); } }
+		if(node->kind == "using-directive") { const CPPGMAstNodePtr target = ChildOfKindLocal(node, "target"); if(target) { string target_name = CanonicalSpelling(RemoveMarker(target->value)); while(!target_name.empty() && target_name[0] == ':') target_name.erase(0, 1); if(!target_name.empty()) { vector<string>& directives = using_namespace_directives_[context]; if(find(directives.begin(), directives.end(), target_name) == directives.end()) directives.push_back(target_name); } } } if(node->kind == "using-declaration") { const CPPGMAstNodePtr target = ChildOfKindLocal(node, "target"); if(target) { const string target_name = RemoveMarker(target->value); if(!target_name.empty() && target_name.find("::") != string::npos) pending_using_declarations_[context].push_back(target_name); } }
 		if(node->kind == "translation-unit") {
 			for(size_t i = 0; i < node->children.size(); ++i) Collect(node->children[i], context);
 			return;
