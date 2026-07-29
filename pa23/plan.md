@@ -1119,7 +1119,7 @@ file-audit budgets.
 - `make test-report-through-pa22`: **2100/2100**, pass.
 - `make test-report ACTIVE_TEST_REPORT_PAS='pa23'`: **304/396**; this is
   **+3** over the 301/396 turn-start baseline.  The residual 92 fixtures are
-  58 status mismatches, 32 LowIR comparisons, and the same two reentrant
+  57 status mismatches, 33 LowIR comparisons, and the same two reentrant
   timeout witnesses.
 - `perl scripts/cppgm_file_audit.pl --stage pa23 --paths dev/src`: pass with
   pre-existing warnings only.
@@ -1134,9 +1134,47 @@ file-audit budgets.
 - **Typed values, aliases, packs, and deduction:** dependent alias filters,
   elaborated type arguments, variable-template state, function-type partials,
   pack/default deduction, and non-type function-pointer/conversion cases.
-- **Specialization and LowIR:** the 32 comparison-only fixtures covering
+- **Specialization and LowIR:** the 33 comparison-only fixtures covering
   specialization bodies, constructors, extern/explicit instantiation,
   function pointers, `sizeof`/non-type values, and generated declaration
   metadata/order.
 - **Fixed points:** the two reentrant static-query fixtures still require
   query identity/cycle handling; they remain separate stress witnesses.
+
+## Checkpoint 10 audit result — 2026-07-29
+
+The checkpoint audit found and fixed two checkpoint-level issues in immediate
+template-argument validation.  Member-kind classification no longer uses
+magic suffixes such as `value` or `::type`; it uses the existing typed alias,
+class, named-type, static-member, and template-definition registries.  The
+duplicate outer validation walk was removed, and direct static-member indexes
+are checked before contextual definition lookup.  Nested owner replay,
+enclosing-parameter binding, and generated-owner state remain unchanged.
+
+Validation is clean through PA22 at **2100/2100**.  PA23 remains at
+**304/396**, equal to the turn-start baseline and +3 over the checkpoint
+baseline; the final complete remainder is **57 status**, **33 LowIR**, and
+**2 timeouts**.  The PA23 file audit passes with its existing 13 warnings.
+The exact 92-fixture inventory is recorded in the matching Checkpoint 10
+section of `pa23/audit.md`.
+
+### Remaining Work Map and next checkpoint
+
+- **Qualified owner/member replay and deferred candidates:** direct namespace
+  precedence, inherited/out-of-class member lookup, current-specialization
+  owners, and candidate-local SFINAE.  This is the next substantial group.
+- **Typed value consumers:** variable-template state, `sizeof`, aliases,
+  packs, boolean/non-type expressions, and the dependent member-result paths
+  that share the owner identity.
+- **Deduction and conversion:** function-type partials, default/pack
+  deduction, function pointers, ADL, overload ranking, and conversions.
+- **Specialization and LowIR:** explicit/extern specialization, constructors,
+  member emission, and the remaining generated declaration metadata/order
+  comparisons.
+- **Fixed-point witnesses:** the two reentrant static-query fixtures remain
+  separately classified as timeout coverage; no timing-specific acceptance
+  is part of the next group.
+
+The next checkpoint bundles the first two groups so one typed owner identity
+can flow through lookup, deferred selection, and typed value consumers before
+the deduction/conversion and specialization/LowIR groups.

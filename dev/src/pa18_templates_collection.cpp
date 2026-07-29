@@ -1159,28 +1159,6 @@ void PA18TemplateExpander::ValidateTemplateDiagnosticsNode(
 		ValidateTemplateDiagnosticsNode(node->children[i], known_names, special_members);
 }
 
-bool PA18TemplateExpander::ValidationTypeArgument(const string& raw,
-	const map<string, bool>& parameters) const
-{
-	string spelling = CanonicalSpelling(raw);
-	if(spelling.size() >= 3 &&
-		spelling.compare(spelling.size() - 3, 3, "...") == 0)
-		spelling = CanonicalSpelling(spelling.substr(0, spelling.size() - 3));
-	while(spelling.compare(0, 8, "typename") == 0 &&
-		(spelling.size() == 8 || isspace(static_cast<unsigned char>(spelling[8]))))
-		spelling = CanonicalSpelling(spelling.substr(8));
-	map<string, bool>::const_iterator parameter = parameters.find(spelling);
-	if(parameter != parameters.end() && parameter->second) return true;
-	if(spelling.compare(0, 8, "typename") == 0 &&
-		(spelling.size() == 8 || isspace(static_cast<unsigned char>(spelling[8]))))
-		return true;
-	if(spelling.compare(0, 7, "decltype") == 0 &&
-		spelling.size() > 8 && spelling[7] == '(') return true;
-	const size_t type_suffix = spelling.rfind("::type");
-	if(type_suffix != string::npos && type_suffix + 6 == spelling.size()) return true;
-	return false;
-}
-
 bool PA18TemplateExpander::FindLogicalNamespaceAlias(const string& spelling,
 	string* alias_key) const
 {

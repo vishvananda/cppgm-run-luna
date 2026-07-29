@@ -480,9 +480,9 @@ private:
 	void ValidateTemplateDiagnostics(const vector<CPPGMAstNodePtr>& input) const;
 	void ValidateTemplateDiagnosticsNode(const CPPGMAstNodePtr& node,
 		const set<string>& known_names, map<string, bool>& special_members) const;
-	bool ValidationTypeArgument(const string& raw,
-		const map<string, bool>& parameters) const;
-	bool ValidationValueArgument(const string& raw, const map<string, bool>& parameters) const;
+	bool ValidationTypeArgument(const string& raw, const string& context, const map<string, bool>& parameters) const;
+	bool ValidationValueArgument(const string& raw, const string& context, const map<string, bool>& parameters) const;
+	bool ValidationKnownTypeMember(const string& raw_owner, const string& member, const string& context) const;
 	void ValidateTemplateArgumentSpelling(const string& raw, const string& context, const map<string, bool>& parameters) const;
 	void ValidateTemplateArgumentKinds(const CPPGMAstNodePtr& node,
 		const string& inherited_context,

@@ -5,8 +5,9 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
-bool PA18TemplateExpander::ValidationValueArgument(const string& raw,
-	const map<string, bool>& parameters) const
+namespace {
+
+string ValidationArgumentSpelling(const string& raw)
 {
 	string spelling = CanonicalSpelling(raw);
 	if(spelling.size() >= 3 &&
@@ -15,7 +16,60 @@ bool PA18TemplateExpander::ValidationValueArgument(const string& raw,
 	while(spelling.size() >= 2 && spelling[0] == '(' &&
 		spelling[spelling.size() - 1] == ')')
 		spelling = CanonicalSpelling(spelling.substr(1, spelling.size() - 2));
-	if(spelling.empty() || ValidationTypeArgument(spelling, parameters)) return false;
+	return spelling;
+}
+
+} // namespace
+
+bool PA18TemplateExpander::ValidationKnownTypeMember(const string& raw_owner,
+	const string& member, const string& context) const
+{
+	if(member.empty()) return false;
+	string owner_spelling = ValidationArgumentSpelling(raw_owner);
+	const size_t open = owner_spelling.find('<');
+	if(open != string::npos) owner_spelling = owner_spelling.substr(0, open);
+	owner_spelling = CanonicalSpelling(owner_spelling);
+	if(owner_spelling.empty()) return false;
+	const string qualified_member = JoinPath(owner_spelling, member);
+	if(type_aliases_.find(qualified_member) != type_aliases_.end() ||
+		class_declarations_.find(qualified_member) != class_declarations_.end() ||
+		named_type_contexts_.find(qualified_member) != named_type_contexts_.end()) return true;
+	const TemplateDefinition* definition = FindDefinition(owner_spelling, context);
+	if(!definition) return false;
+	const string definition_member = JoinPath(definition->qualified_name, member);
+	return type_aliases_.find(definition_member) != type_aliases_.end() ||
+		class_declarations_.find(definition_member) != class_declarations_.end() ||
+		named_type_contexts_.find(definition_member) != named_type_contexts_.end();
+}
+
+bool PA18TemplateExpander::ValidationTypeArgument(const string& raw,
+	const string& context, const map<string, bool>& parameters) const
+{
+	string spelling = CanonicalSpelling(RemoveMarker(raw));
+	if(spelling.size() >= 3 &&
+		spelling.compare(spelling.size() - 3, 3, "...") == 0)
+		spelling = CanonicalSpelling(spelling.substr(0, spelling.size() - 3));
+	while(spelling.compare(0, 8, "typename") == 0 &&
+		(spelling.size() == 8 || isspace(static_cast<unsigned char>(spelling[8]))))
+		spelling = CanonicalSpelling(spelling.substr(8));
+	map<string, bool>::const_iterator parameter = parameters.find(spelling);
+	if(parameter != parameters.end() && parameter->second) return true;
+	if(spelling.compare(0, 8, "typename") == 0 &&
+		(spelling.size() == 8 || isspace(static_cast<unsigned char>(spelling[8]))))
+		return true;
+	if(spelling.compare(0, 7, "decltype") == 0 &&
+		spelling.size() > 8 && spelling[7] == '(') return true;
+	const size_t separator = TopLevelScopeSeparator(spelling);
+	if(separator != string::npos && ValidationKnownTypeMember(
+		spelling.substr(0, separator), spelling.substr(separator + 2), context)) return true;
+	return false;
+}
+
+bool PA18TemplateExpander::ValidationValueArgument(const string& raw,
+	const string& context, const map<string, bool>& parameters) const
+{
+	const string spelling = ValidationArgumentSpelling(raw);
+	if(spelling.empty() || ValidationTypeArgument(spelling, context, parameters)) return false;
 	map<string, bool>::const_iterator parameter = parameters.find(spelling);
 	if(parameter != parameters.end()) return !parameter->second;
 	if(spelling == "true" || spelling == "false" || spelling == "nullptr") return true;
@@ -23,15 +77,24 @@ bool PA18TemplateExpander::ValidationValueArgument(const string& raw,
 		spelling[0] == '"') return true;
 	if(spelling.compare(0, 7, "sizeof(") == 0 ||
 		spelling.compare(0, 8, "alignof(") == 0 ||
-		spelling.compare(0, 12, "static_cast<") == 0) return true;
-	// A qualified member named `value` (and the conventional size/length
-	// constants) denotes an expression in a template argument.  The suffix
-	// check deliberately leaves `T::type` and other dependent type-ids alone.
-	const size_t separator = spelling.rfind("::");
+		spelling.compare(0, 12, "static_cast<") == 0 ||
+		spelling.compare(0, 11, "const_cast<") == 0 ||
+		spelling.compare(0, 14, "reinterpret_cast<") == 0 ||
+		spelling.compare(0, 13, "dynamic_cast<") == 0) return true;
+	const size_t separator = TopLevelScopeSeparator(spelling);
 	if(separator != string::npos) {
+		const string owner = spelling.substr(0, separator);
 		const string member = spelling.substr(separator + 2);
-		if(member == "value" || member == "value_v" || member == "size" ||
-			member == "length" || member == "count") return true;
+		const size_t owner_open = owner.find('<');
+		const string owner_base = owner_open == string::npos ? owner :
+			owner.substr(0, owner_open);
+		map<string, set<string> >::const_iterator indexed =
+			static_members_by_class_.find(CanonicalSpelling(owner));
+		if(indexed != static_members_by_class_.end() &&
+			indexed->second.find(member) != indexed->second.end()) return true;
+		const TemplateDefinition* definition = FindDefinition(owner_base, context);
+		if(definition && definition->static_members.find(member) !=
+			definition->static_members.end()) return true;
 	}
 	return false;
 }
@@ -59,9 +122,9 @@ void PA18TemplateExpander::ValidateTemplateArgumentSpelling(
 					!definition->parameters[parameter].pack && argument > parameter) ++parameter;
 				if(parameter >= definition->parameters.size()) break;
 				const TemplateParameter& expected = definition->parameters[parameter];
-				if(!expected.type && ValidationTypeArgument(arguments[argument], parameters))
+				if(!expected.type && ValidationTypeArgument(arguments[argument], context, parameters))
 					throw logic_error("type used as non-type template argument");
-				if(expected.type && ValidationValueArgument(arguments[argument], parameters))
+				if(expected.type && ValidationValueArgument(arguments[argument], context, parameters))
 					throw logic_error("value used as type template argument");
 				if(!expected.pack) ++parameter;
 			}
@@ -89,36 +152,7 @@ void PA18TemplateExpander::ValidateTemplateArgumentKinds(
 	}
 	if(node->kind == "type-name" || node->kind == "decl-specifier" ||
 		node->kind == "type-specifier") {
-		const string raw = RemoveMarker(node->value);
-		const size_t open = raw.find('<');
-		if(open != string::npos) {
-			string base, argument_text;
-			size_t begin = 0, close = string::npos;
-			if(TemplateBase(raw, open, &begin, &base) &&
-				TemplateRange(raw, open, &argument_text, &close)) {
-				const TemplateDefinition* definition = FindDefinition(base, context);
-				if(definition) {
-					const vector<string> arguments = SplitTemplateArguments(argument_text);
-					size_t required = definition->parameters.size();
-					while(required > 0 && (definition->parameters[required - 1].pack ||
-						!definition->parameters[required - 1].default_type.empty())) --required;
-					size_t parameter = 0;
-					for(size_t argument = 0; arguments.size() >= required &&
-						argument < arguments.size(); ++argument) {
-						while(parameter < definition->parameters.size() &&
-							!definition->parameters[parameter].pack && argument > parameter) ++parameter;
-						if(parameter >= definition->parameters.size()) break;
-						const TemplateParameter& expected = definition->parameters[parameter];
-						if(!expected.type && ValidationTypeArgument(arguments[argument], parameters))
-							throw logic_error("type used as non-type template argument");
-						if(expected.type && ValidationValueArgument(arguments[argument], parameters))
-							throw logic_error("value used as type template argument");
-						if(!expected.pack) ++parameter;
-					}
-					ValidateTemplateArgumentSpelling(raw, context, parameters);
-				}
-			}
-		}
+		ValidateTemplateArgumentSpelling(RemoveMarker(node->value), context, parameters);
 	}
 	for(size_t i = 0; i < node->children.size(); ++i)
 		ValidateTemplateArgumentKinds(node->children[i], context, parameters);
