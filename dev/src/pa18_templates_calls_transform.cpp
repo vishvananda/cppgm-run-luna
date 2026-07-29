@@ -791,6 +791,26 @@ bool PA18TemplateExpander::MaterializeFreeFunctionCandidate(
 		candidate_substitutions)) {
 		return false;
 	}
+	// Deleted definitions are not viable call expressions, and a dependent
+	// enable_if in a function result is an immediate substitution context.  Run
+	// the typed result probe only for that latter shape; ordinary trailing-return
+	// templates still need their full generated definition materialized.
+	const CPPGMAstNodePtr deleted = DescendantOfKind(definition->declaration,
+		"special-initializer");
+	if(deleted && RemoveMarker(deleted->value) == "delete") return false;
+	const CPPGMAstNodePtr candidate_declarator = FunctionDeclarator(definition->declaration);
+	const CPPGMAstNodePtr candidate_trailing = ChildOfKindLocal(candidate_declarator,
+		"trailing-return-type");
+	const string candidate_result_spelling = candidate_trailing ?
+		TypeIdSpelling(ChildOfKindLocal(candidate_trailing, "type-id")) :
+		NodeTypeSpelling(definition->declaration->children[0]) +
+		ReturnDeclaratorSuffix(candidate_declarator);
+	if(candidate_result_spelling.find("enable_if") != string::npos) try {
+		if(FunctionResultType(*definition, inferred, context,
+			&candidate_substitutions, 0, true).empty()) return false;
+	} catch(const PA18SubstitutionFailure&) {
+		return false;
+	}
 	const TemplateDefinition* selected_definition =
 		FindExplicitFunctionSpecialization(definition->qualified_name, inferred, context);
 	if(!selected_definition) selected_definition = definition;

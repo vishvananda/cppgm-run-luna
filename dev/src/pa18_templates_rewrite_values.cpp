@@ -319,7 +319,7 @@ bool PA18TemplateExpander::EvaluateLogicalIntegralText(const string& raw,
 						break;
 					}
 				}
-					string base_spelling = CanonicalSpelling(ReplaceIdentifiers(
+					string base_spelling = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(
 						base_name->value, base_substitutions));
 					// The first pass above substitutes source parameters
 					// simultaneously.  If one binding introduces the spelling of
@@ -562,26 +562,50 @@ bool PA18TemplateExpander::EvaluateLogicalIntegralText(const string& raw,
 			const TemplateDefinition* selected = SelectClassTemplateDefinition(
 				definition, member_arguments->second, context);
 			if(selected) definition = selected;
-			for(size_t parameter = 0; parameter < definition->parameters.size() &&
-				parameter < member_arguments->second.size(); ++parameter) {
-				if(!definition->parameters[parameter].name.empty())
-					member_substitutions[definition->parameters[parameter].name] =
-						member_arguments->second[parameter];
-				if(definition->parameters[parameter].pack &&
-					!definition->parameters[parameter].name.empty()) {
-					vector<string> values;
-					for(size_t value = parameter; value < member_arguments->second.size(); ++value)
-						values.push_back(member_arguments->second[value]);
-					active_pack_substitutions_[definition->parameters[parameter].name] = values;
-				}
-			}
+			// A selected partial specialization keeps the primary parameter list for
+			// materialization, but its base clause is written in the partial's own
+			// parameter names.  Use the pattern matcher as the source of those
+			// bindings: a fixed pattern argument (such as the `true` in
+			// `__or_step<true,B1,Bn...>`) is not represented in the partial clause's
+			// parameter list, so positional replay against that list would shift the
+			// pack by one argument.
 			if(definition->partial_specialization) {
 				map<string,string> partial_bindings;
 				if(MatchClassSpecializationPattern(*definition, member_arguments->second,
-					&partial_bindings, context))
-					for(map<string,string>::const_iterator binding = partial_bindings.begin();
-						binding != partial_bindings.end(); ++binding)
-						member_substitutions[binding->first] = binding->second;
+					&partial_bindings, context)) {
+					for(size_t detail_index = 0;
+						detail_index < definition->specialization_parameter_details.size();
+						++detail_index) {
+						const TemplateParameter& detail =
+							definition->specialization_parameter_details[detail_index];
+						if(detail.name.empty()) continue;
+						map<string,string>::const_iterator binding = partial_bindings.find(detail.name);
+						if(binding == partial_bindings.end()) continue;
+						if(detail.pack) {
+							const vector<string> values = SplitTemplateArguments(binding->second);
+							active_pack_substitutions_[detail.name] = values;
+							if(!values.empty()) member_substitutions[detail.name] = values[0];
+							else member_substitutions.erase(detail.name);
+						} else member_substitutions[detail.name] = binding->second;
+					}
+				}
+			} else {
+				size_t argument = 0;
+				for(size_t parameter = 0; parameter < definition->parameters.size(); ++parameter) {
+					const TemplateParameter& detail = definition->parameters[parameter];
+					if(detail.pack) {
+						const size_t available = member_arguments->second.size() > argument ?
+							member_arguments->second.size() - argument : 0;
+						vector<string> values;
+						for(size_t value = 0; value < available; ++value)
+							values.push_back(member_arguments->second[argument++]);
+						if(!detail.name.empty()) active_pack_substitutions_[detail.name] = values;
+					} else if(argument < member_arguments->second.size()) {
+						if(!detail.name.empty()) member_substitutions[detail.name] =
+							member_arguments->second[argument];
+						++argument;
+					}
+				}
 			}
 		}
 		const bool evaluated = EvaluateInheritedBaseValue(*definition, context,

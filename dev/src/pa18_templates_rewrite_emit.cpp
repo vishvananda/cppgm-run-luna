@@ -396,7 +396,20 @@ void PA18TemplateExpander::RegisterGeneratedTypeEntity(
 					break;
 				}
 			}
-		if(reference_argument) {
+		string target_spelling;
+		if(definition.declaration && !definition.declaration->children.empty())
+			target_spelling = CanonicalSpelling(TypeIdSpelling(
+				definition.declaration->children[0]));
+		bool directly_cv_qualifies_parameter = false;
+		for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter)
+			if(definition.parameters[parameter].type &&
+				!definition.parameters[parameter].name.empty() &&
+				(target_spelling == "const " + definition.parameters[parameter].name ||
+				 target_spelling == "volatile " + definition.parameters[parameter].name)) {
+				directly_cv_qualifies_parameter = true;
+				break;
+			}
+		if(reference_argument && directly_cv_qualifies_parameter) {
 			reference_alias_specializations_[local_name] = true;
 			reference_alias_specializations_[JoinPath(definition.owner, local_name)] = true;
 			reference_alias_specializations_[JoinPath(

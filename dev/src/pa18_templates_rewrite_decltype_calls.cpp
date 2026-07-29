@@ -5,6 +5,23 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
+bool PA18TemplateExpander::IsDeletedFunctionCall(const string& callee,
+	const string& context) const
+{
+	const vector<const TemplateDefinition*> candidates = FindFunctionDefinitions(callee,
+		context);
+	if(!candidates.empty()) {
+		for(size_t candidate = 0; candidate < candidates.size(); ++candidate) {
+			const CPPGMAstNodePtr deleted = DescendantOfKind(
+				candidates[candidate]->declaration, "special-initializer");
+			if(!deleted || RemoveMarker(deleted->value) != "delete") return false;
+		}
+		return true;
+	}
+	const FunctionSignature* signature = FindFunctionSignature(callee, context);
+	return signature && signature->deleted;
+}
+
 void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 	const TemplateDefinition& definition, const vector<string>& actual_types,
 	const string& context, map<string, string>* substitutions) const
@@ -424,7 +441,8 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 		if(candidates.empty() && dot_member_call) {
 			const FunctionSignature* ordinary = FindFunctionSignature(dot_member_name,
 				dot_member_owner);
-			if(ordinary && ordinary->parameters && ordinary->result_specifiers) {
+			if(ordinary && !ordinary->deleted && ordinary->parameters &&
+				ordinary->result_specifiers) {
 				size_t actual = 0;
 				bool viable = true, ellipsis = false;
 				for(size_t parameter = 0; parameter < ordinary->parameters->children.size();
@@ -474,8 +492,17 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 			substitutions, actual_types, result)) return true;
 		string selected_result;
 		bool selected_ellipsis = true;
+		bool all_candidates_deleted = !candidates.empty();
 		for(size_t i = 0; i < candidates.size(); ++i) {
 			const TemplateDefinition& definition = *candidates[i];
+			// A deleted function may still be found by ordinary overload lookup, but
+			// selecting it in an unevaluated call is an invalid expression-SFINAE
+			// probe.  Reject only this candidate and continue looking for the fallback;
+			// the declaration itself must never be materialized as the probe result.
+			const CPPGMAstNodePtr deleted = DescendantOfKind(definition.declaration,
+				"special-initializer");
+			if(deleted && RemoveMarker(deleted->value) == "delete") continue;
+			all_candidates_deleted = false;
 			map<string, string> candidate_substitutions = substitutions;
 			ApplyFriendClassSubstitutions(definition, actual_types, function_context,
 				&candidate_substitutions);
@@ -528,6 +555,7 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 			*result = selected_result;
 			return true;
 		}
+		if(all_candidates_deleted) return false;
 		if(ResolveConstructedCallResult(callee, context, substitutions, actual_types, result)) return true;
 		if(!explicit_definition) {
 			for(map<string, vector<FunctionSignature> >::const_iterator overload =
@@ -547,15 +575,16 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 						if(item && item->kind == "ellipsis") {
 							ellipsis = true;
 							break;
-							}
 						}
-					if(ellipsis && signature.result_specifiers)
+						}
+						if(signature.deleted) continue;
+						if(ellipsis && signature.result_specifiers)
 						return (*result = NodeTypeSpelling(signature.result_specifiers) +
 							ReturnDeclaratorSuffix(signature.declarator), true);
 				}
 			}
 			const FunctionSignature* signature = FindFunctionSignature(callee, context);
-			if(signature && signature->result_specifiers) {
+			if(signature && !signature->deleted && signature->result_specifiers) {
 				*result = NodeTypeSpelling(signature->result_specifiers) +
 					ReturnDeclaratorSuffix(signature->declarator);
 				return !result->empty();

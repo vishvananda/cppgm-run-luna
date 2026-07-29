@@ -8,7 +8,7 @@ namespace pa18_templates_internal {
 string PA18TemplateExpander::FunctionResultType(const TemplateDefinition& definition,
 	const vector<string>& arguments, const string& context,
 	const map<string, string>* outer_substitutions,
-	const vector<string>* explicit_prefix)
+	const vector<string>* explicit_prefix, bool validate_immediate_return)
 {
 	if(!definition.declaration || definition.declaration->children.empty()) return string();
 	ostringstream result_key_stream;
@@ -108,13 +108,75 @@ string PA18TemplateExpander::FunctionResultType(const TemplateDefinition& defini
 		result = TypeIdSpelling(type_id);
 	} else {
 		result = NodeTypeSpelling(definition.declaration->children[0]);
-		result += DeclaratorSuffix(declarator);
+		result += ReturnDeclaratorSuffix(declarator);
+	}
+	const auto has_disabled_enable_if = [&](const string& spelling) {
+		for(size_t search = 0; search < spelling.size();) {
+			const size_t marker = spelling.find("enable_if", search);
+			if(marker == string::npos) break;
+			if(marker > 0 && IsIdentifierCharacter(spelling[marker - 1])) {
+				search = marker + 9;
+				continue;
+			}
+			size_t open = marker;
+			while(open < spelling.size() && IsIdentifierCharacter(spelling[open])) ++open;
+			while(open < spelling.size() && isspace(static_cast<unsigned char>(spelling[open]))) ++open;
+			if(open >= spelling.size() || spelling[open] != '<') {
+				search = marker + 9;
+				continue;
+			}
+			string base, arguments_text;
+			size_t begin = 0, close = string::npos;
+			if(!TemplateBase(spelling, open, &begin, &base)) {
+				search = marker + 9;
+				continue;
+			}
+			bool range_ok = TemplateRange(spelling, open, &arguments_text, &close);
+			if(!range_ok) {
+				int depth = 0;
+				for(size_t position = open; position < spelling.size(); ++position) {
+					if(spelling[position] == '<') ++depth;
+					else if(spelling[position] == '>' && depth > 0 && --depth == 0) {
+						arguments_text = spelling.substr(open + 1,
+							position - open - 1);
+						close = position;
+						range_ok = true;
+						break;
+					}
+				}
+			}
+			if(!range_ok) {
+				search = marker + 9;
+				continue;
+			}
+			if(LastComponent(base) == "enable_if" || LastComponent(base) == "enable_if_c" ||
+				LastComponent(base) == "enable_if_t") {
+				const vector<string> condition = SplitTemplateArguments(arguments_text);
+				if(!condition.empty() && condition[0].find("...") == string::npos &&
+					!HasUnresolvedTemplateParameter(condition[0], result_context, local)) {
+					PA19IntegralValue enabled;
+					if(EvaluateIntegralText(condition[0], result_context, local, &enabled) &&
+						enabled.known && PA19Raw(enabled) == 0) return true;
+				}
+			}
+			search = close == string::npos ? marker + 9 : close + 1;
+		}
+		return false;
+	};
+	if(validate_immediate_return && has_disabled_enable_if(
+		ReplaceIdentifiersPreservingPackSizes(result, local))) {
+		active_pack_substitutions_ = previous_packs;
+		return string();
 	}
 	try {
 		result = RewriteText(result, result_context, local, 0);
 	} catch(...) {
 		active_pack_substitutions_ = previous_packs;
 		throw;
+	}
+	if(validate_immediate_return && has_disabled_enable_if(result)) {
+		active_pack_substitutions_ = previous_packs;
+		return string();
 	}
 	result = CollapseReferenceSpelling(ReplaceIdentifiers(result, local));
 	result = ResolveDecltypeTypeName(result, result_context, local);

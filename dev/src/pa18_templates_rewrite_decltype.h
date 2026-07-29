@@ -282,7 +282,8 @@ inline vector<string> SplitCallArguments(const string& raw)
 	string FunctionResultType(const TemplateDefinition& definition,
 		const vector<string>& arguments, const string& context,
 		const map<string, string>* outer_substitutions = 0,
-		const vector<string>* explicit_prefix = 0);
+		const vector<string>* explicit_prefix = 0,
+		bool validate_immediate_return = false);
 	string FunctionLookupContext(const string& context) const;
 	const TemplateDefinition* FindExplicitFunctionTemplate(const string& base,
 		const string& context) const;
@@ -895,14 +896,16 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 		return string();
 	}
 	bool EvaluateNewExpression(const string& expression, const string& context,
-		const map<string, string>& substitutions, string* result);
+		const map<string, string>& substitutions, string* result); bool IsDeletedFunctionCall(const string& callee, const string& context) const;
 	bool EvaluateDecltypeExpression(const string& expression, const string& context,
 		const map<string, string>& substitutions, string* result)
 	{
 		if(!result) return false;
-		string head, tail;
+		string head, tail; if(SplitTextCall(expression, &head, &tail) &&
+			IsDeletedFunctionCall(StripTextParentheses(head), context)) return false;
 		if(SplitTopLevelComma(expression, &tail, &head)) {
-			if(head.empty() || ExpressionTypeSpelling(head, context, substitutions).empty())
+			const string head_type = head.empty() ? string() : ExpressionTypeSpelling(head, context, substitutions);
+			if(head.empty() || head_type.empty())
 				return false;
 			return EvaluateDecltypeExpression(tail, context, substitutions, result);
 		}

@@ -439,3 +439,138 @@ set: the detector/deleted-candidate cases, cached/no-eager query cases, and
 the dependent member-result cases.  Keep the two timeout fixtures as stress
 witnesses for that same typed query-identity path; do not alter their harness
 timeout or add a timeout-specific acceptance path.
+
+## Checkpoint 5 scope — 2026-07-29 (before implementation)
+
+### Current failure baseline and complete grouping
+
+The required current-PA report is **285/396**, with **111** failing
+fixtures: 76 exit-status mismatches, 33 LowIR comparisons, and the two
+reentrant static-query timeouts.  The exact fixture inventory is checked into
+`pa23/audit.md`; the current report was re-read from the primary log before
+this checkpoint.  The complete set is grouped by shared behavior below
+(groups intentionally overlap where a semantic fact is later materialized).
+
+- **Candidate-local deferred substitution and expression SFINAE (21):**
+  `general/200-function-template-named-parameter-sfinae.t`,
+  `general/300-array-qualified-member-type-sfinae.t`,
+  `general/300-decltype-member-template-callable-pack-result-cache.t`,
+  `general/300-hidden-friend-current-specialization-enable-if.t`,
+  `general/300-qualified-explicit-template-alias-return-sfinae.t`,
+  `general/400-dependent-alias-nontype-sequence-filter.t`,
+  `general/400-elaborated-type-template-arg-false-branch.t`,
+  `general/400-elaborated-type-template-arg-true-branch.t`,
+  `general/400-member-variable-template-leaf-sfinae.t`,
+  `general/500-array-type-argument-sfinae-static-value.t`,
+  `general/500-const-reference-alias-default-sfinae.t`,
+  `general/500-dependent-qualified-member-template-result-bool.t`,
+  `general/500-dependent-std-or-enable-if-defers.t`,
+  `general/500-dependent-typename-enable-if-candidate.t`,
+  `general/500-dependent-typename-member-enable-if-return.t`,
+  `general/500-member-template-conditional-alias-trailing-return.t`,
+  `general/500-mp11-append-alias-template-sfinae.t`,
+  `general/500-nontype-alias-reinstantiation-structural-state.t`,
+  `general/500-source-namespace-base-sfinae-chain.t`,
+  `spec/300-deleted-function-template-callee-detector-sfinae.t`, and
+  `spec/300-deleted-function-template-expression-sfinae.t`.
+- **Qualified owner/member replay (31):** the general/100 namespace and
+  out-of-class cases; general/200 empty-pack, member-template, and nested-id
+  cases; general/300 current-specialization cases; general/400 inherited,
+  alias-owner, nested-owner, out-of-class, qualified-variable, recursive,
+  and unused-member-template cases; general/500 dependent/out-of-class
+  owner cases; and spec/100, spec/200, spec/400, and spec/500 qualified or
+  inherited member cases.  The exact names are the corresponding entries in
+  the audit inventory, not a filename-pattern acceptance rule.
+- **Deduction, overload ranking, conversion, and pack normalization (25):**
+  the remaining general/100 function-parameter cases, general/200 ADL,
+  constructor, reference/cv, template-template, operator, pack, and
+  non-deduced-context cases, general/300 constructor conversion,
+  general/400 function-type/static-cast cases, and spec/100, spec/200,
+  spec/300, and spec/400 function/conversion cases.
+- **Typed aliases and non-type values (20):** dependent boolean/static values,
+  qualified non-type bases, intermediate transforms, `sizeof`, variable and
+  member templates, pointer/reference/function-pointer arguments, integral
+  and enum scope values, class-template argument packs, and pack-kind
+  rejection cases across the exact general/100, general/400, general/500,
+  spec/100, spec/200, and spec/400 entries in the inventory.
+- **Specialization/extern/constructor LowIR materialization (14):** the
+  comparison failures for current and explicit specializations, out-of-class
+  constructors and members, extern/explicit instantiation, function-pointer
+  declarations, and generated declaration metadata.  These are downstream
+  consumers of the preceding typed facts, not separate output fixtures.
+- **Reentrant query stress (2):**
+  `general/500-reentrant-static-query-callable-enable-if-cache.t` and
+  `general/500-reentrant-static-query-enable-if-partial.t` still time out;
+  they remain stress witnesses for the same scoped query identity and are not
+  permitted to gain timeout-specific handling.
+
+### Checkpoint Scope
+
+Complete the deferred candidate-replay group as one typed semantic increment:
+
+1. Preserve candidate-local substitution through dependent `typename` return
+   types and nested trait/alias probes, so the two dependent-typename cases
+   select the correct overload and replay only the selected argument AST.
+2. Treat a selected deleted function as an invalid expression-SFINAE probe,
+   allowing the fallback overload in both deleted-function detector cases;
+   keep the deleted declaration out of materialized LowIR.
+3. Preserve fresh pack elements and dependent `decltype` results across cached
+   member-template queries and std-shaped disjunction/`enable_if` defaults,
+   validating `general/300-decltype-member-template-callable-pack-result-cache.t`
+   and `general/500-dependent-std-or-enable-if-defers.t` alongside the four
+   primary cases above.
+
+Validation for this scope is the six named fixtures, the two reentrant timeout
+witnesses, the full PA23 report, the required through-PA22 report, and the
+PA23 file audit.  The next checkpoint group is qualified owner/member replay
+bundled with typed non-type values, followed by the remaining deduction and
+materialization comparison band.
+
+## Checkpoint 5 result — 2026-07-29
+
+The selected deferred candidate-replay scope is complete: all 6/6 focused
+fixtures pass. The increment now keeps immediate return-type facts in typed
+candidate state, rejects known-false `enable_if` results only while
+materializing candidates whose result spelling contains that substitution
+context, and keeps deleted candidates out of both decltype probes and emitted
+calls. It also preserves direct `const T` reference collapsing without
+discarding the cv-qualification of ordinary reference results, binds partial
+specialization packs from their matched patterns, and normalizes only the
+concrete `std::std::...` owner path needed by dependent replay. PA14 no longer
+precomputes dead addresses for trivially initialized class arrays.
+
+Validation completed for this checkpoint:
+
+- `make test-report-through-pa22`: 2100/2100 tests passed.
+- `make test-report ACTIVE_TEST_REPORT_PAS='pa23'`: 292/396 tests passed,
+  improving the turn-start baseline of 285/396 by 7; the two reentrant
+  static-query fixtures still time out.
+- The six focused checkpoint fixtures all pass, including both dependent
+  typename cases, both deleted-function SFINAE cases, the cached callable-pack
+  case, and the dependent std/or-enable_if case.
+
+### Remaining Work Map
+
+- **Qualified owner/member replay and materialization:** the largest remaining
+  status and LowIR group, including generated member owners, inherited and
+  out-of-class members, current-specialization names, and specialization
+  declaration/definition pairing.
+- **Typed non-type values and partial-pack state:** dependent bool/integral,
+  `sizeof`, variable/member-template values, qualified scopes, and remaining
+  pack-kind rejection cases.
+- **Deduction and overload semantics:** the remaining function-template
+  deduction, conversion, ADL, operator, reference/cv, template-template, and
+  non-deduced-context cases.
+- **Specialization, extern, constructor, and LowIR metadata:** downstream
+  comparison failures after the typed owner/value facts are available.
+- **Reentrant query fixed points:** the two timeout witnesses remain; they need
+  query identity/cycle handling rather than timeout-specific behavior.
+
+### Next Checkpoint Group
+
+Take the qualified owner/member replay group bundled with the typed non-type
+value group. Validate one shared owner-identity path across inherited,
+out-of-class, alias-owner, and current-specialization queries, then verify the
+corresponding integral/pack facts and their generated LowIR consumers. Keep
+the 292/396 PA23 count and the 2100/2100 through-PA22 gate as the regression
+baseline for that checkpoint.

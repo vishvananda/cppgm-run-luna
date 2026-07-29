@@ -458,7 +458,7 @@ struct FunctionSignature
 {
 	CPPGMAstNodePtr result_specifiers;
 	CPPGMAstNodePtr declarator;
-	CPPGMAstNodePtr parameters; bool lvalue_argument; FunctionSignature() : result_specifiers(), declarator(), parameters(), lvalue_argument(false) {}
+	CPPGMAstNodePtr parameters; bool lvalue_argument; bool deleted; FunctionSignature() : result_specifiers(), declarator(), parameters(), lvalue_argument(false), deleted(false) {}
 };
 struct ExplicitCallSelection; struct MemberCallState; struct MemberCallCandidateState; class PA18TemplateExpander
 {
@@ -691,7 +691,7 @@ private:
 		FunctionSignature signature;
 		signature.result_specifiers = CloneNode(result_specs);
 		signature.declarator = CloneNode(declarator);
-		signature.parameters = CloneNode(DescendantOfKind(declarator, "parameter-clause"));
+		signature.parameters = CloneNode(DescendantOfKind(declarator, "parameter-clause")); signature.deleted = DescendantOfKind(declaration, "special-initializer") && RemoveMarker(DescendantOfKind(declaration, "special-initializer")->value) == "delete";
 		const string qualified = JoinPath(context, name);
 		function_overloads_[qualified].push_back(signature);
 		if(function_signatures_.find(qualified) == function_signatures_.end())

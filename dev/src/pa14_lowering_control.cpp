@@ -1295,9 +1295,15 @@ void PA14Lowerer::EmitStatement(const CPPGMAstNodePtr& node, Scope* scope)
               IsTrivialValueStorage(planned_object) &&
               !HasDestructor(planned_object) &&
               !HasDefaultConstructionEffects(planned_object);
-            if(initialized || (referenced &&
-                               (!empty_initializer ||
-                                HasDefaultInitializationEffects(found->second->type))))
+            const bool array_default_effects = empty_initializer ?
+              HasDefaultInitializationEffects(found->second->type) :
+              (HasDefaultConstructionEffects(found->second->type) ||
+               HasExplicitConstructor(found->second->type));
+            const bool reference_address_needed = planned_object &&
+              (planned_object->kind != TYPE_ARRAY ?
+               (!empty_initializer || HasDefaultInitializationEffects(found->second->type)) :
+               array_default_effects);
+            if(initialized || (referenced && reference_address_needed))
               found->second->initialization_address = local_address(found->second);
             else if(node->materialize_object_address &&
                     found->second->initialization_address.empty())
@@ -1373,6 +1379,9 @@ void PA14Lowerer::EmitStatement(const CPPGMAstNodePtr& node, Scope* scope)
                   type_value(found->second->type->child) &&
                   type_value(found->second->type->child)->kind == TYPE_CLASS &&
                   found->second->type->bound >= 0) {
+            const TypePtr element_type = type_value(found->second->type->child);
+            if(!HasDefaultConstructionEffects(element_type) &&
+               !HasExplicitConstructor(element_type)) continue;
             string base;
             if(!found->second->initialization_address.empty()) {
               base = found->second->initialization_address;

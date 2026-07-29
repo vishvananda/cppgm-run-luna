@@ -275,6 +275,12 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 	// dependency; aliases and user-defined traits take the same semantic path.
 	string class_key = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(
 		raw_class, substitutions));
+	// A generated replay can duplicate the standard-library owner while
+	// redirecting a dependent member query.  Normalize that concrete path, but
+	// leave source lexical owners intact: their repeated spelling can be the
+	// active lookup context for hidden friends and is not itself a new identity.
+	if(class_key.find("std::std::") != string::npos)
+		class_key = CollapseRepeatedQualifiedPath(CollapseRepeatedQualifier(class_key));
 	if(class_key.find("::") == string::npos) {
 		const string resolved_class_key = CanonicalSpelling(ResolveAlias(class_key, context));
 		if(!resolved_class_key.empty() && resolved_class_key != class_key)
