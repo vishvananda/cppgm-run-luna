@@ -22,6 +22,9 @@ bool PA18TemplateExpander::HasStaticMember(const TemplateDefinition* definition,
 			while(!current.empty() && (current[current.size() - 1] == '*' ||
 				current[current.size() - 1] == '&')) current.erase(current.size() - 1);
 			current = CanonicalSpelling(current);
+			if(current.empty()) return false;
+			const string active_key = current + "|" + name;
+			if(!active.insert(active_key).second) return false;
 			// A partially replayed function-type pack can leave an ellipsis on a
 			// concrete template argument (`is_same<T, U...>`).  Recover the typed
 			// materialized specialization before walking its inherited bases.
@@ -40,8 +43,15 @@ bool PA18TemplateExpander::HasStaticMember(const TemplateDefinition* definition,
 							requested[argument].erase(ellipsis, 3);
 						requested[argument] = NormalizeTypeArgument(requested[argument]);
 					}
-					for(map<string, string>::const_iterator generated = specialization_bases_.begin();
-						generated != specialization_bases_.end(); ++generated) {
+					map<string, vector<string> >::const_iterator generated_names =
+						specialization_names_by_base_.find(LastComponent(source_base));
+					if(generated_names != specialization_names_by_base_.end())
+					for(size_t generated_index = 0;
+						generated_index < generated_names->second.size(); ++generated_index) {
+						const string& generated_name = generated_names->second[generated_index];
+						map<string, string>::const_iterator generated =
+							specialization_bases_.find(generated_name);
+						if(generated == specialization_bases_.end()) continue;
 						string generated_base = generated->second;
 						const size_t generated_open = generated_base.find('<');
 						if(generated_open != string::npos) generated_base.erase(generated_open);
@@ -59,16 +69,20 @@ bool PA18TemplateExpander::HasStaticMember(const TemplateDefinition* definition,
 							if(actual != requested[argument]) { same = false; break; }
 						}
 						if(!same) continue;
-						if(class_declarations_.find(generated->first) != class_declarations_.end()) {
-							current = generated->first;
-							break;
-						}
-						for(map<string, CPPGMAstNodePtr>::const_iterator declaration =
-							class_declarations_.begin(); declaration != class_declarations_.end(); ++declaration)
-							if(LastComponent(declaration->first) == generated->first) {
-								current = declaration->first;
-								break;
+						const TemplateDefinition* generated_definition =
+							FindDefinition(generated->second, "");
+						if(generated_definition) {
+							const string generated_path = JoinPath(generated_definition->owner,
+								generated_name);
+							if(class_declarations_.find(generated_path) != class_declarations_.end())
+								current = generated_path;
+							else if(!generated_definition->lexical_owner.empty()) {
+								const string lexical_path = JoinPath(
+									generated_definition->lexical_owner, generated_name);
+								if(class_declarations_.find(lexical_path) != class_declarations_.end())
+									current = lexical_path;
 							}
+						}
 						break;
 					}
 					if(current.find("...") != string::npos && !requested.empty()) {
@@ -92,7 +106,8 @@ bool PA18TemplateExpander::HasStaticMember(const TemplateDefinition* definition,
 					}
 				}
 			}
-			if(current.empty() || !active.insert(current).second) return false;
+			const string resolved_key = current + "|" + name;
+			if(resolved_key != active_key && !active.insert(resolved_key).second) return false;
 			map<string, set<string> >::const_iterator indexed =
 				static_members_by_class_.find(current);
 			if(indexed != static_members_by_class_.end() &&

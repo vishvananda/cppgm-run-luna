@@ -38,14 +38,6 @@ bool MentionsQualifiedGeneratedType(const CPPGMAstNodePtr& node,
 	return false;
 }
 
-bool MentionsQualifiedNodeSpelling(const CPPGMAstNodePtr& node,
-	const string& type_name)
-{
-	if(!node || type_name.empty()) return false;
-	return CanonicalSpelling(RemoveMarker(SpellNode(node))).find(type_name + "::") !=
-		string::npos;
-}
-
 bool NamespacePathContains(const CPPGMAstNodePtr& node, const string& path)
 {
 	if(!node || node->kind != "namespace-definition" || path.empty()) return false;
@@ -1233,6 +1225,7 @@ void PA18TemplateExpander::InjectGenerated(const CPPGMAstNodePtr& node,
 		// class; otherwise PA11 analyzes the specialization before the imported
 		// type exists and rejects an otherwise valid dependent definition.
 		set<const CPPGMAstNode*> moved_dependency_namespaces;
+		map<const CPPGMAstNode*, string> generated_spellings;
 		for(size_t candidate = 0; candidate < node->children.size(); ++candidate) {
 			const CPPGMAstNodePtr namespace_node = node->children[candidate];
 			if(!namespace_node || namespace_node->kind != "namespace-definition" ||
@@ -1243,8 +1236,14 @@ void PA18TemplateExpander::InjectGenerated(const CPPGMAstNodePtr& node,
 			for(size_t dependent = 0; dependent < node->children.size(); ++dependent) {
 				const CPPGMAstNodePtr generated = node->children[dependent];
 				if(!generated || (generated->kind != "class-specifier" &&
-					generated->kind != "class-forward-declaration") ||
-					!MentionsQualifiedNodeSpelling(generated, dependency_name)) continue;
+					generated->kind != "class-forward-declaration")) continue;
+				map<const CPPGMAstNode*, string>::iterator spelling =
+					generated_spellings.find(generated.get());
+				if(spelling == generated_spellings.end()) {
+					spelling = generated_spellings.insert(make_pair(generated.get(),
+						CanonicalSpelling(RemoveMarker(SpellNode(generated))))).first;
+				}
+				if(spelling->second.find(dependency_name + "::") == string::npos) continue;
 				first_dependent_generated = min(first_dependent_generated, dependent);
 			}
 			if(first_dependent_generated >= current_position) continue;

@@ -927,10 +927,10 @@ integral-cast evaluation used by these non-type expressions.
 The focused scope, nested pack/function-pointer typedef, template-template
 application, dependent constant lookup, and member-alias owner-shadow cases
 all pass direct compiler validation.  The required current-PA report is
-**301/396**, improving the checkpoint baseline of **300/396** and the
-turn-start baseline of **292/396**; the two reentrant static-query fixtures
-remain timeouts and two focused cases still have LowIR comparison mismatches.
-No tests or reference fixtures were changed.
+**301/396**, above the checkpoint baseline of **300/396**.  The complete
+remainder is 61 exit-status mismatches, 32 LowIR comparison mismatches, and
+the same two reentrant static-query timeouts.  No tests or reference fixtures
+were changed.
 
 ### Remaining Work Map
 
@@ -960,3 +960,20 @@ typed variable-template, `sizeof`, and pack consumers.  Validate concrete
 owner identity and candidate-local lookup first, then rerun the full PA23
 report, through-PA22 regression gate, and PA23 file audit before taking the
 remaining deduction/materialization comparison band.
+
+### Checkpoint 9 audit result
+
+The checkpoint audit replaced the registry-wide static-member recovery scan
+with the existing specialization-by-primary index, exact typed owner-path
+resolution, and an early `(owner, member)` recursion identity.  It also caches
+generated AST spellings during namespace dependency ordering.  The required
+dependent nested-class materialization remains because its removal regresses
+the function-type-tail-pack recursive-specialization witness; it is semantic
+replay, not timeout handling.
+
+The complete failure inventory and validation evidence are recorded in
+`pa23/audit.md`.  The refreshed map is grouped into qualified owner/member
+and candidate-local replay; typed aliases, variable templates, `sizeof`, and
+pack state; deduction/overload composition; specialization/extern/constructor
+LowIR; and the two reentrant fixed-point witnesses.  The next substantial
+checkpoint remains the first group bundled with the small typed-value groups.
