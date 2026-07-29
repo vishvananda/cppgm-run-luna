@@ -1031,10 +1031,11 @@ void PA18TemplateExpander::FinalizeCallResult(
 		string member_result_type;
 		set<string> member_active;
 		if(InferArgument(result_callee->children[0], &member_object_type,
-			substitutions, context) && FindClassMemberType(member_object_type,
-			LastComponent(result_callee->children[1]->value), substitutions, context,
-			&member_result_type, &member_active) && !member_result_type.empty())
-			result->inferred_type = member_result_type;
+				substitutions, context) && FindClassMemberType(member_object_type,
+				LastComponent(result_callee->children[1]->value), substitutions, context,
+				&member_result_type, &member_active) && !member_result_type.empty())
+			result->inferred_type = QualifyTypeArgument(member_result_type,
+				member_object_type, member_object_type, true);
 	}
 }
 

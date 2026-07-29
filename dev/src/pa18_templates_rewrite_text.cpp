@@ -15,7 +15,6 @@ bool ContainsIdentifierToken(const string& text, const string& identifier)
 	}
 	return false;
 }
-
 } // namespace
 string PA18TemplateExpander::RewriteText(string raw, const string& context,
 	const map<string, string>& substitutions, bool* template_replaced,
@@ -24,6 +23,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 	if(template_replaced) *template_replaced = false;
 	const string source_spelling = raw;
 	bool materialized_member_type = false;
+	bool preserved_static_member = false;
 	raw = NormalizeElaboratedSpelling(raw, context);
 	if(!resolve_alias && resolve_member && active_instantiation_name_.empty() &&
 		raw.find("::") == string::npos && raw.find('<') == string::npos &&
@@ -1007,13 +1007,17 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				// Defer only when the typed argument still contains an indexed template
 				// parameter; unknown-but-concrete local classes remain materializable.
 				bool unresolved_type_argument = false;
-				for(size_t i = 0; i < args.size() && i < definition->parameters.size(); ++i)
-					if(definition->parameters[i].type &&
-						(args[i].find("...") != string::npos ||
-							HasUnresolvedTemplateParameter(args[i], context, substitutions))) {
+				for(size_t i = 0; i < args.size() && i < definition->parameters.size(); ++i) {
+					if(!definition->parameters[i].type) continue;
+					const bool concrete_function_type =
+						SplitDirectFunctionType(args[i], 0, 0, 0) ||
+						SplitFunctionPointerType(args[i], 0, 0);
+					if(((args[i].find("...") != string::npos && !concrete_function_type) ||
+						HasUnresolvedTemplateParameter(args[i], context, substitutions))) {
 						unresolved_type_argument = true;
 						break;
 					}
+				}
 					if(unresolved_type_argument) {
 					search = close + 1;
 					continue;
@@ -1250,10 +1254,10 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 											&instantiation_substitutions);
 						if(candidate_result.empty())
 										throw PA18SubstitutionFailure("function result substitution failed");
-										local_name = Instantiate(*instantiation_candidates[candidate], args, context, false,
-										inferred_nested_parent_packs.empty() ? 0 : &inferred_nested_parent_packs,
-										&instantiation_substitutions, requested_owner, 0, 0,
-										defer_class_definition);
+									local_name = Instantiate(*instantiation_candidates[candidate], args, context, false,
+									inferred_nested_parent_packs.empty() ? 0 : &inferred_nested_parent_packs,
+									&instantiation_substitutions, requested_owner, 0, 0,
+									defer_class_definition);
 									definition = instantiation_candidates[candidate];
 							selected_candidate = true;
 							break;
@@ -1306,7 +1310,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 		if(!generated_qualifier.empty()) {
 			replacement = generated_qualifier + "::" + local_name;
 		}
-			if(definition->alias_template) {
+		if(definition->alias_template) {
 				// Alias-template instantiation is a type substitution, not a new
 				// nominal type.  Keep the generated alias declaration registered for
 				// lookup, but feed its rewritten target into the surrounding template
@@ -1341,8 +1345,8 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 								replacement = qualified_source_target;
 						}
 					}
-			}
-			if(close + 1 < raw.size() && IsIdentifierCharacter(raw[close + 1]) &&
+		}
+		if(close + 1 < raw.size() && IsIdentifierCharacter(raw[close + 1]) &&
 				!replacement.empty() && IsIdentifierCharacter(replacement[replacement.size() - 1]))
 				replacement += ' ';
 			raw.replace(begin, close - begin + 1, replacement);
@@ -1403,11 +1407,6 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			separator = next_scope_separator(raw, member_end);
 			continue;
 		}
-		// The backwards scan above finds the generated class component, but a
-		// materialized specialization may still be spelled with its namespace
-		// prefix (`detail::core_int_`).  Consume those leading scope components
-		// too, otherwise replacing `core_int_::member` leaves `detail::` in
-		// front of the member's actual type (`detail::int`).
 		while(owner_begin >= 2 && raw.compare(owner_begin - 2, 2, "::") == 0) {
 			size_t component_begin = owner_begin - 2;
 			while(component_begin > 0 &&
@@ -1415,11 +1414,6 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			owner_begin = component_begin;
 		}
 		const string owner = raw.substr(owner_begin, separator - owner_begin);
-		// Member types produced by a reference-valued alias retain the object's
-		// cv/ref spelling (`const generated_type&::member`).  The lookup helper
-		// removes those qualifiers itself, so use the same normalized owner key
-		// when deciding whether this is a materialized class that should be
-		// replayed.
 		string owner_key = CanonicalSpelling(owner);
 		while(!owner_key.empty() && (owner_key[owner_key.size() - 1] == '&' ||
 			owner_key[owner_key.size() - 1] == '*')) owner_key.erase(owner_key.size() - 1);
@@ -1458,7 +1452,15 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 		}
 		const bool found_member = FindClassMemberType(lookup_owner, member_name,
 			substitutions, context, &member_type, &member_active, true);
-	if(!found_member || member_type.empty()) {
+		if(!found_member || member_type.empty()) {
+			separator = next_scope_separator(raw, member_end);
+			continue;
+		}
+		const bool static_member_expression = HasStaticMember(0, owner_key, member_name) ||
+			HasStaticMember(0, owner, member_name) ||
+			HasStaticMember(0, LastComponent(owner_key), member_name);
+		if(static_member_expression) {
+			preserved_static_member = true;
 			separator = next_scope_separator(raw, member_end);
 			continue;
 		}
@@ -1484,12 +1486,10 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			NormalizeTypeArgument(member_type));
 		if(template_replaced) *template_replaced = true;
 		separator = next_scope_separator(raw, replacement_begin + member_type.size());
-	}
-	raw = CollapseReferenceSpelling(raw);
-	if(!resolve_alias || raw.find("::") == string::npos) return raw;
-		// A qualified static integral member is an expression here, not a type
-		// alias.  Keep its registered spelling intact so a dependent non-type
-		// default can be evaluated by the typed constant table.
+		}
+			raw = CollapseReferenceSpelling(raw);
+		if(preserved_static_member) return raw;
+		if(!resolve_alias || raw.find("::") == string::npos) return raw;
 		if(constant_values_.find(raw) != constant_values_.end()) {
 			return raw;
 		}

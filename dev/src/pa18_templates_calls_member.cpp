@@ -1,5 +1,6 @@
 #include "pa18_templates_collection.h"
 #include "pa18_templates_rewrite.h"
+
 using namespace std;
 namespace pa18_templates_internal {
 
@@ -1148,7 +1149,7 @@ bool PA18TemplateExpander::EmitMemberCandidate(
 				inference_definition, raw_instantiation_arguments, context,
 				 explicit_instantiation, &instantiation_pack_hints, &candidate_substitutions,
 				 requested_owner_pointer, &inferred_function_values,
-				 &forwarding_pack_values);
+					 &forwarding_pack_values);
 		} catch(const logic_error&) {
 			active_concrete_owner_ = previous_concrete_owner;
 			return false;
@@ -1185,9 +1186,11 @@ bool PA18TemplateExpander::EmitMemberCandidate(
 			string result_type = NodeTypeSpelling(definition.declaration->children[0]);
 			const CPPGMAstNodePtr result_declarator = FunctionDeclarator(definition.declaration);
 			result_type += ReturnDeclaratorSuffix(result_declarator);
+			const string result_context = definition.owner.empty() ? context : definition.owner;
 			try {
-				result_type = CanonicalSpelling(ResolveAlias(RewriteText(result_type, context,
-					result_substitutions, 0), context));
+				result_type = CanonicalSpelling(ResolveAlias(RewriteText(result_type, result_context,
+					result_substitutions, 0), result_context));
+				result_type = QualifyTypeArgument(result_type, result_context, result_context, true);
 			} catch(const logic_error&) {
 				return false;
 			}

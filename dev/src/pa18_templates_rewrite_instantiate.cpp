@@ -28,9 +28,7 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformInstantiatedNode(
 	active_integral_substitutions_ = integral_substitutions;
 	active_function_substitutions_ = function_substitutions;
 	active_pack_substitutions_ = previous_packs;
-	// An unnamed parameter pack is only an arity constraint.  It has no source
-	// spelling that can be substituted, so an empty map key must never reach
-	// text replay (where it would make every `...` look expandable).
+	// An unnamed pack is an arity constraint; its empty key must not reach replay.
 	active_pack_substitutions_.erase("");
 	for(map<string, vector<string> >::const_iterator pack = pack_substitutions.begin();
 		pack != pack_substitutions.end(); ++pack)
@@ -920,6 +918,7 @@ bool PA18TemplateExpander::EvaluateIntegralTextSpecialForms(const string& raw,
 			}
 		}
 	}
+	if(EvaluateIntegralTextCStyleCast(raw, context, substitutions, result)) return true;
 	if(raw.compare(0, 2, "::") == 0) {
 		string unscoped = raw;
 		while(unscoped.compare(0, 2, "::") == 0) unscoped.erase(0, 2);

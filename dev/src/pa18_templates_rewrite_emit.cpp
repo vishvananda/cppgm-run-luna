@@ -399,8 +399,8 @@ void PA18TemplateExpander::RegisterGeneratedTypeEntity(
 	const string& generated_owner, const string& local_name,
 	const string& concrete_owner, const map<string, string>& substitutions,
 	const vector<string>& args,
-	const map<string, vector<string> >& pack_substitutions,
-	const string& context, bool explicit_instantiation)
+		const map<string, vector<string> >& pack_substitutions,
+		const string& context, bool explicit_instantiation)
 {
 	if(definition.alias_template) {
 		bool reference_argument = false;
@@ -1032,14 +1032,20 @@ string PA18TemplateExpander::Instantiate(const TemplateDefinition& definition,
 	const map<string, vector<string> >* forwarding_pack_hints,
 	bool defer_class_definition)
 {
-	if(definition.class_template)
-		for(size_t argument = 0; argument < raw_args.size(); ++argument)
-			if(raw_args[argument].find("...") != string::npos)
-				throw PA18SubstitutionFailure("dependent template pack argument");
 	if(definition.parameters.empty()) throw logic_error("template has no type parameters");
 	vector<string> args, metadata_args;
 	map<string, string> substitutions = outer_substitutions ? *outer_substitutions :
 		map<string, string>();
+	if(definition.class_template)
+		for(size_t argument = 0; argument < raw_args.size(); ++argument) {
+			if(raw_args[argument].find("...") == string::npos) continue;
+			const bool concrete_function_type =
+				SplitDirectFunctionType(raw_args[argument], 0, 0, 0) ||
+				SplitFunctionPointerType(raw_args[argument], 0, 0);
+			if(!concrete_function_type || HasUnresolvedTemplateParameter(raw_args[argument],
+				context, substitutions))
+				throw PA18SubstitutionFailure("dependent template pack argument");
+		}
 	const map<string, FunctionSignature> function_substitutions = function_hints ?
 		*function_hints : map<string, FunctionSignature>();
 	string concrete_owner = requested_owner ? *requested_owner :

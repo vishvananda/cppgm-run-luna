@@ -377,11 +377,11 @@ void PA18TemplateExpander::ResolveUsingDeclarationTargets()
 				for(size_t parameter = 0; parameter < owner->second.parameters.size(); ++parameter)
 					if(owner->second.parameters[parameter].type &&
 						owner->second.parameters[parameter].name == target_owner) {
-						dependent_owner = true;
-						break;
-					}
-			}
-			map<string, vector<string> >::const_iterator indexed = definitions_by_name_.find(
+							dependent_owner = true;
+							break;
+						}
+				}
+				map<string, vector<string> >::const_iterator indexed = definitions_by_name_.find(
 				LastComponent(target_member));
 			if(indexed == definitions_by_name_.end()) continue;
 			for(size_t candidate_index = 0; candidate_index < indexed->second.size();
@@ -798,18 +798,6 @@ bool HasDeclarationSpecifier(const CPPGMAstNodePtr& node, const string& wanted)
 	for(size_t child = 0; child < node->children.size(); ++child)
 		if(HasDeclarationSpecifier(node->children[child], wanted)) return true;
 	return false;
-}
-
-bool PA18TemplateExpander::HasStaticMember(const TemplateDefinition* definition,
-	const string& owner, const string& name) const
-{
-	if(name.empty()) return false;
-	if(definition && definition->static_members.find(name) !=
-		definition->static_members.end()) return true;
-	map<string, set<string> >::const_iterator indexed =
-		static_members_by_class_.find(owner);
-	return indexed != static_members_by_class_.end() &&
-		indexed->second.find(name) != indexed->second.end();
 }
 
 void PA18TemplateExpander::SetActiveConcreteOwner(const string& owner,

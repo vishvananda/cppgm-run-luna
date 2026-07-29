@@ -438,8 +438,27 @@ bool PA18TemplateExpander::InferCallMemberArgument(const CPPGMAstNodePtr& expres
 	const string member = callee->children.size() > 1 && callee->children[1] ?
 		LastComponent(callee->children[1]->value) : string();
 	set<string> active;
-	return !object_type.empty() && !member.empty() && FindClassMemberType(
-		object_type, member, substitutions, context, result, &active);
+	if(object_type.empty() || member.empty() || !FindClassMemberType(
+		object_type, member, substitutions, context, result, &active)) return false;
+	// A member function's return declarator is collected relative to its class
+	// scope, so a nested class result may still be the bare spelling `executor`.
+	// Deduction happens at the call site, where that name must retain its owner;
+	// otherwise a constructor template receives an unrelated nominal type (or a
+	// fundamental fallback) instead of `pool::executor`.
+	string member_suffix;
+	string member_base = *result;
+	const size_t suffix_begin = member_base.find_first_of("*&[");
+	if(suffix_begin != string::npos) {
+		member_suffix = member_base.substr(suffix_begin);
+		member_base = CanonicalSpelling(member_base.substr(0, suffix_begin));
+	}
+	if(member_base.find("::") == string::npos && !member_base.empty()) {
+		const string qualified_member = JoinPath(object_type, member_base);
+		if(FindClassDeclaration(qualified_member, context) != CPPGMAstNodePtr() ||
+			class_contexts_.find(qualified_member) != class_contexts_.end())
+			*result = qualified_member + member_suffix;
+	}
+	return true;
 }
 
 bool PA18TemplateExpander::InferCallArgument(const CPPGMAstNodePtr& expression,

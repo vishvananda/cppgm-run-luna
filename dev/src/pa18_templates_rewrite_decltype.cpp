@@ -1,6 +1,5 @@
 #include "pa18_templates_collection.h"
 #include "pa18_templates_rewrite.h"
-
 using namespace std;
 
 namespace pa18_templates_internal {
@@ -1342,11 +1341,12 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 							&nested_owner);
 						const string concrete_nested = JoinPath(owner_local_name,
 							nested_local_name);
-						const bool static_member =
+						const bool static_member = HasStaticMember(0, concrete_nested,
+							 nested_member) ||
 							nested_definition->static_members.find(nested_member) !=
-								nested_definition->static_members.end() ||
+							nested_definition->static_members.end() ||
 							selected_nested->static_members.find(nested_member) !=
-								selected_nested->static_members.end();
+							selected_nested->static_members.end();
 						if(static_member) {
 							raw->replace(begin, nested_close - begin + 1,
 								owner_local_name + "::" + nested_local_name);
@@ -1360,6 +1360,22 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 							nested_substitutions, context, &concrete_member, &nested_active,
 							false) && !concrete_member.empty();
 						if(concrete_found) {
+							size_t qualifier = begin;
+							while(qualifier > 0 && isspace(static_cast<unsigned char>(
+								(*raw)[qualifier - 1]))) --qualifier;
+							const bool typename_qualified = qualifier >= 8 &&
+								raw->compare(qualifier - 8, 8, "typename") == 0 &&
+								(qualifier == 8 || !IsIdentifierCharacter((*raw)[qualifier - 9]));
+							// Without a `typename` qualifier this is an expression member
+							// access.  Preserve the generated owner and the member spelling;
+							// replacing an inherited static member with its declaration type
+							// (`const bool`) changes the expression into an identifier.
+							if(!typename_qualified) {
+								raw->replace(begin, nested_close - begin + 1, concrete_nested);
+								if(template_replaced) *template_replaced = true;
+								if(search) *search = begin + concrete_nested.size();
+								return true;
+							}
 							const string member_context = selected_nested->qualified_name.empty() ?
 								context : selected_nested->qualified_name;
 							concrete_member = NormalizeTypeArgument(RewriteText(

@@ -20,7 +20,8 @@ CPPGMAstNodePtr PA18TemplateExpander::RewriteRegularNodeValue(
 		input->value[0] == '"' && input->value[input->value.size() - 1] == '"')
 		result->value = input->value;
 	else result->value = RewriteText(input->value, context, substitutions, &template_replaced,
-		!type_spelling, true, defer_type_only_class_definitions_ != 0);
+		!type_spelling, true,
+		defer_type_only_class_definitions_ != 0);
 	if((input->kind == "special-member-definition" ||
 		input->kind == "special-member-declaration" || input->kind == "identifier") &&
 		result->value.compare(0, 8, "operator") == 0) {
@@ -78,7 +79,8 @@ CPPGMAstNodePtr PA18TemplateExpander::RewriteRegularNodeValue(
 	if((type_spelling || input->kind == "id-expression") &&
 		result->value.find('<') != string::npos)
 		result->value = RewriteText(result->value, context, substitutions, &template_replaced,
-			true, true, defer_type_only_class_definitions_ != 0);
+			true, true,
+			defer_type_only_class_definitions_ != 0);
 	if(input->kind == "target") {
 		const string raw_target = RemoveMarker(input->value);
 		const size_t separator = raw_target.rfind("::");

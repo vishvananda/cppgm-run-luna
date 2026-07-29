@@ -1,12 +1,11 @@
 #include "pa18_templates_collection.h"
 #include "pa18_templates_rewrite.h"
-
 using namespace std;
 
 namespace pa18_templates_internal {
 
-const TemplateDefinition* PA18TemplateExpander::FindNestedDefinition(
-	const TemplateDefinition& parent, const string& nested_name) const
+	const TemplateDefinition* PA18TemplateExpander::FindNestedDefinition(
+		const TemplateDefinition& parent, const string& nested_name) const
 {
 	// Nested member templates in distinct class partial specializations share
 	// one qualified name in the ordinary definition index.  The selected outer
@@ -293,7 +292,7 @@ bool PA18TemplateExpander::EvaluateLogicalIntegralText(const string& raw,
 		}
 	return false;
 	}
-	bool PA18TemplateExpander::EvaluateInheritedBaseValue(const TemplateDefinition& definition,
+bool PA18TemplateExpander::EvaluateInheritedBaseValue(const TemplateDefinition& definition,
 		const string& context, const map<string, string>& member_substitutions,
 		PA19IntegralValue* result)
 	{
@@ -351,6 +350,42 @@ bool PA18TemplateExpander::EvaluateLogicalIntegralText(const string& raw,
 					base_spelling = CanonicalSpelling(RemoveMarker(RewriteText(
 						base_spelling, context, base_rewrite_substitutions, 0)));
 					base_spelling = ResolveAlias(base_spelling, context);
+					// A replayed tail pack can leave a concrete base argument with its
+					// expansion marker attached (`is_same<T, T...>`).  Once the active
+					// substitutions have supplied the typed value, normalize that one
+					// concrete argument before looking up the materialized base.  Keep
+					// genuine dependent/function-type packs intact for later deduction.
+					if(base_spelling.find("...") != string::npos) {
+						const size_t base_open = base_spelling.find('<');
+						string base_arguments_text;
+						string normalized_base_primary;
+						size_t base_begin = 0, base_close = string::npos;
+						if(base_open != string::npos && TemplateBase(base_spelling, base_open,
+							&base_begin, &normalized_base_primary) && TemplateRange(base_spelling, base_open,
+							&base_arguments_text, &base_close)) {
+							vector<string> normalized_arguments = SplitTemplateArguments(
+								base_arguments_text);
+							bool normalized_pack = false;
+							for(size_t argument = 0; argument < normalized_arguments.size(); ++argument) {
+								string candidate = Trim(normalized_arguments[argument]);
+								if(candidate.size() < 3 || candidate.compare(candidate.size() - 3, 3, "...") != 0)
+									continue;
+								candidate.erase(candidate.size() - 3);
+								if(candidate.empty() || HasUnresolvedTemplateParameter(candidate,
+									context, member_substitutions)) continue;
+								normalized_arguments[argument] = candidate;
+								normalized_pack = true;
+							}
+							if(normalized_pack) {
+								base_spelling = normalized_base_primary + "<";
+								for(size_t argument = 0; argument < normalized_arguments.size(); ++argument) {
+									if(argument) base_spelling += ",";
+									base_spelling += normalized_arguments[argument];
+								}
+								base_spelling += ">";
+							}
+						}
+					}
 				// A still-dependent base from a partial specialization is only a
 				// declaration-time relationship.  Do not try to materialize its
 				// nested pack expression as a concrete template argument while the

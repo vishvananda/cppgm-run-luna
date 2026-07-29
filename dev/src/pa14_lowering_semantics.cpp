@@ -2,7 +2,6 @@
 
 #include <cstdlib>
 #include <functional>
-
 using namespace std;
 
 namespace cppgm_pa14_lowering {
@@ -310,59 +309,6 @@ vector<Binding*> PA14Lowerer::OperatorCandidates(const string& name,
       AppendAssociatedOperatorBindings(expression_value_type(arguments[i]), name,
         result, visited_types, visited_scopes);
     return result;
-  }
-
-vector<Binding*> PA14Lowerer::MemberBindings(const TypePtr& raw_object,
-                                             const string& name) const
-{
-    TypePtr object = type_value(raw_object);
-    if(object && object->kind == TYPE_POINTER) object = type_value(object->child);
-    if(!object || object->kind != TYPE_CLASS || !object->owned_scope)
-      return vector<Binding*>();
-    vector<Binding*> direct;
-    const vector<Binding*> all_direct = DirectBindings(object->owned_scope, last_component(name));
-    for(size_t i = 0; i < all_direct.size(); ++i)
-      if(!all_direct[i]->hidden_friend) direct.push_back(all_direct[i]);
-    if(direct.empty() && name.size() > 1 && name[0] == '~') {
-      const string actual = "~" + LastComponent(object->name);
-      if(actual != last_component(name)) {
-        const vector<Binding*> destructor_bindings =
-          DirectBindings(object->owned_scope, actual);
-        for(size_t i = 0; i < destructor_bindings.size(); ++i)
-          if(!destructor_bindings[i]->hidden_friend) direct.push_back(destructor_bindings[i]);
-      }
-    }
-    // A using-declaration stores an imported copy in the derived scope.  Its
-    // member_owner identifies the declaring base, so consult that typed base
-    // scope again instead of letting the single imported source declaration
-    // hide materialized overloads (including const/non-const member-template
-    // specializations) added to the base later in collection.
-    if(!direct.empty()) {
-      vector<Binding*> imported;
-      for(size_t i = 0; i < direct.size(); ++i) {
-        TypePtr imported_owner = type_value(direct[i]->member_owner);
-        if(!imported_owner || imported_owner.get() == object.get()) continue;
-        if(!imported_owner->owned_scope) continue;
-        const vector<Binding*> base_bindings = DirectBindings(
-          imported_owner->owned_scope, last_component(name));
-        for(size_t base = 0; base < base_bindings.size(); ++base)
-          if(!base_bindings[base]->hidden_friend &&
-             find(imported.begin(), imported.end(), base_bindings[base]) == imported.end())
-            imported.push_back(base_bindings[base]);
-      }
-      if(!imported.empty()) {
-        // Keep the imported declaration first: a public using-declaration may
-        // deliberately re-expose a protected base member.  The base entries
-        // are supplemental overloads, not replacements for that access
-        // adjustment.
-        for(size_t base = 0; base < imported.size(); ++base)
-          if(find(direct.begin(), direct.end(), imported[base]) == direct.end())
-            direct.push_back(imported[base]);
-      }
-      return direct;
-    }
-    if(object->direct_base) return MemberBindings(object->direct_base, name);
-    return vector<Binding*>();
   }
 
 bool PA14Lowerer::IsAccessible(Binding* binding, Scope* scope) const

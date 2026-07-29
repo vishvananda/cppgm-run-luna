@@ -207,6 +207,10 @@ bool PA18TemplateExpander::RewriteResolvedTemplateMember(string* raw, size_t beg
 				member_type = TemplateMemberType(*definition, args, nested, context);
 		}
 	}
+	const bool static_template_member = HasStaticMember(0, concrete_template_owner, nested) ||
+		HasStaticMember(0, template_owner, nested);
+	if(static_template_member)
+		return false;
 	const size_t owner_separator = TopLevelScopeSeparator(concrete_template_owner);
 	if(owner_separator != string::npos) {
 		const string outer_owner = concrete_template_owner.substr(0, owner_separator);

@@ -38,6 +38,14 @@ bool MentionsQualifiedGeneratedType(const CPPGMAstNodePtr& node,
 	return false;
 }
 
+bool MentionsQualifiedNodeSpelling(const CPPGMAstNodePtr& node,
+	const string& type_name)
+{
+	if(!node || type_name.empty()) return false;
+	return CanonicalSpelling(RemoveMarker(SpellNode(node))).find(type_name + "::") !=
+		string::npos;
+}
+
 bool NamespacePathContains(const CPPGMAstNodePtr& node, const string& path)
 {
 	if(!node || node->kind != "namespace-definition" || path.empty()) return false;
@@ -1217,6 +1225,34 @@ void PA18TemplateExpander::InjectGenerated(const CPPGMAstNodePtr& node,
 		if(occurrence != namespace_occurrences_.end() && occurrence->second > 0)
 			last_namespace = --occurrence->second == 0;
 		if(last_namespace) InsertGenerated(&node->children, child_lexical_context);
+		// Generated specializations are normally inserted at the front of their
+		// lexical namespace so their declarations precede all source uses.  A
+		// generated class can nevertheless depend on a source namespace that is
+		// represented by a using-declaration (for example `mpl::integral_c_tag`).
+		// Keep that namespace's declarations ahead of the dependent generated
+		// class; otherwise PA11 analyzes the specialization before the imported
+		// type exists and rejects an otherwise valid dependent definition.
+		set<const CPPGMAstNode*> moved_dependency_namespaces;
+		for(size_t candidate = 0; candidate < node->children.size(); ++candidate) {
+			const CPPGMAstNodePtr namespace_node = node->children[candidate];
+			if(!namespace_node || namespace_node->kind != "namespace-definition" ||
+				!moved_dependency_namespaces.insert(namespace_node.get()).second) continue;
+			const string dependency_name = namespace_node->value;
+			size_t current_position = candidate;
+			size_t first_dependent_generated = node->children.size();
+			for(size_t dependent = 0; dependent < node->children.size(); ++dependent) {
+				const CPPGMAstNodePtr generated = node->children[dependent];
+				if(!generated || (generated->kind != "class-specifier" &&
+					generated->kind != "class-forward-declaration") ||
+					!MentionsQualifiedNodeSpelling(generated, dependency_name)) continue;
+				first_dependent_generated = min(first_dependent_generated, dependent);
+			}
+			if(first_dependent_generated >= current_position) continue;
+			CPPGMAstNodePtr dependency = node->children[current_position];
+			node->children.erase(node->children.begin() + current_position);
+			node->children.insert(node->children.begin() + first_dependent_generated,
+				dependency);
+		}
 		for(size_t i = 0; i < node->children.size(); ++i) {
 			if(node->children[i] && node->children[i]->kind == "class-specifier" &&
 				node->children[i]->children.size() > 1) {

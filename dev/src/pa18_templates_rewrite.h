@@ -893,29 +893,9 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 	void RecordUsingDirective(const CPPGMAstNodePtr& original_child,
 		map<string, string>* local_substitutions);
 	void RecordTypedefSubstitutions(const CPPGMAstNodePtr& original_child,
-		const string& child_context, map<string, string>* local_substitutions)
-	{
-		const CPPGMAstNodePtr list = ChildOfKindLocal(original_child, "init-declarator-list");
-		if(!list) return;
-		for(size_t item_index = 0; item_index < list->children.size(); ++item_index) {
-			const CPPGMAstNodePtr item = list->children[item_index];
-			if(!item || item->children.empty()) continue;
-			const string alias_name = FirstIdentifierLocal(item->children[0]);
-			if(!alias_name.empty()) {
-				const string raw_type = DeclaratorTypeSpelling(
-					NodeTypeSpelling(original_child->children[0]), item->children[0]);
-				const string rewritten_type = RewriteText(
-					raw_type, child_context, *local_substitutions, 0);
-				if(raw_type.empty() || rewritten_type.empty()) continue;
-				(*local_substitutions)[alias_name] = rewritten_type;
-				const string qualified_alias = JoinPath(child_context, alias_name);
-				type_aliases_[qualified_alias] = (*local_substitutions)[alias_name];
-				vector<string>& aliases = type_aliases_by_name_[alias_name];
-				if(find(aliases.begin(), aliases.end(), qualified_alias) == aliases.end())
-					aliases.push_back(qualified_alias);
-			}
-		}
-	}
+		const string& child_context, map<string, string>* local_substitutions);
+	CPPGMAstNodePtr ReplayAliasTemplateDeclaration(const CPPGMAstNodePtr& input,
+		const map<string, string>& substitutions);
 	void RewriteTemplateInitializer(const CPPGMAstNodePtr& input,
 		const string& context, const map<string, string>& substitutions,
 		const CPPGMAstNodePtr& result)
@@ -1065,10 +1045,30 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 				class_declarations_.find(context) != class_declarations_.end() ||
 				(context_open != string::npos && class_declarations_.find(context_primary) !=
 					class_declarations_.end());
+			bool captures_outer_pack = false;
+			if(input->children.size() > 1 && input->children[1] &&
+				input->children[1]->kind == "alias-declaration") {
+				set<string> alias_pack_names;
+				const vector<TemplateParameter> alias_parameters = Parameters(input->children[0]);
+				for(size_t parameter = 0; parameter < alias_parameters.size(); ++parameter)
+					if(alias_parameters[parameter].pack && !alias_parameters[parameter].name.empty())
+						alias_pack_names.insert(alias_parameters[parameter].name);
+				const string alias_body = SpellNode(input->children[1]);
+				for(map<string, vector<string> >::const_iterator pack =
+					active_pack_substitutions_.begin();
+					pack != active_pack_substitutions_.end(); ++pack)
+					if(alias_pack_names.find(pack->first) == alias_pack_names.end() &&
+						alias_body.find(pack->first + "...") != string::npos) {
+						captures_outer_pack = true;
+						break;
+					}
+			}
 			if(input->children.size() > 1 && input->children[1] &&
 				input->children[1]->kind == "alias-declaration" &&
-				(!source_class_context || materialized_class_context))
-				return CloneNode(input);
+				(!source_class_context || materialized_class_context ||
+					captures_outer_pack)) {
+				return ReplayAliasTemplateDeclaration(input, substitutions);
+			}
 			// Preserve a friend template declaration with its complete typed
 			// declarator.  The semantic pass records the friend edge from the
 			// normal template-parameter scope; no synthetic empty signature is

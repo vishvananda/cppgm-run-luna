@@ -905,3 +905,58 @@ Take deduction/conversion and function-type-pack handling as one coherent
 group, including its downstream overload and LowIR consumers.  Preserve the
 new concrete-owner and static-materialization facts, then rerun the complete
 PA23 report, through-PA22 gate, and file audit.
+
+## Checkpoint 9 result — 2026-07-29
+
+### Checkpoint Scope
+
+Completed the specialization/alias replay increment for typed non-type
+values and captured member alias packs.  Class partial-specialization matching
+now converts concrete integral expressions to the declared non-type parameter
+type before comparing them; nested qualified static values therefore retain
+their bool/integral identity.  Replayed member aliases retain captured packs
+when used as template-template arguments, merge a later alias application
+with the captured argument list, and materialize the selected owner through
+the existing generated-specialization registry.  Local typedef aliases now
+record already-evaluated array extents, so later type-id uses do not restore a
+dependent bound.  The increment also retains the existing typed C-style
+integral-cast evaluation used by these non-type expressions.
+
+### Validation
+
+The focused scope, nested pack/function-pointer typedef, template-template
+application, dependent constant lookup, and member-alias owner-shadow cases
+all pass direct compiler validation.  The required current-PA report is
+**301/396**, improving the checkpoint baseline of **300/396** and the
+turn-start baseline of **292/396**; the two reentrant static-query fixtures
+remain timeouts and two focused cases still have LowIR comparison mismatches.
+No tests or reference fixtures were changed.
+
+### Remaining Work Map
+
+- **Qualified owner/member replay and candidate-local deferral:** using and
+  inherited owners, nested/current-specialization member templates,
+  out-of-class replay, and dependent member-result/SFINAE cases remain the
+  largest status group.
+- **Typed aliases, variable templates, and non-type packs:** qualified
+  `sizeof`, variable/member-template values, defaults, pointer/reference
+  arguments, and pack-kind rejection still need their typed facts preserved
+  through all replay paths.
+- **Deduction and overload composition:** conversions, function-type partial
+  ordering, reference/cv normalization, ADL, explicit arguments,
+  template-template defaults, and non-deduced contexts remain unresolved.
+- **Specialization/extern/constructor LowIR:** downstream comparison failures
+  still cover declaration pairing, constructors, function pointers, member
+  emission, and generated metadata/order.
+- **Reentrant fixed points:**
+  `general/500-reentrant-static-query-callable-enable-if-cache.t` and
+  `general/500-reentrant-static-query-enable-if-partial.t` still require a
+  stable semantic query identity rather than timeout-specific handling.
+
+### Next Checkpoint Group
+
+Take the remaining qualified owner/member replay group bundled with its
+typed variable-template, `sizeof`, and pack consumers.  Validate concrete
+owner identity and candidate-local lookup first, then rerun the full PA23
+report, through-PA22 regression gate, and PA23 file audit before taking the
+remaining deduction/materialization comparison band.

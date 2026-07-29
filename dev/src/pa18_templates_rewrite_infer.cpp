@@ -1,5 +1,6 @@
 #include "pa18_templates_collection.h"
 #include "pa18_templates_rewrite.h"
+
 #include <cctype>
 #include <functional>
 #include <sstream>
@@ -566,7 +567,7 @@ bool PA18TemplateExpander::InferFunctionParameter(
 		const CPPGMAstNodePtr argument = arguments->children[*argument_index];
 		FunctionSignature signature;
 		bool inferred_argument = InferArgument(argument, &type, parameter_substitutions,
-			context, &signature);
+				context, &signature);
 		if(inferred_argument && !type.empty()) {
 			string resolved_type = ReplaceIdentifiersPreservingPackSizes(type,
 				parameter_substitutions);
@@ -575,8 +576,8 @@ bool PA18TemplateExpander::InferFunctionParameter(
 					resolved_type, context, parameter_substitutions, 0);
 			} catch(const PA18SubstitutionFailure&) {}
 			resolved_type = CanonicalSpelling(ResolveAlias(resolved_type, context));
-			if(!resolved_type.empty()) type = resolved_type;
-		}
+				if(!resolved_type.empty()) type = resolved_type;
+			}
 		// An empty braced-init-list is a non-deduced argument, but it still
 		// participates in viability once the other template arguments have
 		// supplied every dependent part of this parameter.  Carry the resolved

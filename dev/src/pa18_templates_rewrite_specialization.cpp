@@ -576,19 +576,31 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 		if(argument_index > 0 && argument_index - 1 < definition.parameters.size() &&
 			!definition.parameters[argument_index - 1].type &&
 			!definition.parameters[argument_index - 1].template_template) {
+			const PA19IntegralType expected_type = PA19Type(
+				ResolveAlias(ReplaceIdentifiers(definition.parameters[argument_index - 1].non_type_type,
+					local), context));
 			PA19ConstantExpressionParser parser(constant_values_, local,
 				constant_type_sizes_, constant_type_alignments_, type_aliases_);
 			PA19IntegralValue normalized_value;
-			if(parser.Evaluate(pattern, &normalized_value))
+			if(parser.Evaluate(pattern, &normalized_value)) {
+				if(expected_type.integral) normalized_value = PA19Convert(normalized_value,
+					expected_type);
 				pattern = TemplateIntegralValueSpelling(normalized_value);
-			else if(const_cast<PA18TemplateExpander*>(this)->EvaluateIntegralText(
-				pattern, context, local, &normalized_value) && normalized_value.known)
+			} else if(const_cast<PA18TemplateExpander*>(this)->EvaluateIntegralText(
+				pattern, context, local, &normalized_value) && normalized_value.known) {
+				if(expected_type.integral) normalized_value = PA19Convert(normalized_value,
+					expected_type);
 				pattern = TemplateIntegralValueSpelling(normalized_value);
-			if(parser.Evaluate(actual, &normalized_value))
+			} else if(parser.Evaluate(actual, &normalized_value)) {
+				if(expected_type.integral) normalized_value = PA19Convert(normalized_value,
+					expected_type);
 				actual = TemplateIntegralValueSpelling(normalized_value);
-			else if(const_cast<PA18TemplateExpander*>(this)->EvaluateIntegralText(
-				actual, context, local, &normalized_value) && normalized_value.known)
+			} else if(const_cast<PA18TemplateExpander*>(this)->EvaluateIntegralText(
+				actual, context, local, &normalized_value) && normalized_value.known) {
+				if(expected_type.integral) normalized_value = PA19Convert(normalized_value,
+					expected_type);
 				actual = TemplateIntegralValueSpelling(normalized_value);
+			}
 		}
 		if(pattern.size() > 2 && pattern.compare(pattern.size() - 2, 2, "&&") == 0 &&
 			(actual.size() < 2 || actual.compare(actual.size() - 2, 2, "&&") != 0)) return false;

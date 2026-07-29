@@ -210,6 +210,24 @@ const TemplateDefinition* PA18TemplateExpander::SelectClassTemplateDefinition(
 			matching_arguments.push_back(default_argument);
 			if(!primary->parameters[parameter].name.empty()) default_substitutions[primary->parameters[parameter].name] = default_argument;
 		}
+		// A concrete non-type argument can still arrive here as an expression
+		// (`(I > 1)` after the enclosing substitution).  Normalize it before
+		// matching explicit value specializations; their parameter lists retain
+		// the source parameter but do not carry a second dependent expression
+		// from which MatchClassSpecializationPattern can infer the value.
+		for(size_t argument = 0; argument < matching_arguments.size() &&
+			argument < primary->parameters.size(); ++argument) {
+			const TemplateParameter& parameter = primary->parameters[argument];
+			if(parameter.type || parameter.template_template || parameter.non_type_type.empty()) continue;
+			PA19IntegralValue value;
+			if(!const_cast<PA18TemplateExpander*>(this)->EvaluateIntegralText(
+				matching_arguments[argument], context, map<string, string>(), &value) ||
+				!value.known) continue;
+			const PA19IntegralType expected_type = PA19Type(ResolveAlias(
+				parameter.non_type_type, context));
+			if(expected_type.integral) value = PA19Convert(value, expected_type);
+			matching_arguments[argument] = TemplateIntegralValueSpelling(value);
+		}
 		vector<const TemplateDefinition*> matched;
 		for(size_t i = 0; i < candidates.size(); ++i) {
 			bool matches = false;

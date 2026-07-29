@@ -59,6 +59,7 @@
 	void NormalizeIntegralText(string* raw, const map<string, string>& substitutions);
 	bool EvaluateIntegralTextSpecialForms(const string& raw, const string& context,
 		const map<string, string>& substitutions, PA19IntegralValue* result);
+	bool EvaluateIntegralTextCStyleCast(const string& raw, const string& context, const map<string, string>& substitutions, PA19IntegralValue* result);
 	bool EvaluateExpandedSizeofText(const string& raw, const string& context, const map<string, string>& substitutions, PA19IntegralValue* result, string* expanded);
 	bool EvaluateIntegralTextKnownValues(const string& raw, const string& context, const map<string, string>& substitutions, PA19IntegralValue* result);
 	bool EvaluateIntegralTextFallbacks(const string& raw, const string& context, const map<string, string>& substitutions, PA19IntegralValue* result);
@@ -551,9 +552,7 @@
 			&expanded_pack)) raw = expanded_pack;
 		else {
 			map<string, string> expression_substitutions = substitutions;
-			// Preserve the base of a template-id until RewriteText can match or
-			// materialize the complete argument list.  Substituting a generated
-			// class name into the base alone creates `Generated_<Args>`.
+				// Keep a template-id base intact until RewriteText handles its arguments.
 			for(map<string, string>::const_iterator substitution = substitutions.begin();
 				substitution != substitutions.end(); ++substitution)
 				for(size_t at = raw.find(substitution->first); at != string::npos;

@@ -216,7 +216,7 @@ inline string TemplateArgumentSpelling(const CPPGMAstNodePtr& node)
 	if((node->kind == "sizeof-expression" || node->kind == "type-trait-expression") &&
 		!node->children.empty())
 		return (node->kind == "sizeof-expression" ? "sizeof(" : "alignof(") +
-			SpellNode(node->children[0]) + ")";
+			TemplateArgumentSpelling(node->children[0]) + ")";
 	if(node->kind == "sizeof-pack-expression" && !node->children.empty()) return "sizeof...(" + TemplateArgumentSpelling(node->children[0]) + ")";
 	if(node->kind == "delete-expression" && !node->children.empty())
 		return "delete " + TemplateArgumentSpelling(node->children[0]);
@@ -246,10 +246,7 @@ inline string DefaultTypeSpelling(const CPPGMAstNodePtr& parameter)
 {
 	const CPPGMAstNodePtr argument = ChildOfKindLocal(parameter, "default-template-argument");
 	if(!argument || argument->children.empty()) return string();
-	// SpellNode intentionally flattens AST children with spaces, which loses
-	// the punctuation of a dependent `decltype(new T(declval<Args>()...))`.
-	// Keep the parser's complete decltype spelling so the later pack-aware
-	// rewriter can expand the operand before resolving nested template-ids.
+	// Preserve complete dependent decltype spelling for pack-aware replay.
 	const CPPGMAstNodePtr decltype_spec = DescendantOfKind(
 		argument->children[0], "decltype-specifier");
 	if(decltype_spec && !decltype_spec->value.empty())
@@ -307,9 +304,7 @@ string ReplaceIdentifiersPreservingPackSizes(const string& raw,
 inline string TypeSuffix(string raw, bool preserve_trailing_underscores = false)
 {
 	raw = CanonicalSpelling(raw);
-	// Keep rvalue references as one generated-name component.  Replaying the
-	// older `_ref_ref` spelling loses the reference category and can turn the
-	// second `_ref` into a nominal type during nested constructor replay.
+	// Keep rvalue references as one generated-name component during replay.
 	string collapsed;
 	for(size_t i = 0; i < raw.size(); ++i) {
 		if(i + 1 < raw.size() && raw[i] == '&' && raw[i + 1] == '&') {
@@ -318,6 +313,9 @@ inline string TypeSuffix(string raw, bool preserve_trailing_underscores = false)
 		} else collapsed += raw[i];
 	}
 	raw.swap(collapsed);
+	// Keep ellipsis in generated identities for function-type arguments.
+	for(size_t i = 0; i + 2 < raw.size(); ++i)
+		if(raw.compare(i, 3, "...") == 0) { raw.replace(i, 3, "_ellipsis"); i += 8; }
 	const bool array_type = raw.find('[') != string::npos;
 	string result;
 	for(size_t i = 0; i < raw.size(); ++i) {
