@@ -155,8 +155,9 @@ string PA14Lowerer::EmitReferenceArgument(const CPPGMAstNodePtr& node, Scope* sc
       }
       if(constructed) return EmitTemporaryObjectAddress(node, scope, "arg");
     }
-    if(node && node->kind == "call-expression" && !node->children.empty()) {
-      CallChoice choice = ChooseCall(node, scope);
+	if(node && node->kind == "call-expression" && !node->children.empty() &&
+		!BuiltinCastType(node->children[0], scope)) {
+		CallChoice choice = ChooseCall(node, scope);
       FunctionRecord* function = choice.binding ? RecordForBinding(choice.binding) : 0;
       TypePtr result_type = choice.function ? type_value(choice.function->child) : TypePtr();
       if(function && function->indirect_result && result_type &&

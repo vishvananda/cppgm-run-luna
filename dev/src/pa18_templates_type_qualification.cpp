@@ -274,7 +274,9 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 		}
 	}
 	if(generated_enclosing_qualified)
-		return CanonicalSpelling(prefix + spelling + suffix);
+		{
+			return CanonicalSpelling(prefix + spelling + suffix);
+		}
 	string current = context;
 	for(;;) {
 		map<string, CPPGMAstNodePtr>::const_iterator class_declaration =
@@ -311,7 +313,7 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 				function_contexts_.end();
 			const bool same_template_owner = !template_owner.empty() &&
 				PrefixComponent(candidate) == template_owner;
-			spelling = (function_scope && !same_template_owner) ||
+			spelling = preserve_nested_namespace || (function_scope && !same_template_owner) ||
 				(!template_owner.empty() && !same_template_owner) ? candidate :
 				LastComponent(candidate);
 			break;
@@ -389,7 +391,7 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 				}
 			if(same && candidate_name.size() < best.size()) best = candidate_name;
 		}
-		if(best != generated->first) {
+	if(best != generated->first) {
 			const string owner = PrefixComponent(result);
 			return owner.empty() ? best : owner + "::" + best;
 		}

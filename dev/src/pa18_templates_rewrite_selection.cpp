@@ -215,7 +215,9 @@ const TemplateDefinition* PA18TemplateExpander::SelectClassTemplateDefinition(
 					"ambiguous class template partial specialization");
 			selected = matched[i];
 		}
-		if(selected) return selected;
+		if(selected) {
+			return selected;
+		}
 		throw PA18SubstitutionFailure(
 			"cyclic class template partial specialization ordering");
 	}

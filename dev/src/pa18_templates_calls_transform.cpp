@@ -781,12 +781,16 @@ bool PA18TemplateExpander::MaterializeFreeFunctionCandidate(
 		if(!InferFunctionArguments(*definition, result, &inferred,
 			candidate_substitutions, context, 0, &inferred_pack_values,
 			&inferred_function_values, owner_pack_values.empty() ? 0 :
-			&owner_pack_values, &forwarding_pack_values)) return false;
+			&owner_pack_values, &forwarding_pack_values)) {
+			return false;
+		}
 	} catch(const PA18SubstitutionFailure&) {
 		return false;
 	}
 	if(!ValidateTemplateDefaults(*definition, inferred, context,
-		candidate_substitutions)) return false;
+		candidate_substitutions)) {
+		return false;
+	}
 	const TemplateDefinition* selected_definition =
 		FindExplicitFunctionSpecialization(definition->qualified_name, inferred, context);
 	if(!selected_definition) selected_definition = definition;

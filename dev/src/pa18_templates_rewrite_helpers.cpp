@@ -1,6 +1,5 @@
 #include "pa18_templates_collection.h"
 #include "pa18_templates_rewrite.h"
-
 namespace pa18_templates_internal {
 
 bool PA18TemplateExpander::MatchForwardingReferencePattern(const string& pattern,
@@ -26,7 +25,9 @@ bool PA18TemplateExpander::ConsumeMaterializedStaticAssert(
 	const bool evaluated = EvaluateIntegralText(ConstantExpressionSpelling(
 		result->children[0]), context, substitutions, &value);
 	if(!evaluated || !value.known) return false;
-	if(PA19Raw(value) == 0) throw logic_error("static assertion failed");
+	if(PA19Raw(value) == 0) {
+		throw logic_error("static assertion failed");
+	}
 	return true;
 }
 

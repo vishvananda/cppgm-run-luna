@@ -299,8 +299,8 @@ bool PA18TemplateExpander::EvaluateLogicalIntegralText(const string& raw,
 	{
 					for(size_t child_index = 0;
 						child_index < definition.declaration->children.size(); ++child_index) {
-						const CPPGMAstNodePtr clause = definition.declaration->children[child_index];
-						if(!clause || clause->kind != "base-clause") continue;
+			const CPPGMAstNodePtr clause = definition.declaration->children[child_index];
+			if(!clause || clause->kind != "base-clause") continue;
 		for(size_t base_index = 0; base_index < clause->children.size(); ++base_index) {
 			const CPPGMAstNodePtr base_name = ChildOfKindLocal(
 				clause->children[base_index], "base-name");

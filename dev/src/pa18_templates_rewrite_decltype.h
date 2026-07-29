@@ -1,5 +1,4 @@
 #pragma once
-
 inline vector<string> SplitCallArguments(const string& raw)
 {
 	vector<string> result;
@@ -55,7 +54,6 @@ inline vector<string> SplitCallArguments(const string& raw)
 		return longs >= 2 ? (uns ? "unsigned long long" : "long long") :
 			longs == 1 ? (uns ? "unsigned long" : "long") : uns ? "unsigned int" : "int";
 	}
-
 	bool HasMaterializedMemberFunction(const string& callee,
 		const string& context) const
 	{
@@ -76,7 +74,6 @@ inline vector<string> SplitCallArguments(const string& raw)
 		}
 		return false;
 	}
-
 	bool HasExactOrdinaryMatch(const CPPGMAstNodePtr& call, const string& callee,
 		const map<string, string>& substitutions, const string& context)
 	{
@@ -591,6 +588,22 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 				if(template_argument < arguments.size()) ++template_argument;
 			}
 		}
+		for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter) {
+			const TemplateParameter& detail = definition.parameters[parameter];
+			if(detail.type || detail.non_type_type.empty()) continue;
+			string declared = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(detail.non_type_type, local));
+			string base, argument_text; size_t open = declared.find('<'), begin = 0, close = string::npos;
+			const bool has_enable_if_template = open != string::npos && TemplateBase(declared, open, &begin, &base) && TemplateRange(declared, open, &argument_text, &close) &&
+				(LastComponent(base) == "enable_if" || LastComponent(base) == "enable_if_t") &&
+				(close + 1 == declared.size() || (close + 7 == declared.size() && declared.compare(close + 1, 6, "::type") == 0));
+			if(has_enable_if_template) {
+				const vector<string> condition = SplitTemplateArguments(argument_text); PA19IntegralValue enabled;
+				const string condition_context = definition.owner.empty() ? context : definition.owner;
+				if(!condition.empty() && EvaluateIntegralText(condition[0], condition_context, local, &enabled) && enabled.known) { if(PA19Raw(enabled) == 0) return false; continue; }
+			}
+			string formed = ResolveAlias(NormalizeTypeArgument(ReplaceIdentifiers(RewriteText(detail.non_type_type, context, local, 0), local)), context);
+			if(formed.empty()) return false;
+		}
 		size_t actual = 0;
 		bool has_ellipsis = false;
 		for(size_t parameter = 0; parameter < parameters->children.size(); ++parameter) {
@@ -640,12 +653,34 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 				continue;
 			}
 			if(actual >= actual_types.size()) {
-				if(ChildOfKindLocal(node, "default-argument")) continue;
+				if(ChildOfKindLocal(node, "default-argument")) {
+					const string default_context = definition.owner.empty() ? context : definition.owner;
+					string declared = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(ParameterTypeSpelling(node), local));
+				string default_base, default_arguments; size_t default_open = declared.find('<'), default_begin = 0, default_close = string::npos;
+				const bool default_enable_if = default_open != string::npos && TemplateBase(declared, default_open, &default_begin, &default_base) && TemplateRange(declared, default_open, &default_arguments, &default_close) &&
+					(LastComponent(default_base) == "enable_if" || LastComponent(default_base) == "enable_if_t") &&
+					(default_close + 1 == declared.size() || (default_close + 7 == declared.size() && declared.compare(default_close + 1, 6, "::type") == 0));
+					if(default_enable_if) {
+						const vector<string> default_parts = SplitTemplateArguments(default_arguments); PA19IntegralValue enabled;
+						if(!default_parts.empty() && EvaluateIntegralText(default_parts[0], default_context, local, &enabled) && enabled.known && PA19Raw(enabled) == 0) return false;
+					}
+					string formed;
+					try {
+						formed = RewriteText(ParameterTypeSpelling(node), default_context, local, 0);
+					} catch(const PA18SubstitutionFailure&) {
+						return false;
+					}
+					formed = NormalizeTypeArgument(ReplaceIdentifiers(formed, local));
+					if(formed.empty()) return false;
+					continue;
+				}
 				return false;
 			}
 			string expected = RewriteText(ParameterTypeSpelling(node), context, local, 0);
 			expected = NormalizeTypeArgument(ReplaceIdentifiers(expected, local));
-			if(!FunctionArgumentViable(expected, actual_types[actual], context)) return false;
+				if(!FunctionArgumentViable(expected, actual_types[actual], context)) {
+					return false;
+				}
 			++actual;
 		}
 		return has_ellipsis || actual == actual_types.size();
@@ -759,6 +794,30 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 		if(expression.size() > 1 && (expression[0] == '*' || expression[0] == '&')) {
 			const string inner = ExpressionTypeSpelling(expression.substr(1), context, substitutions);
 			if(!inner.empty()) {
+				if(expression[0] == '&') {
+					string object = NormalizeTypeArgument(ResolveAlias(inner, context));
+					while(object.compare(0, 6, "const ") == 0)
+						object = NormalizeTypeArgument(object.substr(6));
+					while(object.compare(0, 9, "volatile ") == 0)
+						object = NormalizeTypeArgument(object.substr(9));
+					while(object.size() >= 2 && object.compare(object.size() - 2, 2, "&&") == 0)
+						object = NormalizeTypeArgument(object.substr(0, object.size() - 2));
+					while(!object.empty() && object[object.size() - 1] == '&')
+						object = NormalizeTypeArgument(object.substr(0, object.size() - 1));
+					const CPPGMAstNodePtr declaration = FindClassDeclaration(object, context);
+					if(declaration) {
+						for(size_t child = 0; child < declaration->children.size(); ++child) {
+							CPPGMAstNodePtr member = declaration->children[child];
+							if(member && member->kind == "template-declaration" &&
+								member->children.size() > 1) member = member->children[1];
+							if(member && (member->kind == "function-definition" ||
+								member->kind == "function-declaration") &&
+								DeclarationName(member) == "operator&") {
+								return string();
+							}
+						}
+					}
+				}
 				if(expression[0] == '*') {
 					if(inner[inner.size() - 1] == '*')
 						return CanonicalSpelling(inner.substr(0, inner.size() - 1) + "&");
@@ -870,6 +929,33 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 			return !result->empty();
 		}
 		string normalized = stripped;
+		if(normalized.size() > 1 && normalized[0] == '&' && normalized[1] != '&') {
+			const string inner = ExpressionTypeSpelling(normalized.substr(1),
+				context, substitutions);
+			if(inner.empty()) return false;
+			string object = NormalizeTypeArgument(ResolveAlias(inner, context));
+			while(object.compare(0, 6, "const ") == 0)
+				object = NormalizeTypeArgument(object.substr(6));
+			while(object.compare(0, 9, "volatile ") == 0)
+				object = NormalizeTypeArgument(object.substr(9));
+			while(object.size() >= 2 && object.compare(object.size() - 2, 2, "&&") == 0)
+				object = NormalizeTypeArgument(object.substr(0, object.size() - 2));
+			while(!object.empty() && object[object.size() - 1] == '&')
+				object = NormalizeTypeArgument(object.substr(0, object.size() - 1));
+			const CPPGMAstNodePtr declaration = FindClassDeclaration(object, context);
+			if(declaration) for(size_t child = 0; child < declaration->children.size(); ++child) {
+				CPPGMAstNodePtr member = declaration->children[child];
+				if(member && member->kind == "template-declaration" && member->children.size() > 1)
+					member = member->children[1];
+				if(member && (member->kind == "function-definition" ||
+					member->kind == "function-declaration") &&
+					DeclarationName(member) == "operator&") {
+					return false;
+				}
+			}
+			*result = NormalizeTypeArgument(inner + "*");
+			return !result->empty();
+		}
 		if(normalized.compare(0, 6, "delete") == 0 && normalized.size() > 6 &&
 			normalized[6] != ' ')
 			normalized.insert(6, " ");
@@ -881,6 +967,16 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 			return true;
 		}
 		if(normalized.compare(0, 7, "delete ") == 0 || normalized == "delete") {
+			*result = "void";
+			return true;
+		}
+		if(normalized.compare(0, 6, "(void)") == 0 && normalized.size() > 6) {
+			const string operand = normalized.substr(6);
+			string operand_callee, operand_arguments, operand_result;
+			if(SplitTextCall(operand, &operand_callee, &operand_arguments)) {
+				if(!FunctionCallResultType(operand, context, substitutions, &operand_result))
+					return false;
+			} else if(ExpressionTypeSpelling(operand, context, substitutions).empty()) return false;
 			*result = "void";
 			return true;
 		}

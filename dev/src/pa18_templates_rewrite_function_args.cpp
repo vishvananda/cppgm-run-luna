@@ -132,16 +132,18 @@ bool PA18TemplateExpander::InferFunctionTypeArguments(const TemplateDefinition& 
 	const CPPGMAstNodePtr parameters = DescendantOfKind(declarator, "parameter-clause");
 	if(!parameters) return false;
 	size_t parameter_count = 0, required_parameters = 0;
-	bool has_parameter_pack = false;
+	bool has_parameter_pack = false, has_ellipsis = false;
 	for(size_t i = 0; i < parameters->children.size(); ++i) {
 		const CPPGMAstNodePtr parameter = parameters->children[i];
-		if(!parameter || parameter->kind != "parameter-declaration") continue;
+		if(!parameter) continue;
+		if(parameter->kind == "ellipsis") { has_ellipsis = true; continue; }
+		if(parameter->kind != "parameter-declaration") continue;
 		++parameter_count;
 		if(IsFunctionParameterPack(parameter)) has_parameter_pack = true;
 		else if(!FunctionParameterHasDefault(definition, i)) ++required_parameters;
 	}
 	if(actual_types.size() < required_parameters ||
-		(!has_parameter_pack && actual_types.size() > parameter_count)) return false;
+		(!has_parameter_pack && !has_ellipsis && actual_types.size() > parameter_count)) return false;
 	map<string, string> inferred;
 	set<string> parameter_names, pack_parameter_names;
 	for(size_t i = 0; i < definition.parameters.size(); ++i) {

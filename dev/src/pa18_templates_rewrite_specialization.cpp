@@ -522,8 +522,9 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 				continue;
 			}
 			string evaluated;
-			if(!const_cast<PA18TemplateExpander*>(this)->EvaluateDecltypeExpression(
-				pattern.substr(9, pattern.size() - 10), context, local, &evaluated)) return false;
+			const bool evaluated_ok = const_cast<PA18TemplateExpander*>(this)->EvaluateDecltypeExpression(
+				pattern.substr(9, pattern.size() - 10), context, local, &evaluated);
+			if(!evaluated_ok) return false;
 			pattern = NormalizeTypeArgument(evaluated);
 		}
 		bool template_parameter = false;

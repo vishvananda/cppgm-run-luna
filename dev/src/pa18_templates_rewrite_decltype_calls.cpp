@@ -60,16 +60,22 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 		const bool generated_callee = expression.find("__ov") != string::npos ||
 			expression.find("__inst_") != string::npos;
 		const string call_key = "call|" + expression + "@" + context;
-		if(!generated_callee && !active_function_results_.insert(call_key).second) return false;
+		if(!generated_callee && !active_function_results_.insert(call_key).second) {
+			return false;
+		}
 		ActiveFunctionResultScope call_scope(this, generated_callee ? string() : call_key);
 		// Expand a trailing function-parameter pack before splitting the
 		// unevaluated call's arguments.  Otherwise `declval<_Args>()...` is
 		// treated as one dependent operand and a valid return-type probe fails.
 		expression = ExpandPackCallText(expression, active_pack_substitutions_);
 		string callee, argument_text;
-		if(!SplitTextCall(expression, &callee, &argument_text)) return false;
+		if(!SplitTextCall(expression, &callee, &argument_text)) {
+			return false;
+		}
 		callee = StripTextParentheses(callee);
-		if(callee.empty()) return false;
+		if(callee.empty()) {
+			return false;
+		}
 		// The declval helper is intentionally declaration-only.  Its only
 		// semantic effect in an unevaluated operand is to transport the requested
 		// type as an xvalue (with the usual reference collapsing), so do not make
@@ -127,6 +133,10 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 		string qualified_member_name;
 		string qualified_owner;
 		bool qualified_member_call = false;
+		vector<const TemplateDefinition*> dot_member_candidates;
+		string dot_member_name;
+		string dot_member_owner;
+		bool dot_member_call = false;
 		const size_t qualified_separator = TopLevelScopeSeparator(callee);
 		if(qualified_separator != string::npos) {
 			const string owner_spelling = callee.substr(0, qualified_separator);
@@ -155,13 +165,25 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 			qualified_member_name.find('<') : string::npos;
 		const size_t template_open = qualified_member_call ? member_template_open :
 			callee.find('<');
+		size_t final_member_separator = callee.rfind('.');
+		const size_t final_arrow = callee.rfind("->");
+		if(final_arrow != string::npos && final_arrow > final_member_separator)
+			final_member_separator = final_arrow;
+		const bool explicit_member_template = final_member_separator != string::npos &&
+			callee.find('<', final_member_separator + 1) != string::npos;
+		const bool has_member_operator = (callee.find('.') != string::npos ||
+			callee.find("->") != string::npos) && callee.find(".~") == string::npos &&
+			!explicit_member_template;
 	const bool callee_is_static_cast = callee.compare(0, 12, "static_cast<") == 0;
-		if(template_open != string::npos && !callee_is_static_cast) {
+		if(template_open != string::npos && !callee_is_static_cast &&
+			!has_member_operator) {
 			string base_arguments, base;
 			size_t template_close = string::npos, begin = 0;
 			const string& template_source = qualified_member_call ? qualified_member_name : callee;
 			if(!TemplateBase(template_source, template_open, &begin, &base) ||
-				!TemplateRange(template_source, template_open, &base_arguments, &template_close)) return false;
+				!TemplateRange(template_source, template_open, &base_arguments, &template_close)) {
+				return false;
+			}
 				explicit_base_name = base;
 				explicit_definition = FindExplicitFunctionTemplate(base,
 					qualified_member_call && !qualified_owner.empty() ? qualified_owner :
@@ -249,7 +271,9 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 						one[pack_name] = (*pack_values)[element];
 						const string actual = ExpressionTypeSpelling(actual_expression,
 							function_context, one);
-						if(actual.empty()) return false;
+							if(actual.empty()) {
+								return false;
+							}
 						actual_types.push_back(actual);
 					}
 					continue;
@@ -257,8 +281,95 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 			}
 			const string actual = ExpressionTypeSpelling(actual_expression, function_context,
 				substitutions);
-			if(actual.empty()) return false;
+			if(actual.empty()) {
+				return false;
+			}
 			actual_types.push_back(actual);
+		}
+		// A member call in an unevaluated operand is retained as `object.member` in
+		// the compact PA10 spelling.  Resolve the object through typed expression
+		// lookup, then use the concrete class owner for member-template candidates;
+		// treating the whole spelling as an unqualified function name otherwise
+		// finds only an unrelated `declval` helper.
+		int member_angle = 0, member_parentheses = 0, member_brackets = 0;
+		size_t dot_separator = string::npos, dot_separator_size = 0;
+		for(size_t position = 0; position < callee.size(); ++position) {
+			const char ch = callee[position];
+			if(ch == '(') ++member_parentheses;
+			else if(ch == ')' && member_parentheses > 0) --member_parentheses;
+			else if(ch == '[') ++member_brackets;
+			else if(ch == ']' && member_brackets > 0) --member_brackets;
+			else if(ch == '<' && IsTemplateAngleOpen(callee, position)) ++member_angle;
+			else if(ch == '>' && member_angle > 0 && IsTemplateAngleClose(callee, position)) --member_angle;
+			if(member_angle != 0 || member_parentheses != 0 || member_brackets != 0) continue;
+			if(ch == '.') {
+				dot_separator = position;
+				dot_separator_size = 1;
+			} else if(callee.compare(position, 2, "->") == 0) {
+				dot_separator = position;
+				dot_separator_size = 2;
+			}
+		}
+		// Nested template closers can leave the compact angle-depth scan one level
+		// deep at the member separator (`declval<conditional_t<...>>().require` is
+		// the common case).  The syntax still unambiguously identifies the final
+		// dot/arrow as member access, so recover it when the balanced scan missed it.
+		if(dot_separator == string::npos && has_member_operator) {
+			const size_t fallback_arrow = callee.rfind("->");
+			const size_t fallback_dot = callee.rfind('.');
+			if(fallback_arrow != string::npos && fallback_arrow > fallback_dot) {
+				dot_separator = fallback_arrow;
+				dot_separator_size = 2;
+			} else if(fallback_dot != string::npos) {
+				dot_separator = fallback_dot;
+				dot_separator_size = 1;
+			}
+		}
+		if(!explicit_member_template && dot_separator != string::npos &&
+			dot_separator + dot_separator_size < callee.size()) {
+			const string object_expression = Trim(callee.substr(0, dot_separator));
+			string member_spelling = Trim(callee.substr(dot_separator + dot_separator_size));
+			const size_t member_open = member_spelling.find('<');
+			if(member_open != string::npos) member_spelling.erase(member_open);
+			string object_type = ExpressionTypeSpelling(object_expression, function_context,
+				substitutions);
+			const bool complex_member_object = object_expression.find('<') != string::npos ||
+				object_expression.find('(') != string::npos || object_expression.find("::") != string::npos ||
+				HasUnresolvedTemplateParameter(object_type, function_context, substitutions);
+			object_type = FunctionArgumentObjectType(object_type, function_context);
+			if(complex_member_object && !object_type.empty() && !member_spelling.empty() && member_spelling[0] != '~') {
+				dot_member_owner = object_type;
+				dot_member_name = member_spelling;
+				dot_member_candidates = FindFunctionDefinitions(dot_member_name, dot_member_owner);
+				// FindFunctionDefinitions intentionally has a short-name fallback for
+				// source/generated owners.  Once the object type is concrete, prefer
+				// candidates owned by that class (or by its recorded source primary) so
+				// an unrelated same-named member cannot win before inherited lookup.
+				vector<const TemplateDefinition*> exact_candidates;
+				for(size_t candidate = 0; candidate < dot_member_candidates.size(); ++candidate) {
+					const TemplateDefinition* definition = dot_member_candidates[candidate];
+					if(!definition) continue;
+					bool exact = definition->owner == dot_member_owner ||
+						LastComponent(definition->owner) == LastComponent(dot_member_owner);
+					map<string, string>::const_iterator source_base = specialization_bases_.find(
+						LastComponent(dot_member_owner));
+					if(source_base != specialization_bases_.end())
+						exact = exact || definition->owner == source_base->second ||
+							LastComponent(definition->owner) == LastComponent(source_base->second);
+					if(exact) exact_candidates.push_back(definition);
+				}
+				if(!exact_candidates.empty()) dot_member_candidates.swap(exact_candidates);
+				dot_member_call = true;
+			}
+		}
+		// The `<...>` in `declval<T>().member(...)` belongs to the object
+		// expression, not to the member callee.  Discard the earlier unqualified
+		// explicit-template interpretation once dot lookup has identified the
+		// member call.
+		if(dot_member_call) {
+			explicit_definition = 0;
+				explicit_arguments.clear();
+				explicit_base_name.clear();
 		}
 		if(callee[callee.size() - 1] == ')' && ResolveCallableTemporaryCallResult(callee,
 			function_context, context, substitutions, actual_types, result,
@@ -304,19 +415,62 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 			if(candidates.empty()) candidates.push_back(explicit_definition);
 		}
 		else if(qualified_member_call) candidates = qualified_candidates;
+		else if(dot_member_call) candidates = dot_member_candidates;
 		else candidates = FindFunctionDefinitions(callee, function_context);
-		if(generated_callee && GeneratedFunctionCallResultType(callee, function_context,
+		// Ordinary (non-template) members are kept in the typed signature index,
+		// not in TemplateDefinition lookup.  A dependent `decltype` probe can
+		// still call one after its object type has become concrete, so consult that
+		// index when member-template lookup has no candidate.
+		if(candidates.empty() && dot_member_call) {
+			const FunctionSignature* ordinary = FindFunctionSignature(dot_member_name,
+				dot_member_owner);
+			if(ordinary && ordinary->parameters && ordinary->result_specifiers) {
+				size_t actual = 0;
+				bool viable = true, ellipsis = false;
+				for(size_t parameter = 0; parameter < ordinary->parameters->children.size();
+					++parameter) {
+					const CPPGMAstNodePtr node = ordinary->parameters->children[parameter];
+					if(!node) continue;
+					if(node->kind == "ellipsis") {
+						ellipsis = true;
+						continue;
+					}
+					if(node->kind != "parameter-declaration") continue;
+					if(actual >= actual_types.size()) {
+						if(!ChildOfKindLocal(node, "default-argument")) viable = false;
+						continue;
+					}
+					if(!FunctionArgumentViable(ParameterTypeSpelling(node),
+						actual_types[actual++], function_context)) viable = false;
+				}
+				if(actual != actual_types.size() && !ellipsis) viable = false;
+				if(viable) {
+					string ordinary_result = NodeTypeSpelling(ordinary->result_specifiers) +
+						ReturnDeclaratorSuffix(ordinary->declarator);
+					ordinary_result = NormalizeTypeArgument(ResolveAlias(RewriteText(
+						ordinary_result, function_context, substitutions, 0), function_context));
+					if(!ordinary_result.empty()) {
+						*result = ordinary_result;
+						return true;
+					}
+				}
+			}
+		}
+		if(generated_callee && GeneratedFunctionCallResultType(callee, context,
 			substitutions, actual_types, result)) return true;
 		if(candidates.empty()) {
 			set<string> active;
 			map<const TemplateDefinition*, string> concrete_owners;
-			if(qualified_member_call && !qualified_owner.empty())
-				CollectInheritedMemberTemplates(qualified_owner, qualified_member_name,
-					substitutions, function_context, &candidates, &active, &concrete_owners);
-			else CollectInheritedMemberTemplates(context, callee, substitutions,
+				if(qualified_member_call && !qualified_owner.empty())
+					CollectInheritedMemberTemplates(qualified_owner, qualified_member_name,
+						substitutions, function_context, &candidates, &active, &concrete_owners);
+				else if(dot_member_call && !dot_member_owner.empty())
+					CollectInheritedMemberTemplates(dot_member_owner, dot_member_name,
+						substitutions, function_context, &candidates, &active, &concrete_owners);
+				else CollectInheritedMemberTemplates(context, callee, substitutions,
 				function_context, &candidates, &active, &concrete_owners);
 		}
-		if(candidates.empty() && GeneratedFunctionCallResultType(callee, function_context,
+		if(candidates.empty() && GeneratedFunctionCallResultType(callee, context,
 			substitutions, actual_types, result)) return true;
 		string selected_result;
 		bool selected_ellipsis = true;
@@ -329,31 +483,31 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 			const bool complete = explicit_definition &&
 				explicit_arguments.size() == definition.parameters.size();
 			if(complete) arguments = explicit_arguments;
-			else if(!InferFunctionTypeArguments(definition, actual_types, &arguments,
+				else if(!InferFunctionTypeArguments(definition, actual_types, &arguments,
 					candidate_substitutions, function_context, explicit_definition ? &explicit_arguments : 0)) {
-				continue;
-			}
+					continue;
+				}
 			try {
 				if(!FunctionArgumentsViable(definition, arguments, actual_types,
 					function_context, &candidate_substitutions,
 					explicit_definition ? &explicit_arguments : 0)) {
 						continue;
-				}
+					}
 				if(HasAbstractFunctionParameter(definition, arguments,
 					function_context, candidate_substitutions)) {
 					continue;
 				}
-		} catch(const PA18SubstitutionFailure&) {
-				continue;
-			}
+				} catch(const PA18SubstitutionFailure&) {
+					continue;
+				}
 			string candidate_result;
 			try {
 				candidate_result = FunctionResultType(definition, arguments,
 					function_context, &candidate_substitutions,
 					explicit_definition ? &explicit_arguments : 0);
-			} catch(const PA18SubstitutionFailure&) {
-				continue;
-			}
+				} catch(const PA18SubstitutionFailure&) {
+					continue;
+				}
 			if(candidate_result.empty()) continue;
 			bool candidate_ellipsis = false;
 			const CPPGMAstNodePtr candidate_clause = DescendantOfKind(
@@ -379,11 +533,11 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 			for(map<string, vector<FunctionSignature> >::const_iterator overload =
 				function_overloads_.begin(); overload != function_overloads_.end(); ++overload) {
 				const string suffix = "::" + callee;
-				if(overload->first != callee &&
-					(overload->first.size() <= suffix.size() ||
-						overload->first.compare(overload->first.size() - suffix.size(),
-							suffix.size(), suffix) != 0)) continue;
-				for(size_t candidate = 0; candidate < overload->second.size(); ++candidate) {
+					if(overload->first != callee &&
+						(overload->first.size() <= suffix.size() ||
+							overload->first.compare(overload->first.size() - suffix.size(),
+								suffix.size(), suffix) != 0)) continue;
+					for(size_t candidate = 0; candidate < overload->second.size(); ++candidate) {
 					const FunctionSignature& signature = overload->second[candidate];
 					const CPPGMAstNodePtr parameters = signature.parameters;
 					bool ellipsis = false;
@@ -393,8 +547,8 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 						if(item && item->kind == "ellipsis") {
 							ellipsis = true;
 							break;
+							}
 						}
-					}
 					if(ellipsis && signature.result_specifiers)
 						return (*result = NodeTypeSpelling(signature.result_specifiers) +
 							ReturnDeclaratorSuffix(signature.declarator), true);

@@ -569,7 +569,26 @@ vector<string> SplitTemplateArguments(const string& raw)
 		else if(ch == ')' && parentheses > 0) --parentheses;
 		if(ch == '[') ++brackets;
 		else if(ch == ']' && brackets > 0) --brackets;
-		if(ch == '<' && IsTemplateAngleOpen(raw, i)) {
+		bool nested_template_open = ch == '<' && IsTemplateAngleOpen(raw, i);
+		if(nested_template_open) {
+			// TemplateRange can hand us an argument list whose final `>` was
+			// consumed as the enclosing delimiter.  In a dependent comparison
+			// such as `Count < 2, int`, the compact spelling therefore contains an
+			// apparent nested `<` but no matching close.  Do not let that operator
+			// hide the comma separating the enclosing template arguments.
+			int candidate_depth = 1;
+			bool has_close = false;
+			for(size_t scan = i + 1; scan < raw.size(); ++scan) {
+				if(raw[scan] == '<' && IsTemplateAngleOpen(raw, scan)) ++candidate_depth;
+				else if(raw[scan] == '>' && candidate_depth > 0 &&
+					IsTemplateAngleClose(raw, scan) && --candidate_depth == 0) {
+					has_close = true;
+					break;
+				}
+			}
+			nested_template_open = has_close;
+		}
+		if(nested_template_open) {
 			++angle; angle_parentheses.push_back(parentheses);
 		} else if(ch == '>' && angle > 0 && IsTemplateAngleClose(raw, i)) {
 			const int opener_parentheses = angle_parentheses.empty() ? 0 : angle_parentheses.back();

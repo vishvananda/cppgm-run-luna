@@ -153,7 +153,15 @@
 		// treat the end of that spelling as the template range so PA18 can
 		// materialize the declaration normally.
 		if(depth == 1 && open < raw.size()) {
-			if(arguments) *arguments = raw.substr(open + 1);
+			// If the parser compacted a relational `<` inside the argument list
+			// as a nested template opener, the only closing `>` left here is the
+			// enclosing delimiter.  Exclude it from the argument text before the
+			// comma splitter sees the dependent expression (`N<2, int`).  A truly
+			// truncated range still has no final delimiter and keeps the old path.
+			const bool has_enclosing_close = raw.size() > open + 1 &&
+				raw[raw.size() - 1] == '>';
+			if(arguments) *arguments = raw.substr(open + 1,
+				raw.size() - open - 1 - (has_enclosing_close ? 1 : 0));
 			if(close_out) *close_out = raw.size() - 1;
 			return true;
 		}

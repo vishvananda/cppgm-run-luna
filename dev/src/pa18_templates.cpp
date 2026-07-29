@@ -1,6 +1,6 @@
+#include <functional>
 #include "pa18_templates_collection.h"
 #include "pa18_templates_rewrite.h"
-#include <functional>
 
 using namespace pa18_templates_internal;
 
@@ -296,7 +296,7 @@ bool PA18TemplateExpander::EvaluateExpandedSizeofText(const string& raw,
 			call_type, context, substitutions, 0))), context);
 			size = EstimateTypeSize(call_type, context);
 		}
-		if(size) {
+			if(size) {
 			const string replacement = IntegralValueSpelling(PA19IntegralValue::Unsigned(
 				static_cast<unsigned long long>(size), "unsigned long", 64));
 			expanded_size.replace(search, close - search + 1, replacement);

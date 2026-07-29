@@ -17,7 +17,6 @@ bool ContainsIdentifierToken(const string& text, const string& identifier)
 }
 
 } // namespace
-
 string PA18TemplateExpander::RewriteText(string raw, const string& context,
 	const map<string, string>& substitutions, bool* template_replaced,
 	bool resolve_alias, bool resolve_member, bool defer_class_definition)
@@ -537,7 +536,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 					}
 				}
 			}
-				if(!definition) continue;
+			if(!definition) continue;
 			vector<string> raw_template_args = SplitTemplateArguments(arguments_text);
 				// A pack expansion inside a template-id can leave a synthetic
 				// trailing empty component (`F<T, Pack...>` with an empty pack).
@@ -1206,7 +1205,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 						}
 					}
 				}
-				if(instantiation_candidates.empty()) instantiation_candidates.push_back(definition);
+			if(instantiation_candidates.empty()) instantiation_candidates.push_back(definition);
 			const ConcreteOwnerContext previous_concrete_owner = active_concrete_owner_;
 			if(!concrete_owner_for_instantiation.empty())
 				SetActiveConcreteOwner(concrete_owner_for_instantiation, context);

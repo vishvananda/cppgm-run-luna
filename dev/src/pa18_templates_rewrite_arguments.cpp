@@ -164,13 +164,13 @@ bool PA18TemplateExpander::ValidateTemplateDefaults(
 			}
 			if(argument >= arguments.size()) continue;
 			if(default_index < defaulted.size() && defaulted[default_index]) {
-					// Keep a function-pack operand intact while checking a defaulted
+				// Keep a function-pack operand intact while checking a defaulted
 					// enable-if.  The scalar binding stored in `local` is only the
 					// first pack element; replacing `Args` in `Args&&...` here would
 					// turn the whole condition into `first&&&...` and discard the
 					// typed pack before the evaluator can expand it.
-					string declared = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(
-						item.non_type_type, local));
+				string declared = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(
+					item.non_type_type, local));
 				size_t open = declared.find('<');
 				const bool logical_non_type = !item.type &&
 					(declared.find("&&") != string::npos || declared.find("||") != string::npos);
@@ -200,7 +200,7 @@ bool PA18TemplateExpander::ValidateTemplateDefaults(
 			++argument;
 			++default_index;
 		}
-	} catch(const PA18SubstitutionFailure&) {
+		} catch(const PA18SubstitutionFailure&) {
 		active_pack_substitutions_ = previous_packs;
 		return false;
 	} catch(const logic_error&) {
@@ -355,7 +355,7 @@ void PA18TemplateExpander::ResolveTemplateArguments(const TemplateDefinition& de
 	map<string, string>* substitutions,
 	map<string, PA19IntegralValue>* integral_substitutions,
 	map<string, vector<string> >* pack_substitutions,
-	const map<string, vector<string> >* pack_hints)
+		const map<string, vector<string> >* pack_hints)
 {
 	size_t raw_index = 0;
 	for(size_t i = 0; i < definition.parameters.size(); ++i) {
@@ -396,7 +396,7 @@ void PA18TemplateExpander::ResolveTemplateArguments(const TemplateDefinition& de
 					if(!PreservesMaterializedTypeName(argument, *substitutions, context)) argument = RewriteText(argument, context, *substitutions, 0);
 					argument = NormalizeTypeArgument(argument);
 					if(!function_pointer_alias.empty()) argument = function_pointer_alias;
-					argument = QualifyTypeArgument(argument, context, definition.owner);
+				argument = QualifyTypeArgument(argument, context, definition.owner);
 					if(!function_pointer_alias.empty()) argument = function_pointer_alias;
 				} else {
 					try {

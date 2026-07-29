@@ -52,10 +52,6 @@ bool PA18TemplateExpander::GeneratedFunctionCallResultType(
 			const CPPGMAstNodePtr declarator = FunctionDeclarator(declaration);
 			const CPPGMAstNodePtr clause = DescendantOfKind(declarator, "parameter-clause");
 			if(!declarator || !clause) continue;
-			// Generated free functions are stored by their lexical namespace, but
-			// their transformed type spellings are later queried from the caller's
-			// scope.  Replay the signature in the declaration owner so unqualified
-			// result types such as `fusion::map<...>` retain their namespace lookup.
 			const string declaration_context = owner->first.empty() ?
 				function_context : owner->first;
 			bool has_ellipsis = false;
@@ -80,8 +76,8 @@ bool PA18TemplateExpander::GeneratedFunctionCallResultType(
 				}
 				++parameter_count;
 			}
-		if(!viable || (!has_ellipsis && parameter_count != actual_types.size()) ||
-			(has_ellipsis && parameter_count > actual_types.size())) {
+			if(!viable || (!has_ellipsis && parameter_count != actual_types.size()) ||
+				(has_ellipsis && parameter_count > actual_types.size())) {
 			// A generated non-ellipsis specialization can be discarded by
 			// substitution (notably when its parameter would contain an abstract
 			// array).  The source overload set may still provide a viable ellipsis
@@ -144,7 +140,6 @@ bool PA18TemplateExpander::GeneratedFunctionCallResultType(
 	*result = generated_ellipsis_result;
 	return true;
 }
-
 string PA18TemplateExpander::FunctionArgumentObjectType(string raw,
 	const string& context) const
 {
@@ -180,7 +175,6 @@ string PA18TemplateExpander::FunctionArgumentObjectType(string raw,
 		raw = CanonicalSpelling(raw.substr(0, raw.size() - 9));
 	return raw;
 }
-
 bool PA18TemplateExpander::HasClassConversion(const string& expected,
 	const string& actual, const string& context) const
 {
@@ -236,7 +230,6 @@ bool PA18TemplateExpander::HasClassConversion(const string& expected,
 	};
 	return visit(declaration);
 }
-
 bool PA18TemplateExpander::FunctionArgumentViable(const string& parameter,
 	const string& actual, const string& context) const
 {
@@ -296,7 +289,6 @@ bool PA18TemplateExpander::FunctionArgumentViable(const string& parameter,
 		return HasClassConversion(expected, received, context);
 	return true;
 }
-
 string PA18TemplateExpander::FunctionLookupContext(const string& context) const
 {
 	string generated_owner = active_instantiation_name_.empty() ?
@@ -306,7 +298,6 @@ string PA18TemplateExpander::FunctionLookupContext(const string& context) const
 	return generated_base == specialization_bases_.end() || generated_base->second.empty() ?
 		context : generated_base->second;
 }
-
 bool PA18TemplateExpander::EvaluateNewExpression(const string& expression,
 	const string& context, const map<string, string>& substitutions, string* result)
 {
@@ -1205,6 +1196,34 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 	const TemplateDefinition* selected_owner = SelectClassTemplateDefinition(
 		owner_definition, owner_arguments, context);
 	if(!selected_owner) return false;
+	if(!nested_template_id && !nested_name.empty() &&
+		owner_arguments.size() == selected_owner->parameters.size() &&
+		(LastComponent(owner_base) == "conditional" ||
+			LastComponent(owner_base) == "enable_if" ||
+			LastComponent(owner_base) == "enable_if_t")) {
+		map<string, string> direct_local = substitutions;
+		PrepareTemplateMemberSubstitutions(*selected_owner, owner_arguments, context,
+			&direct_local);
+		string direct_member;
+		if(FindDirectTemplateMemberType(*selected_owner, owner_arguments, nested_name,
+			context, &direct_local, &direct_member) && !direct_member.empty() &&
+			direct_member.find('&') == string::npos) {
+			direct_member = NormalizeTypeArgument(RewriteText(direct_member, context,
+			direct_local, 0, false, false));
+		size_t replacement_begin = begin;
+		while(replacement_begin > 0 && isspace(static_cast<unsigned char>(
+			(*raw)[replacement_begin - 1]))) --replacement_begin;
+		if(replacement_begin >= 8 && raw->compare(replacement_begin - 8, 8,
+			"typename") == 0 && (replacement_begin == 8 ||
+			!IsIdentifierCharacter((*raw)[replacement_begin - 9])))
+			replacement_begin -= 8;
+		raw->replace(replacement_begin, concrete_member_end - replacement_begin,
+			direct_member);
+		if(template_replaced) *template_replaced = true;
+		if(search) *search = replacement_begin + direct_member.size();
+		return true;
+		}
+	}
 	string owner_local_name;
 	for(map<string, vector<string> >::const_iterator existing =
 		specialization_arguments_.begin(); existing != specialization_arguments_.end() &&

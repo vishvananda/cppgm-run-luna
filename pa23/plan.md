@@ -330,3 +330,61 @@ the next substantial group, preserving candidate-local substitution failure and
 no-eager body instantiation.  Revisit the reentrant static-query timeout pair
 only with a stable semantic query identity, then rerun the complete PA23 report
 and the through-PA22 gate.
+
+## Checkpoint 3 result — 2026-07-28
+
+### Remaining Work Map
+
+The current report has **112 failures** (including the two reentrant
+static-query timeouts), down from the turn-start **129 failures**.  The shared
+remaining behaviors are qualified owner/member replay, candidate-local SFINAE
+and deferred queries, function deduction/conversion composition, typed alias
+and non-type value preservation, and final specialization/materialization
+metadata.  The complete fixture-level map remains in the first checkpoint;
+this increment completed the stable SFINAE/type-substitution sub-group.
+
+### Completed Scope
+
+The compiler now preserves typed arguments while forming dependent aliases and
+`enable_if` probes, distinguishes relational `<` from nested template angles in
+dependent argument lists, validates candidate-local `enable_if` and default
+parameter substitution, and replays complex dependent member calls through
+their concrete owner.  The focused validation passed 6/8 fixtures:
+
+`general/300-variable-template-default-enable-if-viability.t`,
+`general/400-dependent-less-than-enable-if-alias-type-id.t`,
+`general/400-dependent-less-than-enable-if-nontype-parameter.t`,
+`general/500-concrete-enable-if-nontype-parameter-type-sfinae.t`,
+`spec/300-trailing-return-expression-sfinae-default-param.t`, and
+`spec/500-standard-enable-if-member-use-scope.t`.
+
+The two dependent-typename LowIR fixtures remain unchanged baseline failures
+and are explicitly deferred to the next checkpoint.  The required
+through-PA22 report is **2100/2100**, the full PA23 report is **284/396** (up
+from **267/396**), and the PA23 file audit passes.
+
+### Remaining Work Map
+
+- **Dependent-typename candidate replay:**
+  `general/500-dependent-typename-enable-if-candidate.t` and
+  `general/500-dependent-typename-member-enable-if-return.t` still select or
+  materialize the wrong dependent `enable_if` candidate.
+- **Reentrant/deferred SFINAE:** the two timeout fixtures and the remaining
+  detector, deleted-candidate, cached-query, and no-eager-instantiation cases
+  still need stable query identity and scoped substitution state.
+- **Qualified owner/member replay:** dependent aliases, inherited/using member
+  templates, nested template ids, and current-specialization owner propagation
+  remain the largest exit-status group.
+- **Deduction and typed values:** forwarding/conversion composition,
+  function-type partial ordering, variable templates, `sizeof`, pointer and
+  reference non-type arguments, defaults, and pack-kind validation remain
+  unresolved.
+- **LowIR/materialization:** explicit/extern specialization replay,
+  constructors, member emission, function pointers, and declaration metadata
+  still account for the remaining comparison failures.
+
+### Next Checkpoint Group
+
+Resolve the two dependent-typename overload/materialization cases first, then
+take the broader non-timeout deferred-SFINAE group.  Validate the focused pair,
+the full PA23 report, the through-PA22 gate, and the file audit.
