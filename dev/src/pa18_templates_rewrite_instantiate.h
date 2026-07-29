@@ -1064,7 +1064,8 @@
 			// materializes the same empty specialization.
 			if(args.empty()) local_name += "_";
 			for(size_t i = 0; i < args.size(); ++i) {
-				local_name += i == 0 ? "_" : "__";
+				const bool previous_nested_specialization = i > 0 && specialization_bases_.find(LastComponent(args[i - 1])) != specialization_bases_.end();
+				local_name += i == 0 ? "_" : (previous_nested_specialization && TypeSuffix(args[i]) == "void" ? "___" : "__");
 				if(i < definition.parameters.size() && !definition.parameters[i].type) {
 					string declared = RewriteText(definition.parameters[i].non_type_type,
 						context, substitutions, 0);
@@ -1136,6 +1137,7 @@
 		// `allocator_traits<simple_allocator<int>>::rebind_traits<double>`.
 		if(definition.alias_template && !concrete_owner.empty())
 			local_name += "__" + TypeSuffix(concrete_owner);
+		if(definition.variable_template && definition.member_template && !concrete_owner.empty()) local_name += "_";
 		return local_name;
 	}
 	string Instantiate(const TemplateDefinition& definition, const vector<string>& raw_args,
@@ -1172,8 +1174,7 @@
 			const map<string, vector<string> >& pack_substitutions);
 	void RegisterGeneratedSpecialization(const TemplateDefinition& definition,
 		const vector<string>& metadata_args, const string& local_name);
-	void AddConcreteOwnerSubstitutions(const string& concrete_owner,
-		const string& context, map<string, string>* substitutions);
+	void AddConcreteOwnerSubstitutions(const string& concrete_owner, const string& context, map<string, string>* substitutions, bool bind_source_owner = true);
 	bool ConcreteOwnerMatches(const TemplateDefinition& definition,
 		const string& concrete_owner) const;
 	string FindConcreteInstantiationOwner(const TemplateDefinition& definition,

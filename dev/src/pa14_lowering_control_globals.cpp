@@ -94,7 +94,21 @@ void PA14Lowerer::EmitGlobalInitializer(GlobalRecord& global, Scope* scope)
               expression->children.size() > 1 && expression->children[1])
         arguments = expression->children[1]->children;
       if(!expression && !HasConstructor(value_type)) return;
-      if(!HasDefaultInitializationEffects(value_type) && !HasDestructor(value_type)) return;
+      if(!HasDefaultInitializationEffects(value_type) && !HasDestructor(value_type)) {
+        // A constexpr variable-template member of a materialized class still
+        // needs an initialization frontier: its storage is zero-initialized,
+        // but taking its address keeps the weak object and its dependent
+        // initializer reachable in the emitted program.
+        const bool generated_member_template = global.node &&
+          global.node->template_instantiation &&
+          global.node->template_primary.find("::") != string::npos &&
+          global.template_owner &&
+          global.node->template_arguments.size() >
+            global.template_owner->template_arguments.size();
+        if(generated_member_template && global.template_owner && expression)
+          (void)global_address(&global);
+        return;
+      }
       bool declared_constructor = false;
       const vector<Binding*> constructors =
         MemberBindings(value_type, LastComponent(value_type->name));
@@ -224,7 +238,7 @@ void PA14Lowerer::EmitDynamicInitializers(vector<string>& entries)
       for(size_t i = 0; i < initializers.size() && !state.current->terminated; ++i)
         EmitGlobalInitializer(*initializers[i], initializers[i]->scope);
       if(!state.current->terminated) Terminate("return void");
-      entries.push_back(render(state, "__cppgm_init", "role=init"));
+      entries.push_back(render(state, "__cppgm_init", "role=init, binding=internal"));
       state_ = 0;
     }
     for(size_t i = 0; i < tls_initializers.size(); ++i) {

@@ -58,6 +58,10 @@ struct CPPGMAstNode
 	std::size_t source_token_end;
 	std::string template_primary;
 	std::vector<std::string> template_arguments;
+	// PA18 records that the materialized specialization elided an empty
+	// trailing template parameter pack.  This is distinct from an ordinary
+	// one-argument class specialization at the ABI boundary.
+	bool template_empty_pack;
 	std::vector<CPPGMAstNodePtr> children;
 
 	CPPGMAstNode(const std::string& kind = std::string(),

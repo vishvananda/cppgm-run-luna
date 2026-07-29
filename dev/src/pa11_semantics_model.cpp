@@ -14,7 +14,7 @@ Type::Type(TypeKind type_kind, const string& type_name)
 	  is_union(false), enclosing_type(), dependent_base_lookup(false),
 	  friend_access(), virtual_methods(),
 	  polymorphic(false), has_vpointer(false), template_specialization(false),
-	  template_primary(), template_arguments(), has_deferred_constructor(false),
+	  template_primary(), template_arguments(), template_empty_pack(false), has_deferred_constructor(false),
 	  materialize_sizeof_address(false) {}
 
 Binding::Binding(BindingKind binding_kind, const string& binding_name,

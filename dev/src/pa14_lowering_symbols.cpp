@@ -502,8 +502,9 @@ string PA14Lowerer::TemplateGlobalObjectName(const GlobalRecord& global) const
 {
   if(!global.template_instantiation) return string();
   const size_t separator = global.qualified_name.rfind("::");
-  const string member = separator == string::npos ? global.qualified_name :
+  const string generated_member = separator == string::npos ? global.qualified_name :
     global.qualified_name.substr(separator + 2);
+  string member = generated_member;
   string owner;
   if(global.template_owner) owner = abi_nested_body(global.template_owner);
   else if(separator != string::npos) {
@@ -512,6 +513,38 @@ string PA14Lowerer::TemplateGlobalObjectName(const GlobalRecord& global) const
     for(size_t i = 0; i < components.size(); ++i) owner += abi_component(components[i]);
   }
   if(owner.empty()) return string();
+  if(global.node && !global.node->template_primary.empty() &&
+     !global.node->template_arguments.empty()) {
+    const string primary_member = abi_last_component(global.node->template_primary);
+    if(generated_member == primary_member ||
+       generated_member.compare(0, primary_member.size() + 1,
+         primary_member + "_") == 0) {
+      member = primary_member;
+      string result = "_ZN" + owner +
+        integer_text(static_cast<long long>(member.size())) + member + "I";
+      for(size_t argument = 0; argument < global.node->template_arguments.size(); ++argument) {
+        const string raw = abi_trim(global.node->template_arguments[argument]);
+        const size_t raw_open = raw.find('<');
+        const string raw_base = raw_open == string::npos ? raw : raw.substr(0, raw_open);
+        const string owner_primary = global.template_owner &&
+          !global.template_owner->template_primary.empty() ?
+          abi_last_component(global.template_owner->template_primary) : string();
+        const string owner_name = global.template_owner ?
+          abi_last_component(global.template_owner->name) : string();
+        if(global.template_owner && !owner_primary.empty() &&
+           (raw == owner_primary || raw == owner_name || raw_base == owner_primary ||
+            raw_base == owner_name || abi_last_component(raw) == owner_primary ||
+            abi_last_component(raw) == owner_name)) {
+          result += "S_I";
+          for(size_t owner_argument = 0; owner_argument <
+              global.template_owner->template_arguments.size(); ++owner_argument)
+            result += abi_type_text(global.template_owner->template_arguments[owner_argument]);
+          result += "E";
+        } else result += abi_type_text(raw);
+      }
+      return result + "EE";
+    }
+  }
   return "_ZN" + owner + integer_text(static_cast<long long>(member.size())) + member + "E";
 }
 
@@ -546,7 +579,7 @@ string PA14Lowerer::TemplateFunctionObjectName(const FunctionRecord& function) c
     // empty pack; retain the marker for the generated function entity.
     if(function.member_template && function.member_owner &&
        function.member_owner->template_specialization &&
-       function.member_owner->template_arguments.size() == 1) {
+       function.member_owner->template_empty_pack) {
       const size_t close = owner.rfind('E');
       if(close != string::npos) owner.insert(close, "JE");
     }
@@ -567,7 +600,20 @@ string PA14Lowerer::TemplateFunctionObjectName(const FunctionRecord& function) c
       result += "T_";
       for(size_t i = 1; i < source->parameters.size(); ++i)
         result += abi_type(source->parameters[i]);
-    } else result += abi_function_parameters(source, function.member_owner);
+    } else {
+      if(function.member_template && source->parameters.empty() && source->child &&
+         type_value(source->child) && type_value(source->child)->kind == TYPE_CLASS) {
+        size_t substitution = 0;
+        const bool returns_owner = function.member_owner &&
+          PA12SameType(type_value(source->child), type_value(function.member_owner), true);
+        if(returns_owner)
+          result += abi_substitution(0);
+        else if(abi_template_substitution_index(type_value(source->child),
+                                                 function.member_owner, &substitution))
+          result += abi_substitution(substitution);
+      }
+      result += abi_function_parameters(source, function.member_owner);
+    }
     return result;
   }
 

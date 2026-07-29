@@ -855,3 +855,53 @@ earlier-PA current-instantiation and out-of-class-constructor cases while
 mapping generated owners back to typed declarations.  Bundle only the
 dependent integral/`sizeof` consumers whose owner identity is available, then
 rerun the complete PA23 report, through-PA22 gate, and file audit.
+
+## Checkpoint 8 result — 2026-07-29
+
+### Checkpoint Scope
+
+Completed the qualified member variable-template and static-member replay
+increment.  The implementation now preserves typed empty-pack facts from the
+AST through PA11/PA18/PA14, maps member-template uses to concrete generated
+and source owners, retains qualified source static-array declarators, and
+recovers dependent `sizeof` array types.  PA14 lowering now distinguishes
+constant folding from required static storage/materialization for qualified
+template members, including explicit specializations and type-pack uses, and
+emits the corresponding ABI, initializer, and lifecycle metadata.  The new
+static-rewrite helper module keeps these responsibilities within the PA23
+file-audit limits.
+
+### Validation
+
+The focused qualified member/static cases pass, including
+`general/400-qualified-member-variable-template-class-value.t` and
+`general/500-dependent-qualified-sizeof-static-member.t`, with the related
+PA19–PA22 regression cases.  The through-PA22 report is **2100/2100**.  The
+required current-PA report is **296/396**, improving the turn-start baseline
+of **292/396**.  The PA23 file audit passes with the repository's 13 existing
+warnings.
+
+### Remaining Work Map
+
+The complete current-PA report has 100 failures, including two timeouts.  The
+remaining behavior groups are:
+
+- **Owner/member replay and deferred SFINAE:** current-specialization,
+  inherited/out-of-class members, alias and nested owners, candidate-local
+  substitution, and reentrant static-query fixed points.
+- **Deduction and overload composition:** conversions, reference/cv and
+  function-type partial ordering, template-template arguments, ADL, explicit
+  arguments, and non-deduced contexts.
+- **Typed non-type and pack state:** dependent bool/integral values, variable
+  and alias templates, function-type packs, defaults, and invalid pack-kind
+  rejection.
+- **Specialization and declaration materialization:** explicit/extern
+  specialization pairing, constructors, function pointers, and remaining
+  LowIR identity/metadata comparisons.
+
+### Next Checkpoint Group
+
+Take deduction/conversion and function-type-pack handling as one coherent
+group, including its downstream overload and LowIR consumers.  Preserve the
+new concrete-owner and static-materialization facts, then rerun the complete
+PA23 report, through-PA22 gate, and file audit.

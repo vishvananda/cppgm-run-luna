@@ -104,7 +104,9 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
        !(template_context && has_array_member) &&
        has_nonstatic_member && !HasDefaultConstructionEffects(object_type) &&
        !has_unavailable_default(object_type) && !HasExplicitConstructor(object_type)) return true;
-    const string constructor_name = LastComponent(object_type->name);
+    const string constructor_name = object_type->template_specialization &&
+      !object_type->template_primary.empty() ?
+      LastComponent(object_type->template_primary) : LastComponent(object_type->name);
     // The ordinary semantic pass does not need to materialize an implicit copy
     // constructor merely to type-check a class mem-initializer.  Lowering does
     // need that candidate when a base is initialized from an object value,
@@ -118,7 +120,9 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
         (void)EnsureImplicitCopyConstructor(object_type, false);
     }
 	if(!raw_arguments.empty()) (void)EnsureAggregateConstructor(object_type);
-    vector<Binding*> candidates = MemberBindings(object_type, constructor_name);
+    vector<Binding*> candidates = MemberBindings(object_type, LastComponent(object_type->name));
+    if(candidates.empty() && constructor_name != LastComponent(object_type->name))
+      candidates = MemberBindings(object_type, constructor_name);
     vector<ExprInfo> argument_infos;
     for(size_t i = 0; i < raw_arguments.size(); ++i) {
       ExprInfo info = Infer(raw_arguments[i], scope);
@@ -381,7 +385,10 @@ bool PA14Lowerer::EmitObjectConstructor(VariablePlan* variable,
     if(!object_type || object_type->kind != TYPE_CLASS) return false;
     if(raw_arguments.empty() && HasDefaultConstructionEffects(object_type))
       CollectImplicitConstructor(object_type, object_type->owned_scope, true);
-    const vector<Binding*> candidates = MemberBindings(object_type, LastComponent(object_type->name));
+    vector<Binding*> candidates = MemberBindings(object_type, LastComponent(object_type->name));
+    if(candidates.empty() && object_type->template_specialization &&
+       !object_type->template_primary.empty())
+      candidates = MemberBindings(object_type, LastComponent(object_type->template_primary));
     const bool empty_base_only_default = object_type->direct_base &&
       IsEmptyBaseStorage(object_type->direct_base) &&
       !HasDefaultConstructionEffects(object_type);

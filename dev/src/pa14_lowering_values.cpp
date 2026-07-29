@@ -186,15 +186,33 @@ PA14Lowerer::Value PA14Lowerer::EmitIdentifier(const CPPGMAstNodePtr& node, Scop
 		 (early_demanded_global && early_demanded_global->explicit_specialization));
 	const bool explicit_specialized_static_storage = early_demanded_global &&
 		early_demanded_global->explicit_specialization;
+    const bool generated_member_template = early_demanded_global &&
+		early_demanded_global->node &&
+		early_demanded_global->node->template_instantiation &&
+		early_demanded_global->node->template_primary.find("::") != string::npos;
+    const bool dependent_static_initializer = early_demanded_global &&
+		early_demanded_global->initializer &&
+		DescendantOfKind(early_demanded_global->initializer, "sizeof-expression");
 	const bool qualified_materialized_template_static = node &&
 		node->value.find("::") != string::npos && early_demanded_global &&
-		node->template_instantiation &&
 		early_demanded_global->template_instantiation &&
 		early_demanded_global->initializer && binding->member_owner &&
-		binding->member_owner->template_specialization;
+		binding->member_owner->template_specialization &&
+		!binding->has_value &&
+		(generated_member_template || dependent_static_initializer);
+	const bool template_function_static_use = node && node->template_instantiation &&
+		!node->template_primary.empty();
+	const bool qualified_template_static_use = node &&
+		node->value.find("::") != string::npos && early_demanded_global &&
+		early_demanded_global->template_instantiation &&
+		early_demanded_global->initializer && binding->member_owner &&
+		binding->member_owner->template_specialization && binding->has_value &&
+		template_function_static_use;
+	const bool materialized_template_static = qualified_materialized_template_static ||
+		qualified_template_static_use;
 	if(binding->kind == BIND_VARIABLE && binding->has_value && binding->declaration &&
 		binding->declaration->template_instantiation && binding_integral &&
-		!template_static_storage_override && !qualified_materialized_template_static) {
+		!template_static_storage_override && !materialized_template_static) {
 		result.type = binding->type;
 		result.operand = integer_text(binding->value);
 		result.known_constant = true;
@@ -223,7 +241,7 @@ PA14Lowerer::Value PA14Lowerer::EmitIdentifier(const CPPGMAstNodePtr& node, Scop
 		GlobalRecord* demanded_global = EnsureStaticMemberStorage(binding,
 			decltype_form);
 		if(binding->has_value && !decltype_form && !template_static_storage_override &&
-			!qualified_materialized_template_static) {
+			!materialized_template_static) {
           result.known_constant = true;
           result.constant = binding->value;
           result.operand = integer_text(result.constant);
@@ -233,7 +251,7 @@ PA14Lowerer::Value PA14Lowerer::EmitIdentifier(const CPPGMAstNodePtr& node, Scop
 		if(!decltype_form && demanded_global && demanded_global->initializer && static_value_type &&
 			static_value_type->is_const &&
 			(!template_static_storage_override || explicit_specialized_static_storage) &&
-			!qualified_materialized_template_static) {
+			!materialized_template_static) {
 			long long constant = 0;
           if(FoldInteger(InitializerExpression(demanded_global->initializer), scope,
               &constant, 0)) {

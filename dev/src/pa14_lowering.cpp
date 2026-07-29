@@ -806,8 +806,21 @@ void PA14Lowerer::CollectImplicitConstructor(const TypePtr& owner, Scope* scope,
                                              bool force)
 {
     if(!owner || !scope || owner->kind != TYPE_CLASS) return;
-    const string name = LastComponent(owner->name);
-    vector<Binding*> constructors = DirectBindings(scope, name);
+    const string generated_name = LastComponent(owner->name);
+    bool source_named_constructor = false;
+    if(owner->template_specialization && owner->owned_scope)
+      for(size_t member = 0; member < owner->owned_scope->bindings.size(); ++member) {
+        const Binding& binding = owner->owned_scope->bindings[member];
+        if(binding.kind == BIND_VARIABLE && binding.is_static && binding.declaration &&
+           binding.declaration->template_instantiation &&
+           binding.declaration->template_primary.find("::") != string::npos) {
+          source_named_constructor = true;
+          break;
+        }
+      }
+    const string name = source_named_constructor && !owner->template_primary.empty() ?
+      LastComponent(owner->template_primary) : generated_name;
+    vector<Binding*> constructors = DirectBindings(scope, generated_name);
     bool has_constructor = false;
     for(size_t i = 0; i < constructors.size(); ++i)
       if(constructors[i]->kind == BIND_FUNCTION) { has_constructor = true; break; }
@@ -856,6 +869,16 @@ void PA14Lowerer::CollectImplicitConstructor(const TypePtr& owner, Scope* scope,
     functions_.push_back(FunctionRecord());
     FunctionRecord* record = &functions_.back();
     function_by_key_[key] = record;
+    // Lookup helpers historically use the materialized class spelling for an
+    // implicit constructor.  Keep that spelling as an alias while retaining
+    // the source constructor name on the emitted record and ABI metadata.
+    if(name != generated_name) {
+      Binding alias = binding;
+      alias.name = generated_name;
+      alias.qualified_name.clear();
+      Binding* stored_alias = scope->add(alias);
+      function_by_key_[function_key(stored_alias->qualified_name, source)] = record;
+    }
     record->node = special;
     record->scope = scope;
     record->source_type = source;
@@ -869,8 +892,9 @@ void PA14Lowerer::CollectImplicitConstructor(const TypePtr& owner, Scope* scope,
     record->constructor = true;
     record->implicit_constructor = true;
     record->definition = true;
-	record->template_instantiation = owner->template_specialization;
+    record->template_instantiation = owner->template_specialization;
 	record->weak_binding = record->template_instantiation;
+	record->unwind_no = IsTrivialValueStorage(owner);
 	if(owner->template_specialization) {
 		record->template_primary = owner->template_primary;
 		record->template_arguments = owner->template_arguments;

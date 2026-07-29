@@ -703,9 +703,12 @@ bool PA14Lowerer::EmitObjectTransferAt(const TypePtr& raw_target,
         HasConstructor(target) &&
         !TemplatePrimaryHasNonstaticMemberFunction(target) &&
         !HasUserProvidedConstructor(target);
+      const bool static_member_reference = source_info.binding &&
+        source_info.binding->is_member && source_info.binding->is_static;
       if((source_local && (implicit_return_move ||
            (source_local->parameter && !materialized_empty_template_reference))) ||
-         (source->kind == "binary-expression" && PA12Operator(source->value) == ","))
+         (source->kind == "binary-expression" && PA12Operator(source->value) == ",") ||
+         static_member_reference)
         (void)EmitAddress(source, scope);
       return true;
     }

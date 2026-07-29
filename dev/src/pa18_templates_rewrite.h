@@ -127,6 +127,9 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 	bool FindClassMemberType(const string& raw_class, const string& member,
 		const map<string, string>& substitutions, const string& context,
 		string* result, set<string>* active, bool aliases_only = false) const;
+	bool FindVariableTemplateMemberType(const string& raw_class, const string& member,
+		const map<string, string>& substitutions, const string& context,
+		string* result);
 	bool InferArgument(const CPPGMAstNodePtr& expression, string* result,
 		const map<string, string>& substitutions, const string& context,
 		FunctionSignature* function_signature = 0) const;
@@ -989,6 +992,10 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 	bool PreserveDependentStaticDeclarator(const CPPGMAstNodePtr& input,
 		const string& context, const map<string, string>& substitutions,
 		const CPPGMAstNodePtr& result, string* promoted_name);
+	bool FindSourceStaticArrayOwner(const string& raw, const string& context,
+		string* generated_owner);
+	void RecoverDependentSizeofArrayType(const CPPGMAstNodePtr& input,
+		const CPPGMAstNodePtr& result) const;
 	CPPGMAstNodePtr FinishRegularNode(const CPPGMAstNodePtr& input,
 		const string& context, const map<string, string>& substitutions,
 		const CPPGMAstNodePtr& result, const string& promoted_local_class,

@@ -307,8 +307,24 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
     string qname;
     if(hidden_friend && raw_name.find("::") == string::npos)
       qname = qualified_name(function_scope_owner, raw_name);
-    else if(is_member)
-      qname = TypeQualifiedName(member_owner) + "::" + LastComponent(raw_name);
+    else if(is_member) {
+      string member_name = LastComponent(raw_name);
+      bool source_named_member_template = false;
+      if(is_static && IsGeneratedMemberTemplate(node, raw_name) && member_owner &&
+         member_owner->owned_scope)
+        for(size_t member = 0; member < member_owner->owned_scope->bindings.size(); ++member) {
+          const Binding& binding = member_owner->owned_scope->bindings[member];
+          if(binding.kind == BIND_VARIABLE && binding.is_static && binding.declaration &&
+             binding.declaration->template_instantiation &&
+             binding.declaration->template_primary.find("::") != string::npos) {
+            source_named_member_template = true;
+            break;
+          }
+        }
+      if(source_named_member_template && !node->template_primary.empty())
+        member_name = LastComponent(node->template_primary);
+      qname = TypeQualifiedName(member_owner) + "::" + member_name;
+    }
     else qname = qualified_name(scope, raw_name);
     if(hidden_friend && member_owner->owned_scope) {
       vector<Binding*> hidden = DirectBindings(member_owner->owned_scope, LastComponent(raw_name));
@@ -1249,7 +1265,12 @@ void PA14Lowerer::DemandConstantObjectConstructors(const TypePtr& raw_type,
          arguments[0] && arguments[0]->kind == "braced-init-list")
         arguments = arguments[0]->children;
     } else return;
-    const vector<Binding*> candidates = MemberBindings(type, LastComponent(type->name));
+    const string constructor_name = type->template_specialization &&
+      !type->template_primary.empty() ? LastComponent(type->template_primary) :
+      LastComponent(type->name);
+    vector<Binding*> candidates = MemberBindings(type, LastComponent(type->name));
+    if(candidates.empty() && constructor_name != LastComponent(type->name))
+      candidates = MemberBindings(type, constructor_name);
     for(size_t i = 0; i < candidates.size(); ++i) {
       Binding* binding = candidates[i];
       FunctionRecord* record = RecordForBinding(binding);
@@ -1305,6 +1326,8 @@ void PA14Lowerer::CollectClassStaticMember(const CPPGMAstNodePtr& child,
                                            const string& name)
 {
     if(!child || !item || !owner || !class_scope || !facts.is_static || name.empty()) return;
+    const bool replayed_variable_member = child->template_instantiation &&
+      child->template_primary.find("::") != string::npos;
     GlobalRecord record;
     record.node = child;
     record.scope = class_scope;
@@ -1317,7 +1340,47 @@ void PA14Lowerer::CollectClassStaticMember(const CPPGMAstNodePtr& child,
     record.weak_binding = record.template_instantiation;
     record.initializer = item->children.size() > 1 ? item->children[1] :
       CPPGMAstNodePtr();
-    record.declaration = true;
+    // A replayed variable-template member is itself a definition.  Its
+    // initializer lives in the class specialization, so retaining the
+    // declaration-only marker would discard both storage initialization and
+    // the addressable definition from LowIR.
+    record.declaration = !(replayed_variable_member && record.initializer);
+    if(replayed_variable_member && record.initializer) {
+      record.dynamic_initializer = true;
+      needs_init_helper_ = true;
+      if(facts.is_constexpr) {
+        TypePtr value_member_type = type_value(member_type);
+        if(value_member_type && value_member_type->kind == TYPE_CLASS)
+          CollectImplicitConstructor(value_member_type,
+            value_member_type->owned_scope, true);
+        DemandConstantObjectConstructors(member_type, record.initializer);
+      }
+      const function<bool(const CPPGMAstNodePtr&, const string&)> mentions =
+        [&](const CPPGMAstNodePtr& node, const string& target) {
+          if(!node) return false;
+          string value = node->value;
+          const size_t marker = value.find(':');
+          if(marker != string::npos && (marker + 1 >= value.size() ||
+             value[marker + 1] != ':')) value.erase(0, marker + 1);
+          const size_t scope = value.rfind("::");
+          if(value == target || (scope != string::npos &&
+             value.substr(scope + 2) == target)) return true;
+          for(size_t nested = 0; nested < node->children.size(); ++nested)
+            if(mentions(node->children[nested], target)) return true;
+          return false;
+        };
+      for(size_t function = 0; function < functions_.size(); ++function)
+        if(functions_[function].member_owner == owner &&
+           functions_[function].static_member && functions_[function].template_instantiation) {
+          const string source_name = LastComponent(functions_[function].qualified_name);
+          const string generated_name = functions_[function].node &&
+            functions_[function].node->children.size() > 1 ?
+            FirstIdentifier(functions_[function].node->children[1]) : string();
+          if(mentions(record.initializer, source_name) ||
+             (!generated_name.empty() && mentions(record.initializer, generated_name)))
+            functions_[function].needed = true;
+        }
+    }
     record.internal = false;
     record.thread_local_storage = HasStorageSpecifier(child, "thread_local");
     if(type_is_reference(member_type) && !record.initializer) {

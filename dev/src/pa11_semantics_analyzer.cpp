@@ -63,7 +63,6 @@ size_t TopLevelScopeSeparator(const string& raw)
 	return string::npos;
 }
 }
-
 Analyzer::Analyzer()
 	: global_(new Scope(SCOPE_NAMESPACE, "<global>", 0)), anonymous_type_count_(0),
 	  pending_class_layouts_() {}
@@ -1402,6 +1401,7 @@ TypePtr Analyzer::ProcessClass(const CPPGMAstNodePtr& node, Scope* scope)
 		type->template_specialization = true;
 		type->template_primary = node->template_primary;
 		type->template_arguments = node->template_arguments;
+		type->template_empty_pack = node->template_empty_pack;
 	}
 	type->dependent_base_lookup = node->dependent_base_lookup;
 	type->complete = true;

@@ -145,6 +145,7 @@ struct Type
 	bool template_specialization;
 	string template_primary;
 	vector<string> template_arguments;
+	bool template_empty_pack;
 	// A materialized specialization may retain constructor-template lookup only
 	// in PA18 typed state.  It is still non-aggregate per the source class.
 	bool has_deferred_constructor;

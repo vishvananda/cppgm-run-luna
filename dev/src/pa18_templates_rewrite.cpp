@@ -548,7 +548,7 @@ bool PA18TemplateExpander::PreserveDependentStaticDeclarator(
 	const map<string, string>& substitutions, const CPPGMAstNodePtr& result,
 	string* promoted_name)
 {
-	if(!input || input->kind != "identifier") return false;
+	if(!input || (input->kind != "identifier" && input->kind != "id-expression")) return false;
 	const string raw = CanonicalSpelling(RemoveMarker(input->value));
 	const size_t open = raw.find('<');
 	string argument_text;
@@ -564,9 +564,16 @@ bool PA18TemplateExpander::PreserveDependentStaticDeclarator(
 			specialization_bases_.end();
 	const bool concrete_static_data = concrete_replay_owner && HasStaticMember(
 		0, concrete_owner->second, LastComponent(raw));
-	if(!concrete_static_data || open == string::npos ||
+	bool source_static_data = false;
+	string source_generated_owner;
+	if(input->kind == "id-expression")
+		source_static_data = FindSourceStaticArrayOwner(raw, context,
+			&source_generated_owner);
+	if((!concrete_static_data && !source_static_data) || open == string::npos ||
 		!TemplateRange(raw, open, &argument_text, &close) ||
-		close + 2 >= raw.size() || raw.compare(close + 1, 2, "::") != 0) return false;
+		close + 2 >= raw.size() || raw.compare(close + 1, 2, "::") != 0) {
+		return false;
+	}
 	const vector<string> arguments = SplitTemplateArguments(argument_text);
 	bool dependent_owner = false;
 	for(size_t argument = 0; argument < arguments.size() && !dependent_owner; ++argument) {
@@ -586,14 +593,25 @@ bool PA18TemplateExpander::PreserveDependentStaticDeclarator(
 		const bool builtin = value == "bool" || value == "char" || value == "double" ||
 			value == "float" || value == "int" || value == "long" ||
 			value == "short" || value == "signed" || value == "unsigned" ||
-			value == "void" || value == "wchar_t";
+			value == "void" || value == "wchar_t" || value == "true" ||
+			value == "false" || value == "nullptr";
 		const bool known = class_contexts_.find(value) != class_contexts_.end() ||
 			named_type_contexts_.find(value) != named_type_contexts_.end() ||
 			type_aliases_.find(value) != type_aliases_.end() ||
 			FindDefinition(value, context) != 0;
 		if(bare && !builtin && !known) dependent_owner = true;
 	}
-	if(!dependent_owner) return false;
+	if(!dependent_owner) {
+		// This is a declarator name, not a type-use expression.  A static member
+		// lookup may nevertheless resolve the qualified spelling to its declared
+		// array type; retain the concrete owner/member identity instead of letting
+		// that type spelling replace the identifier.
+		result->value = concrete_static_data ? concrete_owner->second + "::" +
+			LastComponent(raw) : !source_generated_owner.empty() ?
+			source_generated_owner + "::" + LastComponent(raw) : input->value;
+		*promoted_name = string();
+		return concrete_static_data || source_static_data;
+	}
 	result->value = input->value;
 	*promoted_name = string();
 	return true;
@@ -642,6 +660,7 @@ CPPGMAstNodePtr PA18TemplateExpander::FinishRegularNode(
 		map<string, string> local_substitutions = substitutions;
 		struct TypeOnlyScope { size_t& depth; const size_t saved; TypeOnlyScope(size_t& d, bool active) : depth(d), saved(d) { if(active) ++depth; } ~TypeOnlyScope() { depth = saved; } } type_only_scope(defer_type_only_class_definitions_, defer_type_only_classes);
 		TransformRegularChildren(input, child_context, function_context, substitutions, &local_substitutions, result);
+		RecoverDependentSizeofArrayType(input, result);
 		if(input->kind == "function-definition") MaterializeReturnConversions(input, result, context, function_context, local_substitutions);
 		if(input->kind == "class-specifier" || input->kind == "class-forward-declaration") {
 			string class_name = LastComponent(input->value);
@@ -674,9 +693,6 @@ CPPGMAstNodePtr PA18TemplateExpander::FinishRegularNode(
 					ContainsName(input, "&&"))
 					CollapseForwardingReference(result);
 		RewriteTemplateInitializer(input, context, substitutions, result);
-		// Do not materialize a constructor while its template declaration is being
-		// replayed.  The concrete member body is materialized after this declaration
-		// scope closes; doing it here recursively re-enters the same constructor.
 		if(active_template_declaration_depth_ == 0)
 			MaterializeInitializerConstructor(input, result, context, substitutions);
 		if(input->kind == "simple-declaration")

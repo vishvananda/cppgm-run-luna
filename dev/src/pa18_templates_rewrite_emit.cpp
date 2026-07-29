@@ -361,8 +361,9 @@ bool PA18TemplateExpander::HasDeferredDependentClassMember(
 					(raw.size() == 8 || isspace(static_cast<unsigned char>(raw[8])))) {
 					raw = CanonicalSpelling(raw.substr(8));
 				}
-				if(HasUnavailableGeneratedMemberType(raw, context, substitutions))
+				if(HasUnavailableGeneratedMemberType(raw, context, substitutions)) {
 					return true;
+				}
 			}
 			for(size_t child = 0; child < node->children.size(); ++child)
 				if(scan(node->children[child])) return true;
@@ -597,6 +598,9 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 	active_static_member_ = previous_static_member;
 	defer_type_only_class_definitions_ = previous_type_only_depth;
 	if(!generated) throw logic_error("unable to instantiate template");
+	if(definition.class_template && !definition.parameters.empty() &&
+		definition.parameters.back().pack && args.size() < definition.parameters.size())
+		generated->template_empty_pack = true;
 	if(definition.friend_declaration) {
 		// Friend definitions are emitted at namespace scope.  A parameter that
 		// names a nested class is nevertheless looked up in the declaring class
@@ -934,8 +938,9 @@ string PA18TemplateExpander::MaterializeInstantiation(const TemplateDefinition& 
 	RegisterGeneratedSpecialization(definition, metadata_args, local_name);
 	if(definition.class_template) substitutions[definition.name] = local_name;
 	specializations_[key] = local_name;
-	if(defer_class_definition && definition.class_template &&
-		HasDeferredDependentClassMember(definition, context, substitutions)) {
+	const bool deferred_member = defer_class_definition && definition.class_template &&
+		HasDeferredDependentClassMember(definition, context, substitutions);
+	if(deferred_member) {
 		const string generated_owner = definition.lexical_owner.empty() ?
 			definition.owner : definition.lexical_owner;
 		const string generated_path = JoinPath(definition.owner, local_name);
@@ -1049,9 +1054,11 @@ string PA18TemplateExpander::Instantiate(const TemplateDefinition& definition,
 		const size_t separator = outer->second.rfind("::");
 		if(separator == string::npos) continue;
 		const string owner = outer->second.substr(0, separator);
-		AddConcreteOwnerSubstitutions(owner, context, &substitutions);
+		AddConcreteOwnerSubstitutions(owner, context, &substitutions,
+			!definition.class_template);
 	}
-	AddConcreteOwnerSubstitutions(concrete_owner, context, &substitutions);
+	AddConcreteOwnerSubstitutions(concrete_owner, context, &substitutions,
+		!definition.class_template);
 	map<string, PA19IntegralValue> integral_substitutions;
 	map<string, vector<string> > pack_substitutions;
 	// Default non-type arguments can contain sizeof...(Pack).  Argument

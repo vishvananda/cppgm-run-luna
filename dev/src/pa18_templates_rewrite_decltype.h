@@ -1,10 +1,8 @@
 #pragma once
 inline vector<string> SplitCallArguments(const string& raw)
 {
-	vector<string> result;
-	string current;
-	int angle = 0, parentheses = 0, brackets = 0, braces = 0;
-	vector<int> angle_parentheses;
+	vector<string> result; string current;
+	int angle = 0, parentheses = 0, brackets = 0, braces = 0; vector<int> angle_parentheses;
 	for (size_t i = 0; i < raw.size(); ++i) {
 		const char ch = raw[i];
 		if (ch == '<' && IsTemplateAngleOpen(raw, i)) {
@@ -139,7 +137,6 @@ inline vector<string> SplitCallArguments(const string& raw)
 		}
 		return argument == arguments->children.size();
 	}
-
 	bool SplitTopLevelComma(const string& raw, string* tail, string* head = 0) const
 	{
 		int angle = 0, parentheses = 0, brackets = 0;
@@ -159,7 +156,6 @@ inline vector<string> SplitCallArguments(const string& raw)
 		}
 		return false;
 	}
-
 	bool SplitTopLevelConditional(const string& raw, string* condition,
 		string* true_expression, string* false_expression) const
 	{
@@ -195,7 +191,6 @@ inline vector<string> SplitCallArguments(const string& raw)
 		}
 		return false;
 	}
-
 	string StripTextParentheses(string raw) const
 	{
 		raw = Trim(raw);
@@ -214,7 +209,6 @@ inline vector<string> SplitCallArguments(const string& raw)
 			raw = Trim(raw.substr(1, raw.size() - 2));
 		}
 	}
-
 	bool SplitTextCall(const string& raw, string* callee, string* arguments) const
 	{
 		const string spelling = Trim(raw);
@@ -236,7 +230,6 @@ inline vector<string> SplitCallArguments(const string& raw)
 		if(arguments) *arguments = spelling.substr(open + 1, spelling.size() - open - 2);
 		return true;
 	}
-
 	string CollapseReferenceSpelling(string raw) const
 	{
 		raw = CanonicalSpelling(raw);
@@ -249,7 +242,6 @@ inline vector<string> SplitCallArguments(const string& raw)
 		}
 		return CanonicalSpelling(raw);
 	}
-
 	bool SplitStaticCast(string expression, string* type, string* operand) const
 	{
 		expression = CanonicalSpelling(expression);
@@ -273,7 +265,6 @@ inline vector<string> SplitCallArguments(const string& raw)
 		*operand = expression.substr(close + 2, expression.size() - close - 3);
 		return true;
 	}
-
 	bool InferFunctionTypeArguments(const TemplateDefinition& definition,
 		const vector<string>& actual_types, vector<string>* result,
 		const map<string, string>& substitutions, const string& context,
@@ -686,7 +677,6 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 		}
 		return has_ellipsis || actual == actual_types.size();
 	}
-
 	string ExpressionTypeSpelling(string expression, const string& context,
 		const map<string, string>& substitutions)
 	{
@@ -743,6 +733,19 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 			if(comma_head.empty() || ExpressionTypeSpelling(comma_head, context,
 				substitutions).empty()) return string();
 			return ExpressionTypeSpelling(comma_tail, context, substitutions);
+		}
+		// A qualified variable-template id is an expression even though its
+		// spelling contains no call parentheses (`Property::value<T>`).  Resolve
+		// its declared type through the owning class's typed member definition
+		// before the ordinary identifier and function-template fallbacks.
+		const size_t qualified_variable_separator = TopLevelScopeSeparator(expression);
+		if(qualified_variable_separator != string::npos) {
+			const string qualified_owner = expression.substr(0, qualified_variable_separator);
+			const string qualified_member = expression.substr(qualified_variable_separator + 2);
+			string variable_type;
+			if(FindVariableTemplateMemberType(qualified_owner, qualified_member,
+				substitutions, context, &variable_type) && !variable_type.empty())
+				return variable_type;
 		}
 		// Member access in a decltype operand is an expression type, not a
 		// qualified type spelling.  Infer the object first so a dependent or
@@ -1081,7 +1084,6 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 		const string& base, const string& context,
 		const map<string, string>& substitutions, bool* template_replaced,
 		size_t* search);
-
 	void ReifyReferenceType(const CPPGMAstNodePtr& result) const
 	{
 		if(!result || result->kind != "simple-declaration" || result->children.empty()) return;
@@ -1116,7 +1118,6 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 					suffix == "&&" ? "OP_LAND:&&" : "OP_AMP:&")));
 		}
 	}
-
 	void CollectCallArguments(const CPPGMAstNodePtr& node,
 		vector<CPPGMAstNodePtr>* arguments) const
 	{
@@ -1133,7 +1134,6 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 		}
 		arguments->push_back(node);
 	}
-
 	CPPGMAstNodePtr RewriteTemplateCastCall(const CPPGMAstNodePtr& input,
 		const string& context, const map<string, string>& substitutions)
 	{

@@ -523,7 +523,7 @@ private:
 		if (result.candidates.empty() && !result.binding)
 		{
 			result.candidates = Lookup(expression->value, scope);
-			if (result.candidates.empty()) throw logic_error("unknown expression name");
+				if (result.candidates.empty()) throw logic_error("unknown expression name");
 		}
 		if (!result.binding && result.candidates.size() == 1) result.binding = result.candidates[0];
 		if (result.binding && result.binding->kind == BIND_ENUMERATOR)

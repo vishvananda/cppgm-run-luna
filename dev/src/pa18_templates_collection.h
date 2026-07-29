@@ -10,8 +10,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
-using namespace std;
-namespace pa18_templates_internal {
+using namespace std; namespace pa18_templates_internal {
 class PA18SubstitutionFailure : public logic_error { public: explicit PA18SubstitutionFailure(const string& message) : logic_error(message) {} };
 inline bool IsIdentifierCharacter(char ch) {
 	return isalnum(static_cast<unsigned char>(ch)) || ch == '_';
@@ -162,6 +161,7 @@ inline CPPGMAstNodePtr CloneNode(const CPPGMAstNodePtr& node)
 	result->source_token_begin = node->source_token_begin; result->source_token_end = node->source_token_end;
 	result->template_primary = node->template_primary;
 	result->template_arguments = node->template_arguments;
+	result->template_empty_pack = node->template_empty_pack;
 	for(size_t i = 0; i < node->children.size(); ++i)
 		result->children.push_back(CloneNode(node->children[i]));
 	return result;

@@ -681,8 +681,9 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferIdentifier(const CPPGMAstNodePtr& node, 
       if(selected) result.binding = selected;
     }
     if(result.binding) result.candidates.clear();
-	if(!result.binding && result.candidates.empty())
+	if(!result.binding && result.candidates.empty()) {
 		throw logic_error("unknown expression name: " + node->value);
+	}
     if(!result.binding && result.candidates.size() == 1)
       result.binding = result.candidates[0];
     if(result.binding && !IsAccessible(result.binding, scope))

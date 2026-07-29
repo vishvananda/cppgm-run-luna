@@ -855,7 +855,13 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 		while(direct_child && direct_child->kind == "template-declaration" &&
 			direct_child->children.size() > 1)
 			direct_child = direct_child->children[1];
-		if(!aliases_only && direct_child && (direct_child->kind == "class-specifier" ||
+		const bool generated_concrete_owner =
+			specialization_bases_.find(LastComponent(class_key)) !=
+				specialization_bases_.end() &&
+			specialization_arguments_.find(LastComponent(class_key)) !=
+				specialization_arguments_.end() && context != class_key;
+		if(!aliases_only && direct_child &&
+			(direct_child->kind == "class-specifier" ||
 			direct_child->kind == "class-forward-declaration" ||
 			direct_child->kind == "enum-specifier") &&
 			LastComponent(direct_child->value) == member) {
@@ -882,8 +888,6 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 				return !result->empty();
 			}
 		if(child->kind != "simple-declaration" || child->children.empty()) continue;
-		if(aliases_only && !HasDeclarationSpecifier(child->children[0], "typedef"))
-			continue;
 		const string base = NodeTypeSpelling(child->children[0]);
 		const CPPGMAstNodePtr list = ChildOfKindLocal(child, "init-declarator-list");
 		if(!list) continue;
@@ -893,6 +897,14 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 			if(aliases_only && DescendantOfKind(init->children[0], "parameter-clause"))
 				continue;
 			if(LastComponent(FirstIdentifierLocal(init->children[0])) != member) continue;
+			const bool typedef_member = HasDeclarationSpecifier(child->children[0], "typedef");
+			const bool concrete_static_member = generated_concrete_owner &&
+				HasStaticMember(0, class_key, member) &&
+				init->children.size() == 1 &&
+				!HasDeclarationSpecifier(child->children[0], "constexpr") &&
+				DeclaratorArraySuffix(init->children[0]).find_first_not_of("[]") != string::npos;
+			if(aliases_only && !typedef_member && !concrete_static_member)
+				continue;
 				*result = CanonicalSpelling(ReplaceIdentifiers(
 					DeclaratorTypeSpelling(base, init->children[0]), declaration_substitutions));
 				if(result->find("::") != string::npos && result->find('<') != string::npos)
