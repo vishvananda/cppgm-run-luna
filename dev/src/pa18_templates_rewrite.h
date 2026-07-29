@@ -546,6 +546,9 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 	bool RewriteConcreteNestedMember(string* raw, size_t begin, size_t close, const string& base, const string& context, const map<string, string>& substitutions, bool* template_replaced, size_t* search);
 	const TemplateDefinition* SelectFunctionTemplateOverload(const string& raw, const string& lookup_base, const vector<string>& explicit_arguments, const string& context, const map<string, string>& substitutions, const vector<const TemplateDefinition*>& overloads);
 	void ProtectMaterializedSubstitutions(const string& source_spelling, const string& raw, const string& context, const map<string, string>& substitutions, bool materialized_member_type, map<string, string>* final_substitutions) const;
+	void ProtectMaterializedTemplateBases(const string& raw, const string& context,
+		const map<string, string>& substitutions,
+		map<string, string>* protected_substitutions) const;
 	bool RewriteResolvedTemplateMember(string* raw, size_t begin, size_t close,
 		const string& context, const map<string, string>& substitutions,
 		const TemplateDefinition* definition, const vector<string>& args,

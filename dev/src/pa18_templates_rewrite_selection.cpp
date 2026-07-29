@@ -30,7 +30,8 @@ const TemplateDefinition* PA18TemplateExpander::SelectClassTemplateDefinition(
 				bool known_qualified_member = false;
 				if(begin >= 2 && raw.compare(begin - 2, 2, "::") == 0) {
 					const string owner = Trim(raw.substr(0, begin - 2));
-					if(!owner.empty() && IsKnownTypeSpelling(owner, context)) {
+					if(!owner.empty() &&
+						IsKnownTypeSpelling(owner, context)) {
 						string member_type;
 						set<string> active_members;
 						known_qualified_member = FindClassMemberType(owner, word,
@@ -82,9 +83,32 @@ const TemplateDefinition* PA18TemplateExpander::SelectClassTemplateDefinition(
 		};
 		for(size_t argument = 0; argument < arguments.size(); ++argument)
 			if(dependent_argument(arguments[argument])) return primary;
+		vector<string> normalized_arguments;
+		normalized_arguments.reserve(arguments.size());
+		for(size_t argument = 0; argument < arguments.size(); ++argument) {
+			string normalized = NormalizeTypeArgument(RestoreSpecializationSpelling(
+				arguments[argument]));
+			normalized_arguments.push_back(CollapseRepeatedQualifiedPath(
+				CollapseRepeatedQualifier(normalized)));
+		}
+		// A selection may recursively ask for the same semantic family while a
+		// partial specialization is being matched.  That is substitution failure,
+		// not a successful primary-template fallback.  Keep the ordinary selection
+		// key separate so distinct concrete arguments can still be evaluated.
+		string selection_family = primary->qualified_name + "|" + context;
+		for(size_t argument = 0; argument < normalized_arguments.size(); ++argument)
+			selection_family += "|" + normalized_arguments[argument];
+		if(!active_class_template_selection_families_.insert(selection_family).second)
+			throw PA18SubstitutionFailure("recursive class template selection");
+		struct SelectionFamilyScope {
+			set<string>* active;
+			string key;
+			SelectionFamilyScope(set<string>* value, const string& name) : active(value), key(name) {}
+			~SelectionFamilyScope() { active->erase(key); }
+		} selection_family_scope(&active_class_template_selection_families_, selection_family);
 		string selection_key = primary->qualified_name + "|" + context;
-		for(size_t argument = 0; argument < arguments.size(); ++argument)
-			selection_key += "|" + arguments[argument];
+		for(size_t argument = 0; argument < normalized_arguments.size(); ++argument)
+			selection_key += "|" + normalized_arguments[argument];
 		if(!active_class_template_selections_.insert(selection_key).second)
 			return primary;
 		struct SelectionScope {

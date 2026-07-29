@@ -5,6 +5,34 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
+string CollapseRepeatedQualifier(string raw)
+{
+	for(size_t position = 0; position < raw.size();) {
+		if(!IsIdentifierCharacter(raw[position]) ||
+			(position > 0 && IsIdentifierCharacter(raw[position - 1]))) {
+			++position;
+			continue;
+		}
+		size_t first_end = position;
+		while(first_end < raw.size() && IsIdentifierCharacter(raw[first_end])) ++first_end;
+		if(first_end + 2 > raw.size() || raw.compare(first_end, 2, "::") != 0) {
+			position = first_end;
+			continue;
+		}
+		const string component = raw.substr(position, first_end - position);
+		const size_t second_begin = first_end + 2;
+		if(raw.compare(second_begin, component.size(), component) != 0 ||
+			(second_begin + component.size()) + 2 > raw.size() ||
+			raw.compare(second_begin + component.size(), 2, "::") != 0) {
+			position = first_end + 2;
+			continue;
+		}
+		raw.erase(second_begin, component.size() + 2);
+		position = position + component.size() + 2;
+	}
+	return raw;
+}
+
 string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& context,
 	const string& template_owner, bool preserve_nested_namespace) const
 {

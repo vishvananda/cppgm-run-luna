@@ -727,34 +727,6 @@ bool PA18TemplateExpander::ResolveConstructedCallResult(
 	return !result->empty();
 }
 
-string CollapseRepeatedQualifier(string raw)
-{
-	for(size_t position = 0; position < raw.size();) {
-		if(!IsIdentifierCharacter(raw[position]) ||
-			(position > 0 && IsIdentifierCharacter(raw[position - 1]))) {
-			++position;
-			continue;
-		}
-		size_t first_end = position;
-		while(first_end < raw.size() && IsIdentifierCharacter(raw[first_end])) ++first_end;
-		if(first_end + 2 > raw.size() || raw.compare(first_end, 2, "::") != 0) {
-			position = first_end;
-			continue;
-		}
-		const string component = raw.substr(position, first_end - position);
-		const size_t second_begin = first_end + 2;
-		if(raw.compare(second_begin, component.size(), component) != 0 ||
-			(second_begin + component.size()) + 2 > raw.size() ||
-			raw.compare(second_begin + component.size(), 2, "::") != 0) {
-			position = first_end + 2;
-			continue;
-		}
-		raw.erase(second_begin, component.size() + 2);
-		position = position + component.size() + 2;
-	}
-	return raw;
-}
-
 size_t TopLevelScopeSeparator(const string& raw)
 {
 	int angle = 0;
@@ -952,7 +924,7 @@ bool PA18TemplateExpander::FindDirectTemplateMemberType(
 			break;
 		}
 		if(child->kind != "simple-declaration" || child->children.empty() ||
-			SpellNode(child->children[0]).find("typedef") == string::npos) continue;
+			!HasDeclarationSpecifier(child->children[0], "typedef")) continue;
 		const CPPGMAstNodePtr list = ChildOfKindLocal(child, "init-declarator-list");
 		if(!list) continue;
 		for(size_t j = 0; j < list->children.size(); ++j) {
@@ -980,7 +952,7 @@ bool PA18TemplateExpander::FindDirectTemplateMemberType(
 			continue;
 		}
 		if(child->kind != "simple-declaration" || child->children.empty() ||
-			SpellNode(child->children[0]).find("typedef") == string::npos) continue;
+			!HasDeclarationSpecifier(child->children[0], "typedef")) continue;
 		const CPPGMAstNodePtr list = ChildOfKindLocal(child, "init-declarator-list");
 		if(!list) continue;
 		for(size_t j = 0; j < list->children.size(); ++j) {
@@ -1186,6 +1158,8 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 				break;
 			}
 		}
+		ProtectMaterializedTemplateBases(owner_arguments[owner_argument], context,
+			substitutions, &second_pass_substitutions);
 		owner_arguments[owner_argument] = NormalizeTypeArgument(ReplaceIdentifiers(
 			owner_arguments[owner_argument], second_pass_substitutions));
 		const bool template_entity = owner_argument < owner_definition->parameters.size() &&
@@ -1196,11 +1170,41 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 	const TemplateDefinition* selected_owner = SelectClassTemplateDefinition(
 		owner_definition, owner_arguments, context);
 	if(!selected_owner) return false;
+	bool direct_member_declared = false;
+	if(selected_owner->declaration)
+		for(size_t child_index = 0;
+			child_index < selected_owner->declaration->children.size(); ++child_index) {
+			const CPPGMAstNodePtr child = selected_owner->declaration->children[child_index];
+			if(!child) continue;
+			if(child->kind == "alias-declaration" &&
+				LastComponent(RemoveMarker(child->value)) == nested_name) {
+				direct_member_declared = true;
+				break;
+			}
+			if(child->kind != "simple-declaration" || child->children.empty() ||
+				!HasDeclarationSpecifier(child->children[0], "typedef")) continue;
+			const CPPGMAstNodePtr list = ChildOfKindLocal(child, "init-declarator-list");
+			if(!list) continue;
+			for(size_t item_index = 0; item_index < list->children.size(); ++item_index) {
+				const CPPGMAstNodePtr item = list->children[item_index];
+				if(item && !item->children.empty() &&
+					LastComponent(FirstIdentifierLocal(item->children[0])) == nested_name) {
+					direct_member_declared = true;
+					break;
+				}
+			}
+			if(direct_member_declared) break;
+		}
+	bool has_integral_template_parameter = false;
+	for(size_t parameter = 0; parameter < selected_owner->parameters.size(); ++parameter)
+		if(!selected_owner->parameters[parameter].type &&
+			!selected_owner->parameters[parameter].template_template) {
+			has_integral_template_parameter = true;
+			break;
+		}
 	if(!nested_template_id && !nested_name.empty() &&
 		owner_arguments.size() == selected_owner->parameters.size() &&
-		(LastComponent(owner_base) == "conditional" ||
-			LastComponent(owner_base) == "enable_if" ||
-			LastComponent(owner_base) == "enable_if_t")) {
+		direct_member_declared && has_integral_template_parameter) {
 		map<string, string> direct_local = substitutions;
 		PrepareTemplateMemberSubstitutions(*selected_owner, owner_arguments, context,
 			&direct_local);
@@ -1209,19 +1213,19 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 			context, &direct_local, &direct_member) && !direct_member.empty() &&
 			direct_member.find('&') == string::npos) {
 			direct_member = NormalizeTypeArgument(RewriteText(direct_member, context,
-			direct_local, 0, false, false));
-		size_t replacement_begin = begin;
-		while(replacement_begin > 0 && isspace(static_cast<unsigned char>(
-			(*raw)[replacement_begin - 1]))) --replacement_begin;
-		if(replacement_begin >= 8 && raw->compare(replacement_begin - 8, 8,
-			"typename") == 0 && (replacement_begin == 8 ||
-			!IsIdentifierCharacter((*raw)[replacement_begin - 9])))
-			replacement_begin -= 8;
-		raw->replace(replacement_begin, concrete_member_end - replacement_begin,
-			direct_member);
-		if(template_replaced) *template_replaced = true;
-		if(search) *search = replacement_begin + direct_member.size();
-		return true;
+				direct_local, 0, false, false));
+			size_t replacement_begin = begin;
+			while(replacement_begin > 0 && isspace(static_cast<unsigned char>(
+				(*raw)[replacement_begin - 1]))) --replacement_begin;
+			if(replacement_begin >= 8 && raw->compare(replacement_begin - 8, 8,
+				"typename") == 0 && (replacement_begin == 8 ||
+				!IsIdentifierCharacter((*raw)[replacement_begin - 9])))
+				replacement_begin -= 8;
+			raw->replace(replacement_begin, concrete_member_end - replacement_begin,
+				direct_member);
+			if(template_replaced) *template_replaced = true;
+			if(search) *search = replacement_begin + direct_member.size();
+			return true;
 		}
 	}
 	string owner_local_name;

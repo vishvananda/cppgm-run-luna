@@ -270,10 +270,11 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 	string* result, set<string>* active, bool aliases_only) const
 {
 	if(!result || !active) return false;
-	const bool dependent_member_probe = raw_class.find("enable_if") != string::npos ||
-		raw_class.find("disable_if") != string::npos;
-	string class_key = CanonicalSpelling(dependent_member_probe ?
-		ReplaceIdentifiersPreservingPackSizes(raw_class, substitutions) : raw_class);
+	// Member lookup owns the dependent owner spelling.  Resolve its typed
+	// bindings for every probe instead of using helper-name text as a proxy for
+	// dependency; aliases and user-defined traits take the same semantic path.
+	string class_key = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(
+		raw_class, substitutions));
 	if(class_key.find("::") == string::npos) {
 		const string resolved_class_key = CanonicalSpelling(ResolveAlias(class_key, context));
 		if(!resolved_class_key.empty() && resolved_class_key != class_key)
@@ -329,28 +330,9 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 		if(TemplateBase(class_key, source_template_open, &source_template_begin,
 			&source_template_base) && TemplateRange(class_key, source_template_open,
 			&source_argument_text, &source_template_close)) {
-			const auto collapse_repeated_paths = [](string value) {
-				bool changed = false;
-				do {
-					changed = false;
-					for(size_t start = 0; !changed && start < value.size(); ++start)
-						for(size_t separator = value.find("::", start);
-							separator != string::npos; separator = value.find("::", separator + 2)) {
-							const size_t prefix_size = separator + 2 - start;
-							if(separator + 2 + prefix_size > value.size() ||
-								value.compare(separator + 2, prefix_size, value, start,
-									prefix_size) != 0) continue;
-							value.erase(separator + 2, prefix_size);
-							changed = true;
-							break;
-						}
-				} while(changed);
-				return value;
-			};
-			const vector<string> raw_requested_arguments = SplitTemplateArguments(source_argument_text);
-			vector<string> requested_arguments = raw_requested_arguments;
+			vector<string> requested_arguments = SplitTemplateArguments(source_argument_text);
 			for(size_t argument = 0; argument < requested_arguments.size(); ++argument)
-				requested_arguments[argument] = collapse_repeated_paths(CollapseRepeatedQualifier(
+				requested_arguments[argument] = CollapseRepeatedQualifiedPath(CollapseRepeatedQualifier(
 					NormalizeTypeArgument(RestoreSpecializationSpelling(requested_arguments[argument]))));
 			for(map<string, string>::const_iterator generated = specialization_bases_.begin();
 				generated != specialization_bases_.end(); ++generated) {
@@ -366,7 +348,7 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 					concrete_arguments->second.size() < requested_arguments.size()) continue;
 				bool same_arguments = true;
 				for(size_t argument = 0; argument < requested_arguments.size(); ++argument) {
-					if(collapse_repeated_paths(CollapseRepeatedQualifier(NormalizeTypeArgument(
+					if(CollapseRepeatedQualifiedPath(CollapseRepeatedQualifier(NormalizeTypeArgument(
 						RestoreSpecializationSpelling(concrete_arguments->second[argument])))) !=
 						requested_arguments[argument]) {
 						same_arguments = false; break;
@@ -405,7 +387,7 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 						break;
 					}
 					if(child->kind != "simple-declaration" || child->children.empty() ||
-						SpellNode(child->children[0]).find("typedef") == string::npos) continue;
+						!HasDeclarationSpecifier(child->children[0], "typedef")) continue;
 					const CPPGMAstNodePtr list = ChildOfKindLocal(child, "init-declarator-list");
 					if(!list) continue;
 					for(size_t item_index = 0; item_index < list->children.size(); ++item_index) {
@@ -886,7 +868,7 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 				return !result->empty();
 			}
 		if(child->kind != "simple-declaration" || child->children.empty()) continue;
-		if(aliases_only && SpellNode(child->children[0]).find("typedef") == string::npos)
+		if(aliases_only && !HasDeclarationSpecifier(child->children[0], "typedef"))
 			continue;
 		const string base = NodeTypeSpelling(child->children[0]);
 		const CPPGMAstNodePtr list = ChildOfKindLocal(child, "init-declarator-list");

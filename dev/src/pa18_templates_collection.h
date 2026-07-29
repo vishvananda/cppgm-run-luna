@@ -86,6 +86,7 @@ inline string CanonicalSpelling(string raw)
 	return result;
 }
 string CollapseRepeatedQualifier(string raw);
+string CollapseRepeatedQualifiedPath(string value);
 string NormalizeTypeArgument(string raw);
 string PA18ExplicitSpecializationKey(const string& qualified_name,
 	const vector<string>& arguments);
@@ -559,9 +560,10 @@ private:
 	map<string, CPPGMAstNodePtr> extern_instantiation_declarations_;
 	map<string, set<string> > requested_nested_classes_;
 	set<string> materialized_nested_classes_, materialized_member_definitions_, deferred_class_instantiations_; size_t defer_type_only_class_definitions_ = 0; size_t active_template_declaration_depth_ = 0; set<string> active_template_member_types_;
-	mutable set<string> active_member_type_lookups_, active_function_results_,
-		active_class_template_selections_, active_class_specialization_matches_;
-	mutable size_t active_class_specialization_depth_ = 0;
+	mutable set<string> active_member_type_lookups_,
+		active_function_results_,
+		active_class_template_selections_, active_class_template_selection_families_,
+		active_class_specialization_matches_;
 	struct ActiveFunctionResultScope { PA18TemplateExpander* owner; string key; ActiveFunctionResultScope(PA18TemplateExpander* value, const string& name) : owner(value), key(name) {} ~ActiveFunctionResultScope() { owner->active_function_results_.erase(key); } };
 	map<string, FunctionSignature> active_function_substitutions_;
 	size_t EstimateTypeSize(string raw, const string& context) const;

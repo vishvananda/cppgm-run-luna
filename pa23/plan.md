@@ -388,3 +388,54 @@ from **267/396**), and the PA23 file audit passes.
 Resolve the two dependent-typename overload/materialization cases first, then
 take the broader non-timeout deferred-SFINAE group.  Validate the focused pair,
 the full PA23 report, the through-PA22 gate, and the file audit.
+
+## Checkpoint 4 audit — 2026-07-29
+
+### Checkpoint Scope
+
+Audited the typed-SFINAE checkpoint that landed in `b7f7787`, including its
+owner/member replay, specialization matching, materialization protection, and
+cycle-identity boundaries.  The audit changes stay in the existing typed AST,
+substitution, and registry paths; no test or reference fixture changes were
+made.
+
+### Validation
+
+The final PA23 report is **285/396**: 76 exit-status failures, 33 LowIR
+comparisons, and the same two reentrant static-query timeout fixtures.  This is
+one test above the checkpoint baseline of **284/396**, with no current-only
+failures against the clean checkpoint comparison.  The exact through-PA22
+gate passes at **2100/2100**, and the PA23 file audit passes with the existing
+repository warnings.
+
+### Remaining Work Map
+
+The complete 111-fixture set is recorded in `pa23/audit.md`.  The concise
+behavior map is:
+
+- **Qualified owner/member replay (general/100, general/400, and spec/100):**
+  namespace and inherited-owner propagation, current-specialization member
+  lookup, out-of-class member/constructor replay, and generated declaration
+  metadata remain the largest status/materialization band.
+- **Deferred substitution and SFINAE (general/300, general/500, spec/300,
+  plus the two dependent-typename cases):** candidate-local detection,
+  deleted-candidate handling, no-eager instantiation, cached queries, and
+  dependent member results remain grouped around typed query state.
+- **Deduction and overload composition (general/200, function-oriented
+  general/400, and spec/200/spec/400):** packs, defaults, conversion
+  candidates, template-template arguments, function-type partial ordering,
+  and non-deduced contexts remain grouped for the next deduction increment.
+- **Typed aliases and non-type values:** variable/member templates, integral,
+  pointer/reference, `sizeof`, boolean, and pack-kind arguments still need
+  their existing typed facts carried through replay.
+- **LowIR/materialization:** the remaining LowIR comparisons are concentrated
+  in explicit/extern specialization replay, constructors, member emission,
+  function pointers, and declaration ordering/metadata.
+
+### Next Checkpoint Group
+
+Bundle the two dependent-typename fixtures with the non-timeout deferred-SFINAE
+set: the detector/deleted-candidate cases, cached/no-eager query cases, and
+the dependent member-result cases.  Keep the two timeout fixtures as stress
+witnesses for that same typed query-identity path; do not alter their harness
+timeout or add a timeout-specific acceptance path.

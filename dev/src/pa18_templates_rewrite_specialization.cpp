@@ -345,6 +345,37 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 	map<string, string>* inferred, const string& context) const
 {
 	if(!definition.partial_specialization) return false;
+	string match_key = definition.qualified_name + "|" + context;
+	for(size_t argument = 0; argument < arguments.size(); ++argument) {
+		string spelling = CanonicalSpelling(RestoreSpecializationSpelling(
+			arguments[argument]));
+		const string generated_name = LastComponent(spelling);
+		map<string, string>::const_iterator source = specialization_bases_.find(generated_name);
+		map<string, vector<string> >::const_iterator generated_arguments =
+			specialization_arguments_.find(generated_name);
+		if(source != specialization_bases_.end() &&
+			generated_arguments != specialization_arguments_.end()) {
+			string source_name = source->second;
+			const size_t source_open = source_name.find('<');
+			if(source_open != string::npos) source_name.erase(source_open);
+			spelling = source_name + "<";
+			for(size_t value = 0; value < generated_arguments->second.size(); ++value) {
+				if(value) spelling += ",";
+				spelling += RestoreSpecializationSpelling(
+					generated_arguments->second[value]);
+			}
+			spelling += ">";
+		}
+		match_key += "|" + CollapseRepeatedQualifiedPath(
+			CollapseRepeatedQualifier(NormalizeTypeArgument(spelling)));
+	}
+	if(!active_class_specialization_matches_.insert(match_key).second) return false;
+	struct MatchScope {
+		set<string>* active;
+		string key;
+		MatchScope(set<string>* value, const string& name) : active(value), key(name) {}
+		~MatchScope() { active->erase(key); }
+	} match_scope(&active_class_specialization_matches_, match_key);
 	set<string> parameter_names;
 	for(size_t i = 0; i < definition.specialization_parameters.size(); ++i)
 		if(!definition.specialization_parameters[i].empty())
@@ -428,10 +459,10 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 		}
 		if(argument_index >= arguments.size()) return false;
 		string actual = CanonicalSpelling(arguments[argument_index++]);
-		// A second replay pass can append the source template argument list to
-		// an already materialized generated class name (`box_int_<int>`).  Only
-		// normalize that malformed generated spelling; ordinary generated names
-		// retain their qualified identity for lookup and lowering.
+		// A replay pass can append a source argument list to an already
+		// materialized generated class name.  Use the typed specialization
+		// registry to recover the nominal generated identity before matching;
+		// ordinary generated names without a recorded source remain unchanged.
 		string generated_actual_base = actual;
 		const size_t generated_actual_open = generated_actual_base.find('<');
 		if(generated_actual_open != string::npos) {
@@ -439,7 +470,7 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 			const string generated_actual_key = LastComponent(generated_actual_base);
 			if(specialization_bases_.find(generated_actual_key) != specialization_bases_.end() &&
 				specialization_arguments_.find(generated_actual_key) !=
-				specialization_arguments_.end())
+					specialization_arguments_.end())
 				actual = generated_actual_key;
 		}
 		const size_t actual_parameter = argument_index - 1;
@@ -483,9 +514,13 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 		if(!dependent_actual && actual_parameter < definition.parameters.size() &&
 			definition.parameters[actual_parameter].type &&
 			(actual.find("::") != string::npos || actual.find('<') != string::npos)) {
+			map<string, string> protected_actual_substitutions = local;
+			ProtectMaterializedTemplateBases(actual, context, local,
+				&protected_actual_substitutions);
 			const string rewritten_actual = NormalizeTypeArgument(
 				const_cast<PA18TemplateExpander*>(this)->RewriteText(
-					ReplaceIdentifiersPreservingPackSizes(actual, local), context, local, 0));
+					ReplaceIdentifiersPreservingPackSizes(actual, protected_actual_substitutions),
+					context, protected_actual_substitutions, 0));
 			if(!rewritten_actual.empty()) actual = rewritten_actual;
 		}
 		const size_t pattern_open = pattern.find('<');
@@ -494,9 +529,13 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 			(pattern_open == string::npos || pattern_scope > pattern_open);
 		if(pattern.find("typename") != string::npos || dependent_member_pattern) {
 			try {
+				map<string, string> protected_pattern_substitutions = local;
+				ProtectMaterializedTemplateBases(pattern, context, local,
+					&protected_pattern_substitutions);
 				const string rewritten_pattern = NormalizeTypeArgument(
 					const_cast<PA18TemplateExpander*>(this)->RewriteText(
-						ReplaceIdentifiersPreservingPackSizes(pattern, local), context, local, 0));
+						ReplaceIdentifiersPreservingPackSizes(pattern, protected_pattern_substitutions),
+						context, protected_pattern_substitutions, 0));
 				if(!rewritten_pattern.empty()) pattern = rewritten_pattern;
 			} catch(const PA18SubstitutionFailure&) {
 				return false;
@@ -535,23 +574,20 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 				break;
 			}
 		if(argument_index > 0 && argument_index - 1 < definition.parameters.size() &&
-			!definition.parameters[argument_index - 1].type) {
+			!definition.parameters[argument_index - 1].type &&
+			!definition.parameters[argument_index - 1].template_template) {
 			PA19ConstantExpressionParser parser(constant_values_, local,
 				constant_type_sizes_, constant_type_alignments_, type_aliases_);
 			PA19IntegralValue normalized_value;
 			if(parser.Evaluate(pattern, &normalized_value))
 				pattern = TemplateIntegralValueSpelling(normalized_value);
-			else if((definition.name.find("enable_if") != string::npos ||
-				definition.name.find("disable_if") != string::npos) &&
-				const_cast<PA18TemplateExpander*>(this)->EvaluateIntegralText(
-					pattern, context, local, &normalized_value) && normalized_value.known)
+			else if(const_cast<PA18TemplateExpander*>(this)->EvaluateIntegralText(
+				pattern, context, local, &normalized_value) && normalized_value.known)
 				pattern = TemplateIntegralValueSpelling(normalized_value);
 			if(parser.Evaluate(actual, &normalized_value))
 				actual = TemplateIntegralValueSpelling(normalized_value);
-			else if((definition.name.find("enable_if") != string::npos ||
-				definition.name.find("disable_if") != string::npos) &&
-				const_cast<PA18TemplateExpander*>(this)->EvaluateIntegralText(
-					actual, context, local, &normalized_value) && normalized_value.known)
+			else if(const_cast<PA18TemplateExpander*>(this)->EvaluateIntegralText(
+				actual, context, local, &normalized_value) && normalized_value.known)
 				actual = TemplateIntegralValueSpelling(normalized_value);
 		}
 		if(pattern.size() > 2 && pattern.compare(pattern.size() - 2, 2, "&&") == 0 &&
@@ -619,11 +655,14 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 		if(!TemplateBase(source_pattern, open, &begin, &base)) continue;
 		const TemplateDefinition* outer = FindDefinition(base, context);
 		if(!outer || !outer->alias_template) continue;
+		map<string, string> protected_pattern_substitutions = local;
+		ProtectMaterializedTemplateBases(source_pattern, context, local,
+			&protected_pattern_substitutions);
 		const string substituted_pattern = ReplaceIdentifiersPreservingPackSizes(
-			CanonicalSpelling(source_pattern), local);
+			CanonicalSpelling(source_pattern), protected_pattern_substitutions);
 		try {
 			const string rewritten = const_cast<PA18TemplateExpander*>(this)->RewriteText(
-				substituted_pattern, context, local, 0);
+				substituted_pattern, context, protected_pattern_substitutions, 0);
 			(void)rewritten;
 		} catch(const PA18SubstitutionFailure&) {
 			return false;

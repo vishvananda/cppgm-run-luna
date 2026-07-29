@@ -234,4 +234,39 @@ void PA18TemplateExpander::ProtectMaterializedSubstitutions(
         }
 }
 
+void PA18TemplateExpander::ProtectMaterializedTemplateBases(
+	const string& raw, const string& context,
+	const map<string, string>& substitutions,
+	map<string, string>* protected_substitutions) const
+{
+	(void)context;
+	if(!protected_substitutions) return;
+	vector<string> erase_keys;
+	// Scan the source spelling once and consult the typed substitution index by
+	// identifier.  The previous per-binding search repeated the whole spelling
+	// for every bound name on a hot rewrite path.
+	for(size_t at = 0; at < raw.size();) {
+		if(!IsIdentifierCharacter(raw[at])) {
+			++at;
+			continue;
+		}
+		const size_t begin = at;
+		while(at < raw.size() && IsIdentifierCharacter(raw[at])) ++at;
+		const string name = raw.substr(begin, at - begin);
+		map<string, string>::const_iterator substitution = substitutions.find(name);
+		if(substitution == substitutions.end()) continue;
+		const string generated = LastComponent(substitution->second);
+		// The specialization registry is the typed ownership fact for a
+		// materialized template-id.  Do not fall back to FindClassDeclaration
+		// here: lookup itself replays partial specializations and can re-enter
+		// the member path that is trying to protect its source spelling.
+		if(specialization_bases_.find(generated) == specialization_bases_.end()) continue;
+		size_t after = at;
+		while(after < raw.size() && isspace(static_cast<unsigned char>(raw[after]))) ++after;
+		if(after < raw.size() && raw[after] == '<') erase_keys.push_back(name);
+	}
+	for(size_t key = 0; key < erase_keys.size(); ++key)
+		protected_substitutions->erase(erase_keys[key]);
+}
+
 } // namespace pa18_templates_internal

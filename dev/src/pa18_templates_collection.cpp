@@ -4,6 +4,27 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
+string CollapseRepeatedQualifiedPath(string value)
+{
+	bool changed = false;
+	do {
+		changed = false;
+		for(size_t start = 0; !changed && start < value.size(); ++start)
+			for(size_t separator = value.find("::", start);
+				separator != string::npos;
+				separator = value.find("::", separator + 2)) {
+				const size_t prefix_size = separator + 2 - start;
+				if(separator + 2 + prefix_size > value.size() ||
+					value.compare(separator + 2, prefix_size, value, start,
+						prefix_size) != 0) continue;
+				value.erase(separator + 2, prefix_size);
+				changed = true;
+				break;
+			}
+	} while(changed);
+	return value;
+}
+
 void PA18TemplateExpander::EnsureTypeDependency(const string& spelling, const string& context,
 		const string& owner)
 	{
