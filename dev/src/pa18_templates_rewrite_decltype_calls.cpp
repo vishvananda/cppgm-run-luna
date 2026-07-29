@@ -12,9 +12,7 @@ bool PA18TemplateExpander::IsDeletedFunctionCall(const string& callee,
 		context);
 	if(!candidates.empty()) {
 		for(size_t candidate = 0; candidate < candidates.size(); ++candidate) {
-			const CPPGMAstNodePtr deleted = DescendantOfKind(
-				candidates[candidate]->declaration, "special-initializer");
-			if(!deleted || RemoveMarker(deleted->value) != "delete") return false;
+			if(!candidates[candidate] || !candidates[candidate]->deleted) return false;
 		}
 		return true;
 	}
@@ -499,9 +497,7 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 			// selecting it in an unevaluated call is an invalid expression-SFINAE
 			// probe.  Reject only this candidate and continue looking for the fallback;
 			// the declaration itself must never be materialized as the probe result.
-			const CPPGMAstNodePtr deleted = DescendantOfKind(definition.declaration,
-				"special-initializer");
-			if(deleted && RemoveMarker(deleted->value) == "delete") continue;
+			if(definition.deleted) continue;
 			all_candidates_deleted = false;
 			map<string, string> candidate_substitutions = substitutions;
 			ApplyFriendClassSubstitutions(definition, actual_types, function_context,

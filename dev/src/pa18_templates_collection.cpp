@@ -4,6 +4,12 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
+bool IsDeletedFunctionDeclaration(const CPPGMAstNodePtr& declaration)
+{
+	const CPPGMAstNodePtr deleted = DescendantOfKind(declaration, "special-initializer");
+	return deleted && RemoveMarker(deleted->value) == "delete";
+}
+
 string CollapseRepeatedQualifiedPath(string value)
 {
 	bool changed = false;

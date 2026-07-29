@@ -211,3 +211,76 @@ spec/400-qualified-member-template-id-bool-constant.t
 spec/400-template-template-member-alias-owner-shadow.t
 spec/500-conditional-alias-index-sequence-member-template-call.t
 ```
+
+## Checkpoint 5 audit — 2026-07-29
+
+### Scope Reviewed
+
+- The PA23 Checkpoint 5 implementation and result in `pa23/plan.md`, the
+  PA23 contract, and the required testing/reference rules.
+- The deferred replay changes in `804b32b`, including candidate viability,
+  deleted-function probes, dependent return constraints, pack replay, and
+  generated-owner lookup.
+- The uncommitted audit fixes in the PA18 collection, call, decltype,
+  function-argument, member-lookup, and emission paths.
+
+### Findings and Changes
+
+- Candidate viability no longer discovers deleted declarations or immediate
+  `enable_if` constraints by scanning a rewritten return spelling.  Those
+  facts are collected once in `TemplateDefinition` and `FunctionSignature`
+  state and reused by materialization and unevaluated-call lookup.
+- Alias reference collapsing now consumes the collected typed
+  `reference_alias_cv_parameter` fact instead of reparsing generated text.
+- Generated qualified-owner normalization is no longer tied to the literal
+  `std::std::` spelling, and source lexical paths remain distinct unless the
+  normalized path is a registered generated specialization.  The member
+  replay path no longer uses an `enable_if`/`disable_if` name gate.
+- The helper implementations were moved into the existing responsibility-
+  specific `.cpp` modules and the new declarations were compacted only to
+  satisfy the existing file-size audit.  No source file, test, or reference
+  fixture was added or modified.
+- The implementation remains on the normal parser, typed template registry,
+  substitution, and LowIR materialization pipeline.  No reference binary,
+  host compiler, timeout acceptance path, or test-specific output path is
+  used.
+
+### Validation
+
+- `make build` — pass.
+- The six Checkpoint 5 witnesses — pass (`6 / 6`), including both dependent
+  typename cases, both deleted-function detector cases, the cached callable
+  pack case, and the dependent `std`/`enable_if` case.
+- `make test-report ACTIVE_TEST_REPORT_PAS='pa23'` — `292 / 396` passed;
+  72 exit-status mismatches, 30 LowIR comparisons, and the same two reentrant
+  static-query timeouts remain.  There are no current-only regressions against
+  the clean `804b32b` checkpoint state.
+- `make test-report-through-pa22` — pass (`2100 / 2100`).
+- `make test-report-through-pa23` — expected current-stage report with
+  `2392 / 2496` overall: the `2100 / 2100` through-PA22 gate plus the
+  `292 / 396` PA23 result.
+- `perl scripts/cppgm_file_audit.pl --stage pa23 --paths dev/src` — pass with
+  13 non-fatal repository warnings and no fatal issue.
+- The post-804 failure inventory is exactly the preceding Checkpoint 4
+  inventory minus these seven passing fixtures: the cached callable-pack
+  result, const-reference alias default, dependent `std`/`enable_if`, the two
+  dependent typename cases, and the two deleted-function detector cases.
+
+### Remaining Work Map
+
+The remaining 104 fixtures stay grouped as follows:
+
+- qualified owner/member replay and generated declaration/materialization;
+- typed integral, boolean, `sizeof`, variable/member-template, pointer/
+  reference, and pack-kind values;
+- deduction, overload ranking, conversion, ADL, template-template, and
+  non-deduced-context composition;
+- explicit/extern specialization, constructor replay, function pointers, and
+  downstream LowIR metadata; and
+- the two reentrant static-query witnesses, which still require a semantic
+  query fixed point rather than timeout-specific handling.
+
+The next implementation checkpoint is the qualified owner/member replay
+group bundled with typed non-type values, using one registered owner identity
+across inherited, out-of-class, alias-owner, and current-specialization
+queries before taking the remaining deduction/materialization comparisons.

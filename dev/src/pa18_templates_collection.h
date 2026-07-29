@@ -425,9 +425,9 @@ struct TemplateDefinition
 	bool variable_template;
 	bool member_template;
 	bool friend_declaration;
-	bool static_member;
+	bool static_member; bool deleted, immediate_return_constraint; string immediate_return_condition; bool reference_alias_cv_parameter;
 	set<string> static_members;
-	TemplateDefinition() : qualified_name(), name(), owner(), lexical_owner(), declaration(), parameters(), partial_specialization(false), explicit_specialization(false), specialization_parameters(), specialization_parameter_details(), specialization_pack_names(), specialization_pattern(), class_template(false), alias_template(false), variable_template(false), member_template(false), friend_declaration(false), static_member(false), static_members() {}
+	TemplateDefinition() : qualified_name(), name(), owner(), lexical_owner(), declaration(), parameters(), partial_specialization(false), explicit_specialization(false), specialization_parameters(), specialization_parameter_details(), specialization_pack_names(), specialization_pattern(), class_template(false), alias_template(false), variable_template(false), member_template(false), friend_declaration(false), static_member(false), deleted(false), immediate_return_constraint(false), immediate_return_condition(), reference_alias_cv_parameter(false), static_members() {}
 };
 // A materialized class specialization is identified by the canonical template
 // entity and its ordered arguments.  Keep the entity pointer separate from
@@ -459,7 +459,7 @@ struct FunctionSignature
 	CPPGMAstNodePtr result_specifiers;
 	CPPGMAstNodePtr declarator;
 	CPPGMAstNodePtr parameters; bool lvalue_argument; bool deleted; FunctionSignature() : result_specifiers(), declarator(), parameters(), lvalue_argument(false), deleted(false) {}
-};
+}; bool IsDeletedFunctionDeclaration(const CPPGMAstNodePtr& declaration);
 struct ExplicitCallSelection; struct MemberCallState; struct MemberCallCandidateState; class PA18TemplateExpander
 {
 public:
@@ -590,6 +590,7 @@ private:
 	string DeclaratorTypeSpelling(const string& base,
 		const CPPGMAstNodePtr& declarator) const;
 	string TypeIdSpelling(const CPPGMAstNodePtr& type_id) const;
+	bool CollectImmediateReturnConstraint(const CPPGMAstNodePtr& declaration, string* condition) const; bool IsDirectCvQualifiedAliasTarget(const CPPGMAstNodePtr& declaration, const vector<TemplateParameter>& parameters) const;
 	// Keep generated declaration ownership in one typed helper so forwards,
 	// class shells, and materialized definitions cannot diverge.
 	string GeneratedOwner(const TemplateDefinition& definition) const; string QualifyAliasTarget(const string& target, const string& alias) const; void ResolveUsingDeclarationTargets(); bool HasUsingMemberTemplate(const string& context, const string& member) const;
@@ -691,7 +692,7 @@ private:
 		FunctionSignature signature;
 		signature.result_specifiers = CloneNode(result_specs);
 		signature.declarator = CloneNode(declarator);
-		signature.parameters = CloneNode(DescendantOfKind(declarator, "parameter-clause")); signature.deleted = DescendantOfKind(declaration, "special-initializer") && RemoveMarker(DescendantOfKind(declaration, "special-initializer")->value) == "delete";
+		signature.parameters = CloneNode(DescendantOfKind(declarator, "parameter-clause")); signature.deleted = IsDeletedFunctionDeclaration(declaration);
 		const string qualified = JoinPath(context, name);
 		function_overloads_[qualified].push_back(signature);
 		if(function_signatures_.find(qualified) == function_signatures_.end())
@@ -913,7 +914,7 @@ private:
 	item.friend_declaration = declaration && !declaration->children.empty() && HasFriendSpecifier(declaration->children[0]);
 	item.static_member = declaration && !declaration->children.empty() &&
 		HasDeclarationSpecifier(declaration->children[0], "static");
-		item.parameters = Parameters(node->children[0]);
+		item.deleted = IsDeletedFunctionDeclaration(declaration); item.immediate_return_constraint = CollectImmediateReturnConstraint(declaration, &item.immediate_return_condition); item.parameters = Parameters(node->children[0]);
 		for(size_t parameter = 0; parameter < item.parameters.size(); ++parameter)
 			if(!item.parameters[parameter].name.empty()) {
 				template_parameter_names_.insert(item.parameters[parameter].name);
@@ -925,7 +926,7 @@ private:
 		item.class_template = declaration->kind == "class-specifier" ||
 			declaration->kind == "class-forward-declaration";
 		if(item.class_template) IndexStaticMembers(declaration, item.static_members);
-		item.alias_template = declaration->kind == "alias-declaration";
+			item.alias_template = declaration->kind == "alias-declaration"; item.reference_alias_cv_parameter = item.alias_template && IsDirectCvQualifiedAliasTarget(declaration, item.parameters);
 		item.variable_template = declaration->kind == "simple-declaration" &&
 			DescendantOfKind(declaration, "parameter-clause") == CPPGMAstNodePtr();
 		item.member_template = nested_member_template ||
@@ -995,8 +996,7 @@ private:
 					item.owner = primary->owner;
 					item.lexical_owner = primary->lexical_owner;
 					item.qualified_name = primary->qualified_name;
-					item.parameters = primary->parameters;
-					item.declaration = CloneNode(declaration);
+					item.parameters = primary->parameters; item.declaration = CloneNode(declaration); item.deleted = IsDeletedFunctionDeclaration(item.declaration); item.immediate_return_constraint = CollectImmediateReturnConstraint(item.declaration, &item.immediate_return_condition);
 					const CPPGMAstNodePtr primary_declarator = FunctionDeclarator(primary->declaration);
 					const CPPGMAstNodePtr specialized_declarator = FunctionDeclarator(declaration);
 					const CPPGMAstNodePtr primary_parameters =
@@ -1062,7 +1062,7 @@ private:
 			prior->second.declaration = item.declaration;
 			prior->second.lexical_owner = item.lexical_owner;
 			prior->second.class_template = item.class_template || prior->second.class_template;
-			prior->second.alias_template = item.alias_template || prior->second.alias_template;
+			prior->second.alias_template = item.alias_template || prior->second.alias_template; prior->second.deleted = item.deleted; prior->second.immediate_return_constraint = item.immediate_return_constraint; prior->second.immediate_return_condition = item.immediate_return_condition; prior->second.reference_alias_cv_parameter = item.reference_alias_cv_parameter;
 		} else {
 			definitions_[item.qualified_name] = item;
 			definitions_by_name_[item.name].push_back(item.qualified_name);

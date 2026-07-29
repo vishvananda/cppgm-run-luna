@@ -574,3 +574,29 @@ out-of-class, alias-owner, and current-specialization queries, then verify the
 corresponding integral/pack facts and their generated LowIR consumers. Keep
 the 292/396 PA23 count and the 2100/2100 through-PA22 gate as the regression
 baseline for that checkpoint.
+
+## Checkpoint 5 audit — 2026-07-29
+
+The Checkpoint 5 deferred-replay implementation and its follow-on audit fixes
+are complete. Candidate deleted state, immediate return constraints, and
+reference-alias qualification are now typed facts collected with declarations;
+the call and emission paths no longer recover them from generated spelling.
+Qualified member replay uses registered generated-specialization identity rather
+than a `std::std::` spelling exception or an `enable_if`/`disable_if` name gate.
+The helper ownership was kept in existing source modules and the file audit
+line limits remain satisfied.
+
+Validation for this audit is complete: the six focused fixtures pass, PA23 is
+`292 / 396` with 72 exit-status mismatches, 30 LowIR comparisons, and the same
+two reentrant timeout witnesses, the through-PA22 gate is `2100 / 2100`, and
+the through-PA23 report is `2392 / 2496` overall.  The PA23 file audit passes
+with its existing 13 warnings.  No current-only regressions were found
+relative to the clean `804b32b` state, and no tests or reference fixtures were
+changed.
+
+The remaining work is grouped into qualified owner/member replay and
+materialization, typed non-type values and partial-pack state, deduction and
+overload composition, explicit/extern/constructor LowIR metadata, and the two
+reentrant query fixed-point witnesses.  The next substantial checkpoint is the
+shared registered-owner path bundled with typed integral/boolean/`sizeof` and
+pack facts, followed by the remaining deduction comparison band.

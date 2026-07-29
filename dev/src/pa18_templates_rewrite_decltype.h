@@ -278,7 +278,7 @@ inline vector<string> SplitCallArguments(const string& raw)
 		const vector<string>& actual_types, vector<string>* result,
 		const map<string, string>& substitutions, const string& context,
 		const vector<string>* explicit_prefix = 0);
-
+	bool ImmediateReturnConstraintDisabled(const TemplateDefinition& definition, const string& context, const map<string, string>& substitutions);
 	string FunctionResultType(const TemplateDefinition& definition,
 		const vector<string>& arguments, const string& context,
 		const map<string, string>* outer_substitutions = 0,

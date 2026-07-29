@@ -275,12 +275,22 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 	// dependency; aliases and user-defined traits take the same semantic path.
 	string class_key = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(
 		raw_class, substitutions));
-	// A generated replay can duplicate the standard-library owner while
-	// redirecting a dependent member query.  Normalize that concrete path, but
-	// leave source lexical owners intact: their repeated spelling can be the
-	// active lookup context for hidden friends and is not itself a new identity.
-	if(class_key.find("std::std::") != string::npos)
-		class_key = CollapseRepeatedQualifiedPath(CollapseRepeatedQualifier(class_key));
+	// A generated replay can duplicate a qualified owner while redirecting a
+	// dependent member query.  Collapse only when the normalized spelling is a
+	// known generated specialization and the original spelling is not a source
+	// declaration; a real lexical path such as `a::a::type` remains distinct.
+	const string normalized_generated_key = CollapseRepeatedQualifiedPath(
+		CollapseRepeatedQualifier(class_key));
+	const bool normalized_is_generated =
+		normalized_generated_key != class_key &&
+		specialization_bases_.find(LastComponent(normalized_generated_key)) !=
+			specialization_bases_.end() &&
+		specialization_arguments_.find(LastComponent(normalized_generated_key)) !=
+			specialization_arguments_.end();
+	const bool original_is_known = class_contexts_.find(class_key) !=
+		class_contexts_.end() || class_declarations_.find(class_key) !=
+		class_declarations_.end();
+	if(normalized_is_generated && !original_is_known) class_key = normalized_generated_key;
 	if(class_key.find("::") == string::npos) {
 		const string resolved_class_key = CanonicalSpelling(ResolveAlias(class_key, context));
 		if(!resolved_class_key.empty() && resolved_class_key != class_key)
@@ -802,9 +812,7 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 			// class body is being replayed.  In that window, continue lookup through
 			// the selected source partial so inherited members remain visible; the
 			// generated declaration will take over once materialization completes.
-			if(incomplete_concrete || (specialization_definition &&
-				(specialization_definition->name.find("enable_if") != string::npos ||
-					specialization_definition->name.find("disable_if") != string::npos)))
+			if(incomplete_concrete)
 				selected_specialization_declaration = selected_specialization->declaration;
 			map<string, string> specialized_bindings;
 			if(MatchClassSpecializationPattern(*selected_specialization,

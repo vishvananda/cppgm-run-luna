@@ -5,6 +5,42 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
+bool PA18TemplateExpander::CollectImmediateReturnConstraint(
+	const CPPGMAstNodePtr& declaration, string* condition) const
+{
+	if(condition) condition->clear();
+	if(!condition || !declaration || declaration->children.empty()) return false;
+	const CPPGMAstNodePtr declarator = FunctionDeclarator(declaration);
+	if(!declarator) return false;
+	const CPPGMAstNodePtr trailing = ChildOfKindLocal(declarator,
+		"trailing-return-type");
+	string return_spelling;
+	if(trailing) {
+		return_spelling = TypeIdSpelling(ChildOfKindLocal(trailing, "type-id"));
+	} else {
+		return_spelling = NodeTypeSpelling(declaration->children[0]) +
+			ReturnDeclaratorSuffix(declarator);
+	}
+	return_spelling = CanonicalSpelling(return_spelling);
+	const size_t open = return_spelling.find('<');
+	if(open == string::npos) return false;
+	string base;
+	string arguments;
+	size_t begin = 0;
+	size_t close = string::npos;
+	if(!TemplateBase(return_spelling, open, &begin, &base) ||
+		!TemplateRange(return_spelling, open, &arguments, &close)) return false;
+	const string template_name = LastComponent(base);
+	if(template_name != "enable_if" && template_name != "enable_if_c" &&
+		template_name != "enable_if_t") return false;
+	const string suffix = CanonicalSpelling(return_spelling.substr(close + 1));
+	if(!suffix.empty() && suffix != "::type") return false;
+	const vector<string> parts = SplitTemplateArguments(arguments);
+	if(parts.empty()) return false;
+	*condition = parts[0];
+	return true;
+}
+
 string PA18TemplateExpander::FunctionResultType(const TemplateDefinition& definition,
 	const vector<string>& arguments, const string& context,
 	const map<string, string>* outer_substitutions,
@@ -110,61 +146,8 @@ string PA18TemplateExpander::FunctionResultType(const TemplateDefinition& defini
 		result = NodeTypeSpelling(definition.declaration->children[0]);
 		result += ReturnDeclaratorSuffix(declarator);
 	}
-	const auto has_disabled_enable_if = [&](const string& spelling) {
-		for(size_t search = 0; search < spelling.size();) {
-			const size_t marker = spelling.find("enable_if", search);
-			if(marker == string::npos) break;
-			if(marker > 0 && IsIdentifierCharacter(spelling[marker - 1])) {
-				search = marker + 9;
-				continue;
-			}
-			size_t open = marker;
-			while(open < spelling.size() && IsIdentifierCharacter(spelling[open])) ++open;
-			while(open < spelling.size() && isspace(static_cast<unsigned char>(spelling[open]))) ++open;
-			if(open >= spelling.size() || spelling[open] != '<') {
-				search = marker + 9;
-				continue;
-			}
-			string base, arguments_text;
-			size_t begin = 0, close = string::npos;
-			if(!TemplateBase(spelling, open, &begin, &base)) {
-				search = marker + 9;
-				continue;
-			}
-			bool range_ok = TemplateRange(spelling, open, &arguments_text, &close);
-			if(!range_ok) {
-				int depth = 0;
-				for(size_t position = open; position < spelling.size(); ++position) {
-					if(spelling[position] == '<') ++depth;
-					else if(spelling[position] == '>' && depth > 0 && --depth == 0) {
-						arguments_text = spelling.substr(open + 1,
-							position - open - 1);
-						close = position;
-						range_ok = true;
-						break;
-					}
-				}
-			}
-			if(!range_ok) {
-				search = marker + 9;
-				continue;
-			}
-			if(LastComponent(base) == "enable_if" || LastComponent(base) == "enable_if_c" ||
-				LastComponent(base) == "enable_if_t") {
-				const vector<string> condition = SplitTemplateArguments(arguments_text);
-				if(!condition.empty() && condition[0].find("...") == string::npos &&
-					!HasUnresolvedTemplateParameter(condition[0], result_context, local)) {
-					PA19IntegralValue enabled;
-					if(EvaluateIntegralText(condition[0], result_context, local, &enabled) &&
-						enabled.known && PA19Raw(enabled) == 0) return true;
-				}
-			}
-			search = close == string::npos ? marker + 9 : close + 1;
-		}
-		return false;
-	};
-	if(validate_immediate_return && has_disabled_enable_if(
-		ReplaceIdentifiersPreservingPackSizes(result, local))) {
+	if(validate_immediate_return && ImmediateReturnConstraintDisabled(
+		definition, result_context, local)) {
 		active_pack_substitutions_ = previous_packs;
 		return string();
 	}
@@ -174,14 +157,24 @@ string PA18TemplateExpander::FunctionResultType(const TemplateDefinition& defini
 		active_pack_substitutions_ = previous_packs;
 		throw;
 	}
-	if(validate_immediate_return && has_disabled_enable_if(result)) {
-		active_pack_substitutions_ = previous_packs;
-		return string();
-	}
 	result = CollapseReferenceSpelling(ReplaceIdentifiers(result, local));
 	result = ResolveDecltypeTypeName(result, result_context, local);
 	active_pack_substitutions_ = previous_packs;
 	return NormalizeTypeArgument(result);
+}
+
+bool PA18TemplateExpander::ImmediateReturnConstraintDisabled(
+	const TemplateDefinition& definition, const string& context,
+	const map<string, string>& substitutions)
+{
+	if(!definition.immediate_return_constraint ||
+		definition.immediate_return_condition.empty() ||
+		HasUnresolvedTemplateParameter(definition.immediate_return_condition,
+			context, substitutions)) return false;
+	PA19IntegralValue enabled;
+	if(!EvaluateIntegralText(definition.immediate_return_condition, context,
+		substitutions, &enabled) || !enabled.known) return false;
+	return PA19Raw(enabled) == 0;
 }
 
 bool PA18TemplateExpander::InferFunctionTypeArguments(const TemplateDefinition& definition,

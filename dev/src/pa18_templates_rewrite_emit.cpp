@@ -6,6 +6,22 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
+bool PA18TemplateExpander::IsDirectCvQualifiedAliasTarget(
+	const CPPGMAstNodePtr& declaration,
+	const vector<TemplateParameter>& parameters) const
+{
+	if(!declaration || declaration->children.empty()) return false;
+	const string target = CanonicalSpelling(TypeIdSpelling(declaration->children[0]));
+	for(size_t parameter = 0; parameter < parameters.size(); ++parameter) {
+		const TemplateParameter& detail = parameters[parameter];
+		if(!detail.type || detail.name.empty()) continue;
+		if(target == "const " + detail.name || target == detail.name + " const" ||
+			target == "volatile " + detail.name ||
+			target == detail.name + " volatile") return true;
+	}
+	return false;
+}
+
 void PA18TemplateExpander::CheckExplicitSpecializationOrder(
 	const CPPGMAstNodePtr& input, const string& context)
 {
@@ -396,20 +412,7 @@ void PA18TemplateExpander::RegisterGeneratedTypeEntity(
 					break;
 				}
 			}
-		string target_spelling;
-		if(definition.declaration && !definition.declaration->children.empty())
-			target_spelling = CanonicalSpelling(TypeIdSpelling(
-				definition.declaration->children[0]));
-		bool directly_cv_qualifies_parameter = false;
-		for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter)
-			if(definition.parameters[parameter].type &&
-				!definition.parameters[parameter].name.empty() &&
-				(target_spelling == "const " + definition.parameters[parameter].name ||
-				 target_spelling == "volatile " + definition.parameters[parameter].name)) {
-				directly_cv_qualifies_parameter = true;
-				break;
-			}
-		if(reference_argument && directly_cv_qualifies_parameter) {
+		if(reference_argument && definition.reference_alias_cv_parameter) {
 			reference_alias_specializations_[local_name] = true;
 			reference_alias_specializations_[JoinPath(definition.owner, local_name)] = true;
 			reference_alias_specializations_[JoinPath(
