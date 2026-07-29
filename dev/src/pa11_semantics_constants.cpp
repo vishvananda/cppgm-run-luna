@@ -1101,7 +1101,6 @@ ConstantValue Analyzer::EvaluateTyped(const CPPGMAstNodePtr& expression, Scope* 
 	ConstantValue value = Evaluate(expression, scope);
 	return expected ? ConvertConstantValue(value, expected, scope) : value;
 }
-
 ConstantValue Analyzer::Evaluate(const CPPGMAstNodePtr& expression, Scope* scope)
 {
 	if (!expression) return ConstantValue();
@@ -1134,6 +1133,7 @@ ConstantValue Analyzer::Evaluate(const CPPGMAstNodePtr& expression, Scope* scope
 	}
 	if (expression->kind == "id-expression")
 	{
+		if(expression->value == "true" || expression->value == "false") return FromIntegralValue(PA19IntegralValue::Signed(expression->value == "true", "bool", 1));
 		ConstantValue frame_value;
 		if (ConstantFrameValue(expression->value, &frame_value)) return frame_value;
 		// A qualified namespace variable is a complete typed lookup path.

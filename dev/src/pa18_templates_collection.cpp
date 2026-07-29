@@ -1069,6 +1069,13 @@ void PA18TemplateExpander::ValidateTemplateNode(const CPPGMAstNodePtr& node,
 		node->value.find("::") != string::npos)
 		next_class = LastComponent(StripTemplateArgumentsForValidation(
 		PrefixComponent(node->value)));
+	if(!class_node && node->kind == "function-definition" &&
+		next_class.empty() && node->children.size() > 1) {
+		const string function_spelling = FirstIdentifierLocal(node->children[1]);
+		if(function_spelling.find("::") != string::npos)
+			next_class = LastComponent(StripTemplateArgumentsForValidation(
+				PrefixComponent(function_spelling)));
+	}
 	const bool function_node = node->kind == "function-definition" ||
 		node->kind == "special-member-definition";
 	for(size_t i = 0; i < node->children.size(); ++i)
@@ -1163,52 +1170,15 @@ bool PA18TemplateExpander::ValidationTypeArgument(const string& raw,
 		(spelling.size() == 8 || isspace(static_cast<unsigned char>(spelling[8]))))
 		spelling = CanonicalSpelling(spelling.substr(8));
 	map<string, bool>::const_iterator parameter = parameters.find(spelling);
-	return parameter != parameters.end() && parameter->second;
-}
-
-void PA18TemplateExpander::ValidateTemplateArgumentKinds(
-	const CPPGMAstNodePtr& node, const string& inherited_context,
-	const map<string, bool>& inherited_parameters) const
-{
-	if(!node) return;
-	string context = inherited_context;
-	map<const CPPGMAstNode*, string>::const_iterator lexical = lexical_contexts_.find(node.get());
-	if(lexical != lexical_contexts_.end()) context = lexical->second;
-	map<string, bool> parameters = inherited_parameters;
-	if(node->kind == "template-declaration" && node->children.size() > 1) {
-		const vector<TemplateParameter> own = Parameters(node->children[0]);
-		for(size_t i = 0; i < own.size(); ++i) parameters[own[i].name] = own[i].type;
-		ValidateTemplateArgumentKinds(node->children[1], context, parameters);
-		return;
-	}
-	if(node->kind == "type-name" || node->kind == "decl-specifier" ||
-		node->kind == "type-specifier") {
-		const string raw = RemoveMarker(node->value);
-		const size_t open = raw.find('<');
-		if(open != string::npos) {
-			string base, argument_text;
-			size_t begin = 0, close = string::npos;
-			if(TemplateBase(raw, open, &begin, &base) &&
-				TemplateRange(raw, open, &argument_text, &close)) {
-				const TemplateDefinition* definition = FindDefinition(base, context);
-				if(definition) {
-					const vector<string> arguments = SplitTemplateArguments(argument_text);
-					size_t parameter = 0;
-					for(size_t argument = 0; argument < arguments.size(); ++argument) {
-						while(parameter < definition->parameters.size() &&
-							!definition->parameters[parameter].pack && argument > parameter) ++parameter;
-						if(parameter >= definition->parameters.size()) break;
-						const TemplateParameter& expected = definition->parameters[parameter];
-						if(!expected.type && ValidationTypeArgument(arguments[argument], parameters))
-							throw logic_error("type used as non-type template argument");
-						if(!expected.pack) ++parameter;
-					}
-				}
-			}
-		}
-	}
-	for(size_t i = 0; i < node->children.size(); ++i)
-		ValidateTemplateArgumentKinds(node->children[i], context, parameters);
+	if(parameter != parameters.end() && parameter->second) return true;
+	if(spelling.compare(0, 8, "typename") == 0 &&
+		(spelling.size() == 8 || isspace(static_cast<unsigned char>(spelling[8]))))
+		return true;
+	if(spelling.compare(0, 7, "decltype") == 0 &&
+		spelling.size() > 8 && spelling[7] == '(') return true;
+	const size_t type_suffix = spelling.rfind("::type");
+	if(type_suffix != string::npos && type_suffix + 6 == spelling.size()) return true;
+	return false;
 }
 
 bool PA18TemplateExpander::FindLogicalNamespaceAlias(const string& spelling,

@@ -977,3 +977,166 @@ and candidate-local replay; typed aliases, variable templates, `sizeof`, and
 pack state; deduction/overload composition; specialization/extern/constructor
 LowIR; and the two reentrant fixed-point witnesses.  The next substantial
 checkpoint remains the first group bundled with the small typed-value groups.
+
+## Checkpoint 10 scope — 2026-07-29 (before implementation)
+
+### Baseline
+
+The clean turn-start report is **301/396**.  The complete current-PA failure
+set is **95 fixtures**: 61 exit-status mismatches, 32 LowIR comparison
+mismatches, and two timeouts.  Assignments through PA22 pass.  The required
+inventory was re-read from `/home/vishvananda/work/.ralph/luna-gpt-5.6-luna-ultra/last-test.log`;
+the full fixture list is also retained in `pa23/audit.md`.
+
+### Remaining Work Map
+
+- **Qualified owner/member replay and candidate-local lookup (status):**
+  `general/100-direct-namespace-wins-over-using-directive.t`,
+  `general/100-local-qualified-argument-replay.t`,
+  `general/100-member-template-specialization-return-prefers-member-call.t`,
+  `general/100-using-directive-template-member-type-typedef.t`,
+  `general/200-empty-pack-member-template-owner-key.t`,
+  `general/200-member-template-implicit-instantiation-not-overload.t`,
+  `general/200-nested-template-id-partial-specialization-deduction.t`,
+  `general/300-array-qualified-member-type-sfinae.t`,
+  `general/300-hidden-friend-current-specialization-enable-if.t`,
+  `general/300-qualified-explicit-template-alias-return-sfinae.t`,
+  `general/400-current-specialization-display-name-member-alias.t`,
+  `general/400-dependent-nontype-member-template-owner.t`,
+  `general/400-inherited-qualified-member-template-type.t`,
+  `general/400-member-alias-template-template-owner-argument.t`,
+  `general/400-member-template-result-pack-preserves-nested-function-pointer-owner.t`,
+  `general/400-nested-member-template-base-param-shadow-value.t`,
+  `general/400-out-of-class-ctor-using-imported-member-template.t`,
+  `general/400-unused-static-member-template-return-type.t`,
+  `general/500-dependent-qualified-member-template-result-bool.t`,
+  `general/500-out-of-class-member-template-dependent-owner-type.t`,
+  `general/500-recursive-qualified-member-template-bool-arg.t`,
+  `general/500-source-namespace-base-sfinae-chain.t`,
+  `spec/100-dependent-template-id-qualified-member-source-owner.t`,
+  `spec/200-inherited-template-param-shadow-forward.t`,
+  `spec/400-defaulted-nested-class-argument-partial-specialization.t`,
+  `spec/400-dependent-member-template-call.t`,
+  `spec/400-explicit-pack-type-argument-uses-bound-type.t`,
+  `spec/400-explicit-type-arg-dependent-qualified-member-template-id.t`,
+  `spec/400-qualified-member-template-id-bool-constant.t`, and
+  `spec/500-conditional-alias-index-sequence-member-template-call.t`.
+- **Typed alias, non-type, and pack state (status):**
+  `general/200-class-partial-specialization-no-derived-base-deduction.t`,
+  `general/200-template-template-qualified-default-arg-deduction.t`,
+  `general/400-dependent-alias-nontype-sequence-filter.t`,
+  `general/400-elaborated-type-template-arg-false-branch.t`,
+  `general/400-elaborated-type-template-arg-true-branch.t`,
+  `general/400-local-class-default-member-variable-template-nontype-type.t`,
+  `general/400-member-variable-template-leaf-sfinae.t`,
+  `general/400-variable-template-specializations.t`,
+  `general/500-array-type-argument-sfinae-static-value.t`,
+  `general/500-mp11-append-alias-template-sfinae.t`,
+  `general/500-nontype-alias-reinstantiation-structural-state.t`, and
+  `general/500-type-pack-rejects-value-pack-bad.t`.
+- **Deduction, conversion, and overload composition (status):**
+  `general/100-explicit-function-specialization-overload-parameter-match.t`,
+  `general/100-function-type-not-pointer-partial-specialization.t`,
+  `general/100-nontype-function-parameter-adjustment.t`,
+  `general/100-structured-bool-boost-convertible-mpl-overload.t`,
+  `general/200-constructor-template-parameter-shadows-instantiated-type.t`,
+  `general/200-function-template-named-parameter-sfinae.t`,
+  `general/200-member-function-template-address-explicit-pack.t`,
+  `general/300-constructor-template-const-ref-enable-if-conversion.t`,
+  `general/400-function-type-partial-specialization-fixed-arity-over-pack.t`,
+  `general/400-static-cast-rvalue-ref-skips-conversion-operator.t`,
+  `spec/100-function-template-nontype-function-pointer-call.t`,
+  `spec/100-function-template-nontype-function-pointer-specialization-call.t`,
+  `spec/100-local-member-call-constructor-template-instantiation.t`,
+  `spec/100-nontype-function-pointer-argument.t`,
+  `spec/400-conversion-function-template-call-argument.t`,
+  `spec/400-conversion-function-template-copy-init.t`, and
+  `spec/400-conversion-function-template-selection.t`.
+- **Specialization, extern/constructor replay, and LowIR metadata:** the 32
+  comparison fixtures are the exact `LOWIR` entries in the current report,
+  covering current/explicit specialization bodies, function pointers,
+  `sizeof`/non-type values, extern declarations, constructors, member
+  emission, and generated declaration metadata/order.
+- **Reentrant fixed points:**
+  `general/500-reentrant-static-query-callable-enable-if-cache.t` and
+  `general/500-reentrant-static-query-enable-if-partial.t` still time out and
+  require semantic query identity/cycle handling, not timeout-specific
+  acceptance.
+
+### Checkpoint Scope
+
+Implement the typed nested-member owner increment.  When a nested class
+template is materialized as part of a concrete enclosing specialization, bind
+only the enclosing `TemplateDefinition` parameters from the enclosing
+argument vector; retain the nested declaration’s own parameters and dependent
+member expressions until the nested template-id supplies those arguments.
+Preserve the existing typed pack scope and generated-owner registry while
+replaying inherited member types.  In the same immediate semantic validation
+pass, reject a value expression (including a value pack expansion such as
+`trait<Keys>::value...`) when the selected template parameter is a type
+parameter, while continuing to accept dependent type-ids and ordinary
+non-type expressions according to their declared parameter kinds.
+
+Validate this scope with:
+
+`general/400-inherited-qualified-member-template-type.t`,
+`general/400-dependent-nontype-member-template-owner.t`,
+`general/400-nested-member-template-base-param-shadow-value.t`,
+`general/500-out-of-class-member-template-dependent-owner-type.t`,
+`general/500-dependent-qualified-member-template-result-bool.t`,
+`spec/400-explicit-type-arg-dependent-qualified-member-template-id.t`,
+`spec/400-qualified-member-template-id-bool-constant.t`,
+`spec/500-conditional-alias-index-sequence-member-template-call.t`, and
+`general/500-type-pack-rejects-value-pack-bad.t`, followed by the full PA23
+report, the required through-PA22 report, and the PA23 file audit.  The next
+group is the remaining candidate-local SFINAE/deferred and deduction bands,
+bundled with any newly exposed owner paths; the two timeout fixtures remain
+fixed-point stress witnesses.
+
+## Checkpoint 10 result — 2026-07-29
+
+Implemented the nested-owner checkpoint.  Concrete enclosing specializations
+now bind only their enclosing parameters when materializing a member class
+template; non-template nested classes retain the earlier enclosing replay
+needed by PA18.  A complete nested class-template-id is replayed with the
+typed enclosing owner and its own arguments, while partial nested
+specializations stay on the established path.  Out-of-class function
+definitions also carry their qualified owner into dependent-type validation.
+Template-argument validation now tracks type versus value expressions
+recursively, including value-pack expansions, and the constant evaluator
+recognizes replayed boolean literals without ordinary identifier lookup.
+
+The validation helpers were moved to `dev/src/pa18_templates_validation.cpp`
+and added to the cppgm++ source set to keep the touched modules within the
+file-audit budgets.
+
+### Checkpoint validation
+
+- Focused PA18/PA21 regression witnesses: pass.
+- Focused PA22 validation witnesses: pass.
+- Selected PA23 owner/value witnesses: pass; the intentional bad type-pack
+  witness fails compilation as required.
+- `make test-report-through-pa22`: **2100/2100**, pass.
+- `make test-report ACTIVE_TEST_REPORT_PAS='pa23'`: **304/396**; this is
+  **+3** over the 301/396 turn-start baseline.  The residual 92 fixtures are
+  58 status mismatches, 32 LowIR comparisons, and the same two reentrant
+  timeout witnesses.
+- `perl scripts/cppgm_file_audit.pl --stage pa23 --paths dev/src`: pass with
+  pre-existing warnings only.
+
+### Refreshed Remaining Work Map and next checkpoint
+
+- **Owner/member lookup:** direct namespace/using-directive precedence,
+  out-of-class dependent member definitions, inherited member-template
+  lookup, qualified member-template result types, and the remaining
+  candidate-local owner/SFINAE cases.  The next checkpoint starts here with
+  the out-of-class and inherited owner witnesses bundled together.
+- **Typed values, aliases, packs, and deduction:** dependent alias filters,
+  elaborated type arguments, variable-template state, function-type partials,
+  pack/default deduction, and non-type function-pointer/conversion cases.
+- **Specialization and LowIR:** the 32 comparison-only fixtures covering
+  specialization bodies, constructors, extern/explicit instantiation,
+  function pointers, `sizeof`/non-type values, and generated declaration
+  metadata/order.
+- **Fixed points:** the two reentrant static-query fixtures still require
+  query identity/cycle handling; they remain separate stress witnesses.

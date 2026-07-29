@@ -409,8 +409,6 @@
 		const TemplateDefinition* nested = FindNestedDefinition(parent, nested_name);
 		if(nested && !nested->class_template) nested = 0;
 		CPPGMAstNodePtr nested_declaration = nested ? nested->declaration : CPPGMAstNodePtr();
-		vector<TemplateParameter> nested_parameters;
-		if(nested) nested_parameters = nested->parameters;
 		if(!nested) {
 			for(size_t child = 0; parent.declaration && child < parent.declaration->children.size(); ++child) {
 				const CPPGMAstNodePtr candidate = parent.declaration->children[child];
@@ -427,10 +425,12 @@
 		const string key = parent_local_name + "::" + nested_name;
 		if(!materialized_nested_classes_.insert(key).second) return;
 		map<string, string> substitutions;
-		for(size_t i = 0; i < nested_parameters.size() && i < parent_args.size(); ++i)
-			if(!nested_parameters[i].name.empty() &&
-				(nested_parameters[i].type || !nested_parameters[i].non_type_type.empty()))
-				substitutions[nested_parameters[i].name] = parent_args[i];
+		// Keep nested member-template parameters unbound until their template-id.
+		if(nested && !nested->member_template)
+			for(size_t i = 0; i < nested->parameters.size() && i < parent_args.size(); ++i)
+				if(!nested->parameters[i].name.empty() &&
+					(nested->parameters[i].type || !nested->parameters[i].non_type_type.empty()))
+					substitutions[nested->parameters[i].name] = parent_args[i];
 		for(size_t i = 0; i < parent.parameters.size() && i < parent_args.size(); ++i)
 			if(!parent.parameters[i].name.empty())
 				substitutions[parent.parameters[i].name] = parent_args[i];

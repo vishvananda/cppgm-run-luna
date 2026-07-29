@@ -1100,10 +1100,7 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 		nested_name = base.substr(owner_separator + 2);
 		owner_spelling = ResolveAlias(base.substr(0, owner_separator), context);
 	}
-	// TemplateBase returns only the identifier before the current argument list.
-	// For `Owner<T>::template Nested<U>::member`, the current owner spelling is
-	// therefore reconstructed from the range being rewritten before looking up
-	// its nested definition.
+	// Reconstruct the owner spelling before nested lookup.
 	if(owner_spelling.find('<') == string::npos && begin < raw->size() && close < raw->size())
 		owner_spelling = raw->substr(begin, close - begin + 1);
 	const size_t owner_open = owner_spelling.find('<');
@@ -1250,12 +1247,38 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 	}
 	if(owner_local_name.empty()) owner_local_name = Instantiate(*selected_owner,
 		owner_arguments, context);
-	// A dependent nested class template has one more level than the ordinary
-	// `Owner<T>::member` form handled below.  Materialize the nested
-	// specialization first so the enclosing member lookup sees the concrete
-	// inherited typedef.  This is the typed equivalent of resolving
-	// `Cases::template case_<Tag>::proto_grammar` before replaying the outer
-	// template-id that contains it.
+	string pure_nested_arguments_text; size_t pure_nested_close = string::npos;
+	const size_t pure_nested_open = concrete_member_end < raw->size() &&
+		(*raw)[concrete_member_end] == '<' ? concrete_member_end : string::npos;
+	const bool pure_nested_range_found = pure_nested_open != string::npos &&
+		TemplateRange(*raw, pure_nested_open, &pure_nested_arguments_text, &pure_nested_close);
+	if(nested_template_id && nested_name.empty() && pure_nested_range_found && !nested_member.empty()) {
+		const TemplateDefinition* nested_definition = FindNestedDefinition(*selected_owner, nested_member);
+		if(nested_definition && nested_definition->class_template) {
+			map<string, string> nested_substitutions = substitutions;
+			for(size_t parameter = 0; parameter < selected_owner->parameters.size() && parameter < owner_arguments.size(); ++parameter)
+				if(!selected_owner->parameters[parameter].name.empty()) nested_substitutions[selected_owner->parameters[parameter].name] = owner_arguments[parameter];
+			AddConcreteOwnerSubstitutions(owner_local_name, context, &nested_substitutions);
+			nested_substitutions[selected_owner->name] = owner_local_name;
+			vector<string> nested_arguments = SplitTemplateArguments(pure_nested_arguments_text);
+			for(size_t argument = 0; argument < nested_arguments.size(); ++argument) {
+				nested_arguments[argument] = NormalizeTypeArgument(RewriteText(nested_arguments[argument], context, nested_substitutions, 0, false, false));
+				nested_arguments[argument] = NormalizeTypeArgument(ReplaceIdentifiers(nested_arguments[argument], nested_substitutions));
+			}
+			const TemplateDefinition* selected_nested = SelectClassTemplateDefinition(nested_definition, nested_arguments, context);
+			if(selected_nested && !selected_nested->partial_specialization) {
+				const string nested_owner = owner_local_name;
+				const string nested_local_name = Instantiate(*selected_nested, nested_arguments, context, false, 0, &nested_substitutions, &nested_owner);
+				if(!nested_local_name.empty()) {
+					const string concrete_nested = JoinPath(owner_local_name, nested_local_name);
+					raw->replace(begin, pure_nested_close - begin + 1, concrete_nested);
+					if(template_replaced) *template_replaced = true; if(search) *search = begin + concrete_nested.size();
+					return true;
+				}
+			}
+		}
+	}
+	// Materialize a dependent nested class template before outer member lookup.
 	size_t nested_qualifier = close + 1;
 	while(nested_qualifier < raw->size() && isspace(
 		static_cast<unsigned char>((*raw)[nested_qualifier]))) ++nested_qualifier;
@@ -1302,12 +1325,7 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 						*selected_owner, nested_base);
 				if(nested_definition && !nested_member.empty()) {
 					map<string, string> nested_substitutions = substitutions;
-					// The nested definition is collected under the source owner
-					// (`cases::cases<Char, Gram>`), while this replay starts from its
-					// generated owner (`cases_char_type__grammar_char_type_`).  Carry
-					// the owner specialization's typed bindings explicitly; otherwise
-					// inherited members such as `case_<sequence_tag>::proto_grammar`
-					// are transformed with the source spelling `Gram` still present.
+					// Carry typed bindings from the generated owner into nested replay.
 					AddConcreteOwnerSubstitutions(owner_local_name, context,
 						&nested_substitutions);
 					for(size_t parameter = 0; parameter < selected_owner->parameters.size() &&
@@ -1366,10 +1384,7 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 							const bool typename_qualified = qualifier >= 8 &&
 								raw->compare(qualifier - 8, 8, "typename") == 0 &&
 								(qualifier == 8 || !IsIdentifierCharacter((*raw)[qualifier - 9]));
-							// Without a `typename` qualifier this is an expression member
-							// access.  Preserve the generated owner and the member spelling;
-							// replacing an inherited static member with its declaration type
-							// (`const bool`) changes the expression into an identifier.
+							// Preserve expression-member spelling without `typename`.
 							if(!typename_qualified) {
 								raw->replace(begin, nested_close - begin + 1, concrete_nested);
 								if(template_replaced) *template_replaced = true;
@@ -1422,11 +1437,7 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 	if(!materialized_member_name)
 		concrete_member = NormalizeTypeArgument(RewriteText(concrete_member, member_context,
 			concrete_substitutions, 0));
-	// `TemplateBase` points at the nested component after a dependent
-	// qualifier, so `Ptr::template rebind<U>::other` would otherwise become
-	// `Ptr::template standard_allocator_double_`.  The materialized member
-	// type already contains the enclosing specialization's identity; consume
-	// the qualifier through `template` as part of this replacement.
+	// Consume a dependent `template` qualifier with the materialized member.
 	size_t replacement_begin = begin;
 	size_t qualifier = begin;
 	while(qualifier > 0 && isspace(static_cast<unsigned char>((*raw)[qualifier - 1])))
