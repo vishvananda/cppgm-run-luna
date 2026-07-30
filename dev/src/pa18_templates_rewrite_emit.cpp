@@ -508,9 +508,19 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 	const bool flattened_static_member = static_member &&
 		definition.owner.find("::") == string::npos && !requested_owner.empty();
 	const bool free_generated_member = definition.friend_declaration;
-	const string entity_owner = free_generated_member ? PrefixComponent(definition.owner) :
-		generated_owner;
 	string member_owner_name = definition.owner;
+	// Collection records an unqualified friend in the lexical class context.
+	// A class-template replay can contribute that class component twice
+	// (`C::C::operator==`).  Normalize the enclosing class before deriving the
+	// namespace owner; otherwise the materialized friend is queued as a member
+	// of `C` instead of as a namespace-scope function.
+	if(free_generated_member) {
+		const string parent_owner = PrefixComponent(member_owner_name);
+		if(!parent_owner.empty() && LastComponent(member_owner_name) ==
+			LastComponent(parent_owner)) member_owner_name = parent_owner;
+	}
+	const string entity_owner = free_generated_member ? PrefixComponent(member_owner_name) :
+		generated_owner;
 	const size_t member_owner_angle = member_owner_name.find('<');
 	if(member_owner_angle != string::npos) member_owner_name.erase(member_owner_angle);
 	const TemplateDefinition* member_owner_definition = member_owner_name.empty() ? 0 :
@@ -533,6 +543,25 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 		 (definition.alias_template && ConcreteOwnerMatches(definition, requested_owner)) ?
 		 requested_owner : string());
 	if(free_generated_member) concrete_owner.clear();
+	// A hidden friend is emitted at namespace scope, but its return type still
+	// names the current specialization of the declaring class.  The call-site
+	// substitution map normally contains only the friend's own template
+	// parameters (for example `AnyExecutor`); recover the enclosing class's
+	// typed owner from those values before replaying the friend body.
+	if(free_generated_member) {
+		const string source_owner = member_owner_name;
+		const string source_name = LastComponent(source_owner);
+		for(map<string, string>::const_iterator substitution = substitutions.begin();
+			substitution != substitutions.end(); ++substitution) {
+			const string candidate = CanonicalSpelling(substitution->second);
+			map<string, string>::const_iterator candidate_base =
+				specialization_bases_.find(LastComponent(candidate));
+			if(candidate_base == specialization_bases_.end() ||
+				LastComponent(candidate_base->second) != source_name) continue;
+			AddConcreteOwnerSubstitutions(candidate, context, &substitutions, true);
+			break;
+		}
+	}
 	// A generated class can be reached through the lexical function path used
 	// while replaying a functional cast (for example
 	// `make_pair_int::pair_int_`), while PA14 indexes its declarations by the
@@ -654,6 +683,22 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 			}
 		}
 	}
+	// The replayed friend is detached from its declaring class and queued at
+	// namespace scope.  Keep the source friend marker for class-scope hidden
+	// lookup, but remove it from the materialized free definition so PA14
+	// collects the generated function as an ordinary namespace declaration.
+	if(definition.friend_declaration && generated->kind == "function-definition" &&
+		!generated->children.empty() && generated->children[0] &&
+		generated->children[0]->kind == "decl-specifier-seq") {
+		CPPGMAstNodePtr specifiers = generated->children[0];
+		for(size_t specifier = 0; specifier < specifiers->children.size();) {
+			const CPPGMAstNodePtr item = specifiers->children[specifier];
+			if(item && item->kind == "decl-specifier" &&
+				(RemoveMarker(item->value) == "friend" || item->value == "friend"))
+				specifiers->children.erase(specifiers->children.begin() + specifier);
+			else ++specifier;
+		}
+	}
 	if(!definition.class_template && GeneratedNodeHasUnavailableMemberType(
 		generated, transform_context, substitutions)) {
 		throw PA18SubstitutionFailure("dependent type substitution failed");
@@ -690,16 +735,6 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 					break;
 				}
 		}
-	}
-	if(definition.friend_declaration && !generated->children.empty() &&
-		generated->children[0]) {
-		vector<CPPGMAstNodePtr> specifiers;
-		for(size_t specifier = 0; specifier < generated->children[0]->children.size();
-			++specifier) {
-			const CPPGMAstNodePtr& node = generated->children[0]->children[specifier];
-			if(!node || RemoveMarker(node->value) != "friend") specifiers.push_back(node);
-		}
-		generated->children[0]->children.swap(specifiers);
 	}
 	if(member_definition)
 		RestoreGeneratedMemberParameterNames(definition, member_owner_definition, generated);

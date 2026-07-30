@@ -3,6 +3,111 @@
 using namespace std;
 namespace pa18_templates_internal {
 
+string PA18TemplateExpander::NormalizeTemplateTemplateArgument(
+	string raw, const string& context,
+	const map<string, string>& substitutions) const
+{
+	raw = CanonicalSpelling(ReplaceIdentifiers(raw, substitutions));
+	if(raw.compare(0, 9, "template ") == 0) raw = CanonicalSpelling(raw.substr(9));
+	for(size_t position = raw.find("::template "); position != string::npos;
+		position = raw.find("::template ", position + 2)) raw.erase(position + 2, 9);
+	const TemplateDefinition* definition = FindDefinition(raw, context);
+	string concrete_member_argument;
+	const size_t member_separator = raw.rfind("::");
+	if(member_separator != string::npos) {
+		const string owner = raw.substr(0, member_separator);
+		const size_t owner_open = owner.find('<');
+		string owner_arguments_text;
+		size_t owner_close = string::npos;
+		if(owner_open != string::npos && TemplateRange(owner, owner_open,
+			&owner_arguments_text, &owner_close)) {
+			const string owner_base = owner.substr(0, owner_open);
+			const TemplateDefinition* owner_definition = FindDefinition(owner_base, context);
+			if(owner_definition && owner_definition->class_template) {
+				const vector<string> owner_arguments = SplitTemplateArguments(owner_arguments_text);
+				string concrete_owner;
+				ResolveMaterializedClassOwner(owner_base, owner_arguments, context,
+					&concrete_owner);
+				if(concrete_owner.empty()) try {
+					const string local_owner = const_cast<PA18TemplateExpander*>(this)->Instantiate(
+						*owner_definition, owner_arguments, context, false);
+					concrete_owner = JoinPath(owner_definition->owner, local_owner);
+				} catch(const PA18SubstitutionFailure&) {}
+				if(!concrete_owner.empty() && FindClassDeclaration(concrete_owner, context))
+					concrete_member_argument = concrete_owner + "::" + raw.substr(member_separator + 2);
+			}
+		}
+	}
+	if(!definition) {
+		const size_t nested_separator = raw.rfind("::");
+		if(nested_separator != string::npos) {
+			const string member = raw.substr(nested_separator + 2);
+			const string nested_owner = raw.substr(0, nested_separator);
+			const size_t owner_separator = nested_owner.rfind("::");
+			if(owner_separator != string::npos) {
+				const string parent = nested_owner.substr(0, owner_separator);
+				const string nested = nested_owner.substr(owner_separator + 2);
+				string resolved_nested;
+				set<string> active_nested;
+				const bool materialized_nested_owner = class_declarations_.find(
+					nested_owner) != class_declarations_.end();
+				if(materialized_nested_owner || FindClassMemberType(parent, nested,
+					map<string, string>(), context, &resolved_nested, &active_nested,
+					false)) {
+					if(materialized_nested_owner) resolved_nested = nested_owner;
+					resolved_nested = CanonicalSpelling(resolved_nested);
+					const string resolved_prefix = PrefixComponent(resolved_nested);
+					const string repeated_owner = resolved_prefix.empty() ? resolved_nested :
+						JoinPath(resolved_prefix, JoinPath(LastComponent(resolved_prefix),
+						LastComponent(resolved_nested)));
+					map<string, vector<string> >::const_iterator indexed =
+						definitions_by_name_.find(LastComponent(member));
+					if(indexed != definitions_by_name_.end()) for(size_t candidate_index = 0;
+						candidate_index < indexed->second.size(); ++candidate_index) {
+						map<string, TemplateDefinition>::const_iterator candidate = definitions_.find(
+							indexed->second[candidate_index]);
+						if(candidate == definitions_.end() ||
+							(!candidate->second.alias_template && !candidate->second.class_template &&
+								!candidate->second.variable_template)) continue;
+						string candidate_owner = candidate->second.owner;
+						const size_t candidate_open = candidate_owner.find('<');
+						if(candidate_open != string::npos) candidate_owner.erase(candidate_open);
+						bool generated_owner_match = false;
+						const string generated_parent = PrefixComponent(resolved_nested);
+						map<string, string>::const_iterator generated_source =
+							specialization_bases_.find(LastComponent(generated_parent));
+						if(generated_source != specialization_bases_.end()) {
+							const string source_parent = generated_source->second;
+							generated_owner_match = candidate_owner == JoinPath(source_parent,
+								LastComponent(resolved_nested)) || candidate_owner ==
+								JoinPath(source_parent, JoinPath(LastComponent(source_parent),
+									LastComponent(resolved_nested)));
+						}
+						if(candidate_owner == resolved_nested || candidate_owner == repeated_owner ||
+							generated_owner_match) {
+							definition = &candidate->second;
+							if(specialization_bases_.find(LastComponent(
+								PrefixComponent(resolved_nested))) != specialization_bases_.end())
+								concrete_member_argument = resolved_nested + "::" + member;
+							break;
+						}
+					}
+				}
+			}
+		}
+	}
+	if(!definition) return string();
+	if(!concrete_member_argument.empty()) return concrete_member_argument;
+	const size_t owner_separator = raw.rfind("::");
+	if(owner_separator != string::npos) {
+		const string owner = raw.substr(0, owner_separator);
+		if(specialization_bases_.find(LastComponent(owner)) != specialization_bases_.end() &&
+			specialization_arguments_.find(LastComponent(owner)) != specialization_arguments_.end())
+			return raw;
+	}
+	return definition->qualified_name;
+}
+
 bool PA18TemplateExpander::SplitDirectFunctionType(const string& raw,
 	string* result, vector<string>* parameters, string* qualifiers) const
 {

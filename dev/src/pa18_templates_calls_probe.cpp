@@ -660,8 +660,16 @@ bool PA18TemplateExpander::ValidateExplicitFunctionCandidate(
 	if(!arguments) return false;
 	const map<string, vector<string> > previous_packs = active_pack_substitutions_;
 	try {
+		vector<string> resolved_explicit_args = raw_explicit_args;
+		for(size_t explicit_argument = 0; explicit_argument < resolved_explicit_args.size();
+			++explicit_argument) {
+			string value = NormalizeTypeArgument(RewriteText(
+				resolved_explicit_args[explicit_argument], context, substitutions, 0));
+			value = NormalizeTypeArgument(ReplaceIdentifiers(value, substitutions));
+			resolved_explicit_args[explicit_argument] = ResolveAlias(value, context);
+		}
 		if(!InferFunctionArguments(definition, input, arguments, substitutions, context,
-			&raw_explicit_args, 0)) {
+			&resolved_explicit_args, 0)) {
 			active_pack_substitutions_ = previous_packs;
 			return false;
 		}
@@ -715,7 +723,7 @@ bool PA18TemplateExpander::ValidateExplicitFunctionCandidate(
 			if(!detail.name.empty()) bindings[detail.name] = (*arguments)[argument_index];
 			++argument_index;
 		}
-		if(!raw_explicit_args.empty() &&
+		if(!resolved_explicit_args.empty() &&
 			!ValidateTemplateDefaults(definition, *arguments, context, substitutions)) {
 			active_pack_substitutions_ = previous_packs;
 			return false;
@@ -725,7 +733,8 @@ bool PA18TemplateExpander::ValidateExplicitFunctionCandidate(
 			string probe = result;
 			while(!probe.empty() && (probe[probe.size() - 1] == '*' || probe[probe.size() - 1] == '&')) probe.erase(probe.size() - 1);
 			while(probe.size() > 6 && probe.compare(probe.size() - 6, 6, " const") == 0) probe.erase(probe.size() - 6);
-			if(HasUnavailableGeneratedMemberType(probe, context, substitutions)) return false;
+			const bool unavailable = HasUnavailableGeneratedMemberType(probe, context, substitutions);
+			if(unavailable) return false;
 			const bool valid = !result.empty();
 			active_pack_substitutions_ = previous_packs;
 			return valid;

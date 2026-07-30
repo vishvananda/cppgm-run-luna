@@ -18,6 +18,21 @@ using namespace std;
 
 namespace cppgm_pa14_lowering {
 
+namespace {
+
+bool PA14ArrayCvCompatible(const TypePtr& source, const TypePtr& target)
+{
+    if(!source || !target || source->kind != target->kind) return false;
+    if(source->is_const && !target->is_const) return false;
+    if(source->is_volatile && !target->is_volatile) return false;
+    if(source->kind == TYPE_ARRAY)
+        return (source->bound == target->bound || source->bound < 0 || target->bound < 0) &&
+            PA14ArrayCvCompatible(source->child, target->child);
+    return true;
+}
+
+} // namespace
+
 string PA14Lowerer::EmitReferenceArgument(const CPPGMAstNodePtr& node, Scope* scope,
                                const TypePtr& target)
 {
@@ -183,8 +198,17 @@ string PA14Lowerer::EmitReferenceArgument(const CPPGMAstNodePtr& node, Scope* sc
     }
     ExprInfo source = Infer(node, scope);
     TypePtr source_type = expression_value_type(source);
+    const bool referred_const_array = referred && referred->kind == TYPE_ARRAY &&
+      referred->child && referred->child->is_const;
+    const bool unknown_bound_array_reference = source_type && referred &&
+      (referred->is_const || referred_const_array) &&
+      source_type->kind == TYPE_ARRAY && referred->kind == TYPE_ARRAY &&
+      (source_type->bound < 0 || referred->bound < 0) &&
+      PA14ArrayCvCompatible(source_type, referred);
+    const bool same_referred_type = PA12SameType(source_type, referred, true) ||
+      unknown_bound_array_reference;
     const bool direct_address = source.category == "lvalue" &&
-      PA12SameType(source_type, referred, true) &&
+      same_referred_type &&
       (!referred->is_const || !source_type->is_const || referred->is_const);
     // An xvalue already denotes a usable object address for an rvalue
     // reference.  Trying to construct another object here recursively

@@ -389,6 +389,31 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 			definition.specialization_pattern[pattern_index]);
 		set<string> active_aliases;
 		pattern = ExpandAliasPattern(pattern, context, &active_aliases, true);
+		// A class partial specialization's dependent second argument is an
+		// immediate substitution context too.  In particular,
+		// `enable_if<has_size_type<C>, void>::type` must discard the partial when
+		// the concrete C has no nested size_type; allowing the unresolved member
+		// spelling through selects a specialization whose body is not viable.
+		for(size_t enable_if_open = pattern.find('<'); enable_if_open != string::npos; ) {
+			string enable_if_base, enable_if_arguments;
+			size_t enable_if_begin = 0, enable_if_close = string::npos;
+			if(!TemplateBase(pattern, enable_if_open, &enable_if_begin, &enable_if_base) ||
+				!TemplateRange(pattern, enable_if_open, &enable_if_arguments, &enable_if_close)) break;
+			const string enable_if_name = LastComponent(enable_if_base);
+			if((enable_if_name == "enable_if" || enable_if_name == "enable_if_c" ||
+				enable_if_name == "enable_if_t")) {
+				const vector<string> enable_if_parts = SplitTemplateArguments(enable_if_arguments);
+				if(!enable_if_parts.empty()) {
+					const string condition = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(
+						enable_if_parts[0], local));
+					PA19IntegralValue enabled;
+					if(!condition.empty() && const_cast<PA18TemplateExpander*>(this)->EvaluateIntegralText(
+						condition, context, local, &enabled) && enabled.known && PA19Raw(enabled) == 0)
+						return false;
+				}
+			}
+			enable_if_open = pattern.find('<', enable_if_close + 1);
+		}
 		// A dependent qualified type is a substitution point.  RewriteText has
 		// deliberately permissive fallbacks for source declarations, but those
 		// fallbacks must not turn `typename T::missing` into a successful `void`

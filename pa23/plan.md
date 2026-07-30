@@ -1531,3 +1531,110 @@ before handoff: `make test-report-through-pa22` passes **2100/2100**. The final
 `make test-report ACTIVE_TEST_REPORT_PAS='pa23'` remains **310/396** with only
 the two known reentrant timeout witnesses among the residual failures, and
 `perl scripts/cppgm_file_audit.pl --stage pa23 --paths dev/src` passes.
+
+## Checkpoint 13 scope — 2026-07-30 (before implementation)
+
+### Live failure map
+
+The fresh committed-baseline report is **310/396**, with **51 status
+mismatches, 33 LowIR comparisons, and 2 timeouts**. The complete current set is
+the full 90-entry inventory in `pa23/audit.md` minus the four resolved status
+witnesses: `general/100-direct-namespace-wins-over-using-directive`,
+`general/200-empty-pack-member-template-owner-key`,
+`general/500-out-of-class-member-template-dependent-owner-type`, and
+`spec/200-inherited-template-param-shadow-forward`. The remaining map groups
+as follows:
+
+- **Dependent type/alias/SFINAE status cluster:** nested class-template
+  partial-specialization deduction, array-qualified member lookup, hidden
+  friends using the current specialization, explicit alias-template return
+  SFINAE, member alias template-template owners, dependent non-type alias
+  sequences, and source-namespace dependent bases. These are the selected
+  witnesses for this checkpoint.
+- **Deduction/conversion status cluster:** function-type partial ordering,
+  explicit template prefixes, function pointers, constructor/conversion
+  viability, ADL, and member-template overload selection.
+- **Specialization/value/LowIR cluster:** the 33 comparison cases covering
+  explicit/extern replay, constructors, non-type storage, variable templates,
+  and generated declaration/body materialization.
+- **Fixed-point cluster:** the two reentrant static-query tests, which remain
+  semantic termination work and are not addressed through timeout handling.
+
+### Checkpoint Scope
+
+Carry one typed dependent substitution environment through class partial
+specialization selection, alias-template target expansion, and candidate-local
+SFINAE. The scope covers the seven status witnesses named in the first group:
+`general/200-nested-template-id-partial-specialization-deduction`,
+`general/300-array-qualified-member-type-sfinae`,
+`general/300-hidden-friend-current-specialization-enable-if`,
+`general/300-qualified-explicit-template-alias-return-sfinae`,
+`general/400-member-alias-template-template-owner-argument`,
+`general/400-dependent-alias-nontype-sequence-filter`, and
+`general/500-source-namespace-base-sfinae-chain`.
+
+The behavior to implement is real deferred dependent-type lookup: preserve the
+source lexical owner while selecting a concrete specialization, resolve alias
+targets only after their template arguments are bound, and turn failed
+dependent probes into candidate-local SFINAE instead of hard unknown-type or
+substitution failures. Validate these focused witnesses before the full PA23
+report, then through-PA22 and file audit; preserve the current 310-test
+baseline until the new group is verified.
+
+## Checkpoint 13 result — 2026-07-30
+
+The increment completed the stable portion of the typed dependent replay group:
+
+- Class-member collection now creates a typed template-parameter scope for
+  nested template declarations, so member functions and nested classes retain
+  their enclosing type/template-template bindings during lowering.
+- Reference and array compatibility preserves unknown array bounds while
+  retaining the const-element restriction required by prior array deduction.
+- Explicit function candidates resolve outer substitutions before deduction;
+  class partial-specialization probes evaluate candidate-local `enable_if`
+  conditions; and qualified static-member expression types use the materialized
+  class-member path.
+- Template-template member aliases retain their concrete enclosing class owner,
+  and generated hidden friends are recovered through the source class owner
+  with current-specialization substitutions.  The generated-name normalizer was
+  moved to the rewrite implementation module to keep the source file audit
+  limits intact.
+
+The focused witnesses now passing are `general/300-array-qualified-member-type-
+sfinae`, `general/300-hidden-friend-current-specialization-enable-if`,
+`general/300-qualified-explicit-template-alias-return-sfinae`,
+`general/400-member-alias-template-template-owner-argument`, and
+`general/400-dependent-alias-nontype-sequence-filter`.  The two selected
+residual witnesses remain `general/200-nested-template-id-partial-
+specialization-deduction` (short dependent alias type is still unresolved) and
+`general/500-source-namespace-base-sfinae-chain` (the replayed namespace-base
+trait path is still malformed).
+
+Validation is **315/396** for the PA23 report, five tests above the 310-test
+baseline: **46 status mismatches, 33 LowIR comparisons, and two reentrant
+static-query timeouts** remain.  The through-PA22 report passes **2100/2100**,
+and the PA23 file audit passes with the repository's existing warnings.
+
+### Remaining Work Map
+
+- **Dependent owner qualification:** fix the two residual nested-alias and
+  source-namespace-base witnesses without broad qualification fallback or
+  reentrant lookup growth.
+- **Deduction and conversion:** function-type partial ordering, explicit
+  prefixes, function pointers, constructor/conversion viability, ADL, and
+  member-template overload selection remain status failures.
+- **Typed values and deferred SFINAE:** variable templates, `sizeof`, packs,
+  detector/`enable_if` probes, extern declarations, and the two fixed-point
+  timeout witnesses still need candidate-local typed query state.
+- **Specialization and LowIR materialization:** the 33 comparison cases still
+  cover explicit/extern replay, constructors, non-type storage, and generated
+  declaration/body metadata and ordering.
+
+### Next checkpoint group
+
+Take the residual dependent owner qualification together with the adjacent
+function-template deduction/conversion cases, starting with nested template-id
+partial-specialization deduction and source-namespace base matching. Preserve
+the five new SFINAE/alias/hidden-friend passes, then validate the focused
+witnesses, full PA23, through-PA22, and file audit again before the next
+specialization/LowIR increment.

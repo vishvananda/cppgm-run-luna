@@ -105,7 +105,7 @@ ExplicitCallSelection PA18TemplateExpander::SelectExplicitCallDefinition(
 			string argument_text;
 			size_t close = string::npos;
 			const TemplateDefinition* explicit_definition = 0;
-					if(TemplateBase(lookup_callee, open, &begin, &base) &&
+			if(TemplateBase(lookup_callee, open, &begin, &base) &&
 						TemplateRange(lookup_callee, open, &argument_text, &close)) {
 						explicit_definition = FindDefinition(base, context);
 				if(explicit_definition && !explicit_definition->class_template) {

@@ -22,8 +22,8 @@ bool PA18TemplateExpander::ConsumeMaterializedStaticAssert(
 	if(!input || input->kind != "static-assert-declaration" ||
 		active_instantiation_name_.empty() || !result || result->children.empty()) return false;
 	PA19IntegralValue value;
-	const bool evaluated = EvaluateIntegralText(ConstantExpressionSpelling(
-		result->children[0]), context, substitutions, &value);
+	const string expression = ConstantExpressionSpelling(result->children[0]);
+	const bool evaluated = EvaluateIntegralText(expression, context, substitutions, &value);
 	if(!evaluated || !value.known) return false;
 	if(PA19Raw(value) == 0) {
 		throw logic_error("static assertion failed");

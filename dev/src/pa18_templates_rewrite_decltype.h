@@ -740,12 +740,12 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 		// before the ordinary identifier and function-template fallbacks.
 		const size_t qualified_variable_separator = TopLevelScopeSeparator(expression);
 		if(qualified_variable_separator != string::npos) {
-			const string qualified_owner = expression.substr(0, qualified_variable_separator);
-			const string qualified_member = expression.substr(qualified_variable_separator + 2);
-			string variable_type;
+			const string qualified_owner = expression.substr(0, qualified_variable_separator); const string qualified_member = expression.substr(qualified_variable_separator + 2); string variable_type;
 			if(FindVariableTemplateMemberType(qualified_owner, qualified_member,
 				substitutions, context, &variable_type) && !variable_type.empty())
 				return variable_type;
+			const string rewritten_owner = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(qualified_owner, substitutions)); set<string> active_members;
+			if(FindClassMemberType(rewritten_owner, qualified_member, substitutions, context, &variable_type, &active_members, false) && !variable_type.empty()) return variable_type;
 		}
 		// Member access in a decltype operand is an expression type, not a
 		// qualified type spelling.  Infer the object first so a dependent or

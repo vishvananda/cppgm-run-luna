@@ -696,6 +696,19 @@ void PA14Lowerer::CollectClassMembers(const CPPGMAstNodePtr& node, Scope* scope)
     for(size_t i = 0; i < node->children.size(); ++i) {
       const CPPGMAstNodePtr child = node->children[i];
       if(!child) continue;
+      if(child->kind == "template-declaration" && child->children.size() > 1) {
+        const CPPGMAstNodePtr templated = child->children[1], clause = child->children[0];
+        const CPPGMAstNodePtr list = clause ? ChildOfKind(clause, "template-parameter-list") : CPPGMAstNodePtr();
+        Scope* template_scope = analyzer_.NewChild(class_scope, SCOPE_TEMPLATE_PARAMETERS, string());
+        if(list) for(size_t parameter = 0; parameter < list->children.size(); ++parameter) {
+          const CPPGMAstNodePtr parameter_node = list->children[parameter];
+          if(!parameter_node || parameter_node->kind != "type-parameter") continue;
+          const string name = FirstIdentifier(parameter_node); if(name.empty()) continue;
+          analyzer_.AddTypeBinding(template_scope, name, TypePtr(new Type(HasKind(parameter_node, "template-template-parameter") ? TYPE_TEMPLATE_TEMPLATE_PARAMETER : TYPE_TEMPLATE_PARAMETER, name)));
+        }
+        if(templated && templated->kind == "function-definition") { CollectFunction(templated, template_scope, true); continue; }
+        if(templated && templated->kind == "class-specifier") { CollectClassMembers(templated, class_scope); continue; }
+      }
       if(child->kind == "class-specifier") {
         CollectClassMembers(child, class_scope);
         continue;

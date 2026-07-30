@@ -419,7 +419,9 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 		member_arguments->children.push_back(expression->children[1]);
 		member_call->children.push_back(member_arguments);
 		if(InstantiateMemberCall(member_call, member, "operator" + operation,
-			context, substitutions)) return;
+			context, substitutions)) {
+			return;
+		}
 		vector<const TemplateDefinition*> candidates = FindFunctionDefinitions(
 			"operator" + operation, context);
 		// Operator-template discovery also has to follow argument-dependent lookup.
@@ -446,9 +448,37 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 				operand_type = NormalizeTypeArgument(operand_type.substr(0, open));
 			}
 			const CPPGMAstNodePtr declaration = FindClassDeclaration(operand_type, context);
-		if(!declaration) continue;
+			if(!declaration) continue;
+		// A materialized class specialization is emitted under a generated
+		// spelling (for example `any_executor_int_`), while a hidden friend
+		// remains indexed under the source class owner
+		// (`any_executor::operator==`).  Use the typed template identity to
+		// recover that owner for ADL instead of treating the generated class as
+		// a namespace-level declaration.
+		string class_owner = declaration->template_primary;
+		if(class_owner.empty()) {
+			const size_t operand_angle = operand_type.find('<');
+			if(operand_angle != string::npos)
+				class_owner = operand_type.substr(0, operand_angle);
+		}
+		if(class_owner.empty()) {
+			map<string, string>::const_iterator generated = specialization_bases_.find(
+				LastComponent(operand_type));
+			if(generated != specialization_bases_.end()) class_owner = generated->second;
+		}
+		class_owner = CanonicalSpelling(class_owner);
+		const size_t class_owner_angle = class_owner.find('<');
+		if(class_owner_angle != string::npos) class_owner.erase(class_owner_angle);
 		const string owner = !PrefixComponent(operand_type).empty() ?
 			PrefixComponent(operand_type) : PrefixComponent(declaration->value);
+			if(!class_owner.empty()) {
+				const vector<const TemplateDefinition*> associated_class =
+					FindFunctionDefinitions(JoinPath(class_owner,
+						"operator" + operation), context);
+				for(size_t candidate = 0; candidate < associated_class.size(); ++candidate)
+					if(known_candidates.insert(associated_class[candidate]).second)
+						candidates.push_back(associated_class[candidate]);
+			}
 			if(owner.empty()) continue;
 			const vector<const TemplateDefinition*> associated = FindFunctionDefinitions(
 				JoinPath(owner, "operator" + operation), context);
@@ -1081,6 +1111,12 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 				!input->children[1]->children.empty() &&
 				HasFriendSpecifier(input->children[1]->children[0]) &&
 				DescendantOfKind(input->children[1], "parameter-clause"))
+				return TransformRegularNode(input, context, substitutions);
+			if(input->children.size() > 1 && input->children[1] &&
+				input->children[1]->kind == "function-definition" &&
+				!input->children[1]->children.empty() &&
+				HasFriendSpecifier(input->children[1]->children[0]) &&
+				!active_instantiation_name_.empty())
 				return TransformRegularNode(input, context, substitutions);
 			if(!active_instantiation_name_.empty() && input->children.size() > 1 && input->children[1] && (input->children[1]->kind == "special-member-definition" || input->children[1]->kind == "special-member-declaration")) {
 				if(specialization_bases_.find(LastComponent(active_instantiation_name_)) == specialization_bases_.end()) return TransformRegularNode(input, context, substitutions);

@@ -17,7 +17,7 @@ bool PA14CvCompatible(const TypePtr& source, const TypePtr& target)
     if(source->is_const && !target->is_const) return false;
     if(source->is_volatile && !target->is_volatile) return false;
     if(source->kind == TYPE_ARRAY)
-        return source->bound == target->bound &&
+        return (source->bound == target->bound || source->bound < 0 || target->bound < 0) &&
             PA14CvCompatible(source->child, target->child);
     if(source->kind == TYPE_POINTER || source->kind == TYPE_LVALUE_REFERENCE ||
        source->kind == TYPE_RVALUE_REFERENCE)
@@ -1037,6 +1037,11 @@ int PA14Lowerer::ConversionRank(const ExprInfo& source, const TypePtr& target) c
           // type, not on the array wrapper.  Keep that typed conversion rule
           // visible here so string literals and other array lvalues can bind
           // to `T const&` without being decayed to a pointer first.
+          if(source_value->kind == TYPE_ARRAY && target_value->kind == TYPE_ARRAY &&
+             (source_value->bound < 0 || target_value->bound < 0) &&
+             PA12SameType(source_value->child, target_value->child, true) &&
+             PA14CvCompatible(source_value, target_value))
+            return 1;
           if(source_value->kind == TYPE_ARRAY && target_value->kind == TYPE_ARRAY &&
              PA12SameType(source_value, target_value, true) &&
              PA14CvCompatible(source_value, target_value))

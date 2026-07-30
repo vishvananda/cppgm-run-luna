@@ -179,11 +179,26 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
 {
     if(!node || node->children.size() < 2) throw logic_error("invalid function declaration");
     Analyzer::SpecFacts facts;
-    TypePtr base = analyzer_.TypeFromSpecSeq(node->children[0], scope, &facts);
+    Scope* type_scope = scope;
+    if(!type_scope || type_scope->kind != SCOPE_TEMPLATE_PARAMETERS) {
+      // The ordinary class path already has the class scope as its lookup
+      // context.  Template-parameter scopes are supplied by the caller and
+      // must remain the lookup root for dependent return/parameter types.
+      type_scope = scope;
+    }
+    TypePtr base = analyzer_.TypeFromSpecSeq(node->children[0], type_scope, &facts);
     const string raw_name = declarator_name(node->children[1]);
     if(raw_name.empty()) throw logic_error("function has no name");
     TypePtr member_owner;
-    if(scope && scope->kind == SCOPE_CLASS) member_owner = scope->owner_type;
+    // A member template is lowered from a reconstructed template-parameter
+    // scope whose parent is the owning class.  Keep the lexical template
+    // scope for dependent type lookup, but recover the class owner by walking
+    // to the nearest class scope.
+    for(Scope* owner_scope = scope; owner_scope; owner_scope = owner_scope->parent)
+      if(owner_scope->kind == SCOPE_CLASS) {
+        member_owner = owner_scope->owner_type;
+        break;
+      }
     if(!member_owner && raw_name.find("::") != string::npos) {
       const size_t separator = raw_name.rfind("::");
       Analyzer::PathTarget owner = analyzer_.ResolvePath(scope, raw_name.substr(0, separator));
@@ -191,8 +206,9 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
       else if(owner.scope) member_owner = owner.scope->owner_type;
     }
     if(member_owner && member_owner->kind != TYPE_CLASS) member_owner.reset();
-    Scope* type_scope = member_owner && member_owner->owned_scope ?
-      member_owner->owned_scope : scope;
+    if(type_scope && type_scope->kind != SCOPE_TEMPLATE_PARAMETERS)
+      type_scope = member_owner && member_owner->owned_scope ?
+        member_owner->owned_scope : scope;
     TypePtr type = analyzer_.BuildDeclarator(node->children[1], base, type_scope);
     type = PA12AdjustedType(type);
     TypePtr function = function_type(type);
