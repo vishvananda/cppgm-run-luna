@@ -77,6 +77,9 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 	const TemplateDefinition* SelectClassTemplateDefinition(
 		const TemplateDefinition* primary, const vector<string>& arguments,
 		const string& context) const;
+	bool ResolveMaterializedClassOwner(const string& source_base,
+		const vector<string>& requested_arguments, const string& context,
+		string* resolved_owner) const;
 	CPPGMAstNodePtr FindClassDeclaration(string raw_class, const string& context) const
 	{
 		raw_class = CanonicalSpelling(raw_class);

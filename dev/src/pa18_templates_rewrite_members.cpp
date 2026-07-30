@@ -383,6 +383,15 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 					}
 				if(class_declarations_.find(class_key) != class_declarations_.end()) break;
 			}
+			if(class_declarations_.find(class_key) == class_declarations_.end()) {
+				const string collapsed_source = CollapseRepeatedQualifiedPath(
+					CollapseRepeatedQualifier(source_template_base));
+				if(collapsed_source == source_template_base) {
+					string materialized_owner;
+					if(ResolveMaterializedClassOwner(source_template_base, requested_arguments,
+						context, &materialized_owner)) class_key = materialized_owner;
+				}
+			}
 			// A source class whose requested alias contains a dependent member
 			// call needs a concrete owner while that call is evaluated.  Materialize
 			// only this expression-bearing case; eagerly materializing every source
@@ -864,7 +873,7 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 				specialization_bases_.end() &&
 			specialization_arguments_.find(LastComponent(class_key)) !=
 				specialization_arguments_.end() && context != class_key;
-		if(!aliases_only && direct_child &&
+		if((!aliases_only || generated_concrete_owner) && direct_child &&
 			(direct_child->kind == "class-specifier" ||
 			direct_child->kind == "class-forward-declaration" ||
 			direct_child->kind == "enum-specifier") &&
