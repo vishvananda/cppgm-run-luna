@@ -800,6 +800,25 @@ bool HasDeclarationSpecifier(const CPPGMAstNodePtr& node, const string& wanted)
 	return false;
 }
 
+void PA18TemplateExpander::IndexDependentMemberTypeNodes(
+	const CPPGMAstNodePtr& node, vector<CPPGMAstNodePtr>& nodes,
+	vector<CPPGMAstNodePtr>& type_nodes) const
+{
+	if(!node || node->kind == "function-definition" ||
+		node->kind == "special-member-definition" ||
+		node->kind == "special-member-declaration" ||
+		node->kind == "compound-statement") return;
+	if(node->kind == "decl-specifier" || node->kind == "type-name" ||
+		node->kind == "type-specifier" || node->kind == "decltype-specifier" ||
+		node->kind == "base-name") {
+		nodes.push_back(node);
+		if(LastComponent(CanonicalSpelling(RemoveMarker(node->value))) == "type")
+			type_nodes.push_back(node);
+	}
+	for(size_t child = 0; child < node->children.size(); ++child)
+		IndexDependentMemberTypeNodes(node->children[child], nodes, type_nodes);
+}
+
 void PA18TemplateExpander::SetActiveConcreteOwner(const string& owner,
 	const string& context)
 {

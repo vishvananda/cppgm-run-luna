@@ -425,8 +425,10 @@ struct TemplateDefinition
 	bool member_template;
 	bool friend_declaration;
 	bool static_member; bool deleted, immediate_return_constraint; string immediate_return_condition; bool reference_alias_cv_parameter;
+	vector<CPPGMAstNodePtr> dependent_member_type_nodes;
+	vector<CPPGMAstNodePtr> dependent_type_member_nodes;
 	set<string> static_members;
-	TemplateDefinition() : qualified_name(), name(), owner(), lexical_owner(), declaration(), parameters(), partial_specialization(false), explicit_specialization(false), specialization_parameters(), specialization_parameter_details(), specialization_pack_names(), specialization_pattern(), class_template(false), alias_template(false), variable_template(false), member_template(false), friend_declaration(false), static_member(false), deleted(false), immediate_return_constraint(false), immediate_return_condition(), reference_alias_cv_parameter(false), static_members() {}
+	TemplateDefinition() : qualified_name(), name(), owner(), lexical_owner(), declaration(), parameters(), partial_specialization(false), explicit_specialization(false), specialization_parameters(), specialization_parameter_details(), specialization_pack_names(), specialization_pattern(), class_template(false), alias_template(false), variable_template(false), member_template(false), friend_declaration(false), static_member(false), deleted(false), immediate_return_constraint(false), immediate_return_condition(), reference_alias_cv_parameter(false), dependent_member_type_nodes(), dependent_type_member_nodes(), static_members() {}
 };
 // A materialized class specialization is identified by the canonical template
 // entity and its ordered arguments.  Keep the entity pointer separate from
@@ -925,6 +927,8 @@ private:
 		JoinPath(lexical->second, normalized_prefix);
 	item.qualified_name = JoinPath(item.owner, name);
 	item.declaration = declaration;
+	IndexDependentMemberTypeNodes(declaration, item.dependent_member_type_nodes,
+		item.dependent_type_member_nodes);
 	item.friend_declaration = declaration && !declaration->children.empty() && HasFriendSpecifier(declaration->children[0]);
 	item.static_member = declaration && !declaration->children.empty() &&
 		HasDeclarationSpecifier(declaration->children[0], "static");
@@ -993,7 +997,7 @@ private:
 			prior->second.declaration = item.declaration;
 			prior->second.lexical_owner = item.lexical_owner;
 			prior->second.class_template = item.class_template || prior->second.class_template;
-			prior->second.alias_template = item.alias_template || prior->second.alias_template; prior->second.deleted = item.deleted; prior->second.immediate_return_constraint = item.immediate_return_constraint; prior->second.immediate_return_condition = item.immediate_return_condition; prior->second.reference_alias_cv_parameter = item.reference_alias_cv_parameter;
+			prior->second.alias_template = item.alias_template || prior->second.alias_template; prior->second.deleted = item.deleted; prior->second.immediate_return_constraint = item.immediate_return_constraint; prior->second.immediate_return_condition = item.immediate_return_condition; prior->second.reference_alias_cv_parameter = item.reference_alias_cv_parameter; prior->second.dependent_member_type_nodes = item.dependent_member_type_nodes; prior->second.dependent_type_member_nodes = item.dependent_type_member_nodes;
 		} else {
 			definitions_[item.qualified_name] = item;
 			definitions_by_name_[item.name].push_back(item.qualified_name);
@@ -1003,7 +1007,7 @@ private:
 		// is still useful to register its lexical spelling now.
 		Collect(declaration, item.class_template ? JoinPath(item.owner, name) : item.owner);
 	}
-	void IndexConstantMembers(const CPPGMAstNodePtr& node, const string& owner); void IndexStaticMembers(const CPPGMAstNodePtr& node, set<string>& members) const; void IndexUsingDirectiveDefinition(const TemplateDefinition& definition);
+	void IndexConstantMembers(const CPPGMAstNodePtr& node, const string& owner); void IndexStaticMembers(const CPPGMAstNodePtr& node, set<string>& members) const; void IndexDependentMemberTypeNodes(const CPPGMAstNodePtr& node, vector<CPPGMAstNodePtr>& nodes, vector<CPPGMAstNodePtr>& type_nodes) const; void IndexUsingDirectiveDefinition(const TemplateDefinition& definition);
 	void RememberClassPath(const string& path);
 	bool HasStaticMember(const TemplateDefinition* definition, const string& owner, const string& name) const;
 	void Collect(const CPPGMAstNodePtr& node, const string& context, bool type_reference = false)

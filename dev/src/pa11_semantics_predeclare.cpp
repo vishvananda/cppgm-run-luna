@@ -18,6 +18,7 @@ void Analyzer::PredeclareGeneratedScopes(const CPPGMAstNodePtr& tree)
 	};
 	collect_generated(tree);
 	const bool has_generated = !generated_spellings.empty();
+	set<Scope*> synthetic_anonymous_scopes;
 	function<void(const CPPGMAstNodePtr&, Scope*, bool)> predeclare;
 	predeclare = [&](const CPPGMAstNodePtr& node, Scope* scope, bool generated_parent) {
 		if (!node || !scope) return;
@@ -56,11 +57,12 @@ void Analyzer::PredeclareGeneratedScopes(const CPPGMAstNodePtr& tree)
 							scope->children[child]->kind == SCOPE_NAMESPACE &&
 							scope->children[child]->name == "<unnamed>") ++occurrence;
 					bool synthetic_anonymous = false;
-					for (map<const CPPGMAstNode*, Scope*>::const_iterator known =
-						namespace_scopes_.begin(); known != namespace_scopes_.end(); ++known)
-						if(known->second && known->second->parent == scope && known->second->name ==
-							"<unnamed>" && known->first && known->first->synthetic_namespace_forward)
+					for (size_t child = 0; child < scope->children.size(); ++child)
+						if (scope->children[child] && synthetic_anonymous_scopes.find(
+							scope->children[child].get()) != synthetic_anonymous_scopes.end()) {
 							synthetic_anonymous = true;
+							break;
+						}
 					ostringstream suffix;
 					suffix << (synthetic_anonymous && occurrence > 0 ? occurrence - 1 : occurrence);
 					const string component = "_GLOBAL__N_" + suffix.str();
@@ -70,6 +72,8 @@ void Analyzer::PredeclareGeneratedScopes(const CPPGMAstNodePtr& tree)
 					name : scope->qualified_prefix + "::" + name;
 				if (name != "<unnamed>") scope->namespace_children[name] = namespace_scope;
 			}
+			if (name == "<unnamed>" && node->synthetic_namespace_forward)
+				synthetic_anonymous_scopes.insert(namespace_scope);
 			namespace_scopes_[node.get()] = namespace_scope;
 			if (name == "<unnamed>") {
 				bool visible = false;

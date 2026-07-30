@@ -887,3 +887,192 @@ then carry the same typed owner identity through variable-template,
 cluster; deduction/conversion and specialization/constructor LowIR groups
 follow it.  Keep the two reentrant cases as fixed-point witnesses, with no
 timeout-specific acceptance logic.
+
+## Checkpoint 16 audit — 2026-07-30
+
+### Scope Reviewed
+
+- The latest Checkpoint 16 scope, result, Remaining Work Map, and next
+  checkpoint in `pa23/plan.md`, together with the PA23 contract in
+  `pa23/README.md` and `TESTING_AND_REFERENCES.md`.
+- The landed checkpoint commits `150da1c` (dependent-owner replay),
+  `96e611a` (function-template deduction), `1f525a8` (function-type pack
+  replay), `e3fd972` (dependent replay), and `8162530` (owner/dependent
+  lookup), plus the preceding owner-index audit commits.
+- The changed source paths under `dev/src`, especially anonymous-namespace
+  scope predeclaration, `Analyzer` path resolution, class-template selection
+  and matching, dependent member replay, type qualification, constructor
+  lowering, and LowIR materialization.
+- The authoritative current-stage log at
+  `/home/vishvananda/work/.ralph/luna-gpt-5.6-luna-ultra/last-test.log`, the
+  six intended owner/class-partial witnesses, the exact prior-through command,
+  and the PA23 file audit.
+
+### Findings
+
+- The checkpoint remains on the required parser, typed semantic collection,
+  substitution/replay, and LowIR lowering pipeline.  The audit found no
+  skipped phase, dummy or embedded output, interpreter/VM/trampoline
+  substitute, reference-binary or host-compiler invocation, fixture-name gate,
+  or source-specific acceptance path.
+- The two reentrant static-query cases are still genuine semantic fixed-point
+  failures.  No timeout cap, retry, timeout-only success path, or timing-based
+  acceptance logic was added; they remain visible as the two timeout witnesses
+  in the current report.
+- The new `HasDeferredTypeMember` path duplicated the existing dependent-member
+  walk and rescanned a complete declaration tree on every cached class
+  materialization.  Its `LastComponent(...)=type` test also recovered a
+  semantic fact late from AST spelling.  This was a real hot-path ownership
+  and recomputation blocker, not merely a formatting concern.
+- Generated anonymous-namespace predeclaration scanned the entire accumulated
+  `namespace_scopes_` registry for every generated anonymous namespace.  The
+  lookup was candidate-independent and could become quadratic as replay added
+  scopes.  The checkpoint also expanded path resolution inside a large header,
+  which crossed the fatal 1200-line file-audit limit when made readable.
+- The dependent-base constructor branch was traced as a possible fallback
+  success path.  It is keyed by the existing typed `Type::dependent_base_lookup`
+  fact, preserves demand for concrete member constructors, and does not turn a
+  failed lookup into a successful translation.  Removing it causes two valid
+  checkpoint LowIR regressions, so it remains a typed deferral in the ordinary
+  lowering path rather than a timeout or test acceptance workaround.
+
+### Changes Made
+
+- Added `TemplateDefinition::dependent_member_type_nodes` together with the
+  separately owned `dependent_type_member_nodes` subset, indexing both the
+  relevant AST type nodes and the `::type` member fact once during template
+  registration.  Both deferred member checks now consume those owned indexes,
+  so materialization performs only candidate-local substitution checks and does
+  not repeatedly walk the whole declaration or reparse emitted text.
+- Moved `Analyzer::SplitPath`, `ResolvePath`, `ResolveNamespace`, and
+  `ResolveBinding` into the existing `pa11_semantics_analyzer_resolve.cpp`
+  responsibility module.  The anonymous-namespace fallback remains typed on
+  `Scope*` candidates and the header is no longer kept under its size limit by
+  compressed implementation lines.
+- Replaced the registry-wide anonymous-scope scan with a local typed
+  `set<Scope*>` of synthetic anonymous scopes.  This preserves the generated
+  namespace identity while bounding each predeclaration decision to the
+  current scope's children.
+- Kept all audit changes in existing responsibility-named files.  No test,
+  `.ref`, reference binary, unchecked include fragment, or weakened audit rule
+  was added or modified.
+
+### Validation
+
+- `make test-report ACTIVE_TEST_REPORT_PAS='pa23'` — **325/396** passed:
+  38 ordinary exit-status mismatches, 2 reentrant static-query timeouts, and
+  31 LowIR comparisons.  This equals the checkpoint baseline and introduces no
+  current-PA regression.
+- The exact required prior-through command — **pass, 2100/2100** through PA22:
+  `n=23; if [ "$n" -le 1 ]; then echo '===== ALL TESTS PASSED SUCCESSFULLY! (0/0) ====='; else make test-report-through-pa$((n - 1)); fi`.
+- The six checkpoint owner/class-partial preservation witnesses — **pass,
+  6/6** — including class partial matching, nested template-id deduction,
+  source-namespace base SFINAE, dependent qualified base arguments, the
+  out-of-class dependent-owner case, and inherited template-parameter shadowing.
+- `perl scripts/cppgm_file_audit.pl --stage pa23 --paths dev/src` — **pass**
+  with the same 13 non-fatal repository warnings and no fatal size, hidden
+  implementation, compressed-line, or unchecked-path finding.
+- `git diff --check` — pass.  The current-PA count remains at or above the
+  turn-start/checkpoint baseline while earlier assignments remain green.
+
+### Complete Current-PA Failure Inventory
+
+The refreshed inventory below is the complete 71-fixture set from the final
+current-stage report.  The two timeout witnesses are separated from the 38
+ordinary status mismatches; the remaining 31 are LowIR comparisons.
+
+Ordinary status mismatches (38):
+
+```text
+general/100-intermediate-type-transform-value-nontype.t
+general/100-member-template-specialization-return-prefers-member-call.t
+general/100-selected-specialization-special-member-body.t
+general/100-structured-bool-boost-convertible-mpl-overload.t
+general/200-constructor-template-parameter-shadows-instantiated-type.t
+general/200-function-template-named-parameter-sfinae.t
+general/200-member-function-template-address-explicit-pack.t
+general/200-member-template-implicit-instantiation-not-overload.t
+general/200-template-template-qualified-default-arg-deduction.t
+general/300-constructor-template-const-ref-enable-if-conversion.t
+general/400-anonymous-namespace-partial-specialization.t
+general/400-current-specialization-display-name-member-alias.t
+general/400-elaborated-type-template-arg-false-branch.t
+general/400-elaborated-type-template-arg-true-branch.t
+general/400-local-class-default-member-variable-template-nontype-type.t
+general/400-member-template-result-pack-preserves-nested-function-pointer-owner.t
+general/400-out-of-class-ctor-using-imported-member-template.t
+general/400-static-cast-rvalue-ref-skips-conversion-operator.t
+general/400-unused-static-member-template-return-type.t
+general/500-array-type-argument-sfinae-static-value.t
+general/500-dependent-function-type-pack-expansion-ctor-init.t
+general/500-dependent-qualified-member-template-result-bool.t
+general/500-member-template-conditional-alias-trailing-return.t
+general/500-mp11-append-alias-template-sfinae.t
+general/500-nontype-alias-reinstantiation-structural-state.t
+general/500-recursive-qualified-member-template-bool-arg.t
+spec/100-extern-template-member-function-declaration.t
+spec/100-extern-template-static-data-declaration.t
+spec/100-local-member-call-constructor-template-instantiation.t
+spec/400-conversion-function-template-call-argument.t
+spec/400-conversion-function-template-copy-init.t
+spec/400-conversion-function-template-selection.t
+spec/400-defaulted-nested-class-argument-partial-specialization.t
+spec/400-explicit-pack-type-argument-uses-bound-type.t
+spec/400-explicit-type-arg-dependent-qualified-member-template-id.t
+spec/400-function-type-pack-template-argument.t
+spec/400-qualified-member-template-id-bool-constant.t
+spec/500-conditional-alias-index-sequence-member-template-call.t
+```
+
+Timeout witnesses (2):
+
+```text
+general/500-reentrant-static-query-callable-enable-if-cache.t
+general/500-reentrant-static-query-enable-if-partial.t
+```
+
+LowIR comparisons (31):
+
+```text
+general/100-current-specialization-member-body-cast-compare.t
+general/100-dependent-bool-partial-static-value-storage.t
+general/100-explicit-specialization-out-of-class-ctor-replay.t
+general/100-explicit-specialization-pointer-member-definition.t
+general/100-inherited-using-alias-out-of-class-specialization-member.t
+general/100-local-qualified-argument-replay.t
+general/100-sizeof-call-result-nontype-template-argument.t
+general/200-adl-explicit-template-id-call.t
+general/200-function-template-reference-cv-alias-partial-order.t
+general/200-function-template-template-parameter-deduction.t
+general/200-member-operator-template-reference-pattern-partial-order.t
+general/300-current-specialization-constructor-template-canonical-owner.t
+general/300-dependent-bool-base-trait-type-argument.t
+general/400-explicit-function-template-type-arg-drops-nontype-overload.t
+general/400-function-type-pack-out-of-class-constructor.t
+general/400-member-variable-template-leaf-sfinae.t
+general/400-nonmember-template-compound-assignment-const-lhs.t
+general/400-out-of-class-partial-member-template-owner-parameter-alias.t
+general/400-variable-template-specializations.t
+spec/100-explicit-instantiation-after-explicit-specialization-no-effect.t
+spec/100-explicit-instantiation-class-prior-member-definitions.t
+spec/100-explicit-specialization-out-of-class-ctor-replay.t
+spec/100-explicit-specialization-out-of-class-member-emits.t
+spec/100-out-of-class-conversion-operator-definition.t
+spec/100-partial-specialization-member-primary-param-name.t
+spec/100-sizeof-union-type-nttp.t
+spec/200-defaulted-class-template-argument-pack-prefix-deduction.t
+spec/300-constructor-default-pack-partial-ordering.t
+spec/400-class-template-nttp-scope-value.t
+spec/400-defaulted-template-arg-partial-base-completion.t
+spec/400-template-template-member-alias-owner-shadow.t
+```
+
+### Next Substantial Checkpoint Group
+
+Take the typed-value/deferred-SFINAE cluster next: non-type storage,
+dependent `sizeof`, array/static-value probes, detector and alias SFINAE, and
+dependent member-template result evaluation. Keep the two reentrant cases as
+fixed-point witnesses, with no timeout-specific acceptance logic, and retain
+the six owner/class-partial witnesses as regression coverage. Deduction and
+conversion viability plus explicit/extern and LowIR materialization remain the
+following bundled groups.

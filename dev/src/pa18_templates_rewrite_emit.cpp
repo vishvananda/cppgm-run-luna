@@ -345,60 +345,32 @@ bool PA18TemplateExpander::HasDeferredDependentClassMember(
 	const TemplateDefinition& definition, const string& context,
 	const map<string, string>& substitutions) const
 {
-	if(!definition.declaration) return false;
-	const function<bool(const CPPGMAstNodePtr&)> scan =
-		[&](const CPPGMAstNodePtr& node) {
-			if(!node || node->kind == "function-definition" ||
-				node->kind == "special-member-definition" ||
-				node->kind == "special-member-declaration" ||
-				node->kind == "compound-statement") return false;
-			if(node->kind == "decl-specifier" || node->kind == "type-name" ||
-				node->kind == "type-specifier" || node->kind == "decltype-specifier" ||
-				node->kind == "base-name") {
-				string raw = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(
-					RemoveMarker(node->value), substitutions));
-				if(raw.compare(0, 8, "typename") == 0 &&
-					(raw.size() == 8 || isspace(static_cast<unsigned char>(raw[8])))) {
-					raw = CanonicalSpelling(raw.substr(8));
-				}
-				if(HasUnavailableGeneratedMemberType(raw, context, substitutions)) {
-					return true;
-				}
-			}
-			for(size_t child = 0; child < node->children.size(); ++child)
-				if(scan(node->children[child])) return true;
-			return false;
-		};
-	return scan(definition.declaration);
+	for(size_t node = 0; node < definition.dependent_member_type_nodes.size(); ++node) {
+		const CPPGMAstNodePtr& candidate = definition.dependent_member_type_nodes[node];
+		string raw = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(
+			RemoveMarker(candidate->value), substitutions));
+		if(raw.compare(0, 8, "typename") == 0 &&
+			(raw.size() == 8 || isspace(static_cast<unsigned char>(raw[8]))))
+			raw = CanonicalSpelling(raw.substr(8));
+		if(HasUnavailableGeneratedMemberType(raw, context, substitutions)) return true;
+	}
+	return false;
 }
 
 bool PA18TemplateExpander::HasDeferredTypeMember(
 	const TemplateDefinition& definition, const string& context,
 	const map<string, string>& substitutions) const
 {
-	if(!definition.declaration) return false;
-	const function<bool(const CPPGMAstNodePtr&)> scan =
-		[&](const CPPGMAstNodePtr& node) {
-			if(!node || node->kind == "function-definition" ||
-				node->kind == "special-member-definition" ||
-				node->kind == "special-member-declaration" ||
-				node->kind == "compound-statement") return false;
-			if(node->kind == "decl-specifier" || node->kind == "type-name" ||
-				node->kind == "type-specifier" || node->kind == "decltype-specifier" ||
-				node->kind == "base-name") {
-				string raw = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(
-					RemoveMarker(node->value), substitutions));
-				if(raw.compare(0, 8, "typename") == 0 &&
-					(raw.size() == 8 || isspace(static_cast<unsigned char>(raw[8]))))
-					raw = CanonicalSpelling(raw.substr(8));
-				if(LastComponent(raw) == "type" &&
-					HasUnavailableGeneratedMemberType(raw, context, substitutions)) return true;
-			}
-			for(size_t child = 0; child < node->children.size(); ++child)
-				if(scan(node->children[child])) return true;
-			return false;
-		};
-	return scan(definition.declaration);
+	for(size_t node = 0; node < definition.dependent_type_member_nodes.size(); ++node) {
+		const CPPGMAstNodePtr& candidate = definition.dependent_type_member_nodes[node];
+		string raw = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(
+			RemoveMarker(candidate->value), substitutions));
+		if(raw.compare(0, 8, "typename") == 0 &&
+			(raw.size() == 8 || isspace(static_cast<unsigned char>(raw[8]))))
+			raw = CanonicalSpelling(raw.substr(8));
+		if(HasUnavailableGeneratedMemberType(raw, context, substitutions)) return true;
+	}
+	return false;
 }
 
 bool PA18TemplateExpander::GeneratedNodeHasUnavailableMemberType(

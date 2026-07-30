@@ -1,5 +1,92 @@
 #include "pa11_semantics_analyzer.h"
 
+vector<string> Analyzer::SplitPath(const string& raw, bool* absolute) const
+{
+	string path = raw;
+	const bool is_absolute = path.compare(0, 2, "::") == 0;
+	if(is_absolute) path = path.substr(2);
+	vector<string> parts;
+	for(size_t begin = 0; begin <= path.size();) {
+		const size_t end = path.find("::", begin);
+		const string part = path.substr(begin, end == string::npos ?
+			string::npos : end - begin);
+		if(!part.empty()) parts.push_back(part);
+		if(end == string::npos) break;
+		begin = end + 2;
+	}
+	if(absolute) *absolute = is_absolute;
+	return parts;
+}
+
+Analyzer::PathTarget Analyzer::ResolvePath(Scope* from, const string& raw) const
+{
+	bool absolute = false;
+	const vector<string> parts = SplitPath(raw, &absolute);
+	if(parts.empty()) return PathTarget();
+	Scope* current_scope = absolute ? global_.get() : from;
+	Binding* current_binding = 0;
+	for(size_t i = 0; i < parts.size(); ++i) {
+		const string& part = parts[i];
+		if(current_binding) {
+			current_scope = ScopeForType(current_binding->type);
+			if(!current_scope) return PathTarget();
+			current_binding = 0;
+		}
+		if(i == 0 && !absolute) {
+			Binding* binding = LookupUnqualified(current_scope, part);
+			if(binding) {
+				current_binding = binding;
+				if(i + 1 == parts.size()) return PathTarget(0, binding);
+				continue;
+			}
+		}
+		Scope* namespace_scope = (i == 0 && !absolute) ?
+			FindNamespace(current_scope, part) : FindNamespaceDirect(current_scope, part);
+		if(!namespace_scope && part == "<unnamed>" && current_scope)
+			for(size_t using_index = 0;
+				using_index < current_scope->using_directives.size(); ++using_index) {
+				Scope* candidate = current_scope->using_directives[using_index];
+				if(candidate && candidate->kind == SCOPE_NAMESPACE &&
+					candidate->name == part) {
+					namespace_scope = candidate;
+					break;
+				}
+			}
+		if(namespace_scope) {
+			current_scope = namespace_scope;
+			if(i + 1 == parts.size()) return PathTarget(namespace_scope, 0);
+			continue;
+		}
+		Binding* binding = (i == 0 && !absolute) ?
+			LookupUnqualified(current_scope, part) : LookupInNamespace(current_scope, part);
+		if(!binding && current_scope && current_scope->kind == SCOPE_CLASS &&
+			current_scope->owner_type)
+			for(TypePtr base = current_scope->owner_type->direct_base; base;
+				base = base->direct_base) {
+				if(LastComponent(base->name) == part && base->owned_scope &&
+					base->owned_scope->parent)
+					binding = base->owned_scope->parent->local(part);
+				if(!binding && base->owned_scope) binding = base->owned_scope->local(part);
+				if(binding) break;
+			}
+		if(!binding) return PathTarget();
+		if(i + 1 == parts.size()) return PathTarget(0, binding);
+		current_binding = binding;
+	}
+	return current_binding ? PathTarget(0, current_binding) :
+		PathTarget(current_scope, 0);
+}
+
+Scope* Analyzer::ResolveNamespace(Scope* from, const string& raw) const
+{
+	return ResolvePath(from, raw).scope;
+}
+
+Binding* Analyzer::ResolveBinding(Scope* from, const string& raw) const
+{
+	return ResolvePath(from, raw).binding;
+}
+
 TypePtr Analyzer::ResolveType(Scope* from, const string& raw) const
 {
 	const string name = StripTypeMarker(raw);

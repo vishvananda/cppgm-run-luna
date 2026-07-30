@@ -1860,3 +1860,58 @@ starting with non-type storage and dependent `sizeof`/detector evaluation.
 Keep the anonymous-owner and class-partial replay paths covered by the six
 focused witnesses, then rerun the PA23 report, through-PA22 report, and file
 audit.
+
+## Checkpoint 16 audit result — 2026-07-30
+
+### Checkpoint result
+
+The checkpoint audit is complete.  The implementation remains on the normal
+typed parser, semantic, template-replay, and LowIR path.  The audit fixed the
+new per-materialization declaration rescans by indexing dependent member-type
+AST nodes and the `::type` subset at template registration, bounded
+anonymous-scope predeclaration to the current scope, and moved path-resolution
+ownership into the existing resolver module so the source audit remains a real
+size/ownership check.
+No timeout workaround, fallback success path, fixture gate, embedded payload,
+or unchecked implementation fragment remains in the checkpoint changes.
+
+### Validation
+
+- `make test-report ACTIVE_TEST_REPORT_PAS='pa23'`: **325/396**; equal to the
+  checkpoint baseline and therefore stage-progress preserving.
+- Required prior-through command: **pass, 2100/2100** through PA22.
+- The six owner/class-partial preservation witnesses: **pass, 6/6**.
+- `perl scripts/cppgm_file_audit.pl --stage pa23 --paths dev/src`: **pass**
+  with 13 pre-existing non-fatal warnings and no fatal finding.
+- The complete current-stage inventory is recorded in the matching Checkpoint
+  16 audit section in `pa23/audit.md`: 38 ordinary status mismatches, 2
+  reentrant timeout witnesses, and 31 LowIR comparisons.
+
+### Remaining Work Map
+
+The map below is refreshed from that complete 71-fixture inventory; the exact
+fixture names and classifications are recorded in `pa23/audit.md`.
+
+- **Typed values and deferred SFINAE:** non-type storage and reinstantiation,
+  dependent `sizeof`, array/static-value probes, detector/`enable_if` and alias
+  SFINAE, dependent member-template result values, and the two reentrant
+  fixed-point queries.
+- **Template deduction and overload viability:** explicit-prefix and
+  template-template deduction, function/reference/pack normalization,
+  constructors, conversions, ADL, member-template address/call selection,
+  and deleted/extern candidate handling.
+- **Owner and specialization replay:** anonymous and current-specialization
+  names, inherited aliases, nested owners, explicit/extern specialization
+  replay, variable templates, and out-of-class member definitions.
+- **LowIR materialization:** the 31 remaining comparisons covering generated
+  constructor/body metadata, function ordering, static/variable-template
+  state, explicit instantiation, and ABI-visible type/value lowering.
+
+### Next substantial checkpoint group
+
+Bundle typed-value/deferred-SFINAE work with dependent `sizeof`, array/static
+value, alias/detector, and member-template-result witnesses.  Keep the two
+reentrant cases as fixed-point regression witnesses with no timing-based
+acceptance, and retain all six owner/class-partial witnesses.  Follow this
+group with the deduction/conversion cluster, then explicit/extern and LowIR
+materialization.
