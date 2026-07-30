@@ -101,6 +101,52 @@ void PA18TemplateExpander::MaterializeOrdinaryCallConversions(
 	}
 }
 
+void PA18TemplateExpander::MaterializeOrdinaryInitializerConversions(
+	const CPPGMAstNodePtr& input, const CPPGMAstNodePtr& result,
+	const string& context, const map<string, string>& substitutions)
+{
+	if(!input || !result || input->kind != "simple-declaration") return;
+	const CPPGMAstNodePtr original_list = ChildOfKindLocal(input,
+		"init-declarator-list");
+	const CPPGMAstNodePtr transformed_list = ChildOfKindLocal(result,
+		"init-declarator-list");
+	if(!original_list || !transformed_list || input->children.empty()) return;
+	const string declaration_type = NodeTypeSpelling(input->children[0]);
+	const size_t count = min(original_list->children.size(),
+		transformed_list->children.size());
+	for(size_t item = 0; item < count; ++item) {
+		const CPPGMAstNodePtr original_item = original_list->children[item];
+		const CPPGMAstNodePtr transformed_item = transformed_list->children[item];
+		if(!original_item || !transformed_item || original_item->children.empty() ||
+			transformed_item->children.size() < 2) continue;
+		const CPPGMAstNodePtr original_declarator = original_item->children[0];
+		CPPGMAstNodePtr initializer = transformed_item->children[1];
+		if(!original_declarator || !initializer) continue;
+		if(initializer->kind == "initializer") {
+			if(initializer->children.size() != 1) continue;
+			initializer = initializer->children[0];
+		} else if(initializer->kind == "paren-initializer" ||
+			initializer->kind == "braced-init-list") {
+			if(initializer->children.size() != 1) continue;
+			initializer = initializer->children[0];
+		}
+		if(!initializer || initializer->kind == "braced-init-list") continue;
+		string target;
+		try {
+			target = CanonicalSpelling(ResolveAlias(RewriteText(
+				DeclaratorTypeSpelling(declaration_type, original_declarator),
+				context, substitutions, 0), context));
+		} catch(const PA18SubstitutionFailure&) {
+			continue;
+		}
+		// Constructor and class-initializer replay has its own path.  This
+		// path supplies the missing ordinary copy-initialization fact for
+		// destinations such as `int y = box_value`.
+		if(target.empty() || FindClassDeclaration(target, context)) continue;
+		MaterializeOrdinaryConversion(target, initializer, context, substitutions);
+	}
+}
+
 bool PA18TemplateExpander::ResolveOrdinaryConversionTypes(
 	const string& raw_parameter, const CPPGMAstNodePtr& argument,
 	const string& context, const map<string, string>& substitutions,
@@ -111,7 +157,13 @@ bool PA18TemplateExpander::ResolveOrdinaryConversionTypes(
 		*target_type = StripOrdinaryCallConversionType(RewriteText(raw_parameter,
 			context, substitutions, 0));
 	} catch(const PA18SubstitutionFailure&) { return false; }
-	if(target_type->empty() || !FindClassDeclaration(*target_type, context)) return false;
+	// A conversion-function template can target a fundamental or pointer type
+	// just as it can target a class.  The destination is still a typed semantic
+	// fact; requiring a class declaration here prevented `operator T()` from
+	// being materialized for ordinary calls such as `f(box)` where `f` takes an
+	// int.
+	if(target_type->empty() || (!FindClassDeclaration(*target_type, context) &&
+		!IsKnownTypeSpelling(*target_type, context))) return false;
 	try {
 		if(!InferArgument(argument, source_type, substitutions, context)) return false;
 		*source_type = StripOrdinaryCallConversionType(ResolveAlias(RewriteText(

@@ -2198,6 +2198,53 @@ listed repository warnings.  The next turn should start from the owner/
 deferred-member-result group above; no current-PA failure was hidden or
 converted into a fixture change.
 
+## Checkpoint 18 scope — 2026-07-30 (before implementation)
+
+### Live Remaining Work Map
+
+The clean PA23 report remains **329/396**: **35** status failures (including
+the two reentrant fixed-point timeouts) and **32** LowIR comparisons.  The
+complete fixture inventory is the 67-entry grouped list in the preceding
+Checkpoint 17 section, confirmed by the live primary log.  The shared
+remaining behaviors are:
+
+- **Dependent member-result and candidate-local SFINAE:** qualified boolean
+  results, trailing-return aliases, dependent packs, MP11-style alias probes,
+  non-type alias reinstantiation, recursive member queries, and the two
+  terminating-query witnesses.
+- **Owner and specialization replay:** current-specialization and inherited
+  owners, out-of-class members, explicit/extern replay, nested member-template
+  ownership, anonymous scopes, and variable-template state.
+- **Deduction and conversion viability:** constructor and conversion
+  candidates, explicit/template-template prefixes, function-pointer and pack
+  deduction, ADL, and member-template overload selection.
+- **LowIR materialization:** the 32 comparison failures covering generated
+  function/constructor bodies, static storage, explicit instantiation,
+  declaration order, and ABI-visible typed values.
+
+### Checkpoint Scope
+
+Complete the first ordinary conversion-function-template increment in the
+deduction/conversion group.  Ordinary call materialization must retain a
+typed fundamental (and otherwise non-class) destination as a valid conversion
+target, bind the conversion operator template's result parameter against that
+destination, and replay the selected member specialization through the normal
+typed member-call path.  This covers conversion-operator templates used for a
+function argument and copy-initialization, without treating conversion
+operators as constructors or adding an acceptance fallback.
+
+Validate the scope with:
+
+`spec/400-conversion-function-template-call-argument.t`,
+`spec/400-conversion-function-template-copy-init.t`, and
+`spec/400-conversion-function-template-selection.t`.
+
+Then run the full PA23 report, the exact through-PA22 report, the PA23 file
+audit, and `git diff --check`.  The next checkpoint group is the remaining
+dependent member-result/candidate-local SFINAE band bundled with constructor
+and conversion viability; the two reentrant cases remain genuine fixed-point
+witnesses with no timing-specific handling.
+
 ## Checkpoint 17 audit result — 2026-07-30
 
 The checkpoint audit fixed two replay hot-path issues without changing the
@@ -2246,3 +2293,56 @@ selection witnesses.  Keep all typed-owner/array and class-partial
 regressions in the focused suite, retain the two reentrant cases as
 fixed-point witnesses with no timing-based acceptance, then follow with the
 remaining deduction/conversion and explicit/extern LowIR groups.
+
+## Checkpoint 18 result — 2026-07-30
+
+The ordinary conversion-function-template increment is complete.  Fundamental
+and other known non-class destinations are now retained as typed conversion
+targets during ordinary call replay, and scalar copy-initializers use the same
+member-template materialization path as function arguments.  This preserves
+the normal PA14 conversion-operator lookup and generated binding; it does not
+turn conversion operators into constructors or accept an otherwise invalid
+initializer.
+
+The three scoped witnesses pass:
+
+- `spec/400-conversion-function-template-call-argument.t`
+- `spec/400-conversion-function-template-copy-init.t`
+- `spec/400-conversion-function-template-selection.t`
+
+The fresh full PA23 report is **332/396**, up three tests from the
+turn-start **329/396** baseline.  Its remaining **64** fixtures are **32
+exit-status mismatches** and **32 LowIR comparisons**.  The status set is the
+previous status group with the three conversion-function-template witnesses
+removed; the LowIR set is unchanged.  The two reentrant static-query cases
+remain genuine fixed-point timeout witnesses and were not accepted through
+timing behavior or a fallback.
+
+### Refreshed Remaining Work Map
+
+- **Dependent member-result and candidate-local SFINAE (11 status):**
+  structured boolean overloads, dependent function-type packs, qualified
+  boolean results, trailing-return aliases, MP11 append, non-type alias
+  reinstantiation, recursive member queries, the two reentrant fixed-point
+  queries, the qualified bool member-template id, and conditional-alias index
+  sequence calls.
+- **Owner and specialization replay (11 status):** current and inherited
+  owners, anonymous scopes, selected/special member replay, static member
+  state, source-namespace SFINAE, extern/template declarations, local member
+  calls, and defaulted nested-class partial specialization.
+- **Deduction and overload viability (10 status):** constructor and named-
+  parameter SFINAE, explicit-pack and template-template deduction, member
+  template instantiation/overload selection, rvalue-reference conversion
+  ranking, and the remaining explicit type/function-pack witnesses.
+- **LowIR materialization (32 comparisons):** generated current-specialization
+  and constructor bodies, static storage, explicit/extern specialization,
+  owner replay, ADL and partial ordering, variable-template state, and typed
+  ABI-visible values.
+
+### Next Checkpoint Group
+
+Bundle the dependent member-result/candidate-local SFINAE cases with MP11
+append, qualified bool results, trailing-return aliases, and the conditional-
+alias index-sequence member call.  Keep the two reentrant cases as genuine
+fixed-point regression coverage, then take the remaining owner/replay and
+deduction/LowIR groups in separate checkpoints.

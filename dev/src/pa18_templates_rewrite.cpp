@@ -850,8 +850,10 @@ CPPGMAstNodePtr PA18TemplateExpander::FinishRegularNode(
 					ContainsName(input, "&&"))
 					CollapseForwardingReference(result);
 		RewriteTemplateInitializer(input, context, substitutions, result);
-		if(active_template_declaration_depth_ == 0)
+		if(active_template_declaration_depth_ == 0) {
 			MaterializeInitializerConstructor(input, result, context, substitutions);
+			MaterializeOrdinaryInitializerConversions(input, result, context, substitutions);
+		}
 		if(input->kind == "simple-declaration")
 			DeduceAutoInitializerType(result, context, substitutions);
 		if(input->kind == "simple-declaration") ReifyReferenceType(result);
