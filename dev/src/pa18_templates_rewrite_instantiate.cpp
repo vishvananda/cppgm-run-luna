@@ -1373,43 +1373,6 @@ void PA18TemplateExpander::RegisterGeneratedSpecialization(
 	forwards.push_back(MakeForwardClass(local_name));
 }
 
-void PA18TemplateExpander::AddConcreteOwnerSubstitutions(
-	const string& concrete_owner, const string& context,
-	map<string, string>* substitutions, bool bind_source_owner)
-{
-	if(concrete_owner.empty() || !substitutions) return;
-	map<string, string>::const_iterator owner_base = specialization_bases_.find(
-		LastComponent(concrete_owner));
-	map<string, vector<string> >::const_iterator owner_arguments =
-		specialization_arguments_.find(LastComponent(concrete_owner));
-	if(owner_base == specialization_bases_.end() ||
-		owner_arguments == specialization_arguments_.end()) return;
-	const TemplateDefinition* owner_definition = FindDefinition(owner_base->second, context);
-	if(!owner_definition || !owner_definition->class_template) return;
-	const TemplateDefinition* selected_owner = SelectClassTemplateDefinition(
-		owner_definition, owner_arguments->second, context);
-	if(selected_owner) owner_definition = selected_owner;
-	// A member template's defaults are written with the source class name
-	// (`decltype(prop::member<E>())`).  Bind that name to the concrete owner
-	// while resolving the member's own arguments; parameter bindings alone leave
-	// the source owner as an empty outer substitution.
-	if(bind_source_owner && !owner_definition->name.empty())
-		(*substitutions)[owner_definition->name] = concrete_owner;
-	for(size_t parameter = 0; parameter < owner_definition->parameters.size() &&
-		parameter < owner_arguments->second.size(); ++parameter)
-		if(!owner_definition->parameters[parameter].name.empty())
-			(*substitutions)[owner_definition->parameters[parameter].name] =
-				owner_arguments->second[parameter];
-	if(owner_definition->partial_specialization) {
-		map<string, string> specialized;
-		if(MatchClassSpecializationPattern(*owner_definition, owner_arguments->second,
-			&specialized, context))
-			for(map<string, string>::const_iterator binding = specialized.begin();
-				binding != specialized.end(); ++binding)
-				(*substitutions)[binding->first] = binding->second;
-	}
-}
-
 bool PA18TemplateExpander::ConcreteOwnerMatches(
 	const TemplateDefinition& definition, const string& concrete_owner) const
 {

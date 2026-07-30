@@ -1638,3 +1638,76 @@ partial-specialization deduction and source-namespace base matching. Preserve
 the five new SFINAE/alias/hidden-friend passes, then validate the focused
 witnesses, full PA23, through-PA22, and file audit again before the next
 specialization/LowIR increment.
+
+## Checkpoint 14 scope — 2026-07-30 (before implementation)
+
+### Remaining Work Map
+
+The live PA23 baseline is **315/396**: 46 status mismatches, 33 LowIR
+comparisons, and two reentrant static-query timeouts. The residual failures
+group into four shared behaviors: (1) direct function-type versus function-
+pointer partial matching and fixed-arity ordering over a function tail pack;
+(2) concrete function-type pack materialization and recursive dependent-base
+lookup; (3) the remaining function-template deduction/conversion, explicit
+prefix, ADL, constructor, and member-overload status cases; and (4) typed
+non-type/SFINAE state, explicit/extern replay, generated LowIR materialization,
+and fixed-point termination.
+
+### Checkpoint Scope
+
+Implement and validate group (1) and the dependent portion of group (2):
+preserve the distinction between a direct function type and a function pointer
+when matching class-template partial specializations, order a fixed-arity
+function pattern ahead of a tail-pack pattern, and materialize concrete
+function-type pack elements without leaving an expansion marker in a generated
+dependent base. The focused behavior is covered by
+`general/100-function-type-not-pointer-partial-specialization`,
+`general/400-function-type-partial-specialization-fixed-arity-over-pack`, and
+`general/400-function-type-tail-pack-recursive-specialization`. A successful
+checkpoint must improve the 315-test baseline, preserve through-PA22, and pass
+the PA23 file audit; the next group will be the remaining deduction/conversion
+and explicit-prefix witnesses.
+
+## Checkpoint 14 result — 2026-07-30
+
+The function-type matching and dependent pack replay increment is complete:
+
+- Direct function types are canonicalized separately from function pointers,
+  so a direct function argument no longer incorrectly selects a pointer partial
+  specialization. Nested function parameters still receive the language's
+  function-to-pointer adjustment where the parameter is not a reference.
+- Partial ordering now recognizes a fixed-arity direct function pattern as
+  more specialized than the corresponding trailing function-parameter pack.
+- Concrete owner partial-specialization packs are propagated into nested replay
+  state. Recursive dependent-base lookup now materializes each concrete
+  function type rather than retaining a `...` expansion marker.
+
+The three PA23 focused witnesses and the PA21 nested-function regression all
+pass. The full PA23 report is **318/396**, three tests above the 315-test
+baseline; 46 status mismatches, 33 LowIR comparisons, and two reentrant
+static-query timeouts remain. `make test-report-through-pa22` passes
+**2100/2100**, and the PA23 file audit passes with 13 existing nonfatal
+warnings. The owner-pack helper was split into the emit module to keep the
+source-size and function-size audit limits satisfied.
+
+### Remaining Work Map
+
+- **Dependent owner qualification:** nested template-id partial deduction and
+  source-namespace dependent-base SFINAE still fail during replay.
+- **Function-template deduction and conversion:** explicit prefixes, function
+  pointers and non-type function arguments, ADL, conversions, constructors,
+  and member-template overload selection remain status failures.
+- **Typed values and fixed-point SFINAE:** non-type storage, `sizeof`, detector
+  and `enable_if` probes, extern/explicit replay, and the two reentrant static
+  query timeouts still need typed candidate-local state and termination.
+- **Specialization and LowIR materialization:** the 33 comparison cases still
+  cover explicit/extern replay, constructors, variable templates, and generated
+  declaration/body metadata and ordering.
+
+### Next checkpoint group
+
+Take the remaining function-template deduction/conversion group next, starting
+with explicit template prefixes, function-pointer/non-type argument deduction,
+and member-template overload viability. Preserve the direct-function matching,
+fixed-arity ordering, and concrete owner-pack replay paths while validating the
+focused witnesses, full PA23, through-PA22, and file audit again.

@@ -314,6 +314,58 @@ bool PA18TemplateExpander::SplitDirectFunctionType(const string& raw,
 		for(size_t i = 0; i < lhs_ordered.specialization_parameters.size(); ++i)
 			if(!lhs_ordered.specialization_parameters[i].empty()) lhs_names.insert(
 				lhs_ordered.specialization_parameters[i]);
+		const auto function_shape = [this](const TemplateDefinition& definition,
+			string* result, vector<string>* parameters, string* qualifiers,
+			bool* trailing_pack) {
+			for(size_t pattern = 0; pattern < definition.specialization_pattern.size(); ++pattern) {
+				vector<string> parts;
+				if(!SplitDirectFunctionType(CanonicalSpelling(
+					definition.specialization_pattern[pattern]), result, &parts, qualifiers)) continue;
+				*trailing_pack = !parts.empty() && IsTopLevelPackPattern(parts.back());
+				*parameters = parts;
+				return true;
+			}
+			return false;
+		};
+		string lhs_function_result, rhs_function_result, lhs_function_qualifiers,
+			rhs_function_qualifiers;
+		vector<string> lhs_function_parameters, rhs_function_parameters;
+		bool lhs_function_pack = false, rhs_function_pack = false;
+		if(function_shape(lhs_ordered, &lhs_function_result, &lhs_function_parameters,
+			&lhs_function_qualifiers, &lhs_function_pack) &&
+			function_shape(rhs_ordered, &rhs_function_result, &rhs_function_parameters,
+			&rhs_function_qualifiers, &rhs_function_pack) &&
+			lhs_function_qualifiers == rhs_function_qualifiers) {
+			const auto accepts_function_shape = [this](const string& pattern_result,
+				const vector<string>& pattern_parameters, bool pattern_pack,
+				const set<string>& pattern_names, const string& actual_result,
+				const vector<string>& actual_parameters) {
+				map<string, string> inferred;
+				if(!MatchOrderingTypePattern(pattern_result, actual_result, pattern_names,
+					&inferred)) return false;
+				const size_t fixed = pattern_parameters.size() - (pattern_pack ? 1 : 0);
+				if(actual_parameters.size() < fixed ||
+					(!pattern_pack && actual_parameters.size() != fixed)) return false;
+				for(size_t parameter = 0; parameter < fixed; ++parameter)
+					if(!MatchOrderingTypePattern(pattern_parameters[parameter],
+						actual_parameters[parameter], pattern_names, &inferred)) return false;
+				if(pattern_pack) {
+					const string pack = CanonicalSpelling(pattern_parameters.back().substr(
+						0, pattern_parameters.back().size() - 3));
+					if(pattern_names.find(pack) == pattern_names.end()) return false;
+					for(size_t parameter = fixed; parameter < actual_parameters.size(); ++parameter)
+						if(!MatchOrderingTypePattern(pack, actual_parameters[parameter],
+							pattern_names, &inferred)) return false;
+				}
+				return true;
+			};
+			if(!lhs_function_pack && rhs_function_pack && accepts_function_shape(
+				rhs_function_result, rhs_function_parameters, true, rhs_names,
+				lhs_function_result, lhs_function_parameters)) return true;
+			if(lhs_function_pack && !rhs_function_pack && accepts_function_shape(
+				lhs_function_result, lhs_function_parameters, true, lhs_names,
+				rhs_function_result, rhs_function_parameters)) return false;
+		}
 		const auto template_shape = [this](const TemplateDefinition& definition,
 			string* base, vector<string>* parts, bool* trailing_pack) {
 			for(size_t pattern = 0; pattern < definition.specialization_pattern.size(); ++pattern) {

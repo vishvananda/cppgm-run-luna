@@ -1080,7 +1080,12 @@
 			const map<string, vector<string> >& pack_substitutions);
 	void RegisterGeneratedSpecialization(const TemplateDefinition& definition,
 		const vector<string>& metadata_args, const string& local_name);
-	void AddConcreteOwnerSubstitutions(const string& concrete_owner, const string& context, map<string, string>* substitutions, bool bind_source_owner = true);
+	void AddConcreteOwnerSubstitutions(const string& concrete_owner, const string& context,
+		map<string, string>* substitutions, bool bind_source_owner = true,
+		map<string, vector<string> >* pack_substitutions = 0);
+	void InstallConcreteOwnerPacks(const string& concrete_owner, const string& context,
+		map<string, string>* substitutions,
+		map<string, vector<string> >* pack_substitutions, bool bind_source_owner);
 	bool ConcreteOwnerMatches(const TemplateDefinition& definition,
 		const string& concrete_owner) const;
 	string FindConcreteInstantiationOwner(const TemplateDefinition& definition,

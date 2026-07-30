@@ -252,12 +252,29 @@ int PA18TemplateExpander::MatchTypePatternSimpleCases(const string& pattern,
 		actual_bound ? 1 : 0;
 }
 
-int PA18TemplateExpander::MatchTypePatternFunctionCases(const string& pattern,
+int PA18TemplateExpander::MatchTypePatternFunctionCases(const string& raw_pattern,
 	string* actual_value, const set<string>& parameter_names,
 	map<string, string>* inferred, const string& context, bool class_pattern) const
 {
 	if(!actual_value) return 0;
+	string pattern = raw_pattern;
 	string actual = *actual_value;
+	const auto normalize_function_pointer_alias = [this](string value) {
+		if(value.empty() || value[value.size() - 1] != '*') return value;
+		string result, qualifiers;
+		vector<string> parameters;
+		if(!SplitDirectFunctionType(value.substr(0, value.size() - 1), &result,
+			&parameters, &qualifiers)) return value;
+		string normalized = result + "(*) (";
+		for(size_t parameter = 0; parameter < parameters.size(); ++parameter) {
+			if(parameter) normalized += ',';
+			normalized += parameters[parameter];
+		}
+		normalized += ")" + qualifiers;
+		return CanonicalSpelling(normalized);
+	};
+	pattern = normalize_function_pointer_alias(pattern);
+	actual = normalize_function_pointer_alias(actual);
 	string pattern_result, actual_result, pattern_qualifiers, actual_qualifiers;
 	vector<string> pattern_parameters, actual_parameters;
 	const bool direct_pattern_function = SplitDirectFunctionType(pattern, &pattern_result,
@@ -296,12 +313,30 @@ int PA18TemplateExpander::MatchTypePatternFunctionCases(const string& pattern,
 			return 1;
 		}
 		if(pattern_parameters.size() != actual_parameters.size()) return 0;
+		const auto adjust_function_parameter = [this](const string& value) {
+			string result, qualifiers;
+			vector<string> parameters;
+			if(!SplitDirectFunctionType(value, &result, &parameters, &qualifiers)) return value;
+			string adjusted = result + "(*) (";
+			for(size_t parameter = 0; parameter < parameters.size(); ++parameter) {
+				if(parameter) adjusted += ',';
+				adjusted += parameters[parameter];
+			}
+			adjusted += ")" + qualifiers;
+			return CanonicalSpelling(adjusted);
+		};
 		for(size_t parameter = 0; parameter < pattern_parameters.size(); ++parameter)
-			if(!MatchTypePattern(pattern_parameters[parameter], actual_parameters[parameter],
+			if(!MatchTypePattern(pattern_parameters[parameter],
+				(pattern_parameters[parameter].size() > 0 &&
+				 (pattern_parameters[parameter][pattern_parameters[parameter].size() - 1] == '&' ||
+				  (pattern_parameters[parameter].size() > 1 &&
+				   pattern_parameters[parameter].compare(
+					pattern_parameters[parameter].size() - 2, 2, "&&") == 0))) ?
+					actual_parameters[parameter] : adjust_function_parameter(actual_parameters[parameter]),
 				parameter_names, inferred, context, class_pattern)) return 0;
 		return 1;
 	}
-	if(direct_actual_function && pattern.find(")(") != string::npos &&
+	if(!class_pattern && direct_actual_function && pattern.find(")(") != string::npos &&
 		actual_qualifiers.empty()) {
 		string converted = actual_result + "(*)(";
 		for(size_t parameter = 0; parameter < actual_parameters.size(); ++parameter) {

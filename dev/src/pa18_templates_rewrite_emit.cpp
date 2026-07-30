@@ -1061,6 +1061,68 @@ void PA18TemplateExpander::RecoverNestedVectorArgument(
 	}
 }
 
+void PA18TemplateExpander::AddConcreteOwnerSubstitutions(
+	const string& concrete_owner, const string& context,
+	map<string, string>* substitutions, bool bind_source_owner,
+	map<string, vector<string> >* pack_substitutions)
+{
+	if(concrete_owner.empty() || !substitutions) return;
+	map<string, string>::const_iterator owner_base = specialization_bases_.find(
+		LastComponent(concrete_owner));
+	map<string, vector<string> >::const_iterator owner_arguments =
+		specialization_arguments_.find(LastComponent(concrete_owner));
+	if(owner_base == specialization_bases_.end() ||
+		owner_arguments == specialization_arguments_.end()) return;
+	const TemplateDefinition* owner_definition = FindDefinition(owner_base->second, context);
+	if(!owner_definition || !owner_definition->class_template) return;
+	const TemplateDefinition* selected_owner = SelectClassTemplateDefinition(
+		owner_definition, owner_arguments->second, context);
+	if(selected_owner) owner_definition = selected_owner;
+	// A member template's defaults are written with the source class name
+	// (`decltype(prop::member<E>())`).  Bind that name to the concrete owner
+	// while resolving the member's own arguments; parameter bindings alone leave
+	// the source owner as an empty outer substitution.
+	if(bind_source_owner && !owner_definition->name.empty())
+		(*substitutions)[owner_definition->name] = concrete_owner;
+	for(size_t parameter = 0; parameter < owner_definition->parameters.size() &&
+		parameter < owner_arguments->second.size(); ++parameter)
+		if(!owner_definition->parameters[parameter].name.empty())
+			(*substitutions)[owner_definition->parameters[parameter].name] =
+				owner_arguments->second[parameter];
+	if(owner_definition->partial_specialization) {
+		map<string, string> specialized;
+		if(MatchClassSpecializationPattern(*owner_definition, owner_arguments->second,
+			&specialized, context))
+			for(map<string, string>::const_iterator binding = specialized.begin();
+				binding != specialized.end(); ++binding)
+				(*substitutions)[binding->first] = binding->second;
+		if(pack_substitutions) for(size_t pack = 0;
+			pack < owner_definition->specialization_pack_names.size(); ++pack) {
+			const string& name = owner_definition->specialization_pack_names[pack];
+			map<string, string>::const_iterator binding = specialized.find(name);
+			(*pack_substitutions)[name] = binding == specialized.end() || binding->second.empty() ?
+				vector<string>() : SplitTemplateArguments(binding->second);
+		}
+	}
+}
+
+void PA18TemplateExpander::InstallConcreteOwnerPacks(
+	const string& concrete_owner, const string& context,
+	map<string, string>* substitutions,
+	map<string, vector<string> >* pack_substitutions, bool bind_source_owner)
+{
+	map<string, vector<string> > owner_packs;
+	if(!concrete_owner.empty())
+		AddConcreteOwnerSubstitutions(concrete_owner, context, substitutions,
+			bind_source_owner, &owner_packs);
+	for(map<string, vector<string> >::const_iterator pack = owner_packs.begin();
+		pack != owner_packs.end(); ++pack) {
+		if(!pack->first.empty()) active_pack_substitutions_[pack->first] = pack->second;
+		if(pack_substitutions && pack_substitutions->find(pack->first) == pack_substitutions->end())
+			(*pack_substitutions)[pack->first] = pack->second;
+	}
+}
+
 string PA18TemplateExpander::Instantiate(const TemplateDefinition& definition,
 	const vector<string>& raw_args, const string& context, bool explicit_instantiation,
 	const map<string, vector<string> >* pack_hints,
@@ -1110,6 +1172,8 @@ string PA18TemplateExpander::Instantiate(const TemplateDefinition& definition,
 	// restore the surrounding replay state afterward.
 	const map<string, vector<string> > previous_argument_packs =
 		active_pack_substitutions_;
+	InstallConcreteOwnerPacks(concrete_owner, context, &substitutions,
+		&pack_substitutions, !definition.class_template);
 	if(pack_hints) for(map<string, vector<string> >::const_iterator hint =
 		pack_hints->begin(); hint != pack_hints->end(); ++hint)
 		if(!hint->first.empty()) active_pack_substitutions_[hint->first] = hint->second;
