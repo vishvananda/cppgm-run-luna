@@ -631,7 +631,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				continue;
 			}
 		for(size_t i = 0; i < args.size(); ++i) {
-			const string source_argument = args[i];
+			const string source_argument = args[i]; const bool preserve_elaborated_type_owner = IsElaboratedTypeArgumentSpelling(source_argument);
 			const string substituted_source_argument = CanonicalSpelling(CollapseRepeatedQualifiedPath(CollapseRepeatedQualifier(ReplaceIdentifiersPreservingPackSizes(source_argument, substitutions))));
 			// A self-containing template-id replacement has no finite textual
 			// rewrite.  Drop only that binding for this nested rewrite; all semantic
@@ -912,7 +912,8 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 							*argument_substitutions, 0, true, true, defer_nested_class_argument));
 					if(function_pointer_alias.empty()) args[i] = ResolveAlias(args[i], context);
 					else args[i] = function_pointer_alias;
-					args[i] = QualifyTypeArgument(args[i], context, definition->owner);
+					args[i] = QualifyTypeArgument(args[i], context, definition->owner,
+						preserve_elaborated_type_owner);
 					// Preserve a typedef spelling that denotes a reference while
 					// replaying an alias template.  Substituting its expanded
 					// `int&` spelling into `const T` would incorrectly turn the
@@ -925,8 +926,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 						ResolveAlias(source_argument, context).back() == '&')
 						args[i] = source_argument;
 				}
-				if(deferred_pack_argument) {
-					search = close + 1;
+			if(deferred_pack_argument) { search = close + 1;
 					continue;
 				}
 				const size_t supplied_template_arguments = args.size();

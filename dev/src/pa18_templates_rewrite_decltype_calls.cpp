@@ -415,8 +415,15 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 				FindFunctionDefinitions("operator()", object_type);
 			for(size_t candidate = 0; candidate < call_operators.size(); ++candidate) {
 				vector<string> arguments;
-				if(!InferFunctionTypeArguments(*call_operators[candidate], actual_types,
-					&arguments, substitutions, function_context)) continue;
+				try {
+					if(!InferFunctionTypeArguments(*call_operators[candidate], actual_types,
+						&arguments, substitutions, function_context)) continue;
+				} catch(const PA18SubstitutionFailure&) {
+					// A dependent default or return type can fail while probing one
+					// callable.  That removes this candidate; it is not a failure of
+					// the surrounding unevaluated expression.
+					continue;
+				}
 				*result = FunctionResultType(*call_operators[candidate], arguments,
 					function_context, &substitutions);
 				if(!result->empty()) return true;
@@ -502,16 +509,21 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 			map<string, string> candidate_substitutions = substitutions;
 			ApplyFriendClassSubstitutions(definition, actual_types, function_context,
 				&candidate_substitutions);
-			vector<string> arguments;
+				vector<string> arguments;
 			const bool complete = explicit_definition &&
 				explicit_arguments.size() == definition.parameters.size();
 			if(complete) arguments = explicit_arguments;
-				else if(!InferFunctionTypeArguments(definition, actual_types, &arguments,
-					candidate_substitutions, function_context, explicit_definition ? &explicit_arguments : 0)) {
-					continue;
+				else {
+					try {
+						if(!InferFunctionTypeArguments(definition, actual_types, &arguments,
+							candidate_substitutions, function_context,
+							explicit_definition ? &explicit_arguments : 0)) continue;
+					} catch(const PA18SubstitutionFailure&) {
+						continue;
+					}
 				}
-			try {
-				if(!FunctionArgumentsViable(definition, arguments, actual_types,
+				try {
+					if(!FunctionArgumentsViable(definition, arguments, actual_types,
 					function_context, &candidate_substitutions,
 					explicit_definition ? &explicit_arguments : 0)) {
 						continue;
@@ -520,9 +532,9 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 					function_context, candidate_substitutions)) {
 					continue;
 				}
-				} catch(const PA18SubstitutionFailure&) {
-					continue;
-				}
+					} catch(const PA18SubstitutionFailure&) {
+						continue;
+					}
 			string candidate_result;
 			try {
 				candidate_result = FunctionResultType(definition, arguments,

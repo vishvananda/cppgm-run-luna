@@ -22,6 +22,20 @@ bool ContainsIdentifierTokenLocal(const string& text, const string& identifier)
 
 }
 
+bool PA18TemplateExpander::IsElaboratedTypeArgumentSpelling(const string& spelling) const
+{
+	const string normalized = CanonicalSpelling(spelling);
+	const char* const keys[] = {"struct", "class", "union"};
+	for(size_t key = 0; key < sizeof(keys) / sizeof(keys[0]); ++key) {
+		const string keyword = keys[key];
+		if(normalized.compare(0, keyword.size(), keyword) != 0) continue;
+		return normalized.size() > keyword.size() &&
+			(isspace(static_cast<unsigned char>(normalized[keyword.size()])) ||
+				IsIdentifierCharacter(normalized[keyword.size()]));
+	}
+	return false;
+}
+
 string PA18TemplateExpander::ExpandPackCallText(string raw,
 	const map<string, vector<string> >& packs) const
 {

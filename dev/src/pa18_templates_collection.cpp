@@ -530,8 +530,20 @@ string NormalizeTypeArgument(string raw)
 		{"signedshort", "signed short"}, {"signedchar", "signed char"},
 		{"longlong", "long long"}, {"longlongint", "long long int"}, {"longdouble", "long double"}
 	};
-	for(size_t i = 0; i < sizeof(compact_fundamentals) / sizeof(compact_fundamentals[0]); ++i)
-		if(raw == compact_fundamentals[i][0]) { raw = compact_fundamentals[i][1]; break; }
+	for(size_t i = 0; i < sizeof(compact_fundamentals) / sizeof(compact_fundamentals[0]); ++i) {
+		const string compact = compact_fundamentals[i][0];
+		if(raw.compare(0, compact.size(), compact) != 0) continue;
+		const size_t after = compact.size();
+		if(after < raw.size() && IsIdentifierCharacter(raw[after])) continue;
+		// A compact fundamental prefix is only a recovery for a declarator
+		// suffix (`unsignedint[4]`, for example).  Do not reinterpret a source
+		// spelling that continues with another type word; parser replay can
+		// legitimately concatenate those words before normalization.
+		if(after < raw.size() && raw[after] != '[' && raw[after] != '*' &&
+			raw[after] != '&') continue;
+		raw = compact_fundamentals[i][1] + raw.substr(after);
+		break;
+	}
 	const size_t duplicate_const = raw.find("const const ");
 	if(duplicate_const != string::npos) { raw.erase(duplicate_const + 6, 6);
 		const size_t pointer = raw.rfind('*');
@@ -1315,12 +1327,9 @@ string PA18TemplateExpander::ResolveAlias(string spelling, const string& context
 			}
 		}
 		if(direct == type_aliases_.end() && !known_class_name) {
-			const string short_name = LastComponent(spelling);
-			map<string, vector<string> >::const_iterator candidates =
-				type_aliases_by_name_.find(short_name);
-			if(spelling.find("::") == string::npos &&
-				candidates != type_aliases_by_name_.end() && candidates->second.size() == 1)
-				direct = type_aliases_.find(candidates->second[0]);
+			string alias_path;
+			if(FindUnqualifiedGeneratedAliasPath(spelling, context, &alias_path))
+				direct = type_aliases_.find(alias_path);
 		}
 		if(direct == type_aliases_.end()) {
 			string logical_alias;

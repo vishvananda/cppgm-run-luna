@@ -385,10 +385,11 @@ bool PA18TemplateExpander::GeneratedNodeHasUnavailableMemberType(
 	if(!node || node->kind == "compound-statement") return false;
 	if(node->kind == "decl-specifier" || node->kind == "type-name" ||
 		node->kind == "type-specifier" || node->kind == "decltype-specifier" ||
-		node->kind == "base-name")
-		if(HasUnavailableGeneratedMemberType(CanonicalSpelling(
-			ReplaceIdentifiersPreservingPackSizes(RemoveMarker(node->value), substitutions)),
-			context, substitutions)) return true;
+		node->kind == "base-name") {
+		const string probe = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(
+			RemoveMarker(node->value), substitutions));
+		if(HasUnavailableGeneratedMemberType(probe, context, substitutions)) return true;
+	}
 	for(size_t child = 0; child < node->children.size(); ++child)
 		if(GeneratedNodeHasUnavailableMemberType(node->children[child], context, substitutions)) return true;
 	return false;
@@ -505,6 +506,11 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 {
 	const string generated_owner = definition.lexical_owner.empty() ?
 		definition.owner : definition.lexical_owner;
+	// Dependent declarations are collected without ordinary semantic traversal;
+	// retain their elaborated class dependencies before body replay normalizes
+	// the source spelling.
+	EnsureDeclarationDependencies(definition.declaration, definition.owner,
+		generated_owner);
 	const bool static_member = definition.static_member;
 	const bool flattened_static_member = static_member &&
 		definition.owner.find("::") == string::npos && !requested_owner.empty();
@@ -609,6 +615,8 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 	CPPGMAstNodePtr generated;
 	const string transform_context = concrete_owner.empty() ? definition.owner :
 		concrete_owner;
+	InstallImplicitNestedForwards(definition, CPPGMAstNodePtr(), generated_owner,
+		local_name);
 	try {
 		generated = TransformInstantiatedNode(definition, transform_context,
 			substitutions, integral_substitutions, pack_substitutions,
@@ -773,6 +781,7 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 	RegisterGeneratedTypeEntity(definition, generated, generated_owner, local_name,
 		concrete_owner, substitutions, args, pack_substitutions, context,
 		explicit_instantiation);
+	InstallImplicitNestedForwards(definition, generated, generated_owner, local_name);
 	EnsureDeclarationDependencies(generated, definition.owner, generated_owner);
 	if(definition.class_template)
 		RecordTemplateArrayValues(definition, args, context, substitutions,

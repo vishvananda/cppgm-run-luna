@@ -346,7 +346,13 @@ inline string TypeSuffix(string raw, bool preserve_trailing_underscores = false)
 inline bool IsTemplateAngleOpen(const string& raw, size_t position)
 {
 	if(position >= raw.size() || raw[position] != '<') return false;
-	if(position + 1 < raw.size() && raw[position + 1] == '<') return false;
+	// The semantic spelling for a function-local scope uses the literal
+	// `<unnamed>` component.  It is a namespace marker, not a nested template
+	// delimiter; treating it as an angle pair truncates the surrounding
+	// template argument list at its first `>`.
+	if(raw.compare(position, 9, "<unnamed>") == 0) return false;
+	if(position + 1 < raw.size() && raw[position + 1] == '<' &&
+		raw.compare(position + 1, 9, "<unnamed>") != 0) return false;
 	if(position + 1 < raw.size() && raw[position + 1] == '=') return false;
 	size_t previous = position;
 	while(previous > 0 && isspace(static_cast<unsigned char>(raw[previous - 1]))) --previous;
@@ -371,6 +377,7 @@ inline bool IsTemplateAngleOpen(const string& raw, size_t position)
 inline bool IsTemplateAngleClose(const string& raw, size_t position)
 {
 	if(position >= raw.size() || raw[position] != '>') return false;
+	if(position >= 8 && raw.compare(position - 8, 9, "<unnamed>") == 0) return false;
 	size_t previous = position;
 	while(previous > 0 && isspace(static_cast<unsigned char>(raw[previous - 1]))) --previous;
 	// `<>` is an empty template argument list.  It must close at this `>`;
@@ -584,6 +591,7 @@ private:
 	string QualifyTypeArgument(string spelling, const string& context,
 		const string& template_owner = string(),
 		bool preserve_nested_namespace = false) const; string PromotedLocalClass(const string& name, const string& context) const;
+	bool IsElaboratedTypeArgumentSpelling(const string& spelling) const;
 	ClassSpecializationIdentity MakeClassSpecializationIdentity(
 		const TemplateDefinition& definition, const vector<string>& arguments,
 		const string& context) const;
@@ -657,7 +665,7 @@ private:
 	void MaterializeOrdinaryConversion(const string& raw_parameter, const CPPGMAstNodePtr& argument, const string& context, const map<string, string>& substitutions); bool ResolveOrdinaryConversionTypes(const string& raw_parameter, const CPPGMAstNodePtr& argument, const string& context, const map<string, string>& substitutions, string* target_type, string* source_type, CPPGMAstNodePtr* source_declaration); bool ReplayOrdinaryConversion(const string& source_type, const string& target_type, const CPPGMAstNodePtr& source_declaration, const string& context, const map<string, string>& substitutions); bool TryOrdinaryConversionDefinition(const TemplateDefinition& definition, const string& source_type, const string& target_type, const string& expected_pattern, const string& context, const map<string, string>& substitutions);
 	void MaterializeReturnConversions(const CPPGMAstNodePtr& function, const CPPGMAstNodePtr& result, const string& context, const string& function_context, const map<string, string>& substitutions);
 	bool ValidateExplicitFunctionCandidate(const TemplateDefinition& definition, const CPPGMAstNodePtr& input, const string& context, const map<string, string>& substitutions, const vector<string>& raw_explicit_args, vector<string>* arguments); bool HasAbstractFunctionParameter(const TemplateDefinition& definition, const vector<string>& arguments, const string& context, const map<string, string>& substitutions);
-	bool IsAbstractClassType(const string& raw, const string& context, set<string>* active) const; bool IsAbstractObjectSpelling(const string& raw, const string& context) const; string ResolveAlias(string spelling, const string& context) const; bool FindLogicalNamespaceAlias(const string& spelling, string* alias_key) const; bool IsArrayTypeAlias(const string& alias_name, const string& context) const; bool HasPackBeforeFixed(const TemplateDefinition& definition) const; bool ResolveGeneratedMemberAlias(const string& class_key, const string& member, const string& context, string* member_type) const; bool ResolveContextMemberAlias(const string& class_key, const string& member, const string& context, string* member_type) const;
+	bool IsAbstractClassType(const string& raw, const string& context, set<string>* active) const; bool IsAbstractObjectSpelling(const string& raw, const string& context) const; string ResolveAlias(string spelling, const string& context) const; bool FindUnqualifiedGeneratedAliasPath(const string& spelling, const string& context, string* alias_path) const; bool FindLogicalNamespaceAlias(const string& spelling, string* alias_key) const; bool IsArrayTypeAlias(const string& alias_name, const string& context) const; bool HasPackBeforeFixed(const TemplateDefinition& definition) const; bool ResolveGeneratedMemberAlias(const string& class_key, const string& member, const string& context, string* member_type) const; bool ResolveContextMemberAlias(const string& class_key, const string& member, const string& context, string* member_type) const;
 	bool LookupVariableType(const string& name, const string& context,
 		string* result) const;
 	bool ContainsName(const CPPGMAstNodePtr& node, const string& name) const;
@@ -772,6 +780,9 @@ private:
 		const string& owner);
 	void EnsureDeclarationDependencies(const CPPGMAstNodePtr& node,
 		const string& context, const string& owner);
+	void InstallImplicitNestedForwards(const TemplateDefinition& definition,
+		const CPPGMAstNodePtr& generated, const string& generated_owner,
+		const string& local_name);
 	vector<TemplateParameter> Parameters(const CPPGMAstNodePtr& clause) const
 	{
 		vector<TemplateParameter> result;

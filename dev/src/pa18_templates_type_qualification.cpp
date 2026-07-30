@@ -273,8 +273,23 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 					}
 					return false;
 				};
-			if(active_declaration && has_nested(active_declaration, spelling))
+		if(active_declaration && has_nested(active_declaration, spelling))
 				spelling = active_instantiation_name_ + "::" + spelling;
+		}
+		// An elaborated type can introduce an implicit member class while a
+		// class template is replayed (for example `struct PrivateNat` inside
+		// `Holder<T>`).  The source declaration is indexed under `Holder`, but
+		// the type argument belongs to the concrete `Holder_T` specialization.
+		// Carry that typed owner into an alias specialization instead of leaving
+		// a bare name for the namespace-scope alias body to resolve.
+		if(!active_instantiation_name_.empty()) {
+			map<string, string>::const_iterator active_base = specialization_bases_.find(
+				LastComponent(active_instantiation_name_));
+			const string source_owner = PrefixComponent(spelling);
+			if(active_base != specialization_bases_.end() &&
+				!source_owner.empty() && source_owner == active_base->second &&
+				class_declarations_.find(spelling) != class_declarations_.end())
+				spelling = active_instantiation_name_ + "::" + LastComponent(spelling);
 		}
 	const size_t separator = spelling.find("::");
 	const string first = spelling.substr(0, separator);
