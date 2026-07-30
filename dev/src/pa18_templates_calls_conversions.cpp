@@ -32,20 +32,7 @@ static string StripOrdinaryCallConversionType(string raw)
 
 static string OrdinaryConversionOperatorPattern(const TemplateDefinition& definition)
 {
-	if(!definition.declaration) return string();
-	string raw = definition.declaration->value;
-	if(raw.empty()) {
-		const CPPGMAstNodePtr identifier = DescendantOfKind(definition.declaration,
-			"identifier");
-		if(identifier) raw = identifier->value;
-	}
-	const size_t operator_position = raw.find("operator");
-	if(operator_position == string::npos) return string();
-	string suffix = raw.substr(operator_position + 8);
-	while(!suffix.empty() && suffix[0] == ' ') suffix.erase(0, 1);
-	if(suffix.empty() || string("+-*/%^&|=!<>~[],()").find(suffix[0]) != string::npos)
-		return string();
-	return CanonicalSpelling(suffix);
+	return definition.conversion_operator ? definition.conversion_target : string();
 }
 
 static string OrdinaryConversionOwnerBase(const TemplateDefinition& definition)
@@ -53,6 +40,8 @@ static string OrdinaryConversionOwnerBase(const TemplateDefinition& definition)
 	string owner = definition.owner;
 	const size_t operator_position = owner.find("operator");
 	if(operator_position != string::npos) owner.erase(operator_position);
+	const size_t angle = owner.find('<');
+	if(angle != string::npos) owner.erase(angle);
 	while(owner.size() >= 2 && owner.compare(owner.size() - 2, 2, "::") == 0)
 		owner.erase(owner.size() - 2);
 	for(;;) {
@@ -61,6 +50,20 @@ static string OrdinaryConversionOwnerBase(const TemplateDefinition& definition)
 		owner = prefix;
 	}
 	return owner;
+}
+
+void PA18TemplateExpander::IndexOrdinaryConversionDefinitions()
+{
+	conversion_operator_definitions_by_owner_.clear();
+	for(map<string, TemplateDefinition>::const_iterator definition = definitions_.begin();
+		definition != definitions_.end(); ++definition) {
+		const TemplateDefinition& item = definition->second;
+		if(!item.conversion_operator || !item.member_template || item.parameters.empty())
+			continue;
+		const string owner = OrdinaryConversionOwnerBase(item);
+		if(!owner.empty()) conversion_operator_definitions_by_owner_[LastComponent(owner)].push_back(
+			&item);
+	}
 }
 
 bool PA18TemplateExpander::PreserveUnresolvedExplicitTemplateCall(
@@ -189,7 +192,8 @@ bool PA18TemplateExpander::ResolveOrdinaryConversionTypes(
 
 bool PA18TemplateExpander::TryOrdinaryConversionDefinition(
 	const TemplateDefinition& definition, const string& source_type,
-	const string& target_type, const string& expected_pattern, const string& context,
+	const string& target_type, const string& expected_pattern,
+	const CPPGMAstNodePtr& source_declaration, const string& context,
 	const map<string, string>& substitutions)
 {
 	const string member_name = LastComponent(definition.name);
@@ -197,14 +201,9 @@ bool PA18TemplateExpander::TryOrdinaryConversionDefinition(
 	if(definition.class_template || definition.alias_template || definition.variable_template ||
 		!definition.member_template || conversion_pattern.empty() || definition.parameters.empty()) return false;
 	string owner = OrdinaryConversionOwnerBase(definition);
-	const size_t angle = owner.find('<');
-	if(angle != string::npos) owner.erase(angle);
 	string source_base = LastComponent(source_type);
-	map<string, CPPGMAstNodePtr>::const_iterator source_class =
-		class_declarations_.find(source_type);
-	if(source_class != class_declarations_.end() && source_class->second &&
-		!source_class->second->template_primary.empty())
-		source_base = LastComponent(source_class->second->template_primary);
+	if(source_declaration && !source_declaration->template_primary.empty())
+		source_base = LastComponent(source_declaration->template_primary);
 	else {
 		map<string, string>::const_iterator source_specialization =
 			specialization_bases_.find(source_base);
@@ -229,32 +228,19 @@ bool PA18TemplateExpander::TryOrdinaryConversionDefinition(
 	try {
 		if(!InstantiateMemberCall(call, member, member_name, context, substitutions)) return false;
 	} catch(const PA18SubstitutionFailure&) { return false; }
-	map<string, CPPGMAstNodePtr>::iterator declaration = class_declarations_.find(source_type);
-	if(declaration == class_declarations_.end())
-		for(map<string, CPPGMAstNodePtr>::iterator it = class_declarations_.begin();
-			it != class_declarations_.end(); ++it)
-			if(LastComponent(it->first) == LastComponent(source_type)) { declaration = it; break; }
-	map<string, vector<CPPGMAstNodePtr> >::iterator generated = generated_by_owner_.find(source_type);
-	if(generated == generated_by_owner_.end()) generated = generated_by_owner_.find(LastComponent(source_type));
-	if(declaration != class_declarations_.end() && generated != generated_by_owner_.end() &&
-		!generated->second.empty()) {
-		const CPPGMAstNodePtr node = generated->second.back();
-		if(node && find(declaration->second->children.begin(), declaration->second->children.end(), node) ==
-			declaration->second->children.end()) declaration->second->children.push_back(node);
+	if(!source_declaration) return true;
+	map<string, vector<CPPGMAstNodePtr> >::const_iterator generated =
+		generated_by_primary_.find(definition.qualified_name);
+	if(generated == generated_by_primary_.end()) return true;
+	CPPGMAstNodePtr selected;
+	for(vector<CPPGMAstNodePtr>::const_reverse_iterator node = generated->second.rbegin();
+		node != generated->second.rend(); ++node) {
+		if(!*node) continue;
+		selected = *node;
+		break;
 	}
-	if(declaration != class_declarations_.end())
-		for(map<string, vector<CPPGMAstNodePtr> >::const_iterator owner_it = generated_by_owner_.begin();
-			owner_it != generated_by_owner_.end(); ++owner_it)
-			for(size_t i = 0; i < owner_it->second.size(); ++i) {
-				const CPPGMAstNodePtr& node = owner_it->second[i];
-				if(!node || (node->kind != "special-member-definition" &&
-					node->kind != "special-member-declaration") ||
-					node->value.find("operator") == string::npos ||
-					find(declaration->second->children.begin(), declaration->second->children.end(), node) !=
-					declaration->second->children.end()) continue;
-				declaration->second->children.push_back(node);
-				generated_by_owner_[source_type].push_back(node);
-			}
+	if(selected && find(source_declaration->children.begin(), source_declaration->children.end(),
+		selected) == source_declaration->children.end()) source_declaration->children.push_back(selected);
 	return true;
 }
 
@@ -265,17 +251,16 @@ bool PA18TemplateExpander::ReplayOrdinaryConversion(
 {
 	if(!source_declaration) return false;
 	string source_owner = source_type;
-	map<string, CPPGMAstNodePtr>::const_iterator source_class = class_declarations_.find(source_type);
-	if(source_class != class_declarations_.end() && source_class->second &&
-		!source_class->second->template_primary.empty()) source_owner = source_class->second->template_primary;
-	else for(map<string, string>::const_iterator it = specialization_bases_.begin();
-		it != specialization_bases_.end(); ++it)
-		if(it->first == LastComponent(source_type) &&
-			(LastComponent(it->second) == LastComponent(source_type) ||
-			 PrefixComponent(it->second) == PrefixComponent(source_type))) {
-			source_owner = it->second;
-			break;
-		}
+	if(!source_declaration->template_primary.empty()) source_owner =
+		source_declaration->template_primary;
+	else {
+		map<string, string>::const_iterator source_specialization =
+			specialization_bases_.find(LastComponent(source_type));
+		if(source_specialization != specialization_bases_.end() &&
+			(LastComponent(source_specialization->second) == LastComponent(source_type) ||
+				PrefixComponent(source_specialization->second) == PrefixComponent(source_type)))
+			source_owner = source_specialization->second;
+	}
 	const string source_base = LastComponent(source_owner);
 	string expected_pattern = target_type;
 	map<string, CPPGMAstNodePtr>::const_iterator target_class = class_declarations_.find(target_type);
@@ -285,16 +270,18 @@ bool PA18TemplateExpander::ReplayOrdinaryConversion(
 		!target_class->second->template_primary.empty()) {
 		target_owner = target_class->second->template_primary;
 		target_arguments = target_class->second->template_arguments;
-	} else for(map<string, string>::const_iterator it = specialization_bases_.begin();
-		it != specialization_bases_.end(); ++it)
-		if(it->first == LastComponent(target_type) &&
-			(LastComponent(it->second) == LastComponent(target_type) ||
-			 PrefixComponent(it->second) == PrefixComponent(target_type))) {
-			target_owner = it->second;
-			map<string, vector<string> >::const_iterator args = specialization_arguments_.find(it->first);
+	} else {
+		map<string, string>::const_iterator target_specialization =
+			specialization_bases_.find(LastComponent(target_type));
+		if(target_specialization != specialization_bases_.end() &&
+			(LastComponent(target_specialization->second) == LastComponent(target_type) ||
+				PrefixComponent(target_specialization->second) == PrefixComponent(target_type))) {
+			target_owner = target_specialization->second;
+			map<string, vector<string> >::const_iterator args = specialization_arguments_.find(
+				target_specialization->first);
 			if(args != specialization_arguments_.end()) target_arguments = args->second;
-			break;
 		}
+	}
 	if(!target_owner.empty() && !target_arguments.empty()) {
 		expected_pattern = target_owner + "<";
 		for(size_t i = 0; i < target_arguments.size(); ++i) {
@@ -303,13 +290,13 @@ bool PA18TemplateExpander::ReplayOrdinaryConversion(
 		}
 		expected_pattern += ">";
 	}
-	for(map<string, TemplateDefinition>::const_iterator it = definitions_.begin();
-		it != definitions_.end(); ++it) {
-		const string owner = OrdinaryConversionOwnerBase(it->second);
-		if(LastComponent(owner) == source_base &&
-			TryOrdinaryConversionDefinition(it->second, source_type, target_type,
-				expected_pattern, context, substitutions)) return true;
-	}
+	map<string, vector<const TemplateDefinition*> >::const_iterator indexed =
+		conversion_operator_definitions_by_owner_.find(source_base);
+	if(indexed == conversion_operator_definitions_by_owner_.end()) return false;
+	for(size_t candidate = 0; candidate < indexed->second.size(); ++candidate)
+		if(indexed->second[candidate] && TryOrdinaryConversionDefinition(
+			*indexed->second[candidate], source_type, target_type, expected_pattern,
+			source_declaration, context, substitutions)) return true;
 	return false;
 }
 

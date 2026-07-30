@@ -913,11 +913,13 @@ vector<CPPGMAstNodePtr> PA18TemplateExpander::Run(
 	const vector<CPPGMAstNodePtr>& input)
 {
 	active_static_member_ = false;
+	generated_by_primary_.clear();
 	ValidateTemplateDiagnostics(input);
 	for(size_t i = 0; i < input.size(); ++i)
 		CollectLexical(input[i], string(), string());
 	for(size_t i = 0; i < input.size(); ++i) Collect(input[i], string());
 	ResolveUsingDeclarationTargets();
+	IndexOrdinaryConversionDefinitions();
 	for(size_t i = 0; i < input.size(); ++i)
 		ValidateTemplateArgumentKinds(input[i], string(), map<string, bool>());
 	vector<CPPGMAstNodePtr> result;

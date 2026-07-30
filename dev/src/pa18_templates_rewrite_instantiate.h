@@ -112,7 +112,7 @@
 
 	void MarkGeneratedNode(const CPPGMAstNodePtr& node, const string& primary,
 		const vector<string>& arguments, bool explicit_instantiation = false,
-		bool explicit_specialization = false)
+		bool explicit_specialization = false, bool index_node = true)
 	{
 		if(!node) return;
 		node->template_instantiation = true;
@@ -120,9 +120,14 @@
 		node->explicit_instantiation = node->explicit_instantiation || explicit_instantiation;
 		node->template_primary = primary;
 		node->template_arguments = arguments;
+		if(index_node && !primary.empty()) {
+			vector<CPPGMAstNodePtr>& generated = generated_by_primary_[primary];
+			if(find(generated.begin(), generated.end(), node) == generated.end())
+				generated.push_back(node);
+		}
 		for(size_t i = 0; i < node->children.size(); ++i)
 			MarkGeneratedNode(node->children[i], primary, arguments, false,
-				explicit_specialization);
+				explicit_specialization, false);
 	}
 	void RenameGeneratedFunction(const CPPGMAstNodePtr& declaration,
 		const string& name)

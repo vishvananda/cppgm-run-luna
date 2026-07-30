@@ -1154,3 +1154,211 @@ following bundled groups.
   dependent member-result and candidate-local SFINAE band, bundled with the
   conversion-function selection witnesses; the two reentrant cases remain
   fixed-point regression coverage only.
+
+## Checkpoint 18 audit — 2026-07-30
+
+### Scope Reviewed
+
+- The latest Checkpoint 18 scope and result in `pa23/plan.md`, including its
+  three ordinary conversion-function-template witnesses, the 332/396 stage
+  result, and the proposed remaining-work map.
+- `pa23/README.md` and `TESTING_AND_REFERENCES.md`, with their requirements
+  for normal parser/semantic/template-replay/LowIR behavior, fixture-based
+  validation, and prior-PA preservation.
+- The checkpoint head `cc99f03` (`Implement PA23 conversion template replay`),
+  its preceding typed-replay audit checkpoint `78adbf7`, and the audit diff in
+  `dev/src/pa18_templates_calls_conversions.cpp`,
+  `dev/src/pa18_templates_collection.cpp`,
+  `dev/src/pa18_templates_collection.h`, and
+  `dev/src/pa18_templates_rewrite_instantiate.h`.
+- The authoritative active-stage log at
+  `/home/vishvananda/work/.ralph/luna-gpt-5.6-luna-ultra/last-test.log`, the
+  focused PA23 conversion witnesses, the qualified same-name conversion
+  regression witness from PA22, the exact through-PA22 report, and the PA23
+  file audit.
+
+### Findings
+
+- The checkpoint stays on the ordinary compiler pipeline: parsed AST input,
+  typed semantic collection and lookup, template substitution/replay, and
+  LowIR emission.  There is no skipped compiler phase, dummy output,
+  embedded payload, interpreter/VM/trampoline substitute, reference-binary or
+  host-compiler invocation, source/test-specific acceptance gate, or unchecked
+  output path.  The two reentrant static-query fixtures remain genuine
+  fixed-point witnesses; no timeout cap, retry, timing-based acceptance, or
+  fallback success path was added.
+- The checkpoint implementation had a material replay hot-path problem.
+  Every ordinary conversion replay walked all `definitions_` entries, and a
+  successful instantiation then walked every generated owner and node to find
+  an `operator` spelling.  That made the work proportional to the complete
+  template registry and generated-owner set for each conversion, and could
+  append an unrelated special-member node to the source declaration.  It was
+  both avoidable repeated scanning and duplicated/late ownership of generated
+  facts.
+- Conversion-operator status and destination spelling were being recovered
+  from raw declaration/name text during replay.  Qualified out-of-class
+  conversion templates whose target name resembles the source owner exposed
+  an owner-path ambiguity.  This was a stringly semantic fact that belonged
+  in the collected template definition, with generated-node provenance kept
+  separately.
+- The first audit narrowing exposed a real PA22 regression in the qualified
+  same-name target case: the generated owner spelling is not always a direct
+  key for the source declaration.  The through-PA22 gate caught it; indexing
+  generated top-level nodes by their typed `template_primary` restored the
+  witness without returning to a global owner scan.
+- The file audit found no bypass, weakened check, hidden implementation path,
+  or new fatal size/duplication issue.  Its 13 warnings remain the existing
+  non-fatal division-header, complexity, and duplication observations; the
+  changed implementation remains under the checked `dev/src` audit paths.
+
+### Changes Made
+
+- Added `conversion_operator` and `conversion_target` to `TemplateDefinition`.
+  `RegisterTemplate` records the normalized conversion target once at the
+  syntax/collection boundary, including the qualified-declarator spelling
+  needed by the same-name case.  Replay now consumes this typed metadata
+  instead of reparsing declaration text.
+- Added `conversion_operator_definitions_by_owner_`, populated once after
+  collection and using-resolution.  Ordinary conversion replay now visits
+  only the owner-indexed candidates rather than rescanning the full
+  definition registry.
+- Added `generated_by_primary_` provenance.  `MarkGeneratedNode` indexes only
+  top-level materialized declarations by their `template_primary`; recursive
+  children are not duplicated into the index.  Conversion replay selects the
+  exact generated member from that provenance map and attaches it only to
+  the source declaration, removing the old all-owner scan and last-node
+  fallback.
+- Passed the already resolved source declaration into conversion replay and
+  used its `template_primary` plus direct specialization-map lookups for
+  source/target ownership.  This removes repeated full-map walks while
+  retaining the normal `InstantiateMemberCall` and LowIR path.
+- No test, reference fixture, checker, timeout policy, output format, or
+  external tool was changed.  The temporary diagnostic code used while
+  isolating the PA22 regression was removed before validation.
+
+### Validation
+
+- The compiler build passed.
+- The three Checkpoint 18 PA23 witnesses passed, and the qualified PA22
+  same-name conversion witness passed 1/1 after the audit caught and repaired
+  its intermediate regression.
+- The exact required prior-through command passed all earlier assignments:
+  `2100/2100` through PA22.
+- The required active report
+  `make test-report ACTIVE_TEST_REPORT_PAS='pa23'` completed with the
+  expected current-stage failures and reported **332/396**.  This is equal
+  to the turn-start 332/396 and above the pre-Checkpoint-18 329/396
+  baseline; the conversion witnesses remain passing and no earlier-PA
+  fixture was lost.
+- `perl scripts/cppgm_file_audit.pl --stage pa23 --paths dev/src` passed with
+  13 non-fatal pre-existing warnings and no fatal finding.
+- `git diff --check` passed.
+
+### Complete Current-PA Failure Inventory
+
+The active report has 64 remaining fixtures: 32 exit-status mismatches and
+32 LowIR comparisons.  These are semantic implementation work, not audit
+debt; no shortcut or performance blocker remains from Checkpoint 18.
+
+Status failures (32):
+
+```text
+general/100-member-template-specialization-return-prefers-member-call.t
+general/100-selected-specialization-special-member-body.t
+general/100-structured-bool-boost-convertible-mpl-overload.t
+general/200-constructor-template-parameter-shadows-instantiated-type.t
+general/200-function-template-named-parameter-sfinae.t
+general/200-member-function-template-address-explicit-pack.t
+general/200-member-template-implicit-instantiation-not-overload.t
+general/200-template-template-qualified-default-arg-deduction.t
+general/300-constructor-template-const-ref-enable-if-conversion.t
+general/400-anonymous-namespace-partial-specialization.t
+general/400-current-specialization-display-name-member-alias.t
+general/400-member-template-result-pack-preserves-nested-function-pointer-owner.t
+general/400-static-cast-rvalue-ref-skips-conversion-operator.t
+general/400-unused-static-member-template-return-type.t
+general/500-dependent-function-type-pack-expansion-ctor-init.t
+general/500-dependent-qualified-member-template-result-bool.t
+general/500-member-template-conditional-alias-trailing-return.t
+general/500-mp11-append-alias-template-sfinae.t
+general/500-nontype-alias-reinstantiation-structural-state.t
+general/500-recursive-qualified-member-template-bool-arg.t
+general/500-reentrant-static-query-callable-enable-if-cache.t
+general/500-reentrant-static-query-enable-if-partial.t
+general/500-source-namespace-base-sfinae-chain.t
+spec/100-extern-template-member-function-declaration.t
+spec/100-extern-template-static-data-declaration.t
+spec/100-local-member-call-constructor-template-instantiation.t
+spec/400-defaulted-nested-class-argument-partial-specialization.t
+spec/400-explicit-pack-type-argument-uses-bound-type.t
+spec/400-explicit-type-arg-dependent-qualified-member-template-id.t
+spec/400-function-type-pack-template-argument.t
+spec/400-qualified-member-template-id-bool-constant.t
+spec/500-conditional-alias-index-sequence-member-template-call.t
+```
+
+LowIR comparisons (32):
+
+```text
+general/100-current-specialization-member-body-cast-compare.t
+general/100-dependent-bool-partial-static-value-storage.t
+general/100-explicit-specialization-out-of-class-ctor-replay.t
+general/100-explicit-specialization-pointer-member-definition.t
+general/100-inherited-using-alias-out-of-class-specialization-member.t
+general/100-intermediate-type-transform-value-nontype.t
+general/100-local-qualified-argument-replay.t
+general/100-sizeof-call-result-nontype-template-argument.t
+general/200-adl-explicit-template-id-call.t
+general/200-function-template-reference-cv-alias-partial-order.t
+general/200-function-template-template-parameter-deduction.t
+general/200-member-operator-template-reference-pattern-partial-order.t
+general/300-current-specialization-constructor-template-canonical-owner.t
+general/300-dependent-bool-base-trait-type-argument.t
+general/400-explicit-function-template-type-arg-drops-nontype-overload.t
+general/400-function-type-pack-out-of-class-constructor.t
+general/400-member-variable-template-leaf-sfinae.t
+general/400-nonmember-template-compound-assignment-const-lhs.t
+general/400-out-of-class-partial-member-template-owner-parameter-alias.t
+general/400-variable-template-specializations.t
+spec/100-explicit-instantiation-after-explicit-specialization-no-effect.t
+spec/100-explicit-instantiation-class-prior-member-definitions.t
+spec/100-explicit-specialization-out-of-class-ctor-replay.t
+spec/100-explicit-specialization-out-of-class-member-emits.t
+spec/100-out-of-class-conversion-operator-definition.t
+spec/100-partial-specialization-member-primary-param-name.t
+spec/100-sizeof-union-type-nttp.t
+spec/200-defaulted-class-template-argument-pack-prefix-deduction.t
+spec/300-constructor-default-pack-partial-ordering.t
+spec/400-class-template-nttp-scope-value.t
+spec/400-defaulted-template-arg-partial-base-completion.t
+spec/400-template-template-member-alias-owner-shadow.t
+```
+
+### Refreshed Remaining Work Map
+
+- **Dependent member-result and candidate-local SFINAE (11 status):**
+  structured boolean overloads, dependent function-type packs, qualified
+  boolean results, trailing-return aliases, MP11 append, non-type alias
+  reinstantiation, recursive member queries, the two reentrant fixed-point
+  queries, qualified boolean member-template lookup, and the conditional
+  alias index-sequence call.
+- **Owner and specialization replay (11 status):** current and inherited
+  owners, anonymous scopes, selected/special-member replay, static-member
+  state, source-namespace SFINAE, extern/template declarations, local member
+  calls, and defaulted nested-class partial specialization.
+- **Deduction and overload viability (10 status):** constructor and named-
+  parameter SFINAE, explicit-pack and template-template deduction, member
+  template instantiation/overload selection, rvalue-reference conversion
+  ranking, and the remaining explicit type/function-pack witnesses.
+- **LowIR materialization (32 comparisons):** generated current-specialization
+  and constructor bodies, static storage, explicit/extern specialization,
+  owner replay, ADL and partial ordering, variable-template state, and typed
+  ABI-visible values.
+
+### Next Substantial Checkpoint Group
+
+Take the dependent member-result/candidate-local SFINAE group next, bundling
+MP11 append, qualified boolean results, trailing-return aliases, and the
+conditional-alias index-sequence member call. Keep the two reentrant cases as
+fixed-point regression coverage with no timing-based acceptance. Follow with
+the owner/specialization replay, deduction/overload, and LowIR groups.

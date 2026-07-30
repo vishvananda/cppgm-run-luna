@@ -439,6 +439,8 @@ struct TemplateDefinition
 	bool alias_template;
 	bool variable_template;
 	bool member_template;
+	bool conversion_operator;
+	string conversion_target;
 	bool friend_declaration;
 	bool static_member; bool deleted, immediate_return_constraint; string immediate_return_condition; bool reference_alias_cv_parameter;
 	vector<CPPGMAstNodePtr> dependent_member_type_nodes;
@@ -446,7 +448,7 @@ struct TemplateDefinition
 	vector<string> implicit_nested_class_names;
 	vector<TemplateTypeDependency> declaration_type_dependencies;
 	set<string> static_members;
-	TemplateDefinition() : qualified_name(), name(), owner(), lexical_owner(), declaration(), parameters(), partial_specialization(false), explicit_specialization(false), specialization_parameters(), specialization_parameter_details(), specialization_pack_names(), specialization_pattern(), class_template(false), alias_template(false), variable_template(false), member_template(false), friend_declaration(false), static_member(false), deleted(false), immediate_return_constraint(false), immediate_return_condition(), reference_alias_cv_parameter(false), dependent_member_type_nodes(), dependent_type_member_nodes(), implicit_nested_class_names(), declaration_type_dependencies(), static_members() {}
+	TemplateDefinition() : qualified_name(), name(), owner(), lexical_owner(), declaration(), parameters(), partial_specialization(false), explicit_specialization(false), specialization_parameters(), specialization_parameter_details(), specialization_pack_names(), specialization_pattern(), class_template(false), alias_template(false), variable_template(false), member_template(false), conversion_operator(false), conversion_target(), friend_declaration(false), static_member(false), deleted(false), immediate_return_constraint(false), immediate_return_condition(), reference_alias_cv_parameter(false), dependent_member_type_nodes(), dependent_type_member_nodes(), implicit_nested_class_names(), declaration_type_dependencies(), static_members() {}
 };
 // A materialized class specialization is identified by the canonical template
 // entity and its ordered arguments.  Keep the entity pointer separate from
@@ -517,7 +519,9 @@ private:
 	map<string, string> specializations_;
 	set<string> active_specializations_;
 	map<string, vector<CPPGMAstNodePtr> > generated_by_owner_;
+	map<string, vector<CPPGMAstNodePtr> > generated_by_primary_;
 	map<string, vector<CPPGMAstNodePtr> > deferred_generated_by_owner_;
+	map<string, vector<const TemplateDefinition*> > conversion_operator_definitions_by_owner_;
 	map<string, set<string> > deferred_generated_dependencies_;
 	map<string, vector<CPPGMAstNodePtr> > generated_before_class_;
 	map<string, vector<CPPGMAstNodePtr> > generated_namespace_forwards_;
@@ -674,7 +678,8 @@ private:
 	bool PreserveUnresolvedExplicitTemplateCall(const CPPGMAstNodePtr& input, const CPPGMAstNodePtr& result, const vector<string>& explicit_arguments, const string& context, const map<string, string>& explicit_substitutions, const map<string, string>& substitutions);
 	void MaterializeOrdinaryCallConversions(const string& callee_name, const CPPGMAstNodePtr& result, const string& context, const map<string, string>& substitutions);
 	void MaterializeOrdinaryInitializerConversions(const CPPGMAstNodePtr& input, const CPPGMAstNodePtr& result, const string& context, const map<string, string>& substitutions);
-	void MaterializeOrdinaryConversion(const string& raw_parameter, const CPPGMAstNodePtr& argument, const string& context, const map<string, string>& substitutions); bool ResolveOrdinaryConversionTypes(const string& raw_parameter, const CPPGMAstNodePtr& argument, const string& context, const map<string, string>& substitutions, string* target_type, string* source_type, CPPGMAstNodePtr* source_declaration); bool ReplayOrdinaryConversion(const string& source_type, const string& target_type, const CPPGMAstNodePtr& source_declaration, const string& context, const map<string, string>& substitutions); bool TryOrdinaryConversionDefinition(const TemplateDefinition& definition, const string& source_type, const string& target_type, const string& expected_pattern, const string& context, const map<string, string>& substitutions);
+	void IndexOrdinaryConversionDefinitions();
+	void MaterializeOrdinaryConversion(const string& raw_parameter, const CPPGMAstNodePtr& argument, const string& context, const map<string, string>& substitutions); bool ResolveOrdinaryConversionTypes(const string& raw_parameter, const CPPGMAstNodePtr& argument, const string& context, const map<string, string>& substitutions, string* target_type, string* source_type, CPPGMAstNodePtr* source_declaration); bool ReplayOrdinaryConversion(const string& source_type, const string& target_type, const CPPGMAstNodePtr& source_declaration, const string& context, const map<string, string>& substitutions); bool TryOrdinaryConversionDefinition(const TemplateDefinition& definition, const string& source_type, const string& target_type, const string& expected_pattern, const CPPGMAstNodePtr& source_declaration, const string& context, const map<string, string>& substitutions);
 	void MaterializeReturnConversions(const CPPGMAstNodePtr& function, const CPPGMAstNodePtr& result, const string& context, const string& function_context, const map<string, string>& substitutions);
 	bool ValidateExplicitFunctionCandidate(const TemplateDefinition& definition, const CPPGMAstNodePtr& input, const string& context, const map<string, string>& substitutions, const vector<string>& raw_explicit_args, vector<string>* arguments); bool HasAbstractFunctionParameter(const TemplateDefinition& definition, const vector<string>& arguments, const string& context, const map<string, string>& substitutions);
 	bool IsAbstractClassType(const string& raw, const string& context, set<string>* active) const; bool IsAbstractObjectSpelling(const string& raw, const string& context) const; string ResolveAlias(string spelling, const string& context) const; bool FindUnqualifiedGeneratedAliasPath(const string& spelling, const string& context, string* alias_path) const; bool FindLogicalNamespaceAlias(const string& spelling, string* alias_key) const; bool IsArrayTypeAlias(const string& alias_name, const string& context) const; bool HasPackBeforeFixed(const TemplateDefinition& definition) const; bool ResolveGeneratedMemberAlias(const string& class_key, const string& member, const string& context, string* member_type) const; bool ResolveContextMemberAlias(const string& class_key, const string& member, const string& context, string* member_type) const;
@@ -928,6 +933,26 @@ private:
 		// duplicate it in the registry key and make the definition look like a
 		// different member from its in-class declaration.
 		name = LastComponent(name);
+		item.name = name;
+		item.conversion_operator = name.compare(0, 8, "operator") == 0 &&
+			name.size() > 8 && (IsIdentifierCharacter(name[8]) || name[8] == ' ');
+		if(item.conversion_operator) {
+			item.conversion_target = name.substr(8);
+			while(!item.conversion_target.empty() && item.conversion_target[0] == ' ')
+				item.conversion_target.erase(0, 1);
+			item.conversion_target = CanonicalSpelling(item.conversion_target);
+		}
+		if(!item.conversion_operator && declaration && !declaration->value.empty()) {
+			const size_t operator_position = declaration->value.find("operator");
+			if(operator_position != string::npos) {
+				string target = declaration->value.substr(operator_position + 8);
+				while(!target.empty() && target[0] == ' ') target.erase(0, 1);
+				if(!target.empty() && string("+-*/%^&|=!<>~[],()").find(target[0]) == string::npos) {
+					item.conversion_operator = true;
+					item.conversion_target = CanonicalSpelling(target);
+				}
+			}
+		}
 		string declared_prefix;
 		if(declaration->kind == "class-specifier" ||
 			declaration->kind == "class-forward-declaration")
@@ -1027,7 +1052,7 @@ private:
 			prior->second.declaration = item.declaration;
 			prior->second.lexical_owner = item.lexical_owner;
 			prior->second.class_template = item.class_template || prior->second.class_template;
-			prior->second.alias_template = item.alias_template || prior->second.alias_template; prior->second.deleted = item.deleted; prior->second.immediate_return_constraint = item.immediate_return_constraint; prior->second.immediate_return_condition = item.immediate_return_condition; prior->second.reference_alias_cv_parameter = item.reference_alias_cv_parameter; prior->second.dependent_member_type_nodes = item.dependent_member_type_nodes; prior->second.dependent_type_member_nodes = item.dependent_type_member_nodes; if(item.class_template && (!item.implicit_nested_class_names.empty() || item_is_definition)) prior->second.implicit_nested_class_names = item.implicit_nested_class_names; if(item.class_template && (!item.declaration_type_dependencies.empty() || item_is_definition)) prior->second.declaration_type_dependencies = item.declaration_type_dependencies;
+			prior->second.alias_template = item.alias_template || prior->second.alias_template; prior->second.member_template = item.member_template || prior->second.member_template; prior->second.conversion_operator = item.conversion_operator || prior->second.conversion_operator; if(!item.conversion_target.empty()) prior->second.conversion_target = item.conversion_target; prior->second.deleted = item.deleted; prior->second.immediate_return_constraint = item.immediate_return_constraint; prior->second.immediate_return_condition = item.immediate_return_condition; prior->second.reference_alias_cv_parameter = item.reference_alias_cv_parameter; prior->second.dependent_member_type_nodes = item.dependent_member_type_nodes; prior->second.dependent_type_member_nodes = item.dependent_type_member_nodes; if(item.class_template && (!item.implicit_nested_class_names.empty() || item_is_definition)) prior->second.implicit_nested_class_names = item.implicit_nested_class_names; if(item.class_template && (!item.declaration_type_dependencies.empty() || item_is_definition)) prior->second.declaration_type_dependencies = item.declaration_type_dependencies;
 		} else {
 			definitions_[item.qualified_name] = item;
 			definitions_by_name_[item.name].push_back(item.qualified_name);

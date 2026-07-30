@@ -2346,3 +2346,60 @@ append, qualified bool results, trailing-return aliases, and the conditional-
 alias index-sequence member call.  Keep the two reentrant cases as genuine
 fixed-point regression coverage, then take the remaining owner/replay and
 deduction/LowIR groups in separate checkpoints.
+
+## Checkpoint 18 audit result — 2026-07-30
+
+### Audit outcome
+
+The checkpoint audit found and fixed late global replay scans and stringly
+conversion ownership.  Conversion metadata is now captured in
+`TemplateDefinition` during collection, conversion candidates are indexed by
+owner once, and generated top-level declarations are indexed by their typed
+`template_primary`.  Replay uses the resolved source declaration and exact
+generated provenance, so it no longer walks every definition/generated owner
+or appends an unrelated generated node.  The normal typed member-call and
+LowIR paths remain unchanged.
+
+The audit also caught an intermediate PA22 qualified same-name conversion
+regression; the generated-primary index repaired it before completion.  No
+shortcut, timing acceptance, fallback-success path, test-specific gate, or
+file-audit bypass remains.
+
+### Validation
+
+- The three Checkpoint 18 witnesses pass, as does the PA22 qualified
+  same-name conversion regression witness.
+- The exact required through-PA22 report passes **2100/2100**.
+- The full active PA23 report remains **332/396**, with the same 64-fixture
+  failure set recorded in the Checkpoint 18 audit: 32 status failures and 32
+  LowIR comparisons.  This preserves the 332/396 audit-turn baseline and is
+  above the 329/396 pre-checkpoint baseline.
+- The PA23 file audit passes with 13 non-fatal pre-existing warnings; no fatal
+  structural finding was introduced.  `git diff --check` passes.
+
+### Refreshed Remaining Work Map
+
+- **Dependent member-result and candidate-local SFINAE (11 status):**
+  structured boolean overloads, dependent packs, qualified boolean results,
+  trailing-return aliases, MP11 append, non-type alias reinstantiation,
+  recursive queries, two reentrant fixed-point queries, qualified member
+  boolean lookup, and the conditional-alias index-sequence call.
+- **Owner and specialization replay (11 status):** current/inherited and
+  anonymous owners, selected/special-member replay, static state,
+  source-namespace SFINAE, extern/template declarations, local member calls,
+  and defaulted nested-class partial specialization.
+- **Deduction and overload viability (10 status):** constructor and named-
+  parameter SFINAE, explicit-pack/template-template deduction, member
+  overload selection, rvalue-reference ranking, and remaining explicit
+  type/function-pack witnesses.
+- **LowIR materialization (32 comparisons):** generated bodies, static
+  storage, explicit/extern specialization, owner replay, ADL/partial
+  ordering, variable-template state, and typed ABI-visible values.
+
+### Next Substantial Checkpoint Group
+
+Bundle the dependent member-result/candidate-local SFINAE group with MP11
+append, qualified boolean results, trailing-return aliases, and the
+conditional-alias index-sequence member call. Retain the two reentrant cases
+as fixed-point regression coverage with no timing-based acceptance, then
+address the owner/replay and deduction/LowIR groups.
