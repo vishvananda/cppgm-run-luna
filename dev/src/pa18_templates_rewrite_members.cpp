@@ -477,70 +477,90 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 		size_t generated_begin = 0;
 		string generated_arguments;
 		size_t generated_close = string::npos;
-		if(TemplateBase(class_key, generated_open, &generated_begin, &generated_base) &&
-			TemplateRange(class_key, generated_open, &generated_arguments, &generated_close) &&
-			specialization_bases_.find(LastComponent(generated_base)) !=
-				specialization_bases_.end()) {
-			string qualified_generated;
-			for(map<string, CPPGMAstNodePtr>::const_iterator declaration =
-				class_declarations_.begin(); declaration != class_declarations_.end(); ++declaration)
-				if(LastComponent(declaration->first) == LastComponent(generated_base)) {
-					if(qualified_generated.empty()) qualified_generated = declaration->first;
-					else if(qualified_generated != declaration->first) {
+			if(TemplateBase(class_key, generated_open, &generated_begin, &generated_base) &&
+				TemplateRange(class_key, generated_open, &generated_arguments, &generated_close) &&
+				specialization_bases_.find(LastComponent(generated_base)) !=
+					specialization_bases_.end()) {
+				string qualified_generated;
+				map<string, vector<string> >::const_iterator indexed_paths =
+					class_paths_by_name_.find(LastComponent(generated_base));
+				if(indexed_paths != class_paths_by_name_.end()) for(size_t path = 0;
+					path < indexed_paths->second.size(); ++path) {
+					const string& candidate = indexed_paths->second[path];
+					if(class_declarations_.find(candidate) == class_declarations_.end()) continue;
+					if(qualified_generated.empty()) qualified_generated = candidate;
+					else if(qualified_generated != candidate) {
 						qualified_generated.clear();
 						break;
 					}
 				}
-			if(!qualified_generated.empty()) class_key = qualified_generated;
-		}
-	}
-	if(class_declarations_.find(class_key) == class_declarations_.end() &&
-		specialization_bases_.find(LastComponent(class_key)) != specialization_bases_.end()) {
-		for(map<string, CPPGMAstNodePtr>::const_iterator declaration =
-			class_declarations_.begin(); declaration != class_declarations_.end(); ++declaration)
-			if(LastComponent(declaration->first) == LastComponent(class_key)) {
-				class_key = declaration->first;
-				break;
+				if(!qualified_generated.empty()) class_key = qualified_generated;
 			}
-	}
-	map<string, string> class_substitutions = substitutions;
-	ActivePackScope active_packs(const_cast<PA18TemplateExpander*>(this));
+		}
+		if(class_declarations_.find(class_key) == class_declarations_.end() &&
+			specialization_bases_.find(LastComponent(class_key)) != specialization_bases_.end()) {
+			map<string, vector<string> >::const_iterator indexed_paths =
+				class_paths_by_name_.find(LastComponent(class_key));
+			if(indexed_paths != class_paths_by_name_.end()) {
+				string selected_path;
+				for(size_t path = 0; path < indexed_paths->second.size(); ++path) {
+					const string& candidate = indexed_paths->second[path];
+					if(class_declarations_.find(candidate) == class_declarations_.end() ||
+						(!selected_path.empty() && selected_path < candidate)) continue;
+					selected_path = candidate;
+				}
+				if(!selected_path.empty()) class_key = selected_path;
+			}
+		}
+		map<string, string> class_substitutions = substitutions;
+		ActivePackScope active_packs(const_cast<PA18TemplateExpander*>(this));
 	// Nested generated classes are indexed under their enclosing generated
 	// specialization.  Restore the enclosing template bindings before
 	// replaying an inherited member type from the nested class.
-	map<string, string>::const_iterator nested_base = specialization_bases_.end();
-	for(map<string, string>::const_iterator candidate = specialization_bases_.begin();
-		candidate != specialization_bases_.end(); ++candidate)
-		if(LastComponent(candidate->first) == LastComponent(class_key) &&
-			!PrefixComponent(candidate->second).empty()) {
-			nested_base = candidate;
-			break;
+		map<string, string>::const_iterator nested_base = specialization_bases_.find(
+			LastComponent(class_key));
+		if(nested_base != specialization_bases_.end() &&
+			PrefixComponent(nested_base->second).empty()) nested_base = specialization_bases_.end();
+		if(nested_base != specialization_bases_.end()) {
+			const string source_owner = PrefixComponent(nested_base->second);
+			if(!source_owner.empty()) {
+				string selected_path;
+				map<string, string>::const_iterator selected_owner_base = specialization_bases_.end();
+				map<string, vector<string> >::const_iterator selected_owner_arguments =
+					specialization_arguments_.end();
+				map<string, vector<string> >::const_iterator indexed_paths =
+					class_paths_by_name_.find(LastComponent(class_key));
+				if(indexed_paths != class_paths_by_name_.end()) for(size_t path = 0;
+					path < indexed_paths->second.size(); ++path) {
+					const string& candidate_path = indexed_paths->second[path];
+					if(class_declarations_.find(candidate_path) == class_declarations_.end()) continue;
+					const string generated_owner = PrefixComponent(candidate_path);
+					map<string, string>::const_iterator owner_base = specialization_bases_.find(
+						LastComponent(generated_owner));
+					map<string, vector<string> >::const_iterator owner_arguments =
+						specialization_arguments_.find(LastComponent(generated_owner));
+					if(owner_base == specialization_bases_.end() ||
+						owner_arguments == specialization_arguments_.end() ||
+						LastComponent(owner_base->second) != LastComponent(source_owner)) continue;
+					if(!selected_path.empty() && selected_path < candidate_path) continue;
+					selected_path = candidate_path;
+					selected_owner_base = owner_base;
+					selected_owner_arguments = owner_arguments;
+				}
+				if(selected_owner_base != specialization_bases_.end()) {
+					const TemplateDefinition* owner_definition = FindDefinition(
+						selected_owner_base->second, context);
+					if(!owner_definition || !owner_definition->class_template)
+						owner_definition = FindDefinition(LastComponent(selected_owner_base->second), context);
+					if(owner_definition && owner_definition->class_template)
+						for(size_t parameter = 0; parameter < owner_definition->parameters.size() &&
+							parameter < selected_owner_arguments->second.size(); ++parameter)
+							if(!owner_definition->parameters[parameter].name.empty())
+								class_substitutions[owner_definition->parameters[parameter].name] =
+									selected_owner_arguments->second[parameter];
+				}
+			}
 		}
-	if(nested_base != specialization_bases_.end()) {
-		const string source_owner = PrefixComponent(nested_base->second);
-		if(!source_owner.empty()) for(map<string, CPPGMAstNodePtr>::const_iterator declaration =
-			class_declarations_.begin(); declaration != class_declarations_.end(); ++declaration) {
-			if(LastComponent(declaration->first) != LastComponent(class_key)) continue;
-			const string generated_owner = PrefixComponent(declaration->first);
-			map<string, string>::const_iterator owner_base = specialization_bases_.find(
-				LastComponent(generated_owner));
-			map<string, vector<string> >::const_iterator owner_arguments =
-				specialization_arguments_.find(LastComponent(generated_owner));
-			if(owner_base == specialization_bases_.end() ||
-				owner_arguments == specialization_arguments_.end() ||
-				LastComponent(owner_base->second) != LastComponent(source_owner)) continue;
-			const TemplateDefinition* owner_definition = FindDefinition(owner_base->second, context);
-			if(!owner_definition || !owner_definition->class_template)
-				owner_definition = FindDefinition(LastComponent(owner_base->second), context);
-			if(!owner_definition || !owner_definition->class_template) continue;
-			for(size_t parameter = 0; parameter < owner_definition->parameters.size() &&
-				parameter < owner_arguments->second.size(); ++parameter)
-				if(!owner_definition->parameters[parameter].name.empty())
-					class_substitutions[owner_definition->parameters[parameter].name] =
-						owner_arguments->second[parameter];
-			break;
-		}
-	}
 	// A direct template-id such as `node_value<key>` is looked up against the
 	// primary declaration below, so its class-template arguments must also be
 	// installed before replaying member return types.  Without this mapping

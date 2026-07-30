@@ -1398,15 +1398,16 @@ moving to deduction/conversion or LowIR-only groups.
 
 ### Audit outcome
 
-The checkpoint audit found and fixed the only checkpoint-level architecture and
+The checkpoint audit found and fixed the checkpoint-level architecture and
 performance blocker: `FindClassMemberType` was walking the complete
-specialization and declaration maps to recover a materialized owner by short
-name.  The final implementation uses a registration-time typed specialization
-name set and the existing typed class-path index, preserving deterministic
-selection while removing the repeated full-registry scans and per-query vector
-sorting/copying.  No compiler phase, output path, acceptance check, or timeout
-behavior was weakened.  The complete inventory is recorded in the matching
-Checkpoint 11 audit section in `pa23/audit.md`.
+specialization and declaration maps to recover materialized, generated, and
+nested owners by short name.  The final implementation uses a registration-time
+typed specialization name set, direct generated-name lookup, and the existing
+typed class-path index, preserving deterministic selection while removing the
+repeated full-registry scans and per-query vector sorting/copying.  No compiler
+phase, output path, acceptance check, or timeout behavior was weakened.  The
+complete inventory is recorded in the matching Checkpoint 11 audit section in
+`pa23/audit.md`.
 
 ### Validation and refreshed Remaining Work Map
 

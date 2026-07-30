@@ -722,17 +722,19 @@ as fixed-point witnesses and are not handled by timing-specific acceptance.
   No timeout cap, retry loop, timeout-only success path, or other timing
   workaround is present; both remain reported as timeouts.
 - A real checkpoint-level performance and ownership blocker was present in
-  `FindClassMemberType`: its materialized-owner fast path walked all
-  `specialization_bases_` entries and then all `class_declarations_` entries,
-  comparing short-name components.  That made each lookup dependent on the
-  entire accumulated registry and allowed unrelated same-name declarations to
-  participate in owner recovery.
+  `FindClassMemberType`: its materialized-owner path and its adjacent generated
+  suffix/nested-owner recovery walked all `specialization_bases_` entries and
+  then all `class_declarations_` entries, comparing short-name components.
+  That made each recursive lookup dependent on the entire accumulated registry
+  and allowed unrelated same-name declarations to participate in owner
+  recovery.
 - The final implementation removes those registry-wide walks without changing
-  their deterministic selection semantics.  Specialization names are narrowed
-  through a typed base index, and declaration paths are narrowed through the
-  existing typed class-path index.  The sorted name/path selection preserves
-  the prior map-order behavior; no emitted text is reparsed to recover
-  ownership, and no ownership fact is duplicated downstream.
+  their deterministic selection semantics.  Materialized names are narrowed
+  through a typed base index, generated-name recovery uses the direct typed
+  specialization key, and declaration paths are narrowed through the existing
+  typed class-path index.  The indexed candidate selection preserves the prior
+  map-order behavior; no emitted text is reparsed to recover ownership, and no
+  ownership fact is duplicated downstream.
 - The new index is maintained at specialization registration time, so the hot
   lookup path does not copy or sort a vector on every query.  It performs only
   candidate-local argument checks and indexed path checks.  No full-suite walk,
@@ -745,9 +747,10 @@ as fixed-point witnesses and are not handled by timing-specific acceptance.
   name index while keeping the header at its 1200-line audit limit.
 - `dev/src/pa18_templates_rewrite_instantiate.cpp` populates that index when a
   generated specialization is registered.
-- `dev/src/pa18_templates_rewrite_members.cpp` replaces the two full-map owner
-  scans with the typed specialization-name and class-path indexes, preserving
-  the existing exact argument matching and resolver fallback.
+- `dev/src/pa18_templates_rewrite_members.cpp` replaces the materialized-owner,
+  generated-suffix, and nested-owner full-map scans with the typed
+  specialization-name and class-path indexes, preserving exact argument
+  matching, deterministic path selection, and the resolver fallback.
 
 ### Validation
 
