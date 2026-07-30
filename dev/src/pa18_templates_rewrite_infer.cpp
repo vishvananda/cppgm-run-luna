@@ -794,9 +794,12 @@ bool PA18TemplateExpander::InferFunctionParameter(
 				(*forwarding_pack_values)[forwarding_name].push_back(type);
 		}
 		bool null_pointer_conversion = false;
-		if(inferred_argument && argument && argument->kind == "literal" &&
-			Trim(RemoveMarker(argument->value)) == "0" && fixed_template_parameters &&
-			!fixed_template_parameters->empty() && deduction_pattern.find('*') != string::npos) {
+		const bool null_pointer_constant = inferred_argument && argument &&
+			((argument->kind == "literal" &&
+				Trim(RemoveMarker(argument->value)) == "0") ||
+			(argument->kind == "keyword-literal" &&
+				Trim(RemoveMarker(argument->value)) == "nullptr"));
+		if(null_pointer_constant && deduction_pattern.find('*') != string::npos) {
 			map<string, string> null_pointer_substitutions = parameter_substitutions;
 			for(map<string, string>::const_iterator binding = inferred->begin();
 				binding != inferred->end(); ++binding)

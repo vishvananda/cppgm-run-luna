@@ -567,8 +567,29 @@ int PA18TemplateExpander::MatchTypePatternClassCases(const string& pattern,
 			&actual_parts);
 	}
 	if(base_result >= 0) return base_result;
-	return MatchClassTemplateArgumentLists(pattern, actual, pattern_open, actual_open,
-		pattern_parts, actual_parts, parameter_names, inferred, context, class_pattern) ? 1 : 0;
+	const bool outer_match = MatchClassTemplateArgumentLists(pattern, actual, pattern_open, actual_open,
+		pattern_parts, actual_parts, parameter_names, inferred, context, class_pattern);
+	const string pattern_tail = pattern.substr(pattern_close + 1);
+	if(pattern_tail.empty()) return outer_match ? 1 : 0;
+	if(pattern_tail.compare(0, 2, "::") != 0 || pattern_tail.find('<') == string::npos ||
+		actual_open == string::npos)
+		return outer_match ? 1 : 0;
+	size_t actual_close = string::npos;
+	string actual_arguments;
+	if(!TemplateRange(actual, actual_open, &actual_arguments, &actual_close))
+		return outer_match ? 1 : 0;
+	const string actual_tail = actual_close == string::npos ? string() :
+		actual.substr(actual_close + 1);
+	if(!outer_match) return 0;
+	// Object cv/reference suffixes and generated class spellings are normalized
+	// independently by the ordinary matcher.  Only descend when both sides
+	// actually carry another qualified template-id; that is the dependent
+	// nested-owner form whose arguments must participate in deduction.
+	if(actual_tail.empty() || actual_tail.compare(0, 2, "::") != 0 ||
+		actual_tail.find('<') == string::npos)
+		return 1;
+	return MatchTypePattern(pattern_tail, actual_tail, parameter_names, inferred,
+		context, class_pattern) ? 1 : 0;
 }
 
 int PA18TemplateExpander::MatchClassTemplateBasePattern(const string& pattern,

@@ -425,12 +425,11 @@
 		const string key = parent_local_name + "::" + nested_name;
 		if(!materialized_nested_classes_.insert(key).second) return;
 		map<string, string> substitutions;
-		// Keep nested member-template parameters unbound until their template-id.
-		if(nested && !nested->member_template)
-			for(size_t i = 0; i < nested->parameters.size() && i < parent_args.size(); ++i)
-				if(!nested->parameters[i].name.empty() &&
-					(nested->parameters[i].type || !nested->parameters[i].non_type_type.empty()))
-					substitutions[nested->parameters[i].name] = parent_args[i];
+		// A nested class template owns these parameters.  Its enclosing class
+		// arguments are replayed below, while the nested arguments are supplied
+		// later when the qualified template-id is instantiated.  Consuming the
+		// parent arguments here aliases (for example) N1/N2 with Tag1/Tag2 and
+		// corrupts the nested member-template's own substitution scope.
 		for(size_t i = 0; i < parent.parameters.size() && i < parent_args.size(); ++i)
 			if(!parent.parameters[i].name.empty())
 				substitutions[parent.parameters[i].name] = parent_args[i];

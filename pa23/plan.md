@@ -1436,3 +1436,98 @@ and pack consumers.  This is the largest connected status cluster; deduction/
 conversion and specialization/constructor LowIR groups follow it.  Keep the
 two reentrant cases as fixed-point witnesses, without timeout-specific
 acceptance logic.
+
+## Checkpoint 12 scope — 2026-07-30 (before implementation)
+
+### Baseline and complete failure grouping
+
+The clean live PA23 report is **306/396**. Assignments through PA22 pass. The
+complete current-PA failure set is the 90-entry inventory recorded in
+`pa23/audit.md` and confirmed by the primary log: **55 status mismatches, 33
+LowIR comparisons, and two timeouts**. Grouped by shared behavior, the
+remaining work is:
+
+- **Typed owner/member replay and deferred lookup:** the status cases whose
+  dependent qualified members, inherited member templates, out-of-class
+  definitions, hidden friends, aliases, and source namespaces lose the
+  materialized owner or candidate-local substitution scope. Focused witnesses
+  are `general/100-direct-namespace-wins-over-using-directive`,
+  `general/200-empty-pack-member-template-owner-key`,
+  `general/200-nested-template-id-partial-specialization-deduction`,
+  `general/300-array-qualified-member-type-sfinae`,
+  `general/300-hidden-friend-current-specialization-enable-if`,
+  `general/400-member-alias-template-template-owner-argument`,
+  `general/500-source-namespace-base-sfinae-chain`, and
+  `general/500-out-of-class-member-template-dependent-owner-type`.
+- **Typed alias/value/pack consumers:** status cases involving variable
+  templates, `sizeof`, elaborated types, value-pack validation, and aliases
+  that need the same typed owner facts rather than text substitution.
+- **Deduction and conversions:** function partial ordering, explicit prefixes,
+  function pointers, constructor conversions, ADL, and overload viability.
+- **Specialization and LowIR materialization:** all 33 comparison cases,
+  covering explicit/extern replay, constructors, member emission, non-type
+  storage, and generated declaration metadata/order.
+- **Fixed-point semantics:** the two reentrant static-query cases require a
+  terminating typed query identity; they are not accepted through timing or
+  timeout-specific logic.
+
+### Checkpoint Scope
+
+Complete the connected owner/deferred group around `FindClassMemberType` and
+candidate replay. Preserve the typed materialized owner while traversing a
+dependent base or alias, bind enclosing class arguments before replaying a
+member result, and make the lookup scope candidate-local so a failed dependent
+probe is SFINAE instead of an unknown-type hard failure. The implementation
+must keep direct namespace lookup ahead of using-directive fallback, retain
+empty packs, and support nested class-template ids and out-of-class member
+definitions. Bundle the corresponding typed alias/value consumers when they
+use this same owner path; leave unrelated conversion/LowIR formatting work for
+the next group.
+
+Validate first with the eight focused owner/deferred witnesses above, then the
+full PA23 report, the required through-PA22 report, and the PA23 file audit.
+The checkpoint result must record the new pass count, exact residual grouping,
+and the next deduction/conversion or specialization/LowIR group.
+
+### Checkpoint 12 result — 2026-07-30
+
+The owner/deferred increment is complete and the focused validation improved as
+follows:
+
+- `general/100-direct-namespace-wins-over-using-directive` passes after
+  namespace-owned materializations remain in the namespace queue instead of
+  being nested in a class instantiation.
+- `general/200-empty-pack-member-template-owner-key` passes after candidate
+  viability recognizes `nullptr`/`0` as null-pointer conversions for already
+  resolved pointer parameters while still rejecting unresolved `T*` deduction.
+- `general/500-out-of-class-member-template-dependent-owner-type` passes after
+  qualified dependent type matching continues through nested template-id
+  suffixes, binding the member's type and type-pack parameters.
+- The other five focused owner/deferred witnesses remain useful residual
+  failures and were not masked by fallback lookup.
+
+The clean full PA23 report is now **310/396**, four tests above the turn-start
+baseline of 306/396. The remaining 86 tests are grouped as: dependent
+specialization/alias and SFINAE lookup (including the five unresolved focused
+owner witnesses); function-template deduction, partial ordering, explicit
+prefixes, function pointers, ADL, and conversion viability; explicit/extern
+specialization and constructor replay; non-type value/storage and generated
+LowIR materialization/order; and the two reentrant static-query timeout
+witnesses. The latter still require a terminating typed query identity.
+
+### Next checkpoint group
+
+Take the shared deduction/conversion group next, beginning with the remaining
+qualified dependent member and alias SFINAE cases that fail during candidate
+viability, then function-type and explicit-prefix deduction. Validate the
+affected focused witnesses and a fresh full PA23 report before moving to the
+specialization/LowIR group. Preserve the current owner queue, nested template
+suffix matching, and candidate-local null-pointer conversion behavior.
+
+### Regression-safe validation
+
+The narrowed nested-suffix matcher was checked against the earlier regressions
+before handoff: `make test-report-through-pa22` passes **2100/2100**. The final
+`make test-report ACTIVE_TEST_REPORT_PAS='pa23'` remains **310/396** with only
+the two known reentrant timeout witnesses among the residual failures, and
+`perl scripts/cppgm_file_audit.pl --stage pa23 --paths dev/src` passes.

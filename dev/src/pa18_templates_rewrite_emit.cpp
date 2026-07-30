@@ -782,7 +782,9 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 		(context.size() > definition_owner.size() && context.compare(0,
 			definition_owner.size(), definition_owner) == 0 &&
 			context[definition_owner.size()] == ':');
-	if(!explicit_static_data && !definition.owner.empty() && class_contexts_.find(context) != class_contexts_.end() && owner_is_context_ancestor &&
+	if(!explicit_static_data && !definition.owner.empty() &&
+		class_contexts_.find(definition_owner) != class_contexts_.end() &&
+		class_contexts_.find(context) != class_contexts_.end() && owner_is_context_ancestor &&
 		(!definition.class_template || !definition.owner.empty()) &&
 		context != definition.owner &&
 		!recursive_context_argument) {
