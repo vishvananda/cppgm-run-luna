@@ -1076,3 +1076,81 @@ fixed-point witnesses, with no timeout-specific acceptance logic, and retain
 the six owner/class-partial witnesses as regression coverage. Deduction and
 conversion viability plus explicit/extern and LowIR materialization remain the
 following bundled groups.
+
+## Checkpoint 17 audit — 2026-07-30
+
+### Scope Reviewed
+
+- The latest Checkpoint 17 scope, result, complete failure grouping, and next
+  checkpoint in `pa23/plan.md`, together with the PA23 contract in
+  `pa23/README.md` and the repository testing/reference rules.
+- The landed checkpoint commit `4d7484b` and its dependent-owner, deduction,
+  pack-replay, and typed-replay predecessors, with particular attention to
+  `pa18_templates_collection*`, declaration replay, type qualification, and
+  LowIR emission.
+- The authoritative full-stage log at
+  `/home/vishvananda/work/.ralph/luna-gpt-5.6-luna-ultra/last-test.log`, the
+  focused checkpoint witnesses, the exact through-PA22 command, and the PA23
+  file audit.
+
+### Findings
+
+- The checkpoint remains on the parser, typed semantic collection,
+  substitution/replay, and LowIR pipeline.  There is no skipped compiler
+  phase, dummy or embedded output, interpreter/VM/trampoline substitute,
+  reference-binary or host-compiler invocation, fixture-name acceptance gate,
+  or unchecked output path.  The two reentrant static-query fixtures remain
+  genuine semantic fixed-point failures; no timeout cap, retry, or
+  timing-based success path was added.
+- The new implicit nested-owner helper rescanned each class-template AST on
+  both sides of every materialization and used the class-declaration map as a
+  replaceable forward cache.  That was an avoidable hot-path walk and could
+  overwrite a complete nested declaration with an incomplete shell.
+- The new pre-transform dependency preservation also walked the complete
+  source declaration on every materialization.  The AST's type spelling is a
+  syntax-boundary input, but repeatedly rediscovering its dependency facts at
+  replay time was both recomputation and late ownership recovery.
+- The added indexing implementation briefly crossed the 1500-line source
+  limit in `pa18_templates_collection.cpp`; the file audit caught this as a
+  fatal structural regression.  No audit threshold or checker rule was
+  weakened.
+- Comparing the complete Checkpoint 17 baseline inventory with the final
+  report found no newly failing fixture.  The current stage is 329/396,
+  four above the 325 checkpoint baseline: 35 exit-status mismatches,
+  including the two fixed-point timeout witnesses, and 32 LowIR comparisons.
+
+### Changes Made
+
+- Added `TemplateTypeDependency` records and indexed declaration type
+  dependencies once when each template is registered.  Pre-transform replay
+  now consumes that owned index; the post-transform walk remains only for
+  concrete dependencies introduced by substitution.
+- Indexed implicit elaborated nested class names once in the corresponding
+  `TemplateDefinition`, so materialization installs only the already-known
+  names.  The syntax-level scan consumes PA10 AST spellings at registration;
+  it does not reparse emitted LowIR or use fixture-specific strings.
+- Preserved an existing complete `class-specifier` declaration when a later
+  replay only supplies a forward shell, while still allowing a newly generated
+  complete nested declaration to replace an incomplete one.
+- Kept the new indexing implementation in
+  `pa18_templates_collection_nested.cpp`, restoring the source-size audit
+  boundary.  No tests, reference fixtures, checker rules, or external tools
+  were modified or invoked by the compiler implementation.
+
+### Validation
+
+- `make build` — pass.
+- The nine named Checkpoint 17 witnesses — pass (`9/9`).
+- `make test-report ACTIVE_TEST_REPORT_PAS='pa23'` — **329/396**; the
+  complete current-stage failure set is unchanged by the audit fixes and is
+  above the 325 turn-start baseline.  The full failure inventory and grouped
+  Remaining Work Map are recorded in the Checkpoint 17 result in
+  `pa23/plan.md`.
+- Exact required prior-through command — pass, **2100/2100** through PA22:
+  `n=23; if [ "$n" -le 1 ]; then echo '===== ALL TESTS PASSED SUCCESSFULLY! (0/0) ====='; else make test-report-through-pa$((n - 1)); fi`.
+- `perl scripts/cppgm_file_audit.pl --stage pa23 --paths dev/src` — pass
+  with 13 non-fatal pre-existing warnings and no fatal finding.
+- `git diff --check` — pass.  The next substantial group is the remaining
+  dependent member-result and candidate-local SFINAE band, bundled with the
+  conversion-function selection witnesses; the two reentrant cases remain
+  fixed-point regression coverage only.

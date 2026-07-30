@@ -509,8 +509,7 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 	// Dependent declarations are collected without ordinary semantic traversal;
 	// retain their elaborated class dependencies before body replay normalizes
 	// the source spelling.
-	EnsureDeclarationDependencies(definition.declaration, definition.owner,
-		generated_owner);
+	EnsureTemplateDeclarationDependencies(definition, generated_owner);
 	const bool static_member = definition.static_member;
 	const bool flattened_static_member = static_member &&
 		definition.owner.find("::") == string::npos && !requested_owner.empty();

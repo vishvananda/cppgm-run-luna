@@ -98,7 +98,17 @@ void PA18TemplateExpander::EnsureTypeDependency(const string& spelling, const st
 			NormalizeElaboratedSpelling(spelling, context), context);
 		if(!qualified.empty()) EnsureForwardClass(qualified, context, owner);
 	}
-void PA18TemplateExpander::EnsureDeclarationDependencies(const CPPGMAstNodePtr& node,
+	void PA18TemplateExpander::EnsureTemplateDeclarationDependencies(
+		const TemplateDefinition& definition, const string& owner)
+	{
+		for(size_t dependency = 0;
+			dependency < definition.declaration_type_dependencies.size(); ++dependency) {
+			const TemplateTypeDependency& item =
+				definition.declaration_type_dependencies[dependency];
+			EnsureTypeDependency(item.spelling, item.context, owner);
+		}
+	}
+	void PA18TemplateExpander::EnsureDeclarationDependencies(const CPPGMAstNodePtr& node,
 		const string& context, const string& owner)
 	{
 		if(!node) return;

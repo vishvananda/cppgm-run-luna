@@ -2098,8 +2098,9 @@ The checkpoint witnesses that now compile and pass are:
 - `general/400-member-template-constexpr-static-assert.t`
 
 The full current-PA report is **329/396**, four above the turn-start
-baseline.  The remaining **67** failures are now 35 exit-status failures and
-32 LowIR comparisons; the current complete set is grouped below.
+baseline.  The remaining **67** failures are now 35 exit-status failures
+(including the two reentrant timeout witnesses) and 32 LowIR comparisons; the
+current complete set is grouped below.
 
 The final source layout also passes the PA23 file audit.  The implicit nested
 forward and ambiguous-alias helpers now live in the responsibility-specific
@@ -2196,3 +2197,52 @@ and `cppgm_file_audit.pl --stage pa23 --paths dev/src` passes with only the
 listed repository warnings.  The next turn should start from the owner/
 deferred-member-result group above; no current-PA failure was hidden or
 converted into a fixture change.
+
+## Checkpoint 17 audit result — 2026-07-30
+
+The checkpoint audit fixed two replay hot-path issues without changing the
+semantic scope: source declaration dependencies and implicit nested-owner
+names are indexed once at template registration, and a complete nested class
+declaration is not replaced by a later forward shell.  The source-size audit
+boundary was restored by keeping the indexing implementation in the
+responsibility-specific nested-collection module.  The implementation still
+uses the ordinary typed parser, template registry, substitution, and LowIR
+paths; the reentrant cases remain genuine fixed-point failures rather than
+timeout-accepted successes.
+
+### Validation
+
+- `make test-report ACTIVE_TEST_REPORT_PAS='pa23'`: **329/396**, with no new
+  failing fixture relative to the Checkpoint 17 baseline and four more passing
+  tests than the 325-test turn-start baseline.
+- The complete current-stage set is **67 fixtures**: 35 exit-status
+  mismatches (including the two reentrant timeout witnesses) and 32 LowIR
+  comparisons.  The grouped lists immediately above are the authoritative
+  failure inventory; the audit compared the set directly with the baseline.
+- The exact required through-PA22 command passes **2100/2100**.
+- `perl scripts/cppgm_file_audit.pl --stage pa23 --paths dev/src` passes with
+  13 non-fatal pre-existing warnings and no fatal finding.
+
+### Refreshed Remaining Work Map
+
+- **Dependent member-result and typed SFINAE:** MP11 append, qualified bool
+  results, trailing-return aliases, dependent packs, alias/`sizeof` probes,
+  and the two reentrant fixed-point queries.
+- **Owner and specialization replay:** current-specialization display and
+  member bodies, inherited/source-namespace owners, explicit/extern replay,
+  nested member-template ownership, and variable-template state.
+- **Deduction and conversion viability:** constructor and conversion
+  candidates, explicit and template-template prefixes, function-pointer and
+  pack deduction, ADL, and member-template overload selection.
+- **LowIR materialization:** the 32 comparison failures covering generated
+  function/constructor bodies, static storage, explicit instantiation,
+  declaration order, and ABI-visible typed values.
+
+### Next Substantial Checkpoint Group
+
+Bundle the dependent member-result/candidate-local SFINAE group with MP11
+append, qualified bool, trailing-return alias, and the three conversion
+selection witnesses.  Keep all typed-owner/array and class-partial
+regressions in the focused suite, retain the two reentrant cases as
+fixed-point witnesses with no timing-based acceptance, then follow with the
+remaining deduction/conversion and explicit/extern LowIR groups.

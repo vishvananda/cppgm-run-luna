@@ -9,11 +9,53 @@ void PA18TemplateExpander::InstallImplicitNestedForwards(
 	const string& generated_owner, const string& local_name)
 {
 	if(!definition.class_template || !definition.declaration) return;
-	const string source_class = LastComponent(definition.declaration->value);
-	if(source_class.empty()) return;
+	for(size_t name_index = 0; name_index < definition.implicit_nested_class_names.size();
+		++name_index) {
+		const string& name = definition.implicit_nested_class_names[name_index];
+		CPPGMAstNodePtr forward;
+		if(generated && generated->kind == "class-specifier") {
+			bool already_generated = false;
+			for(size_t child = 0; child < generated->children.size(); ++child) {
+				const CPPGMAstNodePtr member = generated->children[child];
+				if(member && (member->kind == "class-specifier" ||
+					member->kind == "class-forward-declaration") &&
+					LastComponent(member->value) == name) {
+					forward = member;
+					already_generated = true;
+					break;
+				}
+			}
+			if(!already_generated) {
+				forward = MakeForwardClass(name);
+				size_t insert = 0;
+				while(insert < generated->children.size() && generated->children[insert] &&
+					(generated->children[insert]->kind == "class-key" ||
+					 generated->children[insert]->kind == "base-clause")) ++insert;
+				generated->children.insert(generated->children.begin() + insert, forward);
+			}
+		}
+		if(!forward) forward = MakeForwardClass(name);
+		const string generated_path = JoinPath(generated_owner, local_name);
+		const string nested_path = JoinPath(generated_path, name);
+		map<string, CPPGMAstNodePtr>::const_iterator existing = class_declarations_.find(nested_path);
+		if(existing != class_declarations_.end() && existing->second &&
+			existing->second->kind == "class-specifier" &&
+			(!forward || forward->kind != "class-specifier")) {
+			RememberClassPath(nested_path);
+			continue;
+		}
+		class_declarations_[nested_path] = forward;
+		RememberClassPath(nested_path);
+	}
+}
+
+void PA18TemplateExpander::IndexImplicitNestedClassNames(
+	const CPPGMAstNodePtr& declaration, vector<string>& names) const
+{
+	if(!declaration) return;
 	set<string> explicit_nested;
-	for(size_t child = 0; child < definition.declaration->children.size(); ++child) {
-		const CPPGMAstNodePtr member = definition.declaration->children[child];
+	for(size_t child = 0; child < declaration->children.size(); ++child) {
+		const CPPGMAstNodePtr member = declaration->children[child];
 		if(member && (member->kind == "class-specifier" ||
 			member->kind == "class-forward-declaration"))
 			explicit_nested.insert(LastComponent(member->value));
@@ -33,8 +75,7 @@ void PA18TemplateExpander::InstallImplicitNestedForwards(
 				size_t begin = position + keyword.size();
 				if(begin < raw.size() && IsIdentifierCharacter(raw[begin]) &&
 					IsIdentifierCharacter(raw[position + keyword.size() - 1])) {
-					// `structName` is accepted by the parser's compact spelling
-					// recovery; the following identifier scan handles both forms.
+					// The parser also accepts compact elaborated spellings.
 				} else {
 					while(begin < raw.size() && isspace(static_cast<unsigned char>(raw[begin]))) ++begin;
 				}
@@ -51,68 +92,70 @@ void PA18TemplateExpander::InstallImplicitNestedForwards(
 			if(!found) ++position;
 		}
 	};
-	const auto scan = [&](const CPPGMAstNodePtr& root) {
-		function<void(const CPPGMAstNodePtr&, bool)> visit;
-		visit = [&](const CPPGMAstNodePtr& node, bool is_root) {
-			if(!node) return;
-			if(!is_root && (node->kind == "class-specifier" ||
-				node->kind == "class-forward-declaration")) return;
-			if(node->kind == "function-definition" ||
-				node->kind == "special-member-definition" ||
-				node->kind == "special-member-declaration") {
-				if(!node->children.empty()) collect_names(NodeTypeSpelling(node->children[0]));
-				if(node->children.size() > 1) {
-					const CPPGMAstNodePtr clause = DescendantOfKind(node->children[1],
-						"parameter-clause");
-					if(clause) for(size_t parameter = 0; parameter < clause->children.size(); ++parameter)
-						if(clause->children[parameter] && clause->children[parameter]->kind ==
-							"parameter-declaration")
-							collect_names(ParameterTypeSpelling(clause->children[parameter]));
-				}
-				return;
+	function<void(const CPPGMAstNodePtr&, bool)> visit;
+	visit = [&](const CPPGMAstNodePtr& node, bool is_root) {
+		if(!node) return;
+		if(!is_root && (node->kind == "class-specifier" ||
+			node->kind == "class-forward-declaration")) return;
+		if(node->kind == "function-definition" ||
+			node->kind == "special-member-definition" ||
+			node->kind == "special-member-declaration") {
+			if(!node->children.empty()) collect_names(NodeTypeSpelling(node->children[0]));
+			if(node->children.size() > 1) {
+				const CPPGMAstNodePtr clause = DescendantOfKind(node->children[1],
+					"parameter-clause");
+				if(clause) for(size_t parameter = 0; parameter < clause->children.size(); ++parameter)
+					if(clause->children[parameter] && clause->children[parameter]->kind ==
+						"parameter-declaration")
+						collect_names(ParameterTypeSpelling(clause->children[parameter]));
 			}
-			if(node->kind == "simple-declaration" && !node->children.empty())
-				collect_names(NodeTypeSpelling(node->children[0]));
-			else if(node->kind == "alias-declaration" && !node->children.empty())
-				collect_names(TypeIdSpelling(node->children[0]));
-			else if(node->kind == "base-name") collect_names(node->value);
-			for(size_t child = 0; child < node->children.size(); ++child)
-				visit(node->children[child], false);
-		};
-		visit(root, true);
-	};
-	scan(definition.declaration);
-	for(set<string>::const_iterator name = implicit_nested.begin();
-		name != implicit_nested.end(); ++name) {
-		if(explicit_nested.find(*name) != explicit_nested.end()) continue;
-		CPPGMAstNodePtr forward;
-		if(generated && generated->kind == "class-specifier") {
-			bool already_generated = false;
-			for(size_t child = 0; child < generated->children.size(); ++child) {
-				const CPPGMAstNodePtr member = generated->children[child];
-				if(member && (member->kind == "class-specifier" ||
-					member->kind == "class-forward-declaration") &&
-					LastComponent(member->value) == *name) {
-					forward = member;
-					already_generated = true;
-					break;
-				}
-			}
-			if(!already_generated) {
-				forward = MakeForwardClass(*name);
-				size_t insert = 0;
-				while(insert < generated->children.size() && generated->children[insert] &&
-					(generated->children[insert]->kind == "class-key" ||
-					 generated->children[insert]->kind == "base-clause")) ++insert;
-				generated->children.insert(generated->children.begin() + insert, forward);
-			}
+			return;
 		}
-		if(!forward) forward = MakeForwardClass(*name);
-		const string generated_path = JoinPath(generated_owner, local_name);
-		const string nested_path = JoinPath(generated_path, *name);
-		class_declarations_[nested_path] = forward;
-		RememberClassPath(nested_path);
+		if(node->kind == "simple-declaration" && !node->children.empty())
+			collect_names(NodeTypeSpelling(node->children[0]));
+		else if(node->kind == "alias-declaration" && !node->children.empty())
+			collect_names(TypeIdSpelling(node->children[0]));
+		else if(node->kind == "base-name") collect_names(node->value);
+		for(size_t child = 0; child < node->children.size(); ++child)
+			visit(node->children[child], false);
+	};
+	visit(declaration, true);
+	for(set<string>::const_iterator name = implicit_nested.begin();
+		name != implicit_nested.end(); ++name)
+		if(explicit_nested.find(*name) == explicit_nested.end()) names.push_back(*name);
+}
+
+void PA18TemplateExpander::IndexDeclarationTypeDependencies(
+	const CPPGMAstNodePtr& node, const string& context,
+	vector<TemplateTypeDependency>& dependencies) const
+{
+	if(!node) return;
+	string child_context = context;
+	if(node->kind == "class-specifier" ||
+		node->kind == "class-forward-declaration")
+		child_context = JoinPath(context, LastComponent(node->value));
+	if(node->kind == "function-definition" && !node->children.empty()) {
+		dependencies.push_back(TemplateTypeDependency(
+			NodeTypeSpelling(node->children[0]), context));
+		if(node->children.size() > 1) {
+			const CPPGMAstNodePtr clause = DescendantOfKind(node->children[1],
+				"parameter-clause");
+			if(clause) for(size_t parameter = 0;
+				parameter < clause->children.size(); ++parameter)
+				if(clause->children[parameter] &&
+					clause->children[parameter]->kind == "parameter-declaration")
+					dependencies.push_back(TemplateTypeDependency(
+						ParameterTypeSpelling(clause->children[parameter]), context));
+		}
 	}
+	if(node->kind == "simple-declaration" && !node->children.empty())
+		dependencies.push_back(TemplateTypeDependency(
+			NodeTypeSpelling(node->children[0]), context));
+	if(node->kind == "base-name")
+		dependencies.push_back(TemplateTypeDependency(node->value, context));
+	for(size_t child = 0; child < node->children.size(); ++child)
+		IndexDeclarationTypeDependencies(node->children[child], child_context,
+			dependencies);
 }
 
 bool PA18TemplateExpander::FindUnqualifiedGeneratedAliasPath(
