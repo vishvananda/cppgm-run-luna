@@ -74,6 +74,7 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 	result->materialize_object_address = input->materialize_object_address;
 	result->materialize_object_name = input->materialize_object_name;
 	result->inferred_type = input->inferred_type;
+	result->indirect_function_call = input->indirect_function_call;
 	result->source_token_begin = input->source_token_begin;
 	result->source_token_end = input->source_token_end;
 	result->template_primary = input->template_primary;
@@ -94,6 +95,11 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 	if(TransformExplicitFunctionCall(input, input_callee, context,
 		substitutions, result))
 		return result;
+	if(input_callee && input_callee->kind == "id-expression" &&
+		active_function_pointer_substitutions_.find(
+			RemoveMarker(input_callee->value)) !=
+			active_function_pointer_substitutions_.end())
+		result->indirect_function_call = true;
 	TransformCallChildren(input, result, context, substitutions);
 	CPPGMAstNodePtr result_callee = result->children.empty() ? CPPGMAstNodePtr() :
 		result->children[0];

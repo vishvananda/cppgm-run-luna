@@ -937,6 +937,12 @@ void PA18TemplateExpander::InsertGenerated(vector<CPPGMAstNodePtr>* children,
 				class_contexts_.find(value) != class_contexts_.end() ||
 				named_type_contexts_.find(value) != named_type_contexts_.end() ||
 				variable_types_.find(value) != variable_types_.end()) return true;
+			// Function names are concrete non-type template arguments too.  They
+			// are not variables or integral constants, but treating them as an
+			// unresolved dependent name here prevents the generated specialization
+			// from being injected into the replayed translation unit.
+			if(FindFunctionSignature(value, owner) != 0 ||
+				FindFunctionSignature(value, string()) != 0) return true;
 			const auto matches_owner = [&](const string& candidate) {
 				if(owner.empty() || candidate == JoinPath(owner, value)) return true;
 				string logical_owner = owner;
@@ -985,7 +991,9 @@ void PA18TemplateExpander::InsertGenerated(vector<CPPGMAstNodePtr>* children,
 			if(known_context_entity(value)) continue;
 			if(argument < definition->second.parameters.size() &&
 				!definition->second.parameters[argument].type) {
-				if(constant_values_.find(value) == constant_values_.end()) return true;
+				if(constant_values_.find(value) == constant_values_.end() &&
+					FindFunctionSignature(value, owner) == 0 &&
+					FindFunctionSignature(value, string()) == 0) return true;
 			} else return true;
 		}
 		return false;

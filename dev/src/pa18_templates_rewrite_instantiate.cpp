@@ -25,8 +25,23 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformInstantiatedNode(
 	const map<string, vector<string> > previous_packs = active_pack_substitutions_;
 	const map<string, vector<string> > previous_pack_identifiers = active_pack_identifier_substitutions_, previous_function_packs = active_function_pack_substitutions_;
 	const map<string, FunctionSignature> previous_functions = active_function_substitutions_;
+	const set<string> previous_function_pointer_parameters =
+		active_function_pointer_substitutions_;
 	active_integral_substitutions_ = integral_substitutions;
 	active_function_substitutions_ = function_substitutions;
+	active_function_pointer_substitutions_.clear();
+	for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter) {
+		const TemplateParameter& item = definition.parameters[parameter];
+		if(item.type || item.name.empty() ||
+			(substitutions.find(item.name) == substitutions.end())) continue;
+		string function_result, function_qualifiers;
+		vector<string> function_parameters;
+		if(SplitDirectFunctionType(item.non_type_type, &function_result,
+			&function_parameters, &function_qualifiers) ||
+			SplitFunctionPointerType(item.non_type_type, &function_result,
+				&function_parameters))
+			active_function_pointer_substitutions_.insert(item.name);
+	}
 	active_pack_substitutions_ = previous_packs;
 	// An unnamed pack is an arity constraint; its empty key must not reach replay.
 	active_pack_substitutions_.erase("");
@@ -63,12 +78,14 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformInstantiatedNode(
 		active_pack_substitutions_ = previous_packs;
 		active_pack_identifier_substitutions_ = previous_pack_identifiers; active_function_pack_substitutions_ = previous_function_packs;
 		active_function_substitutions_ = previous_functions;
+		active_function_pointer_substitutions_ = previous_function_pointer_parameters;
 		return result;
 	} catch(...) {
 		active_integral_substitutions_ = previous;
 		active_pack_substitutions_ = previous_packs;
 		active_pack_identifier_substitutions_ = previous_pack_identifiers; active_function_pack_substitutions_ = previous_function_packs;
 		active_function_substitutions_ = previous_functions;
+		active_function_pointer_substitutions_ = previous_function_pointer_parameters;
 		throw;
 	}
 }

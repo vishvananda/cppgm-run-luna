@@ -702,8 +702,8 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 							substitutions.find(args[i]) == substitutions.end() &&
 								active_integral_substitutions_.find(args[i]) ==
 									active_integral_substitutions_.end() &&
-								variable_types_.find(args[i]) == variable_types_.end() &&
-							constant_values_.find(args[i]) == constant_values_.end();
+									variable_types_.find(args[i]) == variable_types_.end() && constant_values_.find(args[i]) == constant_values_.end() &&
+									FindFunctionSignature(args[i], context) == 0;
 						if(bare_dependent_argument) unresolved_scope = true;
 							if(unresolved_scope &&
 								substitutions.find(CanonicalSpelling(args[i])) == substitutions.end()) {
@@ -765,10 +765,11 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 					args[i].find_first_not_of(
 					"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") ==
 					string::npos && args[i] != "true" && args[i] != "false" &&
-						constant_values_.find(args[i]) == constant_values_.end() &&
-						active_integral_substitutions_.find(args[i]) ==
-						active_integral_substitutions_.end() &&
-						variable_types_.find(args[i]) == variable_types_.end())
+							constant_values_.find(args[i]) == constant_values_.end() &&
+							active_integral_substitutions_.find(args[i]) ==
+							active_integral_substitutions_.end() &&
+							variable_types_.find(args[i]) == variable_types_.end() &&
+							FindFunctionSignature(args[i], context) == 0)
 					dependent_name = true;
 					// A nested template-id can carry a member-function parameter
 					// (`accepts<Args&&...>::value`) without exposing that name as

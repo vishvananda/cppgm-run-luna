@@ -708,5 +708,115 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 	if(inferred) *inferred = local;
 	return true;
 }
+bool PA18TemplateExpander::RegisterExplicitFunctionSpecialization(
+	const CPPGMAstNodePtr& node, const CPPGMAstNodePtr& declaration,
+	const string& declaration_spelling, const string& context,
+	TemplateDefinition* item)
+{
+	if(!node || !declaration || !item) return false;
+	string specialization_base;
+	vector<string> specialization_arguments;
+	const size_t open = declaration_spelling.find('<');
+	string argument_text;
+	size_t begin = 0, close = string::npos;
+	if(open != string::npos && TemplateBase(declaration_spelling, open, &begin,
+			&specialization_base) && TemplateRange(declaration_spelling, open,
+			&argument_text, &close)) {
+		const string suffix = declaration_spelling.substr(close + 1);
+		if(suffix.compare(0, 2, "::") == 0) specialization_base += suffix;
+		specialization_arguments = SplitTemplateArguments(argument_text);
+	} else specialization_base = LastComponent(item->name);
+	const vector<const TemplateDefinition*> overloads =
+		FindFunctionDefinitions(specialization_base, context);
+	vector<const TemplateDefinition*> matching_primaries;
+	const CPPGMAstNodePtr specialized_declarator = FunctionDeclarator(declaration);
+	const CPPGMAstNodePtr specialized_parameters =
+		DescendantOfKind(specialized_declarator, "parameter-clause");
+	const TemplateDefinition* primary = 0;
+	vector<string> matched_arguments;
+	for(size_t overload = 0; overload < overloads.size(); ++overload) {
+		const TemplateDefinition* candidate = overloads[overload];
+		if(!candidate || candidate->class_template || candidate->parameters.empty()) continue;
+		const CPPGMAstNodePtr primary_declarator = FunctionDeclarator(candidate->declaration);
+		const CPPGMAstNodePtr primary_parameters =
+			DescendantOfKind(primary_declarator, "parameter-clause");
+		if(!primary_parameters || !specialized_parameters ||
+			primary_parameters->children.size() != specialized_parameters->children.size()) continue;
+		set<string> parameter_names;
+		for(size_t parameter = 0; parameter < candidate->parameters.size(); ++parameter)
+			if(!candidate->parameters[parameter].name.empty())
+				parameter_names.insert(candidate->parameters[parameter].name);
+		map<string, string> inferred;
+		bool matches = true;
+		for(size_t parameter = 0; parameter < primary_parameters->children.size(); ++parameter) {
+			const CPPGMAstNodePtr primary_parameter = primary_parameters->children[parameter];
+			const CPPGMAstNodePtr specialized_parameter = specialized_parameters->children[parameter];
+			if(!primary_parameter || !specialized_parameter ||
+				!MatchTypePattern(ParameterTypeSpelling(primary_parameter),
+					ParameterTypeSpelling(specialized_parameter), parameter_names,
+					&inferred, context)) { matches = false; break; }
+		}
+		if(!matches) continue;
+		vector<string> candidate_arguments = specialization_arguments;
+		if(candidate_arguments.empty()) for(size_t parameter = 0;
+			parameter < candidate->parameters.size(); ++parameter) {
+			map<string, string>::const_iterator found = inferred.find(
+				candidate->parameters[parameter].name);
+			if(found == inferred.end()) { candidate_arguments.clear(); break; }
+			candidate_arguments.push_back(found->second);
+		}
+		if(candidate_arguments.size() != candidate->parameters.size()) continue;
+		matching_primaries.push_back(candidate);
+		const bool candidate_definition = candidate->declaration &&
+			candidate->declaration->kind == "function-definition";
+		const bool primary_definition = primary && primary->declaration &&
+			primary->declaration->kind == "function-definition";
+		if(!primary || (candidate_definition != primary_definition && candidate_definition)) {
+			primary = candidate; matched_arguments = candidate_arguments;
+		}
+	}
+	if(!primary && !specialization_arguments.empty() && overloads.size() == 1 &&
+		overloads[0] && !overloads[0]->class_template &&
+		!overloads[0]->parameters.empty()) {
+		primary = overloads[0]; matched_arguments = specialization_arguments;
+	}
+	if(!primary) return false;
+	specialization_arguments = matched_arguments;
+	if(specialization_arguments.size() != primary->parameters.size()) return false;
+	item->explicit_specialization = true;
+	item->name = primary->name; item->owner = primary->owner;
+	item->lexical_owner = primary->lexical_owner;
+	item->qualified_name = primary->qualified_name;
+	item->parameters = primary->parameters;
+	item->declaration = CloneNode(declaration);
+	item->deleted = IsDeletedFunctionDeclaration(item->declaration);
+	item->immediate_return_constraint = CollectImmediateReturnConstraint(
+		item->declaration, &item->immediate_return_condition);
+	const CPPGMAstNodePtr primary_declarator = FunctionDeclarator(primary->declaration);
+	const CPPGMAstNodePtr primary_parameters =
+		DescendantOfKind(primary_declarator, "parameter-clause");
+	map<string, string> parameter_renames;
+	if(primary_parameters && specialized_parameters)
+		for(size_t parameter = 0; parameter < primary_parameters->children.size() &&
+			parameter < specialized_parameters->children.size(); ++parameter) {
+			const string primary_name = FirstIdentifierLocal(
+				primary_parameters->children[parameter]);
+			const string specialized_name = FirstIdentifierLocal(
+				specialized_parameters->children[parameter]);
+			if(!primary_name.empty() && !specialized_name.empty() &&
+				primary_name != specialized_name)
+				parameter_renames[specialized_name] = primary_name;
+		}
+	ReplaceAstIdentifiers(item->declaration, parameter_renames);
+	explicit_function_arguments_[declaration.get()] = specialization_arguments;
+	explicit_function_primary_definitions_[declaration.get()] = primary;
+	explicit_function_specializations_[PA18ExplicitSpecializationKey(
+		primary->qualified_name, specialization_arguments)] = *item;
+	for(size_t matching = 0; matching < matching_primaries.size(); ++matching)
+		explicit_function_specializations_by_primary_[matching_primaries[matching]][
+			PA18ExplicitSpecializationKey(matching_primaries[matching]->qualified_name,
+				specialization_arguments)] = *item;
+	return true;
+}
 
 } // namespace pa18_templates_internal

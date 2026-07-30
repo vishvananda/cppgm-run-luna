@@ -22,8 +22,9 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
 {
     if(!expression || expression->children.empty()) throw logic_error("invalid call expression");
     const CPPGMAstNodePtr callee_node = expression->children[0];
-    const CPPGMAstNodePtr arguments_node = expression->children.size() > 1 ?
-      expression->children[1] : CPPGMAstNodePtr();
+	const CPPGMAstNodePtr arguments_node = expression->children.size() > 1 ?
+		  expression->children[1] : CPPGMAstNodePtr();
+	const bool force_indirect = expression->indirect_function_call;
     vector<CPPGMAstNodePtr> argument_nodes;
     if(arguments_node)
       argument_nodes = arguments_node->children;
@@ -148,7 +149,7 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
           break;
         }
     }
-    if(direct) {
+	if(direct && !force_indirect) {
       for(size_t i = 0; i < candidates.size(); ++i) {
         Binding* binding = candidates[i];
         TypePtr function = function_target_type(binding->type);
@@ -325,9 +326,21 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
         if(base_entry) base_entry->needed = true;
       }
 		return best;
-    }
+	}
+	if(force_indirect) {
+		ExprInfo callee = Infer(callee_node, scope);
+		best.function = function_target_type(callee.type);
+		if(!best.function) {
+			TypePtr callable = expression_value_type(callee);
+			if(callable && callable->kind == TYPE_CLASS)
+				return ChooseCall(MakeMemberCall(callee_node, "operator()", argument_nodes), scope);
+		}
+		if(!best.function) throw logic_error("expression is not callable");
+		best.direct = false;
+		return best;
+	}
 
-    ExprInfo callee = Infer(callee_node, scope);
+	ExprInfo callee = Infer(callee_node, scope);
     best.function = function_target_type(callee.type);
     if(!best.function) {
       TypePtr callable = expression_value_type(callee);

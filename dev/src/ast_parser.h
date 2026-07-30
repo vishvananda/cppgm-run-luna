@@ -48,6 +48,10 @@ struct CPPGMAstNode
 	// PA18 records the concrete result type of a materialized member-template
 	// call so a surrounding deduction step can use the same typed fact.
 	std::string inferred_type;
+	// PA18 records that a replayed call uses a non-type function-pointer
+	// parameter.  PA14 must preserve the indirect call ABI instead of treating
+	// the substituted function name as an ordinary direct call.
+	bool indirect_function_call;
 	// Preserve the source-level typename disambiguator.  The spelling itself
 	// is intentionally normalized out of type names, but PA18 validation still
 	// needs to distinguish `typename T::type` from `T::type`.

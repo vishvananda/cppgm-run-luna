@@ -157,6 +157,7 @@ inline CPPGMAstNodePtr CloneNode(const CPPGMAstNodePtr& node)
 	result->materialize_object_address = node->materialize_object_address; result->has_deferred_constructor = node->has_deferred_constructor;
 	result->materialize_object_name = node->materialize_object_name;
 	result->inferred_type = node->inferred_type;
+	result->indirect_function_call = node->indirect_function_call;
 	result->explicit_typename = node->explicit_typename;
 	result->source_token_begin = node->source_token_begin; result->source_token_end = node->source_token_end;
 	result->template_primary = node->template_primary;
@@ -515,6 +516,7 @@ private:
 	map<string, PA19IntegralValue> constant_values_;
 	map<string, vector<PA19IntegralValue> > constant_arrays_; map<string, size_t> constant_type_sizes_, constant_type_alignments_;
 	map<string, PA19IntegralValue> active_integral_substitutions_;
+	set<string> active_function_pointer_substitutions_;
 	// During replay, the source class context remains dependent while its
 	// materialized class is being transformed.  Keep the concrete owner in
 	// typed state so an unqualified static member such as `_v` resolves to the
@@ -555,7 +557,11 @@ private:
 	map<string, vector<string> > specialization_names_by_base_; map<string, set<string> > specialization_name_sets_by_base_;
 	set<ClassSpecializationIdentity> instantiated_class_specializations_;
 	map<string, TemplateDefinition> explicit_function_specializations_;
+	map<const TemplateDefinition*, map<string, TemplateDefinition> >
+		explicit_function_specializations_by_primary_;
 	map<const CPPGMAstNode*, vector<string> > explicit_function_arguments_;
+	map<const CPPGMAstNode*, const TemplateDefinition*>
+		explicit_function_primary_definitions_;
 	set<string> extern_instantiation_keys_;
 	map<string, CPPGMAstNodePtr> extern_instantiation_declarations_;
 	map<string, set<string> > requested_nested_classes_;
@@ -797,15 +803,16 @@ private:
 				"template-parameter-clause");
 			item.template_template = nested_clause != CPPGMAstNodePtr();
 			if(item.template_template) item.template_parameters = Parameters(nested_clause);
-			if(!item.type && !parameter->children.empty()) {
-				item.non_type_type = NodeTypeSpelling(parameter->children[0]);
-				for(size_t child = 0; child < parameter->children.size(); ++child)
-					if(parameter->children[child] &&
-						(parameter->children[child]->kind == "declarator" ||
-						 parameter->children[child]->kind == "abstract-declarator"))
-						item.non_type_type += DeclaratorSuffix(parameter->children[child]);
-				item.non_type_type = CanonicalSpelling(item.non_type_type);
-			}
+				if(!item.type && !parameter->children.empty()) {
+					const CPPGMAstNodePtr declarator = parameter->children.size() > 1 ?
+						parameter->children[1] : CPPGMAstNodePtr();
+					// Function and pointer non-type parameters keep their nested
+					// declarator shape (`R (*)(Args...)`) for argument validation and
+					// the standard function-to-pointer adjustment.  Concatenating only
+					// the outer pointer suffix loses the inner declarator entirely.
+					item.non_type_type = CanonicalSpelling(DeclaratorTypeSpelling(
+						NodeTypeSpelling(parameter->children[0]), declarator));
+				}
 			result.push_back(item);
 		}
 		return result;
@@ -833,6 +840,10 @@ private:
 		for(size_t i = 0; i < node->children.size(); ++i)
 			CollectLexical(node->children[i], child_context, child_logical_context);
 	}
+	bool RegisterExplicitFunctionSpecialization(
+		const CPPGMAstNodePtr& node, const CPPGMAstNodePtr& declaration,
+		const string& declaration_spelling, const string& context,
+		TemplateDefinition* item);
 	void RegisterTemplate(const CPPGMAstNodePtr& node, const string& context,
 		bool nested_member_template = false)
 	{
@@ -935,94 +946,11 @@ private:
 		template_definitions_by_declaration_[declaration.get()] = item;
 		bool has_non_type_parameter = false; for(size_t parameter = 0; parameter < item.parameters.size(); ++parameter) if(!item.parameters[parameter].type && !item.parameters[parameter].template_template) has_non_type_parameter = true;
 		if(!item.class_template && !item.alias_template && !item.variable_template && has_non_type_parameter && declaration && (declaration->kind == "function-definition" || declaration->kind == "simple-declaration" || declaration->kind == "special-member-definition" || declaration->kind == "special-member-declaration")) template_function_signatures_.insert(declaration.get());
-		// `template<>` function declarations are explicit specializations, not
-		// overloads of the primary template.  Keep their concrete body in typed
-		// state so a later call can select it after normal template deduction.
 		if(item.parameters.empty() && !item.class_template &&
 			(declaration->kind == "function-definition" ||
-			 declaration->kind == "simple-declaration")) {
-			string specialization_base;
-			vector<string> specialization_arguments;
-			const size_t open = declaration_spelling.find('<');
-			string argument_text;
-			size_t begin = 0, close = string::npos;
-			if(open != string::npos && TemplateBase(declaration_spelling, open, &begin,
-					&specialization_base) && TemplateRange(declaration_spelling, open,
-					&argument_text, &close)) {
-				const string suffix = declaration_spelling.substr(close + 1);
-				if(suffix.compare(0, 2, "::") == 0)
-					specialization_base += suffix;
-				specialization_arguments = SplitTemplateArguments(argument_text);
-			}
-			else specialization_base = name;
-			const TemplateDefinition* primary = FindDefinition(specialization_base, context);
-			if(primary && !primary->class_template && !primary->parameters.empty()) {
-				if(specialization_arguments.empty()) {
-					const CPPGMAstNodePtr primary_declarator = FunctionDeclarator(primary->declaration);
-					const CPPGMAstNodePtr primary_parameters =
-						DescendantOfKind(primary_declarator, "parameter-clause");
-					const CPPGMAstNodePtr specialized_declarator = FunctionDeclarator(declaration);
-					const CPPGMAstNodePtr specialized_parameters =
-						DescendantOfKind(specialized_declarator, "parameter-clause");
-					set<string> parameter_names;
-					for(size_t parameter = 0; parameter < primary->parameters.size(); ++parameter)
-						if(!primary->parameters[parameter].name.empty()) parameter_names.insert(
-							primary->parameters[parameter].name);
-					map<string, string> inferred;
-					if(primary_parameters && specialized_parameters &&
-						primary_parameters->children.size() == specialized_parameters->children.size())
-						for(size_t parameter = 0; parameter < primary_parameters->children.size(); ++parameter) {
-							const CPPGMAstNodePtr primary_parameter = primary_parameters->children[parameter];
-							const CPPGMAstNodePtr specialized_parameter = specialized_parameters->children[parameter];
-							if(!primary_parameter || !specialized_parameter ||
-								!MatchTypePattern(ParameterTypeSpelling(primary_parameter),
-									ParameterTypeSpelling(specialized_parameter), parameter_names,
-									&inferred, context)) {
-								inferred.clear();
-								break;
-							}
-						}
-					if(!inferred.empty()) for(size_t parameter = 0;
-						parameter < primary->parameters.size(); ++parameter) {
-							map<string, string>::const_iterator found = inferred.find(
-								primary->parameters[parameter].name);
-							if(found == inferred.end()) { inferred.clear(); break; }
-							specialization_arguments.push_back(found->second);
-						}
-				}
-				if(specialization_arguments.size() == primary->parameters.size()) {
-					item.explicit_specialization = true;
-					item.name = primary->name;
-					item.owner = primary->owner;
-					item.lexical_owner = primary->lexical_owner;
-					item.qualified_name = primary->qualified_name;
-					item.parameters = primary->parameters; item.declaration = CloneNode(declaration); item.deleted = IsDeletedFunctionDeclaration(item.declaration); item.immediate_return_constraint = CollectImmediateReturnConstraint(item.declaration, &item.immediate_return_condition);
-					const CPPGMAstNodePtr primary_declarator = FunctionDeclarator(primary->declaration);
-					const CPPGMAstNodePtr specialized_declarator = FunctionDeclarator(declaration);
-					const CPPGMAstNodePtr primary_parameters =
-						DescendantOfKind(primary_declarator, "parameter-clause");
-					const CPPGMAstNodePtr specialized_parameters =
-						DescendantOfKind(specialized_declarator, "parameter-clause");
-					map<string, string> parameter_renames;
-					if(primary_parameters && specialized_parameters)
-						for(size_t parameter = 0; parameter < primary_parameters->children.size() &&
-							parameter < specialized_parameters->children.size(); ++parameter) {
-							const string primary_name = FirstIdentifierLocal(
-								primary_parameters->children[parameter]);
-							const string specialized_name = FirstIdentifierLocal(
-								specialized_parameters->children[parameter]);
-							if(!primary_name.empty() && !specialized_name.empty() &&
-								primary_name != specialized_name)
-								parameter_renames[specialized_name] = primary_name;
-						}
-					ReplaceAstIdentifiers(item.declaration, parameter_renames);
-					explicit_function_arguments_[declaration.get()] = specialization_arguments;
-					explicit_function_specializations_[PA18ExplicitSpecializationKey(
-						primary->qualified_name, specialization_arguments)] = item;
-					return;
-				}
-			}
-		}
+			 declaration->kind == "simple-declaration") &&
+			RegisterExplicitFunctionSpecialization(node, declaration,
+				declaration_spelling, context, &item)) return;
 		map<string, TemplateDefinition>::iterator prior = definitions_.find(item.qualified_name);
 		if(item.partial_specialization) {
 			// A partial specialization is selected from the primary only after

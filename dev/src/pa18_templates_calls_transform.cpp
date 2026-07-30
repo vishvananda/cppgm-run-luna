@@ -122,13 +122,20 @@ ExplicitCallSelection PA18TemplateExpander::SelectExplicitCallDefinition(
 							if(valid_explicit) {
 								bool prefer = !selected_overload;
 								if(selected_overload) {
-									const bool candidate_more = FunctionTemplateMoreSpecialized(
-										*overloads[overload], *selected_overload, context);
-									const bool selected_more = FunctionTemplateMoreSpecialized(
-										*selected_overload, *overloads[overload], context);
-									if(candidate_more != selected_more) prefer = candidate_more;
-									else prefer = overloads[overload]->parameters.size() >
-										selected_overload->parameters.size();
+							const bool candidate_more = FunctionTemplateMoreSpecialized(
+								*overloads[overload], *selected_overload, context);
+							const bool selected_more = FunctionTemplateMoreSpecialized(
+								*selected_overload, *overloads[overload], context);
+							if(candidate_more != selected_more) prefer = candidate_more;
+							else {
+								const bool candidate_definition = overloads[overload]->declaration &&
+									overloads[overload]->declaration->kind == "function-definition";
+								const bool selected_definition = selected_overload->declaration &&
+									selected_overload->declaration->kind == "function-definition";
+								prefer = candidate_definition != selected_definition ?
+									candidate_definition : overloads[overload]->parameters.size() >
+									selected_overload->parameters.size();
+							}
 								}
 								if(prefer) {
 									selected_overload = overloads[overload];
@@ -188,8 +195,19 @@ bool PA18TemplateExpander::TransformExplicitFunctionCall(
 				}
 				if(PreserveUnresolvedExplicitTemplateCall(input, result, explicit_args, context, explicit_substitutions, substitutions)) return true;
 				const TemplateDefinition* explicit_specialization =
-					FindExplicitFunctionSpecialization(base, explicit_args, context);
-				if(explicit_specialization) explicit_definition = explicit_specialization;
+					FindExplicitFunctionSpecialization(explicit_definition, explicit_args);
+				if(explicit_specialization) {
+					// Explicit function specializations are indexed by the primary and
+					// template arguments.  Overloaded primaries can share that key, so
+					// the specialization still has to be viable for the already selected
+					// function-parameter list before it replaces the overload candidate.
+					vector<string> specialization_arguments;
+					const bool specialization_viable = ValidateExplicitFunctionCandidate(*explicit_specialization,
+						explicit_deduction_input, context, substitutions, explicit_args,
+						&specialization_arguments);
+					if(specialization_viable)
+						explicit_definition = explicit_specialization;
+				}
 				vector<string> complete_args;
 				map<string, FunctionSignature> inferred_function_values;
 				bool has_parameter_pack = false;

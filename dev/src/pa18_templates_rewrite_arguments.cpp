@@ -219,6 +219,20 @@ bool PA18TemplateExpander::ResolvePointerOrReferenceArgument(
 	string declared_type = CanonicalSpelling(ReplaceIdentifiers(
 		parameter.non_type_type, substitutions));
 	declared_type = CanonicalSpelling(ResolveAlias(declared_type, context));
+	string function_result, function_qualifiers;
+	vector<string> function_parameters;
+	const bool direct_function_parameter = SplitDirectFunctionType(declared_type,
+		&function_result, &function_parameters, &function_qualifiers);
+	const bool function_pointer_parameter = SplitFunctionPointerType(declared_type,
+		&function_result, &function_parameters);
+	string source_function_result, source_function_qualifiers;
+	vector<string> source_function_parameters;
+	const bool source_direct_function_parameter = SplitDirectFunctionType(
+		CanonicalSpelling(parameter.non_type_type), &source_function_result,
+		&source_function_parameters, &source_function_qualifiers);
+	const bool source_function_pointer_parameter = SplitFunctionPointerType(
+		CanonicalSpelling(parameter.non_type_type), &source_function_result,
+		&source_function_parameters);
 	bool pointer_or_reference = false;
 	int angle = 0, parentheses = 0;
 	for(size_t position = 0; position < declared_type.size(); ++position) {
@@ -232,6 +246,12 @@ bool PA18TemplateExpander::ResolvePointerOrReferenceArgument(
 			break;
 		}
 	}
+	// A function non-type parameter is adjusted to a pointer type by the
+	// language, but its source spelling may still be either `R(Args...)` or
+	// `R (*)(Args...)`.  The pointer is nested in the declarator parentheses in
+	// the latter form, so the top-level scan above deliberately cannot find it.
+	if(source_direct_function_parameter || source_function_pointer_parameter)
+		pointer_or_reference = true;
 	if(!pointer_or_reference) return false;
 	const bool source_explicit_pointer = parameter.non_type_type.find('*') != string::npos ||
 		parameter.non_type_type.find('&') != string::npos;
@@ -247,9 +267,12 @@ bool PA18TemplateExpander::ResolvePointerOrReferenceArgument(
 		raw_shape.find("static_cast<") == 0 || raw_shape.find("reinterpret_cast<") == 0 ||
 		raw_shape.find("const_cast<") == 0 || raw_shape.find("dynamic_cast<") == 0 ||
 		raw_shape.find("*)") != string::npos;
+	const FunctionSignature* named_function = raw_identifier ?
+		FindFunctionSignature(raw_shape, context) : 0;
 	const bool raw_address = raw_address_expression || (raw_identifier &&
 		variable_types_.find(raw_shape) != variable_types_.end() &&
-		CanonicalSpelling(variable_types_.find(raw_shape)->second) != "bool");
+		CanonicalSpelling(variable_types_.find(raw_shape)->second) != "bool") ||
+		(function_pointer_parameter || direct_function_parameter) && named_function;
 	if(!source_explicit_pointer && !raw_address) return false;
 	string pointer_argument = raw_shape;
 	try {
@@ -267,6 +290,13 @@ bool PA18TemplateExpander::ResolvePointerOrReferenceArgument(
 		map<string, string>::const_iterator qualified = variable_qualified_names_.find(target);
 		if(qualified != variable_qualified_names_.end()) pointer_argument = "&" + qualified->second;
 	}
+	// The address operator belongs to the template argument spelling, but the
+	// instantiated call body names the adjusted function-pointer value.  Keep
+	// the callable identity in the AST and let PA18's typed call fact preserve
+	// the required indirect address/decay sequence in PA14.
+	if(pointer_argument.size() > 1 && pointer_argument[0] == '&' &&
+		FindFunctionSignature(pointer_argument.substr(1), context))
+		pointer_argument.erase(0, 1);
 	const bool null_pointer_constant = raw_shape == "0" || raw_shape == "nullptr" ||
 		raw_shape == "__nullptr";
 	const bool address_constant = raw_address_expression && !null_pointer_constant;

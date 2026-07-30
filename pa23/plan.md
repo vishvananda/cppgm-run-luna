@@ -1711,3 +1711,81 @@ with explicit template prefixes, function-pointer/non-type argument deduction,
 and member-template overload viability. Preserve the direct-function matching,
 fixed-arity ordering, and concrete owner-pack replay paths while validating the
 focused witnesses, full PA23, through-PA22, and file audit again.
+
+## Checkpoint 15 scope — 2026-07-30 (before implementation)
+
+### Remaining Work Map
+
+The live PA23 report remains **318/396**, with 46 status mismatches, 33 LowIR
+comparisons, and two reentrant static-query timeouts. The failures group into:
+
+- **Function-template deduction and overload viability:** explicit template
+  prefixes, function-pointer and non-type function arguments, function-type
+  parameter adjustment, member-template address/call selection, ADL, and
+  constructor/conversion candidates.
+- **Dependent owner qualification:** nested template-id partial deduction and
+  source-namespace dependent-base SFINAE still fail during replay.
+- **Typed values and deferred SFINAE:** non-type storage, `sizeof`, detector and
+  `enable_if` probes, extern/explicit replay, and fixed-point query termination.
+- **Specialization and LowIR materialization:** the 33 comparisons covering
+  explicit/extern replay, constructors, variable templates, and generated
+  declaration/body metadata and ordering.
+
+### Checkpoint Scope
+
+Implement the first shared function-template deduction increment: preserve
+explicitly supplied template arguments while deducing the remaining function
+parameters, apply function-parameter adjustment consistently for function and
+function-pointer arguments, and retain typed non-type function-pointer
+arguments when selecting a candidate. The focused scope covers
+`general/100-nontype-function-parameter-adjustment`,
+`general/100-explicit-function-specialization-overload-parameter-match`,
+`spec/100-function-template-nontype-function-pointer-call`,
+`spec/100-function-template-nontype-function-pointer-specialization-call`, and
+`spec/100-nontype-function-pointer-argument`. Validate these cases and the
+earlier function-type checkpoint before the full PA23 report; preserve all
+through-PA22 tests and the source audit.
+
+## Checkpoint 15 result — 2026-07-30
+
+The function-template deduction and explicit-specialization increment is
+complete:
+
+- Nested function and function-pointer non-type parameter declarators are
+  retained as typed parameter shapes, including function-to-pointer adjustment
+  during argument replay.
+- Explicit specialization registration matches the selected overload's
+  parameter pattern, prefers a definition over a forward declaration, and
+  keeps specialization lookup keyed by the selected primary.
+- Function-pointer non-type arguments record their indirect call fact and PA14
+  emits the corresponding address/decay path for indirect calls.
+
+The five PA23 focused witnesses and the PA19/PA21/PA22 regression witnesses
+all pass. The full PA23 report is **323/396**, five tests above the 318-test
+turn-start baseline; the residual failures remain grouped as dependent-owner
+qualification, deduction/conversion and overload viability, typed
+non-type/SFINAE state, and specialization/LowIR materialization. One
+reentrant static-query timeout remains in the current report. The required
+through-PA22 report passes **2100/2100**, and the PA23 file audit passes with
+13 existing nonfatal warnings.
+
+### Remaining Work Map
+
+- **Dependent owner qualification:** nested template-id partial deduction and
+  source-namespace dependent-base SFINAE still fail during replay.
+- **Function-template deduction and overload viability:** ADL, conversions,
+  constructors, member-template overloads, remaining explicit-prefix cases,
+  and the residual function-type/function-pointer deduction cases remain.
+- **Typed values and deferred SFINAE:** non-type storage, `sizeof`, detector
+  and `enable_if` probes, extern/explicit replay, and reentrant static-query
+  termination still need candidate-local typed state.
+- **Specialization and LowIR materialization:** the remaining comparisons cover
+  explicit/extern replay, constructors, variable templates, and generated
+  declaration/body metadata and ordering.
+
+### Next checkpoint group
+
+Take dependent owner qualification together with the adjacent nested
+template-id deduction and source-namespace base SFINAE witnesses. Preserve the
+new function-pointer specialization and indirect-call paths while validating
+the focused group, full PA23, through-PA22, and file audit again.

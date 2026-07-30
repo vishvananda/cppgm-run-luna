@@ -390,7 +390,14 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
 		node->explicit_specialization;
 	record->extern_template = record->extern_template || node->extern_instantiation;
 	record->object_root = record->object_root || node->explicit_instantiation;
-	if(node->explicit_instantiation || node->extern_instantiation) record->needed = true;
+	// An explicit function specialization is an ordinary definition with a
+	// concrete template identity.  It must remain an emission root even when
+	// the current translation unit does not call that overload; treating it as
+	// demand-driven drops the specialization from the LowIR surface.
+	if((node->explicit_specialization &&
+		(node->kind == "function-definition" ||
+		 node->kind == "special-member-definition")) ||
+		node->explicit_instantiation || node->extern_instantiation) record->needed = true;
 	record->weak_binding = record->template_instantiation && !record->extern_template;
 	record->inline_definition = record->inline_definition || HasInline(node) || facts.is_constexpr;
 	const bool out_of_class_definition = definition && is_member && member_owner &&

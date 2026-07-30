@@ -196,6 +196,22 @@
 
 	const TemplateDefinition* FindDefinition(string raw_name, const string& context) const;
 	const TemplateDefinition* FindExplicitFunctionSpecialization(
+		const TemplateDefinition* primary, const vector<string>& arguments) const
+	{
+		if(!primary || primary->class_template) return 0;
+		map<const TemplateDefinition*, map<string, TemplateDefinition> >::const_iterator
+			by_primary = explicit_function_specializations_by_primary_.find(primary);
+		if(by_primary != explicit_function_specializations_by_primary_.end()) {
+			map<string, TemplateDefinition>::const_iterator found = by_primary->second.find(
+				PA18ExplicitSpecializationKey(primary->qualified_name, arguments));
+			if(found != by_primary->second.end()) return &found->second;
+		}
+		map<string, TemplateDefinition>::const_iterator fallback =
+			explicit_function_specializations_.find(
+				PA18ExplicitSpecializationKey(primary->qualified_name, arguments));
+		return fallback == explicit_function_specializations_.end() ? 0 : &fallback->second;
+	}
+	const TemplateDefinition* FindExplicitFunctionSpecialization(
 		const string& raw_name, const vector<string>& arguments,
 		const string& context) const
 	{

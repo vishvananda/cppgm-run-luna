@@ -562,10 +562,30 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
     } else if(choice.direct) {
       if(!function_record) throw logic_error("missing direct function record");
       callee = "@" + function_record->symbol;
-    } else {
-      Value callee_value = EmitValue(callee_node, scope);
-      callee = callee_value.operand;
-      signature << " as (";
+	} else {
+	  Value callee_value = EmitValue(callee_node, scope);
+	  callee = callee_value.operand;
+	  // A named function used through a non-type function-pointer parameter is
+	  // still a function designator at this boundary.  Materialize the standard
+	  // function-to-pointer conversion before the indirect call; local function
+	  // references already carry their decay in EmitIdentifier and are left
+	  // unchanged.
+	  if(callee_node && callee_node->kind == "id-expression" &&
+		callee_value.function) {
+		const vector<Binding*> bindings = Lookup(callee_node->value, scope);
+		bool named_function = false;
+		for(size_t binding = 0; binding < bindings.size(); ++binding)
+			if(bindings[binding] && bindings[binding]->kind == BIND_FUNCTION) {
+				named_function = true;
+				break;
+			}
+		if(named_function) {
+			const string decay = new_temp();
+			AddInstruction(decay + " = unary decay ptr " + callee);
+			callee = decay;
+		}
+	  }
+	  signature << " as (";
       for(size_t i = 0; i < choice.function->parameters.size(); ++i) {
         if(i != 0) signature << ", ";
         const TypePtr parameter = choice.function->parameters[i];

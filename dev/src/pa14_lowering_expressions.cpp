@@ -732,9 +732,20 @@ PA14Lowerer::Value PA14Lowerer::EmitBinary(const CPPGMAstNodePtr& node, Scope* s
       value.operand = EmitPointerOffset(node, scope);
       return value;
     }
-    TypePtr common = CommonType(left_type, right_type, op);
-    Value left_raw = EmitValue(node->children[0], scope, common);
-    Value right_raw = EmitValue(node->children[1], scope, common);
+	TypePtr common = CommonType(left_type, right_type, op);
+	const auto is_conditional_operand = [](CPPGMAstNodePtr value) {
+		while(value && value->kind == "parenthesized-expression" &&
+			!value->children.empty()) value = value->children[0];
+		return value && value->kind == "conditional-expression";
+	};
+	// The conditional expression computes its own arm/common type before the
+	// surrounding arithmetic conversion.  Passing the binary common type into
+	// it would widen its temporary slot (for example `true ? 1 : 0` to i64)
+	// instead of converting the completed i32 value at this binary boundary.
+	Value left_raw = EmitValue(node->children[0], scope,
+		is_conditional_operand(node->children[0]) ? TypePtr() : common);
+	Value right_raw = EmitValue(node->children[1], scope,
+		is_conditional_operand(node->children[1]) ? TypePtr() : common);
     Value left = left_raw;
     Value right = right_raw;
     if(left_raw.known_constant && is_integral_type(left_raw.type) &&

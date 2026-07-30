@@ -922,8 +922,13 @@ bool PA18TemplateExpander::TransformExplicitSpecialization(
 			close + 1 < raw_name.size() && raw_name.compare(close + 1, 2, "::") == 0)
 			base += raw_name.substr(close + 1);
 	}
-	const TemplateDefinition* specialization = FindExplicitFunctionSpecialization(
-		base, explicit_arguments->second, context);
+	const TemplateDefinition* primary = 0;
+	map<const CPPGMAstNode*, const TemplateDefinition*>::const_iterator primary_found =
+		explicit_function_primary_definitions_.find(input->children[1].get());
+	if(primary_found != explicit_function_primary_definitions_.end()) primary = primary_found->second;
+	const TemplateDefinition* specialization = primary ?
+		FindExplicitFunctionSpecialization(primary, explicit_arguments->second) :
+		FindExplicitFunctionSpecialization(base, explicit_arguments->second, context);
 	if(!specialization) return false;
 	string owner_local;
 	string owner_base = specialization->owner;
