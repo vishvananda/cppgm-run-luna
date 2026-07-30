@@ -1393,3 +1393,45 @@ with the empty-pack, nested-partial, array-qualified, member-alias, and source
 namespace fixtures.  Carry the resolved typed owner into candidate-local
 SFINAE and alias/value replay, then validate the full PA23 report before
 moving to deduction/conversion or LowIR-only groups.
+
+## Checkpoint 11 audit result — 2026-07-30
+
+### Audit outcome
+
+The checkpoint audit found and fixed the only checkpoint-level architecture and
+performance blocker: `FindClassMemberType` was walking the complete
+specialization and declaration maps to recover a materialized owner by short
+name.  The final implementation uses a registration-time typed specialization
+name set and the existing typed class-path index, preserving deterministic
+selection while removing the repeated full-registry scans and per-query vector
+sorting/copying.  No compiler phase, output path, acceptance check, or timeout
+behavior was weakened.  The complete inventory is recorded in the matching
+Checkpoint 11 audit section in `pa23/audit.md`.
+
+### Validation and refreshed Remaining Work Map
+
+- Full PA23: **306/396** passed; **90** remain — 55 ordinary status failures,
+  33 LowIR comparisons, and 2 timeout witnesses.  This is at the turn-start
+  baseline and preserves the checkpoint improvement from 304/396.
+- Through PA22: **2100/2100** passed.
+- PA23 file audit: passed with 13 existing non-fatal warnings; the header
+  remains at the 1200-line limit.
+- PA21 inline-namespace and PA22 hidden-friend regression witnesses: passed.
+
+The authoritative complete current-PA failure set is the 90-entry inventory
+in `pa23/audit.md`: the 55 status cases cover direct/using owner lookup,
+nested/member replay, typed aliases and values, deduction, conversions, and
+extern/function-pointer calls; the 33 LowIR cases cover specialization,
+constructor/member emission, non-type storage, and generated declaration
+metadata; the two reentrant static-query cases remain fixed-point stress
+witnesses.  No unresolved audit, shortcut, regression, or performance issue
+is being deferred as a separate problem.
+
+### Next substantial checkpoint group
+
+Bundle qualified owner/member replay with candidate-local deferred SFINAE, then
+carry the same typed owner identity through variable-template, `sizeof`, alias,
+and pack consumers.  This is the largest connected status cluster; deduction/
+conversion and specialization/constructor LowIR groups follow it.  Keep the
+two reentrant cases as fixed-point witnesses, without timeout-specific
+acceptance logic.

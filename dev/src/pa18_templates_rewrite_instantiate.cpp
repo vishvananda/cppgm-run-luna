@@ -1363,6 +1363,7 @@ void PA18TemplateExpander::RegisterGeneratedSpecialization(
 		LastComponent(definition.qualified_name)];
 	if(find(indexed_names.begin(), indexed_names.end(), local_name) == indexed_names.end())
 		indexed_names.push_back(local_name);
+	specialization_name_sets_by_base_[LastComponent(definition.qualified_name)].insert(local_name);
 	const string generated_owner = definition.lexical_owner.empty() ?
 		definition.owner : definition.lexical_owner;
 	if(class_contexts_.find(generated_owner) != class_contexts_.end()) return;

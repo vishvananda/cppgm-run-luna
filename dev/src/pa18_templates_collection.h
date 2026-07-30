@@ -552,7 +552,7 @@ private:
 	map<string, vector<string> > function_signatures_by_name_;
 	map<string, vector<FunctionSignature> > function_overloads_; set<const CPPGMAstNode*> template_function_signatures_; map<string, string> specialization_bases_;
 	map<string, vector<string> > specialization_arguments_;
-	map<string, vector<string> > specialization_names_by_base_;
+	map<string, vector<string> > specialization_names_by_base_; map<string, set<string> > specialization_name_sets_by_base_;
 	set<ClassSpecializationIdentity> instantiated_class_specializations_;
 	map<string, TemplateDefinition> explicit_function_specializations_;
 	map<const CPPGMAstNode*, vector<string> > explicit_function_arguments_;

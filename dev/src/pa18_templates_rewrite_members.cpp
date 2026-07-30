@@ -354,34 +354,47 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 			for(size_t argument = 0; argument < requested_arguments.size(); ++argument)
 				requested_arguments[argument] = CollapseRepeatedQualifiedPath(CollapseRepeatedQualifier(
 					NormalizeTypeArgument(RestoreSpecializationSpelling(requested_arguments[argument]))));
-			for(map<string, string>::const_iterator generated = specialization_bases_.begin();
-				generated != specialization_bases_.end(); ++generated) {
-				string generated_source = generated->second;
-				const size_t generated_source_open = generated_source.find('<');
-				if(generated_source_open != string::npos) generated_source.erase(generated_source_open);
-				if(generated_source != source_template_base &&
-					(LastComponent(generated_source) != LastComponent(source_template_base) ||
-						PrefixComponent(generated_source) != PrefixComponent(source_template_base))) continue;
-				map<string, vector<string> >::const_iterator concrete_arguments =
-					specialization_arguments_.find(generated->first);
-				if(concrete_arguments == specialization_arguments_.end() ||
-					concrete_arguments->second.size() < requested_arguments.size()) continue;
-				bool same_arguments = true;
-				for(size_t argument = 0; argument < requested_arguments.size(); ++argument) {
-					if(CollapseRepeatedQualifiedPath(CollapseRepeatedQualifier(NormalizeTypeArgument(
-						RestoreSpecializationSpelling(concrete_arguments->second[argument])))) !=
-						requested_arguments[argument]) {
-						same_arguments = false; break;
+			map<string, set<string> >::const_iterator generated_names =
+				specialization_name_sets_by_base_.find(LastComponent(source_template_base));
+			if(generated_names != specialization_name_sets_by_base_.end()) {
+				for(set<string>::const_iterator candidate = generated_names->second.begin();
+					candidate != generated_names->second.end(); ++candidate) {
+					const string& generated_name = *candidate;
+					map<string, string>::const_iterator generated =
+						specialization_bases_.find(generated_name);
+					if(generated == specialization_bases_.end()) continue;
+					string generated_source = generated->second;
+					const size_t generated_source_open = generated_source.find('<');
+					if(generated_source_open != string::npos) generated_source.erase(generated_source_open);
+					if(generated_source != source_template_base &&
+						(LastComponent(generated_source) != LastComponent(source_template_base) ||
+							PrefixComponent(generated_source) != PrefixComponent(source_template_base))) continue;
+					map<string, vector<string> >::const_iterator concrete_arguments =
+						specialization_arguments_.find(generated_name);
+					if(concrete_arguments == specialization_arguments_.end() ||
+						concrete_arguments->second.size() < requested_arguments.size()) continue;
+					bool same_arguments = true;
+					for(size_t argument = 0; argument < requested_arguments.size(); ++argument) {
+						if(CollapseRepeatedQualifiedPath(CollapseRepeatedQualifier(NormalizeTypeArgument(
+							RestoreSpecializationSpelling(concrete_arguments->second[argument])))) !=
+							requested_arguments[argument]) {
+							same_arguments = false; break;
+						}
 					}
+					if(!same_arguments) continue;
+					map<string, vector<string> >::const_iterator indexed_paths =
+						class_paths_by_name_.find(generated_name);
+					if(indexed_paths != class_paths_by_name_.end()) {
+						string selected_path;
+						for(size_t path_index = 0; path_index < indexed_paths->second.size(); ++path_index) {
+							const string& path = indexed_paths->second[path_index];
+							if(class_declarations_.find(path) != class_declarations_.end() &&
+								(selected_path.empty() || path < selected_path)) selected_path = path;
+						}
+						if(!selected_path.empty()) class_key = selected_path;
+					}
+					if(class_declarations_.find(class_key) != class_declarations_.end()) break;
 				}
-				if(!same_arguments) continue;
-				for(map<string, CPPGMAstNodePtr>::const_iterator declaration =
-					class_declarations_.begin(); declaration != class_declarations_.end(); ++declaration)
-					if(LastComponent(declaration->first) == generated->first) {
-						class_key = declaration->first;
-						break;
-					}
-				if(class_declarations_.find(class_key) != class_declarations_.end()) break;
 			}
 			if(class_declarations_.find(class_key) == class_declarations_.end()) {
 				const string collapsed_source = CollapseRepeatedQualifiedPath(
