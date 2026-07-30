@@ -633,7 +633,8 @@ int PA18TemplateExpander::MatchClassTemplateBasePattern(const string& pattern,
 	const string& context, bool class_pattern, vector<string>* actual_parts) const
 {
 	const CPPGMAstNodePtr actual_declaration = FindClassDeclaration(actual, context);
-	if(actual_declaration) for(size_t child = 0; child < actual_declaration->children.size(); ++child) {
+	if(!class_pattern && actual_declaration) for(size_t child = 0;
+		child < actual_declaration->children.size(); ++child) {
 		const CPPGMAstNodePtr clause = actual_declaration->children[child];
 		if(!clause || clause->kind != "base-clause") continue;
 		for(size_t base_index = 0; base_index < clause->children.size(); ++base_index) {
@@ -651,9 +652,11 @@ int PA18TemplateExpander::MatchClassTemplateBasePattern(const string& pattern,
 		base == specialization_bases_.end()) return 0;
 	const string pattern_base = LastComponent(pattern.substr(0, pattern.find('<')));
 	if(parameter_names.find(pattern_base) == parameter_names.end() &&
-		LastComponent(base->second) != pattern_base)
-		return MatchGeneratedBaseTypePattern(pattern, actual, pattern_base,
-			parameter_names, inferred, context, class_pattern) > 0 ? 1 : 0;
+		LastComponent(base->second) != pattern_base) {
+		if(!class_pattern && MatchGeneratedBaseTypePattern(pattern, actual, pattern_base,
+			parameter_names, inferred, context, class_pattern) > 0) return 1;
+		return 0;
+	}
 	if(parameter_names.find(pattern_base) != parameter_names.end())
 		(*inferred)[pattern_base] = base->second;
 	if(pattern_parts.empty()) {
@@ -723,7 +726,7 @@ int PA18TemplateExpander::MatchActualTemplateBasePattern(const string& pattern,
 	if(pattern_base != actual_base) {
 		const TemplateDefinition* actual_definition = FindDefinition(
 			actual.substr(0, actual_open), context);
-		if(actual_definition && actual_definition->class_template &&
+		if(!class_pattern && actual_definition && actual_definition->class_template &&
 			actual_definition->declaration) {
 			const vector<string> concrete_parts = SplitTemplateArguments(actual_arguments);
 			map<string, string> class_substitutions;
@@ -745,7 +748,7 @@ int PA18TemplateExpander::MatchActualTemplateBasePattern(const string& pattern,
 				}
 			}
 		}
-		if(MatchGeneratedBaseTypePattern(pattern, actual, pattern_base,
+		if(!class_pattern && MatchGeneratedBaseTypePattern(pattern, actual, pattern_base,
 			parameter_names, inferred, context, class_pattern) > 0) return 1;
 		return 0;
 	}

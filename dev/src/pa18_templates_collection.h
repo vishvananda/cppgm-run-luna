@@ -567,8 +567,10 @@ private:
 	map<string, set<string> > requested_nested_classes_;
 	set<string> materialized_nested_classes_, materialized_member_definitions_, deferred_class_instantiations_; size_t defer_type_only_class_definitions_ = 0; size_t active_template_declaration_depth_ = 0; set<string> active_template_member_types_;
 	mutable set<string> active_member_type_lookups_,
+		active_alias_resolutions_,
 		active_function_results_,
 		active_class_template_selections_, active_class_template_selection_families_,
+		active_class_template_selection_probes_,
 		active_class_specialization_matches_;
 	struct ActiveFunctionResultScope { PA18TemplateExpander* owner; string key; ActiveFunctionResultScope(PA18TemplateExpander* value, const string& name) : owner(value), key(name) {} ~ActiveFunctionResultScope() { owner->active_function_results_.erase(key); } };
 	map<string, FunctionSignature> active_function_substitutions_;
@@ -612,6 +614,7 @@ private:
 	CPPGMAstNodePtr FunctionDeclarator(const CPPGMAstNodePtr& declaration) const; CPPGMAstNodePtr FunctionParameterDefaultNode(const TemplateDefinition& definition, size_t parameter) const; bool FunctionParameterHasDefault(const TemplateDefinition& definition, size_t parameter) const; bool RestoreFunctionParameterDefaults(const TemplateDefinition& definition, TemplateDefinition* result) const;
 	bool IsBuiltinArithmeticType(string raw) const; bool IsKnownTypeSpelling(string raw, const string& context) const; bool HasUnavailableGeneratedMemberType(string raw, const string& context, const map<string, string>& substitutions) const; bool GeneratedNodeHasUnavailableMemberType(const CPPGMAstNodePtr& node, const string& context, const map<string, string>& substitutions) const;
 	bool HasDeferredDependentClassMember(const TemplateDefinition& definition, const string& context, const map<string, string>& substitutions) const;
+	bool HasDeferredTypeMember(const TemplateDefinition& definition, const string& context, const map<string, string>& substitutions) const;
 	bool HasUnresolvedTemplateParameter(string raw, const string& context, const map<string, string>& substitutions) const;
 	string CommonBuiltinArithmeticType(const string& left, const string& right) const;
 	bool InferOperatorResult(const string& operation, const string& left, const string& right, const string& context, string* result) const;

@@ -1283,10 +1283,28 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 					}
 				}
 			}
-			if(base_definition && base_is_partial_specialization && !base_arguments.empty())
-				base_lookup = base_spelling;
-			else if(base_definition) base_lookup = base_definition->qualified_name;
-			if(FindClassMemberType(base_lookup, member, base_substitutions,
+				if(base_definition && base_is_partial_specialization && !base_arguments.empty())
+					base_lookup = base_spelling;
+				else if(base_definition) base_lookup = base_definition->qualified_name;
+				if(!base_definition) {
+					// Ordinary typedefs used as dependent bases (for example
+					// `mpl::false_`) are not TemplateDefinitions.  Resolve the alias
+					// in the source namespace before giving up inherited member lookup;
+					// otherwise `is_same<T, U>::type` remains an unqualified dependent
+					// chain even though its bool_ base exposes `type`.
+					const string qualified_base = QualifyTypeArgument(base_spelling,
+						declaration_context, declaration_context, true);
+					const string resolved_base = CanonicalSpelling(ResolveAlias(
+						qualified_base, declaration_context));
+					if(!resolved_base.empty() && resolved_base != qualified_base &&
+						resolved_base != base_spelling &&
+						FindClassMemberType(resolved_base, member, base_substitutions,
+							declaration_context, result, active, aliases_only)) {
+						active->erase(active_key);
+						return true;
+					}
+				}
+				if(FindClassMemberType(base_lookup, member, base_substitutions,
 				declaration_context, result, active, aliases_only)) {
 				active->erase(active_key);
 				return true;

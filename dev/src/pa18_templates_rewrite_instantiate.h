@@ -206,7 +206,11 @@
 			parameter < parent_args.size(); ++parameter)
 			if(!parent.parameters[parameter].name.empty() &&
 				CanonicalSpelling(parent_args[parameter]) ==
-				parent.parameters[parameter].name) {
+				parent.parameters[parameter].name &&
+				class_contexts_.find(CanonicalSpelling(parent_args[parameter])) ==
+					class_contexts_.end() &&
+				named_type_contexts_.find(CanonicalSpelling(parent_args[parameter])) ==
+					named_type_contexts_.end()) {
 				return;
 			}
 		for(size_t argument = 0; argument < parent_args.size(); ++argument) {

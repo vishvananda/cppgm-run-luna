@@ -7,39 +7,78 @@ const TemplateDefinition* PA18TemplateExpander::SelectClassTemplateDefinition(
 		const string& context) const
 	{
 		if(!primary) return primary;
+		if(!context.empty() && (context[0] == '!' || context[0] == '~' ||
+			context[0] == '+' || context[0] == '-')) {
+			string lookup_context = context;
+			while(!lookup_context.empty() && (lookup_context[0] == '!' ||
+				lookup_context[0] == '~' || lookup_context[0] == '+' ||
+				lookup_context[0] == '-')) lookup_context.erase(lookup_context.begin());
+			if(lookup_context != context)
+				return SelectClassTemplateDefinition(primary, arguments, lookup_context);
+		}
 		if(!primary->class_template && !primary->alias_template &&
 			!primary->variable_template) return primary;
 		const auto dependent_argument = [this, &context](const string& raw) {
-			for(size_t position = 0; position < raw.size();) {
-				if(!IsIdentifierCharacter(raw[position])) {
+		const string dependency_spelling = CanonicalSpelling(raw);
+			for(size_t position = 0; position < dependency_spelling.size();) {
+				if(!IsIdentifierCharacter(dependency_spelling[position])) {
 					++position;
 					continue;
 				}
 				const size_t begin = position;
-				while(position < raw.size() && IsIdentifierCharacter(raw[position])) ++position;
-				const string word = raw.substr(begin, position - begin);
+				while(position < dependency_spelling.size() &&
+					IsIdentifierCharacter(dependency_spelling[position])) ++position;
+				const string word = dependency_spelling.substr(begin, position - begin);
 				if(!word.empty() && isdigit(static_cast<unsigned char>(word[0]))) continue;
+				// The internal `<unnamed>` component is a concrete namespace marker,
+				// not an unresolved template identifier.  Treating its payload as
+				// dependent prevents class partial-specialization selection for source
+				// types that cross an anonymous namespace boundary.
+				const bool anonymous_component = begin > 0 && dependency_spelling[begin - 1] == '<' &&
+					position < dependency_spelling.size() && dependency_spelling[position] == '>';
+				if(anonymous_component) continue;
 				size_t next = position;
-				while(next < raw.size() && isspace(static_cast<unsigned char>(raw[next]))) ++next;
-				if(next + 1 < raw.size() && raw.compare(next, 2, "::") == 0) continue;
+				while(next < dependency_spelling.size() &&
+					isspace(static_cast<unsigned char>(dependency_spelling[next]))) ++next;
+				if(next + 1 < dependency_spelling.size() &&
+					dependency_spelling.compare(next, 2, "::") == 0) continue;
 				// A qualified component can be a concrete static member of a known
 				// class template (`trait<T>::value`).  It is not itself a dependent
 				// template argument when the typed member index already contains that
 				// member.  Keep unknown qualified members dependent so an unresolved
 				// probe still routes through substitution failure.
 				bool known_qualified_member = false;
-				if(begin >= 2 && raw.compare(begin - 2, 2, "::") == 0) {
-					const string owner = Trim(raw.substr(0, begin - 2));
-					if(!owner.empty() &&
-						IsKnownTypeSpelling(owner, context)) {
-						string member_type;
-						set<string> active_members;
-						known_qualified_member = FindClassMemberType(owner, word,
-							map<string, string>(), context, &member_type, &active_members,
-							false) && !member_type.empty();
+				if(begin >= 2 && dependency_spelling.compare(begin - 2, 2, "::") == 0) {
+					const string owner = Trim(dependency_spelling.substr(0, begin - 2));
+					if(!owner.empty()) {
+						const string canonical_owner = CanonicalSpelling(owner);
+						map<string, set<string> >::const_iterator indexed_members =
+							static_members_by_class_.find(canonical_owner);
+						known_qualified_member = indexed_members != static_members_by_class_.end() &&
+							indexed_members->second.find(word) != indexed_members->second.end();
+						const string qualified_member = CanonicalSpelling(owner + "::" + word);
+						known_qualified_member = known_qualified_member ||
+							class_declarations_.find(qualified_member) != class_declarations_.end() ||
+							constant_values_.find(qualified_member) != constant_values_.end();
 						if(!known_qualified_member) {
-							const CPPGMAstNodePtr owner_declaration = FindClassDeclaration(
-								owner, context);
+							string logical_owner = owner;
+							const string anonymous = "::<unnamed>";
+							for(size_t anonymous_at = logical_owner.find(anonymous);
+								anonymous_at != string::npos; ) {
+								logical_owner.erase(anonymous_at, anonymous.size());
+								anonymous_at = logical_owner.find(anonymous, anonymous_at);
+							}
+							const string logical_member = CanonicalSpelling(logical_owner + "::" + word);
+							known_qualified_member = class_contexts_.find(logical_member) !=
+								class_contexts_.end() || class_declarations_.find(logical_member) !=
+								class_declarations_.end() || named_type_contexts_.find(logical_member) !=
+								named_type_contexts_.end();
+						}
+						if(!known_qualified_member) {
+							map<string, CPPGMAstNodePtr>::const_iterator owner_it =
+								class_declarations_.find(canonical_owner);
+							const CPPGMAstNodePtr owner_declaration = owner_it ==
+								class_declarations_.end() ? CPPGMAstNodePtr() : owner_it->second;
 							const function<bool(const CPPGMAstNodePtr&)> declares_member =
 								[&](const CPPGMAstNodePtr& node) {
 								if(!node) return false;
@@ -77,10 +116,15 @@ const TemplateDefinition* PA18TemplateExpander::SelectClassTemplateDefinition(
 					type_aliases_.find(word) != type_aliases_.end() ||
 					known_qualified_member ||
 					specialization_bases_.find(word) != specialization_bases_.end();
-				if(!known) return true;
-			}
-			return false;
-		};
+				const string anonymous_member_marker = "::<unnamed>::";
+				const bool anonymous_member = begin >= anonymous_member_marker.size() &&
+					dependency_spelling.compare(begin - anonymous_member_marker.size(),
+						anonymous_member_marker.size(), anonymous_member_marker) == 0;
+				const bool concrete_anonymous_member = known || anonymous_member;
+			if(!concrete_anonymous_member) return true;
+		}
+		return false;
+	};
 		for(size_t argument = 0; argument < arguments.size(); ++argument)
 			if(dependent_argument(arguments[argument])) return primary;
 		vector<string> normalized_arguments;
@@ -88,8 +132,7 @@ const TemplateDefinition* PA18TemplateExpander::SelectClassTemplateDefinition(
 		for(size_t argument = 0; argument < arguments.size(); ++argument) {
 			string normalized = NormalizeTypeArgument(RestoreSpecializationSpelling(
 				arguments[argument]));
-			normalized_arguments.push_back(CollapseRepeatedQualifiedPath(
-				CollapseRepeatedQualifier(normalized)));
+			normalized_arguments.push_back(normalized);
 		}
 		// A selection may recursively ask for the same semantic family while a
 		// partial specialization is being matched.  That is substitution failure,
@@ -190,6 +233,8 @@ const TemplateDefinition* PA18TemplateExpander::SelectClassTemplateDefinition(
 		if(candidates.empty()) return primary;
 		vector<string> matching_arguments = arguments;
 		for(size_t argument = 0; argument < matching_arguments.size(); ++argument) {
+			matching_arguments[argument] = NormalizeTypeArgument(
+				matching_arguments[argument]);
 			// A template-template argument is a template entity, not the type
 			// produced by resolving an alias body.  Preserve its identity while
 			// matching a class partial specialization; resolving `pointer_member`

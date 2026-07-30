@@ -1789,3 +1789,74 @@ Take dependent owner qualification together with the adjacent nested
 template-id deduction and source-namespace base SFINAE witnesses. Preserve the
 new function-pointer specialization and indirect-call paths while validating
 the focused group, full PA23, through-PA22, and file audit again.
+
+## Checkpoint 16 scope — 2026-07-30 (before implementation)
+
+### Remaining Work Map
+
+The reproduced PA23 report is **323/396**, with 73 failures. They remain
+grouped into:
+
+- **Class partial matching and dependent owners:** class partial-specialization
+  matching still reuses function-style derived-to-base deduction; nested
+  template-id replay and source-namespace dependent bases lose the concrete
+  owner or qualified helper type.
+- **Function-template deduction and overload viability:** ADL, conversions,
+  constructors, member-template overloads, explicit-prefix cases, and residual
+  function/function-pointer deduction remain.
+- **Typed values and deferred SFINAE:** non-type storage, `sizeof`, detector
+  and `enable_if` probes, extern/explicit replay, and the two reentrant
+  static-query timeouts still need candidate-local typed state.
+- **Specialization and LowIR materialization:** remaining comparisons cover
+  explicit/extern replay, constructors, variable templates, and generated
+  declaration/body metadata and ordering.
+
+### Checkpoint Scope
+
+Implement the dependent-owner/class-partial increment: keep derived-to-base
+deduction available for ordinary function argument matching but disable it when
+matching a class partial-specialization template-id, then preserve the source
+namespace and concrete nested owner while replaying dependent bases and nested
+template-id arguments. The focused witnesses are
+`general/200-class-partial-specialization-no-derived-base-deduction`,
+`general/200-nested-template-id-partial-specialization-deduction`,
+`general/500-source-namespace-base-sfinae-chain`, and
+`general/100-dependent-qualified-nontype-base-argument`. Preserve the passing
+out-of-class dependent-owner and inherited-parameter witnesses, then validate
+the focused group, full PA23, through-PA22, and file audit.
+
+## Checkpoint 16 result — 2026-07-30
+
+The dependent-owner increment is complete. Class partial-specialization
+matching no longer applies derived-base deduction, while ordinary function
+matching retains it. Anonymous namespace scopes now reuse their typed source
+identity across predeclaration and replay; dependent base/member lookup keeps
+the source owner; and nested type arguments are qualified only when the
+anonymous namespace path requires it. Deferred class replay preserves a shell
+when a dependent `type` member is still unavailable, while concrete member
+definitions and user-provided constructor behavior remain materialized.
+
+Validation passed for all six focused witnesses (**6/6**), the PA19 relational
+regression, and the required through-PA22 report (**2100/2100**). The full
+PA23 report is **325/396**, above the turn-start baseline of 306/396. The file
+audit passes with 13 nonfatal warnings.
+
+### Remaining Work Map
+
+- **Function-template deduction and overload viability:** ADL, conversions,
+  constructors, member-template overloads, explicit-prefix cases, and the
+  remaining function/function-pointer deduction cases.
+- **Typed values and deferred SFINAE:** non-type storage, `sizeof`, detector
+  and `enable_if` probes, extern/explicit replay, and the two reentrant
+  static-query timeout cases.
+- **Specialization and LowIR materialization:** explicit/extern replay,
+  constructors, variable templates, and generated declaration/body metadata
+  and ordering.
+
+### Next checkpoint group
+
+Take the typed-value/deferred-SFINAE witnesses as the next coherent group,
+starting with non-type storage and dependent `sizeof`/detector evaluation.
+Keep the anonymous-owner and class-partial replay paths covered by the six
+focused witnesses, then rerun the PA23 report, through-PA22 report, and file
+audit.

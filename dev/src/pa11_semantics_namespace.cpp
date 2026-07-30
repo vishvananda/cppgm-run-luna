@@ -17,10 +17,26 @@ void Analyzer::ProcessNamespace(const CPPGMAstNodePtr& node, Scope* scope)
 		scope->namespace_aliases.find(name) != scope->namespace_aliases.end()))
 		throw logic_error("namespace conflicts with declaration");
 	Scope* namespace_scope = 0;
+	bool reused_anonymous_scope = false;
+	map<const CPPGMAstNode*, Scope*>::iterator predeclared =
+		namespace_scopes_.find(node.get());
+	if (predeclared != namespace_scopes_.end()) {
+		namespace_scope = predeclared->second;
+		reused_anonymous_scope = namespace_scope != 0;
+	}
+	if (node->synthetic_namespace_forward && name == "<unnamed>")
+		for (size_t child = scope->children.size(); child > 0; --child)
+			if (scope->children[child - 1] &&
+				scope->children[child - 1]->kind == SCOPE_NAMESPACE &&
+				scope->children[child - 1]->name == "<unnamed>") {
+				namespace_scope = scope->children[child - 1].get();
+				reused_anonymous_scope = true;
+				break;
+			}
 	map<string, Scope*>::iterator found = scope->namespace_children.find(name);
-	if (name != "<unnamed>" && found != scope->namespace_children.end())
+	if (!namespace_scope && name != "<unnamed>" && found != scope->namespace_children.end())
 		namespace_scope = found->second;
-	else {
+	if (!namespace_scope) {
 		namespace_scope = NewChild(scope, SCOPE_NAMESPACE, name);
 		if (name != "<unnamed>") scope->namespace_children[name] = namespace_scope;
 	}
@@ -28,18 +44,25 @@ void Analyzer::ProcessNamespace(const CPPGMAstNodePtr& node, Scope* scope)
 		// Keep anonymous-namespace identity in the typed scope path.  The
 		// enclosing namespace still exposes the scope through its using path,
 		// while symbol lowering needs the stable internal namespace component.
-		size_t occurrence = 0;
-		for (size_t child = 0; child < scope->children.size(); ++child)
-			if (scope->children[child] &&
-				scope->children[child]->kind == SCOPE_NAMESPACE &&
-				scope->children[child]->name == "<unnamed>") ++occurrence;
-		ostringstream suffix;
-		suffix << occurrence;
-		const string component = "_GLOBAL__N_" + suffix.str();
-		namespace_scope->qualified_prefix = scope->qualified_prefix.empty() ?
-			component : scope->qualified_prefix + "::" + component;
+		if (!reused_anonymous_scope) {
+			size_t occurrence = 0;
+			for (size_t child = 0; child < scope->children.size(); ++child)
+				if (scope->children[child] &&
+					scope->children[child]->kind == SCOPE_NAMESPACE &&
+					scope->children[child]->name == "<unnamed>") ++occurrence;
+			ostringstream suffix;
+			suffix << occurrence;
+			const string component = "_GLOBAL__N_" + suffix.str();
+			namespace_scope->qualified_prefix = scope->qualified_prefix.empty() ?
+				component : scope->qualified_prefix + "::" + component;
+		}
 	}
-	if (name == "<unnamed>") scope->using_directives.push_back(namespace_scope);
+	if (name == "<unnamed>") {
+		bool already_visible = false;
+		for (size_t using_index = 0; using_index < scope->using_directives.size(); ++using_index)
+			if (scope->using_directives[using_index] == namespace_scope) already_visible = true;
+		if (!already_visible) scope->using_directives.push_back(namespace_scope);
+	}
 	namespace_scopes_[node.get()] = namespace_scope;
 	namespace_scope->inline_namespace = HasKind(node, "inline");
 	if (namespace_scope->inline_namespace) {

@@ -182,6 +182,7 @@ public:
 			}
 			Scope* namespace_scope = (i == 0 && !absolute) ?
 				FindNamespace(current_scope, part) : FindNamespaceDirect(current_scope, part);
+			if (!namespace_scope && part == "<unnamed>" && current_scope) for(size_t u = 0; u < current_scope->using_directives.size(); ++u) if(current_scope->using_directives[u] && current_scope->using_directives[u]->name == part) { namespace_scope = current_scope->using_directives[u]; break; }
 			if (namespace_scope)
 			{
 				current_scope = namespace_scope;

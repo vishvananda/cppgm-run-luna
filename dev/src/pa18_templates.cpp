@@ -1450,7 +1450,12 @@ void PA18TemplateExpander::CollectVariables(const CPPGMAstNodePtr& node,
 			if(!item || item->children.empty()) continue;
 			const string name = FirstIdentifierLocal(item->children[0]);
 			if(!name.empty() && !type.empty()) {
-				const string declared_type = DeclaratorTypeSpelling(type, item->children[0]);
+				string declared_type = DeclaratorTypeSpelling(type, item->children[0]);
+				if(context.find("<unnamed>") != string::npos) {
+					const string qualified_declared_type = QualifyTypeArgument(
+						declared_type, context, context, true);
+					if(!qualified_declared_type.empty()) declared_type = qualified_declared_type;
+				}
 				variable_types_[name] = declared_type;
 				// Local declarations share names across functions.  Keep the
 				// function-scoped fact as well as the translation-unit fallback so

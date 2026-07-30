@@ -36,6 +36,16 @@ string CollapseRepeatedQualifier(string raw)
 string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& context,
 	const string& template_owner, bool preserve_nested_namespace) const
 {
+	if(!context.empty() && (context[0] == '!' || context[0] == '~' ||
+		context[0] == '+' || context[0] == '-')) {
+		string lookup_context = context;
+		while(!lookup_context.empty() && (lookup_context[0] == '!' ||
+			lookup_context[0] == '~' || lookup_context[0] == '+' ||
+			lookup_context[0] == '-')) lookup_context.erase(lookup_context.begin());
+		if(lookup_context != context)
+			return QualifyTypeArgument(spelling, lookup_context, template_owner,
+				preserve_nested_namespace);
+	}
 	spelling = CanonicalSpelling(spelling);
 	while(spelling.compare(0, 8, "typename") == 0 &&
 		(spelling.size() == 8 || isspace(static_cast<unsigned char>(spelling[8]))))
@@ -188,6 +198,31 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 		indexed_type_path(spelling, template_owner, context, &indexed_spelling)) {
 		const size_t open = spelling.find('<');
 		spelling = indexed_spelling + (open == string::npos ? string() : spelling.substr(open));
+	}
+	if(spelling.find("::") == string::npos) {
+		map<string, vector<string> >::const_iterator indexed_name =
+			class_paths_by_name_.find(spelling);
+		string anonymous_candidate;
+		if(indexed_name != class_paths_by_name_.end())
+			for(size_t path = 0; path < indexed_name->second.size(); ++path) {
+				const string& candidate = indexed_name->second[path];
+				const size_t separator = candidate.rfind("::");
+				const string owner = separator == string::npos ? string() :
+					candidate.substr(0, separator);
+				if(owner.find("<unnamed>") == string::npos) continue;
+				map<string, string>::const_iterator logical =
+					lexical_namespace_logical_.find(owner);
+				if(logical == lexical_namespace_logical_.end()) continue;
+				const bool visible = context == logical->second ||
+					(context.size() > logical->second.size() &&
+					 context.compare(0, logical->second.size(), logical->second) == 0 &&
+					 context[logical->second.size()] == ':');
+				if(!visible) continue;
+				if(!anonymous_candidate.empty() && anonymous_candidate != candidate)
+					anonymous_candidate.clear();
+				else anonymous_candidate = candidate;
+			}
+		if(!anonymous_candidate.empty()) spelling = anonymous_candidate;
 	}
 	const string promoted_local = PromotedLocalClass(spelling, context);
 	if(!promoted_local.empty()) spelling = promoted_local;
@@ -357,7 +392,24 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 		if(!inherited.empty()) spelling = inherited;
 	}
 	}
-	const string result = CollapseRepeatedQualifier(CanonicalSpelling(prefix + spelling + suffix));
+	string result = CollapseRepeatedQualifier(CanonicalSpelling(prefix + spelling + suffix));
+	const size_t nested_open = result.find('<');
+	if((context.find("<unnamed>") != string::npos ||
+		result.find("<unnamed>") != string::npos) && nested_open != string::npos) {
+		string nested_arguments;
+		size_t nested_close = string::npos;
+		if(TemplateRange(result, nested_open, &nested_arguments, &nested_close)) {
+			const vector<string> nested_parts = SplitTemplateArguments(nested_arguments);
+			string qualified_result = result.substr(0, nested_open) + "<";
+			for(size_t nested = 0; nested < nested_parts.size(); ++nested) {
+				if(nested) qualified_result += ",";
+				qualified_result += QualifyTypeArgument(nested_parts[nested], context,
+					template_owner, preserve_nested_namespace);
+			}
+			qualified_result += ">" + result.substr(nested_close + 1);
+			result = CollapseRepeatedQualifier(CanonicalSpelling(qualified_result));
+		}
+	}
 	// Template replay can derive the same concrete class through an alias or
 	// through the generated owner name.  Reuse an existing specialization when
 	// its primary and typed template arguments are identical; otherwise PA14

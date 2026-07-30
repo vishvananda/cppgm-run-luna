@@ -28,7 +28,7 @@ void Analyzer::PredeclareGeneratedScopes(const CPPGMAstNodePtr& tree)
 		}
 		if (node->kind == "namespace-definition") {
 			const string name = node->value;
-			if (name == "<unnamed>") return;
+			if (name == "<unnamed>" && !has_generated) return;
 			if (node->synthetic_namespace_forward) {
 				Binding* class_binding = scope->local(name);
 				if (class_binding && class_binding->kind == BIND_TYPE &&
@@ -40,13 +40,42 @@ void Analyzer::PredeclareGeneratedScopes(const CPPGMAstNodePtr& tree)
 				}
 			}
 			Scope* namespace_scope = 0;
-			map<string, Scope*>::iterator found = scope->namespace_children.find(name);
-			if (found != scope->namespace_children.end()) namespace_scope = found->second;
-			else {
+			map<const CPPGMAstNode*, Scope*>::iterator predeclared =
+				namespace_scopes_.find(node.get());
+			if (predeclared != namespace_scopes_.end()) namespace_scope = predeclared->second;
+			if (!namespace_scope) {
+				map<string, Scope*>::iterator found = scope->namespace_children.find(name);
+				if (found != scope->namespace_children.end()) namespace_scope = found->second;
+			}
+			if (!namespace_scope) {
 				namespace_scope = NewChild(scope, SCOPE_NAMESPACE, name);
-				namespace_scope->qualified_prefix = scope->qualified_prefix.empty() ?
+				if (name == "<unnamed>") {
+					size_t occurrence = 0;
+					for (size_t child = 0; child < scope->children.size(); ++child)
+						if (scope->children[child] &&
+							scope->children[child]->kind == SCOPE_NAMESPACE &&
+							scope->children[child]->name == "<unnamed>") ++occurrence;
+					bool synthetic_anonymous = false;
+					for (map<const CPPGMAstNode*, Scope*>::const_iterator known =
+						namespace_scopes_.begin(); known != namespace_scopes_.end(); ++known)
+						if(known->second && known->second->parent == scope && known->second->name ==
+							"<unnamed>" && known->first && known->first->synthetic_namespace_forward)
+							synthetic_anonymous = true;
+					ostringstream suffix;
+					suffix << (synthetic_anonymous && occurrence > 0 ? occurrence - 1 : occurrence);
+					const string component = "_GLOBAL__N_" + suffix.str();
+					namespace_scope->qualified_prefix = scope->qualified_prefix.empty() ?
+						component : scope->qualified_prefix + "::" + component;
+				} else namespace_scope->qualified_prefix = scope->qualified_prefix.empty() ?
 					name : scope->qualified_prefix + "::" + name;
-				scope->namespace_children[name] = namespace_scope;
+				if (name != "<unnamed>") scope->namespace_children[name] = namespace_scope;
+			}
+			namespace_scopes_[node.get()] = namespace_scope;
+			if (name == "<unnamed>") {
+				bool visible = false;
+				for (size_t using_index = 0; using_index < scope->using_directives.size(); ++using_index)
+					if (scope->using_directives[using_index] == namespace_scope) visible = true;
+				if (!visible) scope->using_directives.push_back(namespace_scope);
 			}
 			for (size_t i = 0; i < node->children.size(); ++i)
 				if (node->children[i]->kind != "inline")

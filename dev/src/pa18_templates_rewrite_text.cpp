@@ -155,12 +155,12 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 		while(end < raw.size() && IsIdentifierCharacter(raw[end])) ++end;
 			if(end == at + token.size()) break;
 			const string member = raw.substr(at + token.size(), end - at - token.size());
-			string member_type;
-			set<string> member_active;
-			FindClassMemberType(current->second, member, substitutions, context,
-				&member_type, &member_active, true);
-			if(member_type.empty()) member_type = TemplateMemberType(*definition,
-				arguments->second, member, context);
+				string member_type;
+				set<string> member_active;
+				FindClassMemberType(current->second, member, substitutions, context,
+					&member_type, &member_active, true);
+				if(member_type.empty()) member_type = TemplateMemberType(*definition,
+					arguments->second, member, context);
 			if(member_type.empty()) {
 				bool nested_class = false;
 				if(definition->declaration) for(size_t child = 0;
@@ -172,15 +172,18 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 					nested_class = true;
 					break;
 				}
-				if(nested_class) {
+					if(nested_class) {
 					requested_nested_classes_[definition->qualified_name].insert(member);
 					requested_nested_classes_[LastComponent(definition->qualified_name)].insert(member);
 					InstantiateNestedClass(*definition, arguments->second,
 						current->second, member, context);
 				}
-				break;
-			}
-			size_t replacement_begin = at;
+					break;
+				}
+				if(!member_type.empty()) { string member_context = context; map<string, string>::const_iterator owner = specialization_bases_.find(LastComponent(current->second));
+					if(owner != specialization_bases_.end() && !PrefixComponent(owner->second).empty()) member_context = PrefixComponent(owner->second);
+					member_type = QualifyTypeArgument(member_type, member_context, member_context, true); }
+				size_t replacement_begin = at;
 			size_t word_begin = at;
 			while(word_begin > 0 && isspace(static_cast<unsigned char>(raw[word_begin - 1]))) --word_begin;
 			if(word_begin >= 8 && raw.compare(word_begin - 8, 8, "typename") == 0 &&
@@ -629,8 +632,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			}
 		for(size_t i = 0; i < args.size(); ++i) {
 			const string source_argument = args[i];
-			const string substituted_source_argument = CanonicalSpelling(
-				ReplaceIdentifiersPreservingPackSizes(source_argument, substitutions));
+			const string substituted_source_argument = CanonicalSpelling(CollapseRepeatedQualifiedPath(CollapseRepeatedQualifier(ReplaceIdentifiersPreservingPackSizes(source_argument, substitutions))));
 			// A self-containing template-id replacement has no finite textual
 			// rewrite.  Drop only that binding for this nested rewrite; all semantic
 			// deduction facts remain in the caller's typed substitution map.
@@ -648,8 +650,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				}
 				protected_substitutions.erase(substitution->first);
 			}
-					const string rewrite_source = argument_substitutions == &substitutions ?
-						args[i] : substituted_source_argument;
+				const string rewrite_source = CanonicalSpelling(CollapseRepeatedQualifiedPath(CollapseRepeatedQualifier(argument_substitutions == &substitutions ? args[i] : substituted_source_argument)));
 					if(i < definition->parameters.size() &&
 						definition->parameters[i].template_template) {
 						string normalized;
@@ -683,8 +684,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 									template_pack_names_.find(pack_name) !=
 										template_pack_names_.end()) {
 									deferred_pack_argument = true;
-									break;
-								}
+					break; }
 							}
 						}
 						bool unresolved_scope = !HasReplayContext(substitutions);
@@ -852,7 +852,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 					const bool defer_nested_class_argument = defer_class_definition ||
 						(i < definition->parameters.size() && definition->parameters[i].type &&
 							source_argument != substituted_source_argument);
-						args[i] = NormalizeTypeArgument(RewriteText(rewrite_source, context,
+					args[i] = NormalizeTypeArgument(RewriteText(rewrite_source, context,
 							*argument_substitutions, 0, true, true, defer_nested_class_argument));
 					// The first rewrite is a typed substitution boundary.  If a source
 					// parameter was materialized to a class whose spelling is also an
@@ -908,8 +908,8 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 					function_pointer_alias = function_pointer_alias_spelling(substituted_source_argument);
 				if(!function_pointer_alias.empty()) args[i] = function_pointer_alias;
 				else args[i] = ResolveAlias(args[i], context);
-					args[i] = NormalizeTypeArgument(RewriteText(rewrite_source, context,
-						*argument_substitutions, 0, true, true, defer_nested_class_argument));
+						args[i] = NormalizeTypeArgument(RewriteText(rewrite_source, context,
+							*argument_substitutions, 0, true, true, defer_nested_class_argument));
 					if(function_pointer_alias.empty()) args[i] = ResolveAlias(args[i], context);
 					else args[i] = function_pointer_alias;
 					args[i] = QualifyTypeArgument(args[i], context, definition->owner);

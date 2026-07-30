@@ -387,6 +387,13 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 	for(; pattern_index < definition.specialization_pattern.size(); ++pattern_index) {
 		string pattern = CanonicalSpelling(
 			definition.specialization_pattern[pattern_index]);
+		// An explicit class specialization is stored in the same pattern index as
+		// a partial specialization, but its empty template-parameter clause means
+		// that each unqualified pattern component is a concrete type.  Resolve it
+		// in the specialization's namespace before comparing it with the fully
+		// qualified use-site argument (`tag` versus `meta::mpl::tag`).
+		if(definition.specialization_parameters.empty())
+			pattern = QualifyTypeArgument(pattern, definition.owner, definition.owner, true);
 		set<string> active_aliases;
 		pattern = ExpandAliasPattern(pattern, context, &active_aliases, true);
 		// A class partial specialization's dependent second argument is an
@@ -484,6 +491,8 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 		}
 		if(argument_index >= arguments.size()) return false;
 		string actual = CanonicalSpelling(arguments[argument_index++]);
+		if(definition.specialization_parameters.empty())
+			actual = QualifyTypeArgument(actual, definition.owner, definition.owner, true);
 		// A replay pass can append a source argument list to an already
 		// materialized generated class name.  Use the typed specialization
 		// registry to recover the nominal generated identity before matching;
@@ -510,6 +519,10 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 				++actual_word;
 			const string actual_name = actual.substr(actual_begin,
 				actual_word - actual_begin);
+			const bool anonymous_component = actual_begin > 0 &&
+				actual[actual_begin - 1] == '<' && actual_word < actual.size() &&
+				actual[actual_word] == '>';
+			if(anonymous_component) continue;
 			const bool qualified_member_name = actual_begin >= 2 &&
 				actual.compare(actual_begin - 2, 2, "::") == 0;
 			if(!actual_name.empty() && isdigit(static_cast<unsigned char>(actual_name[0])))

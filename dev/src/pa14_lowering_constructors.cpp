@@ -404,7 +404,39 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
         }
       }
     }
-    if(base && !delegating && !explicitly_initialized_base && HasConstructor(base) &&
+    // A generated specialization can retain a dependent-base marker even
+    // after its concrete class body has been replayed.  In that case the
+    // base lookup was intentionally deferred; emitting an implicit base
+    // constructor call here would manufacture a synthetic base-entry
+    // function from an unresolved template path.  Explicit base
+    // mem-initializers are still handled below once their target is known.
+	const bool defer_dependent_base = base && owner->dependent_base_lookup &&
+		!HasUserProvidedConstructor(base);
+	if(defer_dependent_base) {
+      // Keep definitions for concrete class subobjects in a deferred base's
+      // replayed body.  The base call itself is intentionally postponed, but
+      // an explicitly defined member constructor is still part of the
+      // materialized template closure (and is observable in the object
+      // surface even when no call can be formed yet).
+      for(size_t member = 0; member < base->class_members.size(); ++member) {
+        const ClassMemberInfo& member_fact = base->class_members[member];
+        if(member_fact.is_static || !member_fact.type) continue;
+        TypePtr member_type = type_value(member_fact.type);
+        while(member_type && member_type->kind == TYPE_ARRAY)
+          member_type = type_value(member_type->child);
+        if(!member_type || member_type->kind != TYPE_CLASS) continue;
+        const vector<Binding*> member_constructors = MemberBindings(
+          member_type, LastComponent(member_type->name));
+        for(size_t candidate = 0; candidate < member_constructors.size(); ++candidate) {
+          FunctionRecord* record = RecordForBinding(member_constructors[candidate]);
+          if(record && record->constructor && record->definition &&
+             !record->implicit_constructor)
+            record->needed = true;
+        }
+      }
+    }
+	if(base && !defer_dependent_base && !delegating &&
+       !explicitly_initialized_base && HasConstructor(base) &&
        (!IsEmptyBaseStorage(base) || HasDefaultConstructionEffects(base) ||
         HasUserProvidedConstructor(base))) {
       const string this_address = EmitValue(this_node, scope).operand;
