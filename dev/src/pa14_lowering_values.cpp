@@ -836,6 +836,12 @@ Binding* PA14Lowerer::FindConversionOperator(const TypePtr& raw_source,
     TypePtr source = type_value(raw_source);
     TypePtr target = type_value(raw_target);
     if(!source || source->kind != TYPE_CLASS || !target) return 0;
+    // An object is already in the target class for an identity conversion.
+    // Looking through its conversion operators in that case is both
+    // semantically wrong (the copy/move/reference path is preferred) and can
+    // recurse when an operator's result is the same class.
+    if(target->kind == TYPE_CLASS && PA12SameType(source, target, true))
+      return 0;
     Binding* best = 0;
     int best_rank = 1000000;
     const vector<Binding*> candidates = ConversionBindings(source);
@@ -853,6 +859,13 @@ Binding* PA14Lowerer::FindConversionOperator(const TypePtr& raw_source,
         if(PA12SameType(result_value, target, false)) standard = 0;
         else if(PA12SameType(result_value, target, true)) standard = 1;
         else if(IsDerivedFrom(result_value, target)) standard = BaseDistance(result_value, target);
+      } else if(result_value && result_value->kind == TYPE_CLASS) {
+        // A conversion function already supplies the one user-defined
+        // conversion allowed in an implicit conversion sequence.  Ranking a
+        // class result against a scalar/pointer target by calling
+        // ConversionRank again would permit a second conversion function and
+        // can recurse indefinitely for conversion-function templates.
+        standard = -1;
       } else if(result_value && result_value->kind != TYPE_CLASS && target->kind == TYPE_CLASS) {
         // A conversion function followed by a converting constructor would
         // require two user-defined conversions and is not viable here.
@@ -1023,6 +1036,24 @@ int PA14Lowerer::ConversionRank(const ExprInfo& source, const TypePtr& target) c
     TypePtr source_value = type_value(source.type);
     TypePtr target_value = type_value(target);
     if(!source_value || !target_value) return -1;
+    // The recursive conversion hazard is specific to class values.  The
+    // generic PA12 type relation deliberately ignores nested cv for some
+    // callers, but that is not an identity conversion for pointer types
+    // (e.g. `int**` to `const int**`).
+    const bool same_class_value = source_value->kind == TYPE_CLASS &&
+      target_value->kind == TYPE_CLASS &&
+      PA12SameType(source_value, target_value, true);
+    if(same_class_value && target->kind != TYPE_LVALUE_REFERENCE &&
+       target->kind != TYPE_RVALUE_REFERENCE)
+      return 0;
+    if(same_class_value && target->kind == TYPE_LVALUE_REFERENCE &&
+       source.category == "lvalue" &&
+       (!source_value->is_const || target_value->is_const))
+      return 0;
+    if(same_class_value && target->kind == TYPE_RVALUE_REFERENCE &&
+       source.category != "lvalue" &&
+       (!source_value->is_const || target_value->is_const))
+      return 0;
     if(target->kind == TYPE_RVALUE_REFERENCE && source.category == "lvalue" &&
        is_arithmetic_type(source_value) && is_arithmetic_type(target_value)) return 2;
     if(source_value->kind == TYPE_CLASS) {

@@ -3943,3 +3943,137 @@ owner/candidate cases and both fixed-point fixtures as regressions.  Validation
 for this audit is `make build` (pass), the three focused witnesses (3/3), the
 required through-PA22 report (2100/2100), the PA23 report (354/396), and the
 PA23 file audit (pass with 13 advisory warnings).
+
+## Checkpoint 29 scope — 2026-07-31 (before implementation)
+
+### Current PA23 failure inventory
+
+The live baseline is **354/396**, with **19 status failures** and **23 LowIR
+comparisons**.  The complete residual set is grouped by shared behavior:
+
+- **Conversion and dependent-result execution (6 status):**
+  `general/400-static-cast-rvalue-ref-skips-conversion-operator.t`,
+  `general/500-dependent-qualified-member-template-result-bool.t`,
+  `general/500-dependent-function-type-pack-expansion-ctor-init.t`,
+  `general/500-mp11-append-alias-template-sfinae.t`,
+  `general/500-reentrant-static-query-callable-enable-if-cache.t`,
+  `general/500-reentrant-static-query-enable-if-partial.t`.
+- **Owner and specialization replay (11 status):**
+  `general/100-default-nontype-qualified-function-lookup.t`,
+  `general/100-selected-specialization-special-member-body.t`,
+  `general/300-dependent-alias-helper-partial-specialization.t`,
+  `general/400-anonymous-namespace-partial-specialization.t`,
+  `general/400-current-specialization-display-name-member-alias.t`,
+  `general/400-member-template-result-pack-preserves-nested-function-pointer-owner.t`,
+  `general/500-nontype-alias-reinstantiation-structural-state.t`,
+  `general/500-recursive-qualified-member-template-bool-arg.t`,
+  `spec/100-local-member-call-constructor-template-instantiation.t`,
+  `spec/400-defaulted-nested-class-argument-partial-specialization.t`,
+  `spec/400-explicit-type-arg-dependent-qualified-member-template-id.t`.
+- **Qualified member-id and alias-pack replay (2 status):**
+  `spec/400-qualified-member-template-id-bool-constant.t` and
+  `spec/500-conditional-alias-index-sequence-member-template-call.t`.
+  The direct compiler-crash/deep-recursion witnesses in the first group are
+  `general/400-static-cast-rvalue-ref-skips-conversion-operator.t` and
+  `general/500-dependent-qualified-member-template-result-bool.t`.
+- **Typed value and LowIR materialization (23 comparisons):**
+  `general/100-current-specialization-member-body-cast-compare.t`,
+  `general/100-dependent-bool-partial-static-value-storage.t`,
+  `general/100-inherited-using-alias-out-of-class-specialization-member.t`,
+  `general/100-intermediate-type-transform-value-nontype.t`,
+  `general/100-local-qualified-argument-replay.t`,
+  `general/100-sizeof-call-result-nontype-template-argument.t`,
+  `general/200-adl-explicit-template-id-call.t`,
+  `general/200-function-template-reference-cv-alias-partial-order.t`,
+  `general/200-function-template-template-parameter-deduction.t`,
+  `general/200-member-operator-template-reference-pattern-partial-order.t`,
+  `general/300-current-specialization-constructor-template-canonical-owner.t`,
+  `general/300-dependent-bool-base-trait-type-argument.t`,
+  `general/400-explicit-function-template-type-arg-drops-nontype-overload.t`,
+  `general/400-member-variable-template-leaf-sfinae.t`,
+  `general/400-nonmember-template-compound-assignment-const-lhs.t`,
+  `general/400-out-of-class-partial-member-template-owner-parameter-alias.t`,
+  `general/400-variable-template-specializations.t`,
+  `spec/100-out-of-class-conversion-operator-definition.t`,
+  `spec/100-partial-specialization-member-primary-param-name.t`,
+  `spec/100-sizeof-union-type-nttp.t`,
+  `spec/400-class-template-nttp-scope-value.t`,
+  `spec/400-defaulted-template-arg-partial-base-completion.t`,
+  `spec/400-template-template-member-alias-owner-shadow.t`.
+
+The two fixed-point query fixtures are retained as regressions while this
+increment is validated; they are not silently removed from the report.
+
+### Remaining Work Map
+
+- **Conversion ranking:** prevent recursive class-to-class conversion lookup
+  when source and target already have the same typed value, and preserve the
+  value category of `static_cast<T&&>`.
+- **Typed non-type values:** preserve signedness, storage, and selected
+  specialization facts through integral evaluation and lowering.
+- **Dependent result and owner replay:** continue with alias/pack substitution,
+  qualified member-id lookup, and fixed-point query identity after the typed
+  boundary is stable.
+- **LowIR identity/materialization:** repair function-owner metadata, call
+  materialization, `sizeof`, variable-template storage, and generated-body
+  ordering without changing earlier PA behavior.
+
+### Checkpoint Scope
+
+Implement and validate the first typed conversion boundary as one coherent
+increment: exact typed class values must have an identity conversion rank before
+user-defined conversion lookup, and reference casts must bind directly to the
+source object.  This specifically covers the crash/regression fixture
+`general/400-static-cast-rvalue-ref-skips-conversion-operator.t` and the related
+class-conversion LowIR boundary in
+`spec/100-out-of-class-conversion-operator-definition.t`; it also establishes
+the rank invariant needed by the six dependent-result/SFINAE cases above.
+After this increment, rerun the two focused fixtures, the complete PA23 report,
+the through-PA22 report, and the file audit.  The next checkpoint will take the
+typed non-type/storage subgroup if the conversion increment passes.
+
+### Checkpoint 29 result
+
+The typed conversion boundary is complete for this checkpoint.  `ConversionRank`
+now gives exact class values their direct identity/reference path before asking
+for a user-defined conversion, and `FindConversionOperator` rejects a class
+result followed by a second scalar/pointer conversion.  This prevents the
+conversion-function-template recursion while preserving the standard pointer
+qualification rules by limiting the identity fast path to class values.
+
+Validation:
+
+- focused rvalue-reference witness: **pass**; it now emits the direct
+  `Holder` move-constructor path and does not invoke `operator U()`;
+- focused out-of-class conversion witness: **compile/status pass**; its
+  remaining LowIR difference is the separate empty-object conversion-call
+  elision/materialization behavior;
+- `make test-report ACTIVE_TEST_REPORT_PAS='pa23'`: **355/396**, improving the
+  354/396 turn-start baseline by one test;
+- required through-PA22 report: **2100/2100**;
+- `perl scripts/cppgm_file_audit.pl --stage pa23 --paths dev/src`: **pass** with
+  13 pre-existing advisory warnings.
+
+### Remaining Work Map after Checkpoint 29
+
+- **Empty-object conversion materialization:** decide whether the side-effect
+  analysis can safely elide the empty `sink<int>` conversion call in
+  `spec/100-out-of-class-conversion-operator-definition.t`; retain constructor
+  and conversion side effects for nontrivial bodies.
+- **Typed non-type/storage (23 LowIR):** signedness and storage demand,
+  `sizeof`, variable-template specialization, explicit type arguments, owner
+  metadata, generated-body ordering, and operator lowering remain.
+- **Owner/specialization replay (11 status):** qualified/defaulted,
+  current/inherited/anonymous/local owner, partial-specialization, and member
+  template replay remain grouped as in the inventory above.
+- **Dependent result/SFINAE and query fixed points (8 status):** aliases,
+  packs, dependent booleans, MP11/recursive queries, qualified member ids, and
+  stable reentrant query identity remain.
+
+### Next Checkpoint 30 group
+
+Take the typed non-type/storage subgroup first, beginning with static integral
+value demand and signedness at the LowIR boundary.  Keep the passing rvalue
+conversion witness and the through-PA22 report as regression gates, and retain
+the empty-object conversion fixture as a materialization regression while
+testing the next group.
