@@ -159,6 +159,32 @@ ExplicitCallSelection PA18TemplateExpander::SelectExplicitCallDefinition(
 	return state;
 }
 
+bool PA18TemplateExpander::ResolveExplicitTemplateCallResult(
+	const CPPGMAstNodePtr& input, const CPPGMAstNodePtr& input_callee,
+	const string& context, const map<string, string>& substitutions,
+	string* result)
+{
+	if(!result) return false;
+	ExplicitCallSelection state = SelectExplicitCallDefinition(input, input_callee,
+		context, substitutions);
+	if(!state.valid || !state.definition || !state.deduction_input) return false;
+	const vector<string> explicit_arguments = SplitTemplateArguments(state.argument_text);
+	vector<string> complete_arguments;
+	try {
+		if(!InferFunctionArguments(*state.definition, state.deduction_input,
+			&complete_arguments, substitutions, context, &explicit_arguments) ||
+			!ValidateTemplateDefaults(*state.definition, complete_arguments, context,
+				substitutions)) return false;
+		const string resolved = FunctionResultType(*state.definition,
+			complete_arguments, context, &substitutions);
+		if(resolved.empty()) return false;
+		*result = NormalizeTypeArgument(resolved);
+		return !result->empty();
+	} catch(const PA18SubstitutionFailure&) {
+		return false;
+	}
+}
+
 bool PA18TemplateExpander::TransformExplicitFunctionCall(
 	const CPPGMAstNodePtr& input, const CPPGMAstNodePtr& input_callee,
 	const string& context, const map<string, string>& substitutions,

@@ -89,47 +89,16 @@ bool PA18TemplateExpander::InferCallIdentifierArgument(
 	}
 	// Before the enclosing explicit call is transformed, a nested explicit
 	// template-id still has its source spelling (`declval<int>`) and therefore
-	// has no materialized `template_primary` fact yet.  Its return type is still
-	// a typed source fact: use the selected function template's declaration to
-	// infer it for the enclosing call's deduction probe.  This is especially
-	// important for trailing-return expressions, where transforming the outer
-	// call must first deduce an `Initiation` parameter from `declval<T>()`.
-	const string raw_callee = RemoveMarker(expression->children[0]->value);
-	const size_t raw_open = raw_callee.find('<');
-	if(raw_open != string::npos) {
-		string raw_base, raw_arguments;
-		size_t raw_begin = 0, raw_close = string::npos;
-		if(TemplateBase(raw_callee, raw_open, &raw_begin, &raw_base) &&
-			TemplateRange(raw_callee, raw_open, &raw_arguments, &raw_close)) {
-			const vector<string> explicit_arguments = SplitTemplateArguments(raw_arguments);
-			const vector<const TemplateDefinition*> definitions = FindFunctionDefinitions(
-				raw_base, context);
-			for(size_t candidate = 0; candidate < definitions.size(); ++candidate) {
-				const TemplateDefinition* definition = definitions[candidate];
-				if(!definition || definition->class_template || !definition->declaration ||
-					definition->parameters.size() != explicit_arguments.size() ||
-					definition->declaration->children.empty()) continue;
-				map<string, string> return_substitutions = substitutions;
-				for(size_t parameter = 0; parameter < definition->parameters.size(); ++parameter)
-					if(!definition->parameters[parameter].name.empty())
-						return_substitutions[definition->parameters[parameter].name] =
-							explicit_arguments[parameter];
-				string return_type = NodeTypeSpelling(definition->declaration->children[0]) +
-					ReturnDeclaratorSuffix(FunctionDeclarator(definition->declaration));
-				const string return_context = definition->owner.empty() ? context :
-					definition->owner;
-				try {
-					return_type = CanonicalSpelling(ResolveAlias(const_cast<PA18TemplateExpander*>(this)->RewriteText(
-						return_type, return_context, return_substitutions, 0), return_context));
-				} catch(const PA18SubstitutionFailure&) {
-					continue;
-				}
-				if(!return_type.empty()) {
-					*result = return_type;
-					return true;
-				}
-			}
-		}
+	// has no materialized `template_primary` fact yet.  Resolve that call through
+	// the same typed candidate-selection and completed-argument path used by
+	// normal call transformation; the enclosing deduction probe then sees its
+	// real trailing return type rather than a first-match spelling guess.
+	string explicit_result;
+	PA18TemplateExpander* replay = const_cast<PA18TemplateExpander*>(this);
+	if(replay->ResolveExplicitTemplateCallResult(expression,
+		expression->children[0], context, substitutions, &explicit_result)) {
+		*result = explicit_result;
+		return true;
 	}
 	const string member = LastComponent(expression->children[0]->value);
 	string owner;

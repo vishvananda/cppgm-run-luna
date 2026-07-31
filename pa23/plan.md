@@ -3902,5 +3902,40 @@ perl scripts/cppgm_file_audit.pl --stage pa23 --paths dev/src
                                      PASS — 13 advisory warnings
 ```
 
-The working tree contains only the five compiler-source changes and this
-running plan; no tests or reference fixtures were changed.
+At the implementation checkpoint, the working tree contained only the five
+compiler-source changes and this running plan; no tests or reference fixtures
+were changed.
+
+## Checkpoint 28 audit refresh — 2026-07-31
+
+The checkpoint audit found and fixed one architectural defect in the nested
+explicit-template result fallback.  The fallback had selected the first
+same-arity definition and rewritten its raw return spelling.  It now shares
+`SelectExplicitCallDefinition`, typed function-argument completion, default
+validation, and `FunctionResultType` with ordinary explicit-call
+materialization.  This removes downstream string recovery and keeps overload,
+pack, default, and substitution behavior on the existing semantic path.
+
+The audit preserved the Checkpoint 28 result at **354/396**, with the complete
+current-PA set unchanged at **19 status failures** and **23 LowIR comparisons**.
+The exact fixture names remain in the Checkpoint 28 result immediately above.
+The concise remaining map and next substantial group are:
+
+- **Owner/candidate replay:** 11 status failures covering qualified/defaulted,
+  current/inherited/anonymous/local owner, partial-specialization, and
+  qualified member-template replay.
+- **Dependent result/SFINAE/conversion:** 6 status failures covering aliases,
+  packs, dependent boolean/trailing results, MP11/recursive queries, and
+  rvalue-reference conversion ranking.
+- **Fixed-point query stress:** 2 status failures requiring typed query
+  identity and remaining ordinary termination behavior.
+- **Typed value/LowIR materialization:** 23 comparisons covering non-type and
+  variable-template values, `sizeof`, explicit type arguments, owner metadata,
+  generated bodies, operators, and storage.
+
+The next substantial checkpoint bundles the 23 materialization comparisons
+with the six dependent-result/SFINAE/conversion cases, while retaining the 11
+owner/candidate cases and both fixed-point fixtures as regressions.  Validation
+for this audit is `make build` (pass), the three focused witnesses (3/3), the
+required through-PA22 report (2100/2100), the PA23 report (354/396), and the
+PA23 file audit (pass with 13 advisory warnings).

@@ -1640,3 +1640,125 @@ the owner/specialization replay, deduction/overload, and LowIR groups.
 - **Fixed-point coverage:** the two reentrant static-query fixtures remain
   explicit termination regressions and are not accepted through timing or
   fallback behavior.
+
+## Checkpoint 28 audit — 2026-07-31
+
+### Scope Reviewed
+
+- The latest `Checkpoint 28 Scope` and result in `pa23/plan.md`, including
+  the 351/396 start, the 354/396 checkpoint result, the exact residual
+  fixture inventory, and the next checkpoint group.
+- `pa23/README.md`, `TESTING_AND_REFERENCES.md`, the three direct replay
+  witnesses, the related PA18–PA22 report contract, and the full primary log
+  at `/home/vishvananda/work/.ralph/luna-gpt-5.6-luna-ultra/last-test.log`.
+- HEAD `919117b` (`Advance PA23 member-template replay`), its preceding
+  audit/implementation commits, and the changed replay modules in the
+  checkpoint diff: `pa18_templates_calls_member.cpp`,
+  `pa18_templates_calls_transform.cpp`,
+  `pa18_templates_rewrite_infer_call.cpp`, and
+  `pa18_templates_rewrite_infer_types.cpp`.
+- The required through-PA22 report, the PA23 source file audit, and the
+  focused witness output before and after the audit fix.
+
+### Findings
+
+- The checkpoint remains on the normal compiler pipeline: parsed AST,
+  semantic collection and lookup, typed template deduction/substitution and
+  replay, PA14 lowering, and LowIR emission.  No compiler phase is skipped;
+  there is no dummy or embedded output, interpreter/VM/trampoline substitute,
+  reference-binary or host-compiler invocation, source/test-specific
+  acceptance gate, or unchecked output path.
+- The member-call parser's new `TemplateRange` use correctly distinguishes
+  `::` inside a globally qualified explicit template argument from the
+  owner separator after a template-id.  That source-spelling parse only
+  locates the AST operation; candidate identity and ownership still come from
+  the existing typed member lookup and replay records.
+- One checkpoint-level architecture defect was present in the new nested
+  explicit-template result fallback.  It reparsed the callee spelling,
+  matched only equal parameter counts, substituted raw argument text into a
+  declaration, and returned the first non-empty result.  That could select an
+  unrelated overload, mishandle packs/defaults or an explicit specialization,
+  and recover a semantic return fact downstream from text.  It also duplicated
+  candidate lookup work outside the normal explicit-call path.  This was fixed
+  below; the fallback now uses the existing typed candidate ranking, explicit
+  viability, completed argument deduction/default validation, and
+  `FunctionResultType` path.
+- The visible-function priority change is scoped to replayed identifier
+  inference: a function-local parameter or an owner-indexed object remains a
+  typed variable fact, while a leaked translation-unit parameter spelling no
+  longer hides a visible function signature.  The owner walk is bounded by
+  lexical context; it does not scan the definition registry or reparse emitted
+  LowIR.
+- The implicit-member fallback only marks a call as handled after typed
+  `InferArgument` and `FindClassMemberType` succeed.  It does not manufacture
+  output or turn a failed lookup into success.  The two reentrant static-query
+  fixtures remain ordinary termination failures in the report; no timeout,
+  retry budget, timing acceptance, or substitute execution path was added.
+- The source file audit has no fatal finding and retains the same 13
+  repository-level advisory warnings.  No tests, references, harnesses,
+  checker rules, generated payloads, hidden implementation fragments, or
+  unchecked paths were added or modified.
+- The audit fix leaves the current-PA count at the checkpoint baseline
+  (**354/396**) and preserves the earlier assignments (**2100/2100 through
+  PA22**).  The complete current-PA residual is exactly **19 exit-status
+  failures** and **23 LowIR comparisons**; the fresh log contains no timeout.
+  These are the planned semantic work frontier, not an unresolved checkpoint
+  shortcut, ownership, performance, regression, or file-audit blocker.
+
+### Changes Made
+
+- Added `ResolveExplicitTemplateCallResult` to the shared call-transformation
+  module.  It selects the nested explicit call with
+  `SelectExplicitCallDefinition`, completes its typed template arguments with
+  `InferFunctionArguments`, validates defaults, and computes its result with
+  `FunctionResultType`.
+- Replaced the checkpoint's first-match raw-text return inference in
+  `InferCallIdentifierArgument` with that shared resolver.  The outer
+  deduction probe now consumes the same candidate and result semantics as
+  actual call materialization, with no downstream recovery from an emitted
+  spelling.
+- Refreshed `pa23/plan.md` with this audit result, the exact 42-fixture
+  residual set, the grouped Remaining Work Map, and the next substantial
+  checkpoint group.  No tests or `.ref` files were changed.
+
+### Validation
+
+- `make build`: **PASS**.
+- Focused checkpoint witnesses: **3/3 PASS** after a serial rerun (the only
+  failed attempt was a parallel local-check build-config race, not a compiler
+  result).
+- Required prior-through command
+  (`n=23; ... make test-report-through-pa22`): **PASS, 2100/2100**.
+- `make test-report ACTIVE_TEST_REPORT_PAS='pa23'`: **354/396**, exit 2 only
+  for the 42 checked-in PA23 residual fixtures; the primary log reports
+  exactly **19 status** and **23 LowIR** failures.
+- `perl scripts/cppgm_file_audit.pl --stage pa23 --paths dev/src`:
+  **PASS**, with 13 non-fatal advisory warnings and no fatal finding.
+- `git diff --check`: **PASS**.
+
+### Remaining Work Map
+
+- **Member-template replay and owner identity — 11 status failures:**
+  qualified/defaulted lookup, current/inherited/anonymous/local owners,
+  partial-specialization owner completion, and qualified member-template
+  calls remain the status frontier.
+- **Dependent result, SFINAE, and conversion composition — 6 status
+  failures:** alias substitution, pack-expanded constructor arguments,
+  dependent boolean/trailing results, MP11/recursive queries, and
+  rvalue-reference conversion selection remain after candidate replay.
+- **Fixed-point query stress — 2 status failures:** both reentrant static
+  query fixtures remain explicit termination coverage and must be solved with
+  stable typed query identity, not timing or fallback acceptance.
+- **Typed value and LowIR materialization — 23 comparisons:** static and
+  variable-template storage, non-type alias state, `sizeof`, explicit type
+  arguments, partial member owners, and generated body/storage metadata still
+  differ after selection.
+
+### Next Substantial Checkpoint Group
+
+Bundle the 23 typed-value/LowIR materialization comparisons with the six
+dependent-result/SFINAE/conversion status cases.  Preserve the 11 owner and
+candidate replay status fixtures and both fixed-point stress fixtures as
+regressions.  The next checkpoint should carry typed owner, non-type value,
+selected overload, and materialized function identity through lowering, then
+rerun the PA23 report, the exact through-PA22 command, and the file audit.
