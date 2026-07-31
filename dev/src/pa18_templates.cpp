@@ -289,9 +289,10 @@ bool PA18TemplateExpander::EvaluateExpandedSizeofText(const string& raw,
 			declaration->second->kind == "class-forward-declaration";
 		size_t size = incomplete ? 0 : EstimateTypeSize(type_operand, context);
 		string call_type;
-		if(!size && (operand.find('(') != string::npos || operand.find('{') != string::npos) &&
-			operand.find("**") == string::npos && FunctionCallResultType(operand, context,
-				substitutions, &call_type)) {
+		const bool call_result = !size && (operand.find('(') != string::npos ||
+			operand.find('{') != string::npos) && operand.find("**") == string::npos &&
+			FunctionCallResultType(operand, context, substitutions, &call_type);
+		if(call_result) {
 			call_type = ResolveAlias(CanonicalSpelling(RemoveMarker(RewriteText(
 			call_type, context, substitutions, 0))), context);
 			size = EstimateTypeSize(call_type, context);

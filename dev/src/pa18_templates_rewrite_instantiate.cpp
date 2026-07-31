@@ -1081,11 +1081,19 @@ bool PA18TemplateExpander::EvaluateIntegralText(string raw, const string& contex
 		return false;
 	}
 	NormalizeIntegralText(&raw, substitutions);
-	if(EvaluateLogicalIntegralText(raw, context, substitutions, result)) return result->known;
-	if(EvaluateIntegralTextSpecialForms(raw, context, substitutions, result)) return true;
+	if(EvaluateLogicalIntegralText(raw, context, substitutions, result)) {
+		return result->known;
+	}
+	const bool special_value = EvaluateIntegralTextSpecialForms(raw, context, substitutions, result);
+	if(special_value) {
+		return true;
+	}
 	const bool known_value = EvaluateIntegralTextKnownValues(raw, context, substitutions, result);
-	if(known_value) return true;
-	return EvaluateIntegralTextFallbacks(raw, context, substitutions, result);
+	if(known_value) {
+		return true;
+	}
+	const bool fallback_value = EvaluateIntegralTextFallbacks(raw, context, substitutions, result);
+	return fallback_value;
 }
 CPPGMAstNodePtr PA18TemplateExpander::FindSourceConstantFunction(
 	string raw, const string& context) const

@@ -328,6 +328,7 @@ class PA14Lowerer
 	map<const CPPGMAstNode*, GlobalRecord*> local_static_plans_;
 	set<string> deferred_static_members_;
 	set<const Type*> complete_template_object_uses_;
+	set<const Type*> complete_template_parameter_uses_;
 	set<const Type*> materialized_member_object_uses_;
 	bool needs_init_helper_;
 	bool needs_fini_helper_;

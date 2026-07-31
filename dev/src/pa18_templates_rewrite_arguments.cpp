@@ -385,7 +385,7 @@ void PA18TemplateExpander::ResolveTemplateArguments(const TemplateDefinition& de
 	map<string, string>* substitutions,
 	map<string, PA19IntegralValue>* integral_substitutions,
 	map<string, vector<string> >* pack_substitutions,
-		const map<string, vector<string> >* pack_hints)
+	const map<string, vector<string> >* pack_hints)
 {
 	size_t raw_index = 0;
 	for(size_t i = 0; i < definition.parameters.size(); ++i) {

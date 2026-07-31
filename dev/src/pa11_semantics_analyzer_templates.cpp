@@ -6,15 +6,22 @@ void Analyzer::ProcessTemplate(const CPPGMAstNodePtr& node, Scope* scope)
 	Scope* parameters = NewChild(scope, SCOPE_TEMPLATE_PARAMETERS, string());
 	CPPGMAstNodePtr clause = node->children[0];
 	CPPGMAstNodePtr list = ChildOfKind(clause, "template-parameter-list");
+	vector<string> template_parameter_names;
 	if (list)
 	{
 		for (size_t i = 0; i < list->children.size(); ++i)
 		{
 			CPPGMAstNodePtr parameter = list->children[i];
 			if (!parameter) continue;
+			string parameter_name;
+			if (parameter->kind == "non-type-template-parameter" &&
+				parameter->children.size() > 1 && parameter->children[1])
+				parameter_name = FirstIdentifier(parameter->children[1]);
+			else parameter_name = FirstIdentifier(parameter);
+			if (!parameter_name.empty()) template_parameter_names.push_back(parameter_name);
 			if (parameter->kind == "type-parameter")
 			{
-				const string name = FirstIdentifier(parameter);
+				const string name = parameter_name;
 				if (name.empty()) continue;
 				const bool template_template = HasKind(parameter, "template-template-parameter");
 				TypePtr type(new Type(template_template ? TYPE_TEMPLATE_TEMPLATE_PARAMETER : TYPE_TEMPLATE_PARAMETER, name));
@@ -52,6 +59,7 @@ void Analyzer::ProcessTemplate(const CPPGMAstNodePtr& node, Scope* scope)
 				alias_type->name = alias_name;
 				alias_type->template_primary = alias_name;
 			}
+			alias_type->template_parameter_names = template_parameter_names;
 			AddTypeBinding(parameters, alias_name, alias_type, true);
 			if (scope) AddTypeBinding(scope, alias_name, alias_type, true);
 			return;
@@ -67,6 +75,7 @@ void Analyzer::ProcessTemplate(const CPPGMAstNodePtr& node, Scope* scope)
 		const string class_name = LastComponent(node->children[1]->value);
 		Binding* template_class = class_name.empty() ? 0 : parameters->local(class_name);
 		if (template_class && template_class->kind == BIND_TYPE && template_class->type) {
+			template_class->type->template_parameter_names = template_parameter_names;
 			AddTypeBinding(scope, class_name, template_class->type);
 			Binding* anchor = scope->local(class_name);
 			if (anchor) anchor->suppress_dump = true;

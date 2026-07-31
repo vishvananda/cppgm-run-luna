@@ -575,6 +575,8 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 	}
 	string ExpandPackCallText(string raw,
 		const map<string, vector<string> >& packs) const;
+	void ExpandNestedTemplateArgumentPacks(vector<string>* arguments,
+		string* arguments_text);
 	string RewriteText(string raw, const string& context,
 		const map<string, string>& substitutions, bool* template_replaced,
 		bool resolve_alias = true, bool resolve_member = true,

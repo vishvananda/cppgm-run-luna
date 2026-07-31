@@ -5,6 +5,207 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
+bool PA18TemplateExpander::HasClassConversion(const string& expected,
+	const string& actual, const string& context) const
+{
+	const string wanted = FunctionArgumentObjectType(expected, context);
+	set<string> active_classes;
+	function<bool(const string&)> visit_class = [&](const string& raw_class) {
+		string class_name = CanonicalSpelling(raw_class);
+		while(class_name.compare(0, 6, "const ") == 0)
+			class_name = CanonicalSpelling(class_name.substr(6));
+		while(!class_name.empty() && (class_name[class_name.size() - 1] == '&' ||
+			class_name[class_name.size() - 1] == '*'))
+			class_name.erase(class_name.size() - 1);
+		class_name = CanonicalSpelling(class_name);
+		if(class_name.empty() || !active_classes.insert(class_name).second) return false;
+		const CPPGMAstNodePtr declaration = FindClassDeclaration(class_name, context);
+		if(!declaration) {
+			active_classes.erase(class_name);
+			return false;
+		}
+		vector<string> class_arguments;
+		string primary_name = class_name;
+		const size_t open = class_name.find('<');
+		if(open != string::npos) {
+			string argument_text;
+			size_t close = string::npos;
+			if(!TemplateRange(class_name, open, &argument_text, &close)) {
+				active_classes.erase(class_name);
+				return false;
+			}
+			class_arguments = SplitTemplateArguments(argument_text);
+			primary_name = CanonicalSpelling(class_name.substr(0, open));
+		} else {
+			map<string, vector<string> >::const_iterator generated_arguments =
+				specialization_arguments_.find(LastComponent(class_name));
+			map<string, string>::const_iterator generated_base =
+				specialization_bases_.find(LastComponent(class_name));
+			if(generated_arguments != specialization_arguments_.end())
+				class_arguments = generated_arguments->second;
+			if(generated_base != specialization_bases_.end() &&
+				!generated_base->second.empty()) primary_name = generated_base->second;
+		}
+		const TemplateDefinition* primary = FindDefinition(primary_name, context);
+		if(!primary) primary = FindDefinition(LastComponent(primary_name), context);
+		map<string, string> class_substitutions;
+		if(primary) for(size_t parameter = 0; parameter < primary->parameters.size() &&
+			parameter < class_arguments.size(); ++parameter)
+			if(!primary->parameters[parameter].name.empty())
+				class_substitutions[primary->parameters[parameter].name] =
+					class_arguments[parameter];
+		function<bool(const CPPGMAstNodePtr&)> visit = [&](const CPPGMAstNodePtr& node) {
+			if(!node) return false;
+			const string name = RemoveMarker(node->value);
+			if(name.compare(0, 8, "operator") == 0 && name.size() > 8) {
+				string target = CanonicalSpelling(ReplaceIdentifiers(name.substr(8),
+					class_substitutions));
+				if(!target.empty()) try {
+					target = const_cast<PA18TemplateExpander*>(this)->RewriteText(
+						target, context, class_substitutions, 0);
+					if(FunctionArgumentObjectType(target, context) == wanted) return true;
+				} catch(const PA18SubstitutionFailure&) {}
+			}
+			if(node->kind == "base-clause") for(size_t child = 0;
+				child < node->children.size(); ++child) {
+				const CPPGMAstNodePtr base_name = ChildOfKindLocal(
+					node->children[child], "base-name");
+				if(!base_name) continue;
+				string base = CanonicalSpelling(ReplaceIdentifiers(base_name->value,
+					class_substitutions));
+				try {
+					base = CanonicalSpelling(ReplaceIdentifiers(
+						const_cast<PA18TemplateExpander*>(this)->RewriteText(
+							base, context, class_substitutions, 0), class_substitutions));
+					base = CanonicalSpelling(ResolveAlias(base, context));
+				} catch(const PA18SubstitutionFailure&) { continue; }
+				if(visit_class(base)) return true;
+			}
+			for(size_t child = 0; child < node->children.size(); ++child)
+				if(visit(node->children[child])) return true;
+			return false;
+		};
+		const bool found = visit(declaration);
+		active_classes.erase(class_name);
+		return found;
+	};
+	return visit_class(actual);
+}
+bool PA18TemplateExpander::FunctionArgumentViable(const string& parameter,
+	const string& actual, const string& context) const
+{
+	const string expected = FunctionArgumentObjectType(parameter, context);
+	const string received = FunctionArgumentObjectType(actual, context);
+	if(expected.empty() || received.empty()) return false;
+	if(expected == received) return true;
+	// A declaration can spell a class parameter relative to its owning
+	// template while the inferred argument carries the qualified owner.  Use
+	// the typed name resolver before treating the two class objects as
+	// different; this does not collapse distinct template specializations.
+	const string qualified_expected = CanonicalSpelling(QualifyTypeArgument(
+		expected, context));
+	const string qualified_received = CanonicalSpelling(QualifyTypeArgument(
+		received, context));
+	if(!qualified_expected.empty() && qualified_expected == qualified_received)
+		return true;
+	if(expected.find('<') == string::npos && received.find('<') == string::npos) {
+		const CPPGMAstNodePtr expected_declaration = FindClassDeclaration(expected, context);
+		const CPPGMAstNodePtr received_declaration = FindClassDeclaration(received, context);
+		if(expected_declaration && expected_declaration == received_declaration) return true;
+	}
+	if(IsBuiltinArithmeticType(expected) && IsBuiltinArithmeticType(received))
+		return true;
+	if(IsBuiltinArithmeticType(expected) && FindClassDeclaration(received, context))
+		return false;
+	// Pointer arguments are not an unconstrained class conversion boundary.
+	// In particular, a pointer to one sibling class must not bind to a pointer
+	// to another sibling merely because both pointees are known classes.  This
+	// distinction is observable in the standard detection idiom used by the
+	// structured-bool replay cases.
+	const size_t expected_pointer = expected.rfind('*');
+	const size_t received_pointer = received.rfind('*');
+	if(expected_pointer != string::npos && received_pointer != string::npos) {
+		const auto pointer_target = [](string raw) {
+			raw.erase(raw.rfind('*'));
+			return CanonicalSpelling(raw);
+		};
+		const string expected_target = pointer_target(expected);
+		const string received_target = pointer_target(received);
+		if(expected_target.find("__") != string::npos ||
+			received_target.find("__") != string::npos) return true;
+		if(specialization_arguments_.find(LastComponent(expected_target)) !=
+			specialization_arguments_.end() || specialization_arguments_.find(
+			LastComponent(received_target)) != specialization_arguments_.end()) return true;
+		if(expected_target == received_target) return true;
+		if(expected_target == "void") return true;
+		const string qualified_expected_target = CanonicalSpelling(QualifyTypeArgument(
+			expected_target, context));
+		const string qualified_received_target = CanonicalSpelling(QualifyTypeArgument(
+			received_target, context));
+		if(qualified_expected_target == qualified_received_target) return true;
+		const auto expected_declaration = FindClassDeclaration(qualified_expected_target, context);
+		const auto received_declaration = FindClassDeclaration(qualified_received_target, context);
+		// An unresolved template-template pointer remains a deduction pattern,
+		// not a concrete unrelated-class conversion.  Leave that case viable for
+		// the later template-argument matcher.
+		if(!expected_declaration || !received_declaration) return true;
+		set<string> visited;
+		function<bool(const string&)> derives = [&](const string& derived) {
+			const string key = CanonicalSpelling(derived);
+			if(!visited.insert(key).second) return false;
+			if(key == qualified_expected_target) return true;
+			const CPPGMAstNodePtr declaration = FindClassDeclaration(key, context);
+			if(!declaration) return false;
+			for(size_t child = 0; child < declaration->children.size(); ++child) {
+				const CPPGMAstNodePtr base_clause = declaration->children[child];
+				if(!base_clause || base_clause->kind != "base-clause") continue;
+				for(size_t base = 0; base < base_clause->children.size(); ++base) {
+					const CPPGMAstNodePtr base_name = ChildOfKindLocal(
+						base_clause->children[base], "base-name");
+					if(!base_name) continue;
+					string base_spelling = CanonicalSpelling(base_name->value);
+					base_spelling = CanonicalSpelling(QualifyTypeArgument(base_spelling, context));
+					if(derives(base_spelling)) return true;
+				}
+			}
+			return false;
+		};
+		return derives(qualified_received_target);
+	}
+	// A hidden friend may deliberately take a lightweight proxy object while
+	// callers probe it with the associated property type.  Model the ordinary
+	// converting-constructor path before looking for conversion operators on the
+	// received class; both are user-defined conversions in the candidate probe.
+	const CPPGMAstNodePtr expected_class = FindClassDeclaration(expected, context);
+	if(expected_class) {
+		const string expected_name = LastComponent(expected);
+		for(size_t child = 0; child < expected_class->children.size(); ++child) {
+			const CPPGMAstNodePtr member = expected_class->children[child];
+			if(!member || (member->kind != "special-member-definition" &&
+				member->kind != "special-member-declaration") ||
+				LastComponent(RemoveMarker(member->value)) != expected_name) continue;
+			const CPPGMAstNodePtr parameters = DescendantOfKind(
+				FunctionDeclarator(member), "parameter-clause");
+			if(!parameters || parameters->children.empty()) continue;
+			const CPPGMAstNodePtr first = parameters->children[0];
+			if(first && first->kind == "parameter-declaration" &&
+				FunctionArgumentViable(ParameterTypeSpelling(first), received, context)) return true;
+		}
+	}
+	// Expression-SFINAE needs to reject an attempted conversion between two
+	// unrelated complete class types.  The typed class conversion index admits
+	// only a conversion operator whose target matches the expected object.
+	const bool direct_parameter = expected.find('*') == string::npos &&
+		expected.find('&') == string::npos;
+	const bool direct_actual = received.find('*') == string::npos &&
+		received.find('&') == string::npos;
+	if(direct_parameter && direct_actual &&
+		FindClassDeclaration(expected, context) &&
+		FindClassDeclaration(received, context))
+		return HasClassConversion(expected, received, context);
+	return true;
+}
+
 bool PA18TemplateExpander::IsDeletedFunctionCall(const string& callee,
 	const string& context) const
 {
@@ -566,17 +767,71 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 		if(all_candidates_deleted) return false;
 		if(ResolveConstructedCallResult(callee, context, substitutions, actual_types, result)) return true;
 		if(!explicit_definition) {
+			string selected_result;
+			bool selected_ellipsis = true;
+			bool selected_any = false;
+			auto template_component = [](string raw) {
+				const size_t open = raw.find('<');
+				if(open != string::npos) raw.erase(open);
+				return LastComponent(raw);
+			};
+			string generated_source_owner;
+			map<string, string> generated_owner_substitutions = substitutions;
+			if(qualified_member_call) {
+				map<string, string>::const_iterator generated_base =
+					specialization_bases_.find(LastComponent(qualified_owner));
+				if(generated_base != specialization_bases_.end()) {
+					generated_source_owner = generated_base->second;
+					vector<string> generated_arguments;
+					map<string, vector<string> >::const_iterator recorded_arguments =
+						specialization_arguments_.find(LastComponent(qualified_owner));
+					if(recorded_arguments != specialization_arguments_.end())
+						generated_arguments = recorded_arguments->second;
+					const size_t open = generated_source_owner.find('<');
+					if(open != string::npos || !generated_arguments.empty()) {
+						string argument_text;
+						size_t close = string::npos;
+						if(open != string::npos)
+							TemplateRange(generated_source_owner, open, &argument_text, &close);
+						if(open == string::npos || close != string::npos) {
+							const string primary_name = open == string::npos ? generated_source_owner :
+								generated_source_owner.substr(0, open);
+							const TemplateDefinition* primary = FindDefinition(primary_name,
+								function_context);
+							if(!primary) primary = FindDefinition(LastComponent(primary_name),
+								function_context);
+							const vector<string> arguments = generated_arguments.empty() ?
+								SplitTemplateArguments(argument_text) : generated_arguments;
+							if(primary) for(size_t parameter = 0;
+								parameter < primary->parameters.size() && parameter < arguments.size();
+								++parameter)
+								if(!primary->parameters[parameter].name.empty())
+									generated_owner_substitutions[primary->parameters[parameter].name] =
+										arguments[parameter];
+						}
+					}
+				}
+			}
 			for(map<string, vector<FunctionSignature> >::const_iterator overload =
 				function_overloads_.begin(); overload != function_overloads_.end(); ++overload) {
-				const string suffix = "::" + callee;
-					if(overload->first != callee &&
-						(overload->first.size() <= suffix.size() ||
-							overload->first.compare(overload->first.size() - suffix.size(),
-								suffix.size(), suffix) != 0)) continue;
-					for(size_t candidate = 0; candidate < overload->second.size(); ++candidate) {
+				bool matches = overload->first == callee;
+				if(!matches && qualified_member_call) {
+					const size_t separator = overload->first.rfind("::");
+					if(separator != string::npos &&
+						overload->first.substr(separator + 2) == qualified_member_name) {
+						const string candidate_owner = overload->first.substr(0, separator);
+						matches = generated_source_owner.empty() ?
+							(candidate_owner == qualified_owner ||
+								template_component(candidate_owner) == template_component(qualified_owner)) :
+							template_component(candidate_owner) == template_component(generated_source_owner);
+					}
+				}
+				if(!matches) continue;
+				for(size_t candidate = 0; candidate < overload->second.size(); ++candidate) {
 					const FunctionSignature& signature = overload->second[candidate];
 					const CPPGMAstNodePtr parameters = signature.parameters;
-					bool ellipsis = false;
+					bool ellipsis = false, viable = true;
+					size_t actual = 0;
 					if(parameters) for(size_t parameter = 0; parameter < parameters->children.size();
 						++parameter) {
 						const CPPGMAstNodePtr item = parameters->children[parameter];
@@ -584,13 +839,48 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 							ellipsis = true;
 							break;
 						}
+						if(!item || item->kind != "parameter-declaration") continue;
+						if(IsFunctionParameterPack(item)) {
+							ellipsis = true;
+							break;
 						}
-						if(signature.deleted) continue;
-						if(ellipsis && signature.result_specifiers)
-						return (*result = NodeTypeSpelling(signature.result_specifiers) +
-							ReturnDeclaratorSuffix(signature.declarator), true);
+						if(actual >= actual_types.size()) {
+							if(!ChildOfKindLocal(item, "default-argument")) viable = false;
+							continue;
+						}
+						string parameter_type = ParameterTypeSpelling(item);
+						try {
+							parameter_type = NormalizeTypeArgument(ReplaceIdentifiers(
+								RewriteText(parameter_type, function_context,
+									generated_owner_substitutions, 0), generated_owner_substitutions));
+						} catch(const PA18SubstitutionFailure&) {
+							viable = false;
+						}
+						if(viable && HasUnresolvedTemplateParameter(parameter_type,
+							function_context, generated_owner_substitutions)) viable = false;
+						const bool parameter_viable = viable && FunctionArgumentViable(parameter_type,
+							actual_types[actual], function_context);
+						if(!parameter_viable) viable = false;
+						++actual;
+						}
+					if(signature.deleted || !viable || actual != actual_types.size() && !ellipsis)
+						continue;
+					string ordinary_result = NodeTypeSpelling(signature.result_specifiers) +
+						ReturnDeclaratorSuffix(signature.declarator);
+					try {
+						ordinary_result = NormalizeTypeArgument(ResolveAlias(RewriteText(
+							ordinary_result, function_context, generated_owner_substitutions, 0),
+							function_context));
+					} catch(const PA18SubstitutionFailure&) { ordinary_result.clear(); }
+					if(ordinary_result.empty()) continue;
+					if(!selected_any || (selected_ellipsis && !ellipsis)) {
+						selected_result = ordinary_result;
+						selected_ellipsis = ellipsis;
+						selected_any = true;
+					}
 				}
 			}
+			if(selected_any) { *result = selected_result; return true; }
 			const FunctionSignature* signature = FindFunctionSignature(callee, context);
 			if(signature && !signature->deleted && signature->result_specifiers) {
 				*result = NodeTypeSpelling(signature->result_specifiers) +

@@ -226,6 +226,45 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 	}
 	const string promoted_local = PromotedLocalClass(spelling, context);
 	if(!promoted_local.empty()) spelling = promoted_local;
+	if(spelling.find("::") == string::npos && spelling.find('<') == string::npos) {
+		map<string, string>::const_iterator generated_base =
+			specialization_bases_.find(LastComponent(spelling));
+		map<string, vector<string> >::const_iterator generated_arguments =
+			specialization_arguments_.find(LastComponent(spelling));
+		if(generated_base != specialization_bases_.end() &&
+			generated_arguments != specialization_arguments_.end()) {
+			const string raw_generated_owner = PrefixComponent(generated_base->second);
+			const size_t raw_repeated_separator = raw_generated_owner.rfind("::");
+			const bool repeated_generated_owner = raw_repeated_separator != string::npos &&
+				LastComponent(raw_generated_owner.substr(0, raw_repeated_separator)) ==
+				raw_generated_owner.substr(raw_repeated_separator + 2);
+			string generated_owner = raw_generated_owner;
+			const size_t repeated_separator = generated_owner.rfind("::");
+			if(repeated_separator != string::npos &&
+				LastComponent(generated_owner.substr(0, repeated_separator)) ==
+				generated_owner.substr(repeated_separator + 2))
+				generated_owner.erase(repeated_separator);
+			if(!repeated_generated_owner && generated_owner.find("::") != string::npos &&
+				generated_owner.find('<') == string::npos) {
+				const string owner_candidate = JoinPath(generated_owner, spelling);
+				if(!generated_owner.empty() && known_type(owner_candidate)) spelling = owner_candidate;
+				else {
+					map<string, vector<string> >::const_iterator paths =
+						class_paths_by_name_.find(LastComponent(spelling));
+					if(paths != class_paths_by_name_.end()) {
+						string selected;
+						for(size_t path = 0; path < paths->second.size(); ++path) {
+							const string& candidate = paths->second[path];
+							if(!known_type(candidate) ||
+								PrefixComponent(candidate) != generated_owner) continue;
+							if(selected.empty() || candidate < selected) selected = candidate;
+						}
+						if(!selected.empty()) spelling = selected;
+					}
+				}
+			}
+		}
+	}
 	const bool direct_function = SplitDirectFunctionType(spelling, 0, 0, 0);
 	if(spelling.size() > 5 && spelling.compare(spelling.size() - 5, 5, "const") == 0 &&
 		spelling.find("::") == string::npos && !direct_function) {

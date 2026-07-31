@@ -75,6 +75,7 @@ void PA14Lowerer::PrepareLoweringProgram()
   IndexClassTypesByName();
   IndexMaterializedMemberObjectUses();
   complete_template_object_uses_.clear();
+  complete_template_parameter_uses_.clear();
   IndexCompleteTemplateObjectUses(program_);
   IndexFriendOwners();
   InstallBuiltins();

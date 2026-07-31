@@ -909,7 +909,7 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 		if((!aliases_only || generated_concrete_owner) && direct_child &&
 			(direct_child->kind == "class-specifier" ||
 			direct_child->kind == "class-forward-declaration" ||
-			direct_child->kind == "enum-specifier") &&
+				direct_child->kind == "enum-specifier") &&
 			LastComponent(direct_child->value) == member) {
 			*result = JoinPath(class_key, member);
 			active->erase(active_key);
@@ -926,13 +926,13 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 					fallback_type = type;
 				continue;
 			}
-				*result = CanonicalSpelling(ReplaceIdentifiers(type, declaration_substitutions));
-				if(result->find("::") != string::npos && result->find('<') != string::npos)
-					*result = NormalizeTypeArgument(const_cast<PA18TemplateExpander*>(this)->RewriteText(
-						*result, context, declaration_substitutions, 0));
-				active->erase(active_key);
-				return !result->empty();
-			}
+			*result = CanonicalSpelling(ReplaceIdentifiers(type, declaration_substitutions));
+			if(result->find("::") != string::npos && result->find('<') != string::npos)
+				*result = NormalizeTypeArgument(const_cast<PA18TemplateExpander*>(this)->RewriteText(
+					*result, context, declaration_substitutions, 0));
+			active->erase(active_key);
+			return !result->empty();
+		}
 		if(child->kind != "simple-declaration" || child->children.empty()) continue;
 		const string base = NodeTypeSpelling(child->children[0]);
 		const CPPGMAstNodePtr list = ChildOfKindLocal(child, "init-declarator-list");
@@ -951,14 +951,14 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 				DeclaratorArraySuffix(init->children[0]).find_first_not_of("[]") != string::npos;
 			if(aliases_only && !typedef_member && !concrete_static_member)
 				continue;
-				*result = CanonicalSpelling(ReplaceIdentifiers(
-					DeclaratorTypeSpelling(base, init->children[0]), declaration_substitutions));
-				if(result->find("::") != string::npos && result->find('<') != string::npos)
-					*result = NormalizeTypeArgument(const_cast<PA18TemplateExpander*>(this)->RewriteText(
-						*result, context, declaration_substitutions, 0));
-				active->erase(active_key);
-				return !result->empty();
-			}
+			*result = CanonicalSpelling(ReplaceIdentifiers(
+				DeclaratorTypeSpelling(base, init->children[0]), declaration_substitutions));
+			if(result->find("::") != string::npos && result->find('<') != string::npos)
+				*result = NormalizeTypeArgument(const_cast<PA18TemplateExpander*>(this)->RewriteText(
+					*result, context, declaration_substitutions, 0));
+			active->erase(active_key);
+			return !result->empty();
+		}
 	}
 	if(!fallback_type.empty()) {
 		*result = CanonicalSpelling(ReplaceIdentifiers(fallback_type, declaration_substitutions));

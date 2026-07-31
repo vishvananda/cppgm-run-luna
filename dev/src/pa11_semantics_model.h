@@ -145,6 +145,11 @@ struct Type
 	bool template_specialization;
 	string template_primary;
 	vector<string> template_arguments;
+	// Template parameter names are retained in declaration order, including
+	// non-type parameters that do not have a Scope binding in the PA11 model.
+	// Materialized dependent members use this typed frame to rebind base and
+	// conversion-function types without reconstructing source text lookup.
+	vector<string> template_parameter_names;
 	bool template_empty_pack;
 	// A materialized specialization may retain constructor-template lookup only
 	// in PA18 typed state.  It is still non-aggregate per the source class.

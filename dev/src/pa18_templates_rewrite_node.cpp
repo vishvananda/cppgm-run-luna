@@ -93,7 +93,7 @@ CPPGMAstNodePtr PA18TemplateExpander::RewriteRegularNodeValue(
 		}
 	}
 	if(input->kind == "decl-specifier" || input->kind == "type-name" ||
-		input->kind == "type-specifier") {
+		input->kind == "type-specifier" || input->kind == "base-name") {
 		const size_t marker_colon = result->value.find(':');
 		string marker;
 		if(marker_colon != string::npos) {

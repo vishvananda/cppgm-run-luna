@@ -262,7 +262,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				}
 				expanded_current_arguments.push_back(current_arguments[argument]);
 			}
-			current_arguments.swap(expanded_current_arguments);
+			current_arguments.swap(expanded_current_arguments); ExpandNestedTemplateArgumentPacks(&current_arguments, &arguments_text);
 		}
 		if(resolve_member && RewriteMemberTemplateAliasApplication(&raw, begin, close,
 			base, context, substitutions, template_replaced, &search)) continue;
@@ -926,7 +926,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 						ResolveAlias(source_argument, context).back() == '&')
 						args[i] = source_argument;
 				}
-			if(deferred_pack_argument) { search = close + 1;
+				if(deferred_pack_argument) { search = close + 1;
 					continue;
 				}
 				const size_t supplied_template_arguments = args.size();

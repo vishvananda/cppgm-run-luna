@@ -136,6 +136,84 @@ string PA18TemplateExpander::ExpandPackCallText(string raw,
 	return raw;
 }
 
+void PA18TemplateExpander::ExpandNestedTemplateArgumentPacks(
+	vector<string>* arguments, string* arguments_text)
+{
+	if(!arguments) return;
+	vector<string>& current_arguments = *arguments;
+			// Expand a pack nested in one template argument (`L<T...>`) by
+			// duplicating that innermost template-id.  ExpandPackCallText is for
+			// call/initializer expressions; applying it to the whole argument list
+			// would duplicate the enclosing prefix as well.
+			for(size_t argument = 0; argument < current_arguments.size(); ++argument) {
+				string nested = current_arguments[argument];
+				for(size_t search = 0; search + 2 < nested.size();) {
+					const size_t ellipsis = nested.find("...", search);
+					if(ellipsis == string::npos) break;
+					size_t open = string::npos;
+					int angles = 0;
+					for(size_t position = ellipsis; position > 0; --position) {
+						const char ch = nested[position - 1];
+						if(ch == '>') ++angles;
+						else if(ch == '<' && angles > 0) {
+							--angles;
+							if(angles == 0) {
+								open = position - 1;
+								break;
+							}
+						}
+					}
+					if(open == string::npos) {
+						search = ellipsis + 3;
+						continue;
+					}
+					size_t begin = open;
+					while(begin > 0 && (IsIdentifierCharacter(nested[begin - 1]) ||
+						nested[begin - 1] == ':')) --begin;
+					const string source = nested.substr(begin, ellipsis - begin);
+					vector<string> pack_names;
+					for(map<string, vector<string> >::const_iterator pack =
+						active_pack_substitutions_.begin();
+						pack != active_pack_substitutions_.end(); ++pack) {
+						if(pack->first.empty() || !ContainsIdentifierTokenLocal(source, pack->first)) continue;
+						pack_names.push_back(pack->first);
+					}
+					if(pack_names.empty()) {
+						search = ellipsis + 3;
+						continue;
+					}
+					const vector<string>& first_pack =
+						active_pack_substitutions_.find(pack_names[0])->second;
+					bool same_size = true;
+					for(size_t pack = 1; pack < pack_names.size(); ++pack)
+						if(active_pack_substitutions_.find(pack_names[pack])->second.size() !=
+							first_pack.size()) same_size = false;
+					if(!same_size) throw PA18SubstitutionFailure("pack expansion length mismatch");
+					string expansion;
+					for(size_t element = 0; element < first_pack.size(); ++element) {
+						map<string, string> one;
+						for(size_t pack = 0; pack < pack_names.size(); ++pack)
+							one[pack_names[pack]] = active_pack_substitutions_.find(
+								pack_names[pack])->second[element];
+						if(!expansion.empty()) expansion += ',';
+						expansion += ReplaceIdentifiersPreservingPackSizes(source, one);
+					}
+					nested.replace(begin, ellipsis + 3 - begin, expansion);
+					search = begin + expansion.size();
+				}
+				current_arguments[argument] = nested;
+			}
+	if(arguments_text) {
+		string expanded_arguments;
+		for(size_t argument = 0; argument < current_arguments.size(); ++argument) {
+			if(argument) expanded_arguments += ',';
+			expanded_arguments += current_arguments[argument];
+		}
+		*arguments_text = expanded_arguments;
+		*arguments = SplitTemplateArguments(expanded_arguments);
+	}
+}
+
 const TemplateDefinition* PA18TemplateExpander::SelectFunctionTemplateOverload(
     const string& raw, const string& lookup_base,
     const vector<string>& explicit_arguments, const string& context,

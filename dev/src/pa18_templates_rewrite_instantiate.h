@@ -585,7 +585,7 @@
 		if(raw.find("&&") != string::npos || raw.find("||") != string::npos) {
 			try { evaluated = EvaluateIntegralText(NormalizeIntegralArgumentExpression(raw, context), context, substitutions, &value); } catch(...) { evaluated = false; }
 		}
-	if(!evaluated) raw = RemoveMarker(RewriteText(raw, context, substitutions, 0, true, false));
+		if(!evaluated) raw = RemoveMarker(RewriteText(raw, context, substitutions, 0, true, false));
 		// Do not rebind a dependent template-id base after RewriteText.
 		map<string, string> resolved_substitutions = substitutions;
 		for(map<string, string>::const_iterator substitution = substitutions.begin();

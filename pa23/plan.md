@@ -2742,3 +2742,166 @@ The next checkpoint is the bundled deduction/overload group plus the first
 typed-value materialization consumers. It will be validated against the
 active PA23 report, the through-PA22 report, the file audit, and the exact
 owner/source-namespace witnesses above.
+
+## Checkpoint 21 scope — 2026-07-31 (before implementation)
+
+The ordered active report confirms the current baseline is **332/396**. The
+complete current-PA failure set is **64 fixtures**: 32 raw compiler status
+failures and 32 LowIR comparisons. The raw status failures are:
+
+- `general/100-member-template-specialization-return-prefers-member-call`,
+  `general/100-selected-specialization-special-member-body`,
+  `general/100-structured-bool-boost-convertible-mpl-overload`,
+  `general/200-constructor-template-parameter-shadows-instantiated-type`,
+  `general/200-function-template-named-parameter-sfinae`,
+  `general/200-member-function-template-address-explicit-pack`,
+  `general/200-member-template-implicit-instantiation-not-overload`,
+  `general/200-template-template-qualified-default-arg-deduction`,
+  `general/300-constructor-template-const-ref-enable-if-conversion`,
+  `general/400-anonymous-namespace-partial-specialization`,
+  `general/400-current-specialization-display-name-member-alias`,
+  `general/400-member-template-result-pack-preserves-nested-function-pointer-owner`,
+  `general/400-static-cast-rvalue-ref-skips-conversion-operator`,
+  `general/400-unused-static-member-template-return-type`,
+  `general/500-dependent-function-type-pack-expansion-ctor-init`,
+  `general/500-dependent-qualified-member-template-result-bool`,
+  `general/500-member-template-conditional-alias-trailing-return`,
+  `general/500-mp11-append-alias-template-sfinae`,
+  `general/500-nontype-alias-reinstantiation-structural-state`,
+  `general/500-recursive-qualified-member-template-bool-arg`,
+  `general/500-reentrant-static-query-callable-enable-if-cache`,
+  `general/500-reentrant-static-query-enable-if-partial`,
+  `general/500-source-namespace-base-sfinae-chain`,
+  `spec/100-extern-template-member-function-declaration`,
+  `spec/100-extern-template-static-data-declaration`,
+  `spec/100-local-member-call-constructor-template-instantiation`,
+  `spec/400-defaulted-nested-class-argument-partial-specialization`,
+  `spec/400-explicit-pack-type-argument-uses-bound-type`,
+  `spec/400-explicit-type-arg-dependent-qualified-member-template-id`,
+  `spec/400-function-type-pack-template-argument`,
+  `spec/400-qualified-member-template-id-bool-constant`, and
+  `spec/500-conditional-alias-index-sequence-member-template-call`.
+
+The 32 LowIR comparison failures are:
+
+- `general/100-current-specialization-member-body-cast-compare`,
+  `general/100-dependent-bool-partial-static-value-storage`,
+  `general/100-explicit-specialization-out-of-class-ctor-replay`,
+  `general/100-explicit-specialization-pointer-member-definition`,
+  `general/100-inherited-using-alias-out-of-class-specialization-member`,
+  `general/100-intermediate-type-transform-value-nontype`,
+  `general/100-local-qualified-argument-replay`,
+  `general/100-sizeof-call-result-nontype-template-argument`,
+  `general/200-adl-explicit-template-id-call`,
+  `general/200-function-template-reference-cv-alias-partial-order`,
+  `general/200-function-template-template-parameter-deduction`,
+  `general/200-member-operator-template-reference-pattern-partial-order`,
+  `general/300-current-specialization-constructor-template-canonical-owner`,
+  `general/300-dependent-bool-base-trait-type-argument`,
+  `general/400-explicit-function-template-type-arg-drops-nontype-overload`,
+  `general/400-function-type-pack-out-of-class-constructor`,
+  `general/400-member-variable-template-leaf-sfinae`,
+  `general/400-nonmember-template-compound-assignment-const-lhs`,
+  `general/400-out-of-class-partial-member-template-owner-parameter-alias`,
+  `general/400-variable-template-specializations`,
+  `spec/100-explicit-instantiation-after-explicit-specialization-no-effect`,
+  `spec/100-explicit-instantiation-class-prior-member-definitions`,
+  `spec/100-explicit-specialization-out-of-class-ctor-replay`,
+  `spec/100-explicit-specialization-out-of-class-member-emits`,
+  `spec/100-out-of-class-conversion-operator-definition`,
+  `spec/100-partial-specialization-member-primary-param-name`,
+  `spec/100-sizeof-union-type-nttp`,
+  `spec/200-defaulted-class-template-argument-pack-prefix-deduction`,
+  `spec/300-constructor-default-pack-partial-ordering`,
+  `spec/400-class-template-nttp-scope-value`,
+  `spec/400-defaulted-template-arg-partial-base-completion`, and
+  `spec/400-template-template-member-alias-owner-shadow`.
+
+### Checkpoint 21 Remaining Work Map
+
+- **Dependent-base/SFINAE owner replay:** the source-namespace chain,
+  named-parameter SFINAE, structured boolean traits, and MP11 alias fallback
+  lose the source lexical owner when `::value` is queried through a generated
+  specialization. The local-qualified replay LowIR mismatch is the adjacent
+  function-order consumer of the same owner identity.
+- **Candidate deduction and overloads:** constructor/conversion viability,
+  explicit packs, template-template defaults, member-template addresses,
+  partial ordering, and static-cast conversion selection remain after the
+  owner query is stable.
+- **Alias/value and declaration materialization:** dependent boolean/integral
+  values, `sizeof`, variable templates, explicit/extern declarations, special
+  members, and generated declaration order account for the remaining LowIR
+  band.
+- **Fixed points:** the two reentrant static-query fixtures still need a
+  terminating typed query identity; timeout-specific acceptance is out of
+  scope.
+
+### Checkpoint 21 Scope
+
+Implement the shared dependent-base member-query boundary for the four
+related witnesses `general/500-source-namespace-base-sfinae-chain`,
+`general/100-structured-bool-boost-convertible-mpl-overload`,
+`general/500-mp11-append-alias-template-sfinae`, and
+`general/100-local-qualified-argument-replay`. Preserve the source lexical
+namespace and generated specialization identity while evaluating dependent
+`::value`/`::type` queries, keep candidate-local bindings through SFINAE, and
+retain the typed function ordering facts in LowIR. Validate those four
+witnesses, then the full active report, through-PA22 report, file audit, and
+clean status. The next checkpoint group is constructor/template-template
+deduction bundled with the first remaining typed-value materialization cases.
+
+## Checkpoint 22 — structured-bool pointer viability
+
+### Remaining Work Map
+
+- **Owner and namespace replay:** source-namespace lookup, anonymous-namespace
+  partials, local qualified replay, and generated owner aliases remain.
+- **Deduction and overload composition:** constructor/conversion viability,
+  explicit packs, template-template defaults, member-template lookup, and
+  partial ordering remain the largest status group.
+- **Typed values and materialization:** dependent boolean/integral values,
+  `sizeof`, variable templates, explicit/extern declarations, special members,
+  and LowIR declaration/storage metadata remain comparison residuals.
+- **Fixed points:** the two reentrant static-query cases still need a typed
+  terminating query identity.
+
+### Checkpoint Scope
+
+Repair the shared expression-SFINAE pointer boundary used by the structured
+boolean conversion probe. Concrete pointers to unrelated complete class types
+must be rejected, derived-to-base and `void*` conversions must remain viable,
+and unresolved/generated pointer patterns must remain available for later
+template deduction. Validate the three structured-bool witnesses, the PA21
+template-arity regression, and the full through-PA22 report; then rerun the
+active PA23 report and file audit.
+
+## Checkpoint 22 result — 2026-07-31
+
+The pointer boundary now rejects unrelated complete class-pointer candidates
+while retaining exact, derived-to-base, `void*`, and unresolved/generated
+template patterns. This makes the structured conversion probe select the
+`bool_<false>` overload and keeps the generated
+`integral_constant<bool, false>::value` storage when that specialization is a
+complete expression object. Static constexpr conversion members that are only
+used as constant expressions remain unmaterialized.
+
+The three structured-bool witnesses pass, as does the PA21
+`template-template-arity-incomplete-partial` regression. The parent report is
+clean at **2100/2100**. The active PA23 report is **332/396**, above the
+turn-start 321/396 baseline; the remaining failures stay in the grouped owner
+replay, deduction/overload, typed-value/materialization, and fixed-point bands
+listed above. No tests or reference fixtures were changed.
+
+### Validation and next checkpoint
+
+- `make test-report-through-pa22`: **PASS (2100/2100)**.
+- Focused PA23 structured-bool witnesses: **PASS (3/3)**.
+- PA21 template-template arity regression: **PASS (1/1)**.
+- `make test-report ACTIVE_TEST_REPORT_PAS='pa23'`: **332/396**.
+- `perl scripts/cppgm_file_audit.pl --stage pa23 --paths dev/src`: **PASS**
+  with the repository's existing warnings.
+- `git diff --check`: **PASS**.
+
+The next checkpoint is the bundled constructor/template-template deduction and
+named-parameter SFINAE group, with the adjacent typed-value consumers for
+`sizeof`, boolean/integral members, and variable-template materialization.
