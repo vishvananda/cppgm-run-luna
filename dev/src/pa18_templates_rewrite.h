@@ -1046,8 +1046,17 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 				const TemplateDefinition* definition = FindDefinition(base, context);
 				if(!definition || !definition->class_template)
 					throw logic_error("explicit instantiation names no class template");
-				if(input->explicit_instantiation)
-					Instantiate(*definition, SplitTemplateArguments(arguments), context, true);
+				if(input->explicit_instantiation) {
+					const size_t previous_visibility = explicit_instantiation_visibility_;
+					explicit_instantiation_visibility_ = input->source_token_begin;
+					try {
+						Instantiate(*definition, SplitTemplateArguments(arguments), context, true);
+					} catch(...) {
+						explicit_instantiation_visibility_ = previous_visibility;
+						throw;
+					}
+					explicit_instantiation_visibility_ = previous_visibility;
+				}
 				// A valid extern class instantiation suppresses an emitted definition;
 				// it is still accepted only after the typed class entity was found.
 				return CPPGMAstNodePtr();

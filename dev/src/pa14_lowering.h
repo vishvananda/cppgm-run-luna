@@ -384,6 +384,8 @@ string qualified_name(Scope* scope, const string& raw) const;
 
 string TypeQualifiedName(const TypePtr& type) const;
 
+TypePtr ResolveClassOwner(Scope* scope, const string& raw) const;
+
 string declarator_name(const CPPGMAstNodePtr& node) const;
 
 TypePtr declared_type(const CPPGMAstNodePtr& node, Scope* scope,

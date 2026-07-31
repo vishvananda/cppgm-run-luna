@@ -253,6 +253,11 @@
 		const vector<const TemplateDefinition*> members = MemberDefinitions(parent, parent_args);
 		for(size_t i = 0; i < members.size(); ++i) {
 			const TemplateDefinition& member = *members[i];
+			if(explicit_instantiation && explicit_instantiation_visibility_ !=
+				static_cast<size_t>(-1) && member.declaration &&
+				member.declaration->source_token_begin != static_cast<size_t>(-1) &&
+				member.declaration->source_token_begin > explicit_instantiation_visibility_)
+				continue;
 			// A member template is not a member of the enclosing specialization
 			// until its own template arguments are known.  Replaying it while the
 			// class is materialized would leave names such as `U` dependent in a

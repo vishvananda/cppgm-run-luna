@@ -3408,3 +3408,200 @@ extern, special-member, conversion, and out-of-class emission cases.  Retain
 the candidate/dependent-result and typed-value groups as regressions, including
 the two fixed-point fixtures, and keep the full failure inventory above as the
 checkpoint's comparison set.
+
+## Checkpoint 27 scope — 2026-07-31 (before implementation)
+
+### Live baseline and complete grouped failure set
+
+The fresh required PA23 report is **343/396**, with **53** failing fixtures:
+24 exit-status failures and 29 LowIR comparisons.  The complete fixture
+inventory is the 24-entry status block and 29-entry LowIR block immediately
+above; the shared behavior groups are:
+
+- **Explicit/extern owner and specialization replay:**
+  `general/100-default-nontype-qualified-function-lookup.t`,
+  `general/100-member-template-specialization-return-prefers-member-call.t`,
+  `general/100-selected-specialization-special-member-body.t`,
+  `general/200-member-template-implicit-instantiation-not-overload.t`,
+  `general/300-dependent-alias-helper-partial-specialization.t`,
+  `general/400-anonymous-namespace-partial-specialization.t`,
+  `general/400-current-specialization-display-name-member-alias.t`,
+  `general/400-member-template-result-pack-preserves-nested-function-pointer-owner.t`,
+  `general/500-recursive-qualified-member-template-bool-arg.t`,
+  `spec/100-explicit-instantiation-after-explicit-specialization-no-effect.t`,
+  `spec/100-explicit-instantiation-class-prior-member-definitions.t`,
+  `spec/100-explicit-specialization-out-of-class-ctor-replay.t`,
+  `spec/100-explicit-specialization-out-of-class-member-emits.t`,
+  `spec/100-extern-template-member-function-declaration.t`,
+  `spec/100-extern-template-static-data-declaration.t`,
+  `spec/100-local-member-call-constructor-template-instantiation.t`,
+  `spec/400-defaulted-nested-class-argument-partial-specialization.t`,
+  `spec/400-explicit-type-arg-dependent-qualified-member-template-id.t`,
+  `spec/400-qualified-member-template-id-bool-constant.t`, and
+  `spec/500-conditional-alias-index-sequence-member-template-call.t`.
+- **Typed dependent member results and values:**
+  `general/100-dependent-bool-partial-static-value-storage.t`,
+  `general/100-intermediate-type-transform-value-nontype.t`,
+  `general/100-sizeof-call-result-nontype-template-argument.t`,
+  `general/200-function-template-reference-cv-alias-partial-order.t`,
+  `general/300-dependent-bool-base-trait-type-argument.t`,
+  `general/400-member-variable-template-leaf-sfinae.t`,
+  `general/400-variable-template-specializations.t`,
+  `general/500-member-template-conditional-alias-trailing-return.t`,
+  `general/500-mp11-append-alias-template-sfinae.t`,
+  `general/500-nontype-alias-reinstantiation-structural-state.t`,
+  `spec/100-sizeof-union-type-nttp.t`, and
+  `spec/400-class-template-nttp-scope-value.t`.
+- **Deduction, conversion, and candidate viability:**
+  `general/100-explicit-specialization-pointer-member-definition.t`,
+  `general/200-adl-explicit-template-id-call.t`,
+  `general/200-function-template-template-parameter-deduction.t`,
+  `general/200-member-operator-template-reference-pattern-partial-order.t`,
+  `general/400-explicit-function-template-type-arg-drops-nontype-overload.t`,
+  `general/400-nonmember-template-compound-assignment-const-lhs.t`,
+  `general/400-static-cast-rvalue-ref-skips-conversion-operator.t`,
+  `spec/100-out-of-class-conversion-operator-definition.t`,
+  `spec/400-conversion-function-template-call-argument.t`,
+  `spec/400-conversion-function-template-copy-init.t`,
+  `spec/400-conversion-function-template-selection.t`, and
+  `spec/400-template-template-member-alias-owner-shadow.t`.
+- **Remaining fixed-point stress:**
+  `general/500-reentrant-static-query-callable-enable-if-cache.t` and
+  `general/500-reentrant-static-query-enable-if-partial.t` remain genuine
+  termination witnesses; they are not in the acceptance scope and must not be
+  handled through timeout or broad fallback behavior.
+
+### Checkpoint Scope
+
+Complete the explicit/extern specialization-materialization increment as one
+typed owner path:
+
+1. Recover an explicitly specialized class template-id as the owner of an
+   out-of-class member or special-member definition from the analyzer's typed
+   class registry, then collect the concrete member with its source body,
+   object identity, and required LowIR emission state.
+2. Recognize `extern template` member-function and static-data declarations as
+   typed explicit-instantiation declarations of the selected class member;
+   validate the owner/member kind without demanding a function-template
+   definition, and retain the declaration-only/no-body contract.
+3. Preserve the source-order boundary of an explicit class instantiation so
+   only definitions visible before the instantiation become object roots, while
+   an explicit specialization keeps its own concrete definition and constructor
+   aliases.  Do this through `FunctionRecord`/`GlobalRecord` facts rather than
+   generated-name or fixture-specific checks.
+
+The focused validation set is:
+
+`general/100-explicit-specialization-out-of-class-ctor-replay.t`,
+`general/100-explicit-specialization-pointer-member-definition.t`,
+`spec/100-explicit-specialization-out-of-class-ctor-replay.t`,
+`spec/100-explicit-specialization-out-of-class-member-emits.t`,
+`spec/100-explicit-instantiation-after-explicit-specialization-no-effect.t`,
+`spec/100-explicit-instantiation-class-prior-member-definitions.t`,
+`spec/100-extern-template-member-function-declaration.t`,
+`spec/100-extern-template-static-data-declaration.t`, and
+`spec/100-out-of-class-conversion-operator-definition.t`.
+
+Before implementation this scope is expected to improve the 343-test
+baseline; it must preserve all assignments through PA22, pass the PA23 file
+audit, and leave the two fixed-point fixtures visible.  The next checkpoint
+will take the remaining dependent member-result/candidate-viability group,
+then the residual typed-value and LowIR comparison cases.
+
+## Checkpoint 27 result — 2026-07-31
+
+### Completed scope and validation
+
+The typed owner/specialization increment is complete.  Out-of-class members
+and special members of an explicitly specialized class now recover their
+class owner from the typed class registry, retain the source body and
+specialization facts, and enter the correct emission frontier.  Explicit
+class-instantiation replay now has a source-order visibility boundary;
+extern-template member-function and static-data declarations are recognized
+as declaration-only typed member facts; and an explicit function
+specialization remains selected when a later explicit instantiation is
+replayed.
+
+The focused owner/replay tests passed for explicit constructors, pointer
+members, explicit member emission, explicit-instantiation ordering, and both
+extern-template member forms.  The out-of-class conversion-operator fixture
+remains a LowIR comparison failure in the separate conversion-materialization
+path; it was retained as a regression guard rather than folded into this
+checkpoint's owner recovery.
+
+The required PA23 report is **351/396**, up from the turn-start **343/396**.
+The remaining set is **45 fixtures**: **22** exit-status failures and **23**
+LowIR comparisons.  The fixed-point query fixtures remain visible in the
+status set.  The final net improvement is eight tests above baseline,
+covering the owner/replay increment and the cross-specialization ABI guard.
+
+The follow-up ABI correction keeps built-in template arguments as direct
+Itanium encodings, emits the template-name substitution for a typed
+cross-specialization parameter, and suppresses a redundant base-entry body
+for inline converting constructors.  It restores the PA21 and PA22
+cross-specialization fixtures; the required through-PA22 report is
+**2100/2100**.
+
+### Remaining Work Map
+
+- **Dependent owner and candidate replay (exit status):**
+  `general/100-default-nontype-qualified-function-lookup.t`,
+  `general/100-member-template-specialization-return-prefers-member-call.t`,
+  `general/100-selected-specialization-special-member-body.t`,
+  `general/200-member-template-implicit-instantiation-not-overload.t`,
+  `general/300-dependent-alias-helper-partial-specialization.t`,
+  `general/400-anonymous-namespace-partial-specialization.t`,
+  `general/400-current-specialization-display-name-member-alias.t`,
+  `general/400-member-template-result-pack-preserves-nested-function-pointer-owner.t`,
+  `general/500-recursive-qualified-member-template-bool-arg.t`,
+  `spec/100-local-member-call-constructor-template-instantiation.t`,
+  `spec/400-defaulted-nested-class-argument-partial-specialization.t`,
+  `spec/400-explicit-type-arg-dependent-qualified-member-template-id.t`,
+  `spec/400-qualified-member-template-id-bool-constant.t`, and
+  `spec/500-conditional-alias-index-sequence-member-template-call.t`.
+- **Candidate deduction, conversion, and dependent results:**
+  `general/400-static-cast-rvalue-ref-skips-conversion-operator.t`,
+  `general/500-dependent-function-type-pack-expansion-ctor-init.t`,
+  `general/500-dependent-qualified-member-template-result-bool.t`,
+  `general/500-member-template-conditional-alias-trailing-return.t`,
+  `general/500-mp11-append-alias-template-sfinae.t`,
+  `general/500-nontype-alias-reinstantiation-structural-state.t`,
+  `spec/400-defaulted-nested-class-argument-partial-specialization.t`, and
+  the remaining template-template/member-operator deduction comparisons.
+- **Typed values and LowIR materialization:** the current comparison set is
+  `general/100-current-specialization-member-body-cast-compare.t`,
+  `general/100-dependent-bool-partial-static-value-storage.t`,
+  `general/100-inherited-using-alias-out-of-class-specialization-member.t`,
+  `general/100-intermediate-type-transform-value-nontype.t`,
+  `general/100-local-qualified-argument-replay.t`,
+  `general/100-sizeof-call-result-nontype-template-argument.t`,
+  `general/200-adl-explicit-template-id-call.t`,
+  `general/200-function-template-reference-cv-alias-partial-order.t`,
+  `general/200-function-template-template-parameter-deduction.t`,
+  `general/200-member-operator-template-reference-pattern-partial-order.t`,
+  `general/300-current-specialization-constructor-template-canonical-owner.t`,
+  `general/300-dependent-bool-base-trait-type-argument.t`,
+  `general/400-explicit-function-template-type-arg-drops-nontype-overload.t`,
+  `general/400-member-variable-template-leaf-sfinae.t`,
+  `general/400-nonmember-template-compound-assignment-const-lhs.t`,
+  `general/400-out-of-class-partial-member-template-owner-parameter-alias.t`,
+  `general/400-variable-template-specializations.t`,
+  `spec/100-out-of-class-conversion-operator-definition.t`,
+  `spec/100-partial-specialization-member-primary-param-name.t`,
+  `spec/100-sizeof-union-type-nttp.t`,
+  `spec/400-class-template-nttp-scope-value.t`,
+  `spec/400-defaulted-template-arg-partial-base-completion.t`, and
+  `spec/400-template-template-member-alias-owner-shadow.t`.
+- **Fixed-point termination:**
+  `general/500-reentrant-static-query-callable-enable-if-cache.t` and
+  `general/500-reentrant-static-query-enable-if-partial.t` still require a
+  stable typed query identity and candidate-local cycle handling.
+
+### Next checkpoint group
+
+Take the dependent owner/candidate replay group together with its typed
+member-result and conversion-ranking consumers.  Start with the status
+fixtures that fail before LowIR, then validate the associated comparison
+fixtures and preserve the two fixed-point witnesses as regressions.  Follow
+with the residual typed-value/materialization set; every increment must rerun
+the PA23 report, the through-PA22 report, and the file audit.

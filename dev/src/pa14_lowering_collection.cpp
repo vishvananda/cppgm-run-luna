@@ -52,6 +52,40 @@ string HexEncode(const string& value)
     return result;
 }
 
+string PA14TrimOwnerSpelling(string value)
+{
+    while(!value.empty() && isspace(static_cast<unsigned char>(value[0])))
+      value.erase(0, 1);
+    while(!value.empty() && isspace(static_cast<unsigned char>(value[value.size() - 1])))
+      value.erase(value.size() - 1);
+    return value;
+}
+
+vector<string> PA14OwnerTemplateArguments(const string& value, size_t open)
+{
+    vector<string> result;
+    if(open == string::npos || open >= value.size() || value[value.size() - 1] != '>')
+      return result;
+    string current;
+    int angle = 0, parentheses = 0, brackets = 0;
+    for(size_t position = open + 1; position + 1 < value.size(); ++position) {
+      const char character = value[position];
+      if(character == '<') ++angle;
+      else if(character == '>' && angle > 0) --angle;
+      else if(character == '(') ++parentheses;
+      else if(character == ')' && parentheses > 0) --parentheses;
+      else if(character == '[') ++brackets;
+      else if(character == ']' && brackets > 0) --brackets;
+      if(character == ',' && angle == 0 && parentheses == 0 && brackets == 0) {
+        result.push_back(PA14TrimOwnerSpelling(current));
+        current.clear();
+      } else current += character;
+    }
+    if(!current.empty() || !result.empty())
+      result.push_back(PA14TrimOwnerSpelling(current));
+    return result;
+}
+
 } // namespace
 
 bool PA14Lowerer::HasInline(const CPPGMAstNodePtr& node) const
@@ -79,6 +113,48 @@ bool PA14Lowerer::TemplatePrimaryHasNonstaticMemberFunction(const TypePtr& raw_t
          HasNonstaticMemberFunction(primary)) return true;
     }
     return false;
+}
+
+TypePtr PA14Lowerer::ResolveClassOwner(Scope* scope, const string& raw) const
+{
+    if(raw.empty()) return TypePtr();
+    Analyzer::PathTarget direct = analyzer_.ResolvePath(scope, raw);
+    TypePtr direct_type = direct.binding ? type_value(direct.binding->type) :
+      (direct.scope ? type_value(direct.scope->owner_type) : TypePtr());
+    if(direct_type && direct_type->kind == TYPE_CLASS && direct_type->owned_scope)
+      return direct_type;
+
+    string wanted = raw;
+    while(wanted.compare(0, 2, "::") == 0) wanted.erase(0, 2);
+    const size_t open = wanted.find('<');
+    const string wanted_base = open == string::npos ? wanted : wanted.substr(0, open);
+    const vector<string> wanted_arguments = PA14OwnerTemplateArguments(wanted, open);
+    const string lookup_name = LastComponent(wanted);
+    const string lookup_base = LastComponent(wanted_base);
+    map<string, vector<TypePtr> >::const_iterator group = class_types_by_name_.find(lookup_name);
+    if(group == class_types_by_name_.end() && !lookup_base.empty())
+      group = class_types_by_name_.find(lookup_base);
+    if(group == class_types_by_name_.end()) return TypePtr();
+    for(size_t index = 0; index < group->second.size(); ++index) {
+      const TypePtr candidate = type_value(group->second[index]);
+      if(!candidate || candidate->kind != TYPE_CLASS || !candidate->owned_scope)
+        continue;
+      if(candidate->name == wanted || TypeQualifiedName(candidate) == wanted)
+        return candidate;
+      if(open == string::npos || !candidate->template_specialization ||
+         candidate->template_arguments.size() != wanted_arguments.size()) continue;
+      if(LastComponent(candidate->template_primary) != lookup_base &&
+         LastComponent(candidate->name) != lookup_name) continue;
+      bool same_arguments = true;
+      for(size_t argument = 0; argument < wanted_arguments.size(); ++argument)
+        if(PA14TrimOwnerSpelling(candidate->template_arguments[argument]) !=
+           wanted_arguments[argument]) {
+          same_arguments = false;
+          break;
+        }
+      if(same_arguments) return candidate;
+    }
+    return TypePtr();
 }
 
 void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, bool definition)
@@ -110,6 +186,8 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
       Analyzer::PathTarget owner = analyzer_.ResolvePath(scope, raw_name.substr(0, separator));
       if(owner.binding) member_owner = owner.binding->type;
       else if(owner.scope) member_owner = owner.scope->owner_type;
+      if(!member_owner || member_owner->kind != TYPE_CLASS)
+        member_owner = ResolveClassOwner(scope, raw_name.substr(0, separator));
     }
     if(member_owner && member_owner->kind != TYPE_CLASS) member_owner.reset();
     if(type_scope && type_scope->kind != SCOPE_TEMPLATE_PARAMETERS)
@@ -299,6 +377,13 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
 		node->explicit_specialization;
 	record->extern_template = record->extern_template || node->extern_instantiation;
 	record->object_root = record->object_root || node->explicit_instantiation;
+	const bool concrete_specialized_definition = definition && is_member && member_owner &&
+		member_owner->owned_scope && scope != member_owner->owned_scope &&
+		member_owner->template_specialization && !node->template_instantiation &&
+		!record->member_template && !is_static;
+	if(concrete_specialized_definition) {
+		record->explicit_specialization = true;
+	}
 	// An explicit function specialization is an ordinary definition with a
 	// concrete template identity.  It must remain an emission root even when
 	// the current translation unit does not call that overload; treating it as
@@ -307,7 +392,8 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
 		(node->kind == "function-definition" ||
 		 node->kind == "special-member-definition")) ||
 		node->explicit_instantiation || node->extern_instantiation) record->needed = true;
-	record->weak_binding = record->template_instantiation && !record->extern_template;
+	record->weak_binding = record->template_instantiation && !record->extern_template &&
+		!record->explicit_specialization;
 	record->inline_definition = record->inline_definition || HasInline(node) || facts.is_constexpr;
 	const bool out_of_class_definition = definition && is_member && member_owner &&
 		member_owner->owned_scope && scope != member_owner->owned_scope;
@@ -318,7 +404,7 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
 	// while ordinary members and members of an already materialized class
 	// specialization retain their typed definition.
 	if(out_of_class_definition && !record->member_template &&
-		!record->template_instantiation && !member_owner->template_specialization)
+		(!record->template_instantiation || concrete_specialized_definition))
 		record->needed = true;
 	if(node->template_instantiation || node->extern_instantiation) {
 		record->template_primary = node->template_primary;
@@ -638,7 +724,12 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
 	record->template_instantiation = node->template_instantiation || owner->template_specialization ||
 		(owner->direct_base && type_value(owner->direct_base) &&
 		 type_value(owner->direct_base)->template_specialization);
-	record->weak_binding = record->template_instantiation;
+	const bool concrete_specialized_definition = out_of_class_definition &&
+		owner->template_specialization && !node->template_instantiation;
+	record->explicit_specialization = record->explicit_specialization ||
+		concrete_specialized_definition;
+	record->weak_binding = record->template_instantiation &&
+		!record->explicit_specialization;
 	// A special-member definition written in the class body is inline even
 	// when it is not a template.  Preserve that linkage fact so its emitted
 	// object uses the ABI constructor identity and receives the C2 alias.
@@ -690,14 +781,15 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
 		 (owner->template_specialization && record->source_type &&
 		  !record->source_type->parameters.empty() &&
 		  (!node->template_instantiation ||
-		   complete_template_object_uses_.find(owner.get()) !=
-			complete_template_object_uses_.end())))) {
+			   complete_template_object_uses_.find(owner.get()) !=
+				complete_template_object_uses_.end())) || concrete_specialized_definition)) {
 		record->needed = true;
 	}
 	const bool constructor_record = record->constructor;
 	if(constructor_record &&
 	   (record->defaulted || (out_of_class_definition &&
-							  !record->template_instantiation))) {
+							  (!record->template_instantiation ||
+							   (concrete_specialized_definition && !HasInline(node)))))) {
       EnsureConstructorBaseEntry(record);
       if(out_of_class_definition) {
         FunctionRecord* base_entry = BaseEntryFor(record);

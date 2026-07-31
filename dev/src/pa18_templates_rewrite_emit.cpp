@@ -1094,8 +1094,27 @@ string PA18TemplateExpander::MaterializeInstantiation(const TemplateDefinition& 
 			extern_instantiation_declarations_.erase(extern_declaration);
 			specializations_.erase(cached);
 		} else {
+			const bool superseded_by_explicit = !definition.explicit_specialization &&
+				FindExplicitFunctionSpecialization(&definition, metadata_args);
+			if(explicit_instantiation && !definition.class_template &&
+				!superseded_by_explicit) {
+				map<string, vector<CPPGMAstNodePtr> >::const_iterator generated =
+					generated_by_primary_.find(definition.qualified_name);
+				if(generated != generated_by_primary_.end())
+					for(size_t node = 0; node < generated->second.size(); ++node) {
+						const CPPGMAstNodePtr& materialized = generated->second[node];
+						if(!materialized || materialized->template_arguments != metadata_args)
+							continue;
+						const string materialized_name = FirstIdentifierLocal(
+							FunctionDeclarator(materialized));
+						if(materialized_name != cached->second)
+							continue;
+						MarkGeneratedNode(materialized, definition.qualified_name,
+							metadata_args, true, definition.explicit_specialization, false);
+					}
+			}
 			if(definition.class_template && HasDeferredDependentClassMember(
-				definition, context, substitutions, pack_substitutions)) return cached->second;
+					definition, context, substitutions, pack_substitutions)) return cached->second;
 			ReplayCachedInstantiation(definition, args, cached->second, context,
 				explicit_instantiation, pack_substitutions);
 			return cached->second;

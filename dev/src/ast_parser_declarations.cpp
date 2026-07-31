@@ -368,6 +368,8 @@ CPPGMAstNodePtr Parser::ParseExplicitInstantiation()
 	CPPGMAstNodePtr result = Node("explicit-instantiation-declaration");
 	result->explicit_instantiation = !extern_template;
 	result->extern_instantiation = extern_template;
+	result->source_token_begin = mark.position;
+	result->source_token_end = position_ == 0 ? 0 : position_ - 1;
 	Add(result, target);
 	return result;
 }

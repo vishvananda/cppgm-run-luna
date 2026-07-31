@@ -657,8 +657,8 @@ void PA14Lowerer::CollectTopLevel(const CPPGMAstNodePtr& node, Scope* scope)
         Analyzer::PathTarget owner = analyzer_.ResolvePath(scope, owner_name);
         TypePtr owner_type = owner.binding ? owner.binding->type :
           (owner.scope ? owner.scope->owner_type : TypePtr());
-        if(owner_type && owner_type->kind == TYPE_CLASS && owner_type->owned_scope)
-          owner_scope = owner_type->owned_scope;
+        if(!owner_type || owner_type->kind != TYPE_CLASS) owner_type = ResolveClassOwner(scope, owner_name);
+        if(owner_type && owner_type->kind == TYPE_CLASS && owner_type->owned_scope) owner_scope = owner_type->owned_scope;
       }
       CPPGMAstNodePtr declarator = ChildOfKind(node, "declarator");
       CPPGMAstNodePtr initializer = ChildOfKind(declarator, "special-initializer");

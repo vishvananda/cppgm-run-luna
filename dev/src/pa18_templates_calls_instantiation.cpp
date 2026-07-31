@@ -13,9 +13,9 @@ bool PA18TemplateExpander::MaterializeExplicitInstantiation(
 		target->kind != "special-member-declaration" &&
 		target->kind != "special-member-definition")) return false;
 	const CPPGMAstNodePtr declarator = FunctionDeclarator(target);
+	if(!declarator) return false;
 	const CPPGMAstNodePtr parameters = DescendantOfKind(declarator,
 		"parameter-clause");
-	if(!declarator || !parameters) return false;
 	string raw_name = target->kind == "special-member-declaration" ||
 		target->kind == "special-member-definition" ?
 		CanonicalSpelling(RemoveMarker(target->value)) :
@@ -77,6 +77,42 @@ bool PA18TemplateExpander::MaterializeExplicitInstantiation(
 		LastComponent(lookup_owner) == function_name) {
 		if(!extern_instantiation)
 			Instantiate(*owner_definition, owner_arguments, context, true);
+		return true;
+	}
+	// Member declarations and static data members are owned by the class
+	// template rather than by the free-function registry.  Keep extern
+	// declarations as typed ownership facts; an explicit instantiation replays
+	// the enclosing class so its already-visible member definitions can enter
+	// the normal materialization path.
+	if(owner_definition && owner_definition->class_template && !owner_arguments.empty()) {
+		bool known_member = HasStaticMember(owner_definition, lookup_owner, function_name);
+		if(!known_member && parameters) {
+			set<string> active_member_lookup;
+			string member_type;
+			known_member = FindClassMemberType(owner_definition->qualified_name,
+				function_name, map<string, string>(), context, &member_type,
+				&active_member_lookup, false);
+		}
+		if(known_member) {
+			if(!extern_instantiation)
+				Instantiate(*owner_definition, owner_arguments, context, true);
+			return true;
+		}
+	}
+	if(!parameters) return false;
+	// An explicit instantiation after an explicit function specialization names
+	// the specialization that is already the selected entity; it must not create
+	// a second primary-template body.  Re-enter the typed specialization record
+	// so the explicit-instantiation root fact reaches its cached declaration.
+	if(!explicit_arguments.empty()) for(size_t candidate_index = 0;
+		candidate_index < candidates.size(); ++candidate_index) {
+		const TemplateDefinition* candidate = candidates[candidate_index];
+		if(!candidate || candidate->class_template || candidate->parameters.empty()) continue;
+		const TemplateDefinition* specialization =
+			FindExplicitFunctionSpecialization(candidate, explicit_arguments);
+		if(!specialization) continue;
+		if(!extern_instantiation)
+			Instantiate(*specialization, explicit_arguments, context, true);
 		return true;
 	}
 	// A non-member overloaded operator must have a class or enum operand.  Do

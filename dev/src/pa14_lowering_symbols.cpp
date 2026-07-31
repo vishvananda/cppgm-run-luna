@@ -412,11 +412,73 @@ size_t abi_named_type_count(const string& raw)
   return result;
 }
 
+string abi_generated_fundamental_name(string raw)
+{
+  while(!raw.empty() && raw[raw.size() - 1] == '_') raw.erase(raw.size() - 1);
+  if(raw == "bool" || raw == "char" || raw == "signed_char" ||
+     raw == "unsigned_char" || raw == "short" || raw == "short_int" ||
+     raw == "unsigned_short" || raw == "unsigned_short_int" ||
+     raw == "int" || raw == "signed_int" || raw == "unsigned" ||
+     raw == "unsigned_int" || raw == "long" || raw == "long_int" ||
+     raw == "unsigned_long" || raw == "unsigned_long_int" ||
+     raw == "long_long" || raw == "long_long_int" ||
+     raw == "unsigned_long_long" || raw == "unsigned_long_long_int" ||
+     raw == "float" || raw == "double" || raw == "long_double" ||
+     raw == "char16_t" || raw == "char32_t" || raw == "wchar_t" ||
+     raw == "nullptr_t") {
+    for(size_t i = 0; i < raw.size(); ++i)
+      if(raw[i] == '_') raw[i] = ' ';
+    if(raw == "unsigned") raw = "unsigned int";
+    if(raw == "short") raw = "short int";
+    if(raw == "long") raw = "long int";
+    if(raw == "signed char") return "c";
+    if(raw == "unsigned char") return "h";
+    return abi_fundamental(raw);
+  }
+  return string();
+}
+
+string abi_cross_template_specialization(const TypePtr& raw, const TypePtr& owner)
+{
+  const TypePtr value = type_value(raw);
+  const TypePtr owner_value = type_value(owner);
+  if(!value || !owner_value || value->kind != TYPE_CLASS ||
+     owner_value->kind != TYPE_CLASS || !owner_value->template_specialization ||
+     owner_value->template_primary.empty()) return string();
+  const string owner_primary = abi_last_component(owner_value->template_primary);
+  if(value->template_specialization && !value->template_primary.empty() &&
+     abi_last_component(value->template_primary) == owner_primary &&
+     value->template_arguments.size() != owner_value->template_arguments.size())
+    return string();
+  if(value->template_specialization && !value->template_primary.empty() &&
+     abi_last_component(value->template_primary) == owner_primary) {
+    bool same_arguments = value->template_arguments.size() ==
+      owner_value->template_arguments.size();
+    for(size_t argument = 0; same_arguments &&
+        argument < value->template_arguments.size(); ++argument)
+      if(abi_trim(value->template_arguments[argument]) !=
+         abi_trim(owner_value->template_arguments[argument])) same_arguments = false;
+    if(!same_arguments) {
+      string result = "S_I";
+      for(size_t argument = 0; argument < value->template_arguments.size(); ++argument)
+        result += abi_type_text(value->template_arguments[argument]);
+      return result + "E";
+    }
+  }
+  const string raw_name = abi_last_component(value->name);
+  const string prefix = owner_primary + "_";
+  if(raw_name.compare(0, prefix.size(), prefix) != 0) return string();
+  const string argument = abi_generated_fundamental_name(raw_name.substr(prefix.size()));
+  return argument.empty() ? string() : "S_I" + argument + "E";
+}
+
 bool abi_template_substitution_index(const TypePtr& raw, const TypePtr& owner,
                                      size_t* index)
 {
   if(!raw || !owner || !owner->template_specialization ||
      owner->template_arguments.empty() || !index) return false;
+  const TypePtr value = type_value(raw);
+  if(value && (value->kind == TYPE_FUNDAMENTAL || value->kind == TYPE_ENUM)) return false;
   const string raw_type = abi_type(raw);
   string unqualified_raw = raw_type;
   while(!unqualified_raw.empty() &&
@@ -460,6 +522,12 @@ string abi_member_parameter_type(const TypePtr& raw, const TypePtr& owner)
   if(raw->kind == TYPE_LVALUE_REFERENCE || raw->kind == TYPE_RVALUE_REFERENCE) {
     size_t substitution = 0;
     const string reference = raw->kind == TYPE_LVALUE_REFERENCE ? "R" : "O";
+    const string cross_specialization = abi_cross_template_specialization(raw->child, owner);
+    if(!cross_specialization.empty())
+      return cv + reference +
+        string(raw->child && raw->child->is_const ? "K" : "") +
+        (raw->child && raw->child->is_volatile ? "V" : "") +
+        cross_specialization;
     if(abi_template_substitution_index(type_value(raw->child), owner,
                                        &substitution))
       return cv + reference +
@@ -470,11 +538,15 @@ string abi_member_parameter_type(const TypePtr& raw, const TypePtr& owner)
   }
   if(raw->kind == TYPE_POINTER) {
     size_t substitution = 0;
+    const string cross_specialization = abi_cross_template_specialization(raw->child, owner);
+    if(!cross_specialization.empty()) return cv + "P" + cross_specialization;
     if(abi_template_substitution_index(type_value(raw->child), owner,
                                        &substitution))
       return cv + "P" + abi_substitution(substitution);
     return cv + "P" + abi_member_parameter_type(raw->child, owner);
   }
+  const string cross_specialization = abi_cross_template_specialization(raw, owner);
+  if(!cross_specialization.empty()) return cv + cross_specialization;
   size_t substitution = 0;
   if(abi_template_substitution_index(raw, owner, &substitution))
     return cv + abi_substitution(substitution);
