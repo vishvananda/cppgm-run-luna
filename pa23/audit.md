@@ -1455,3 +1455,91 @@ the owner/specialization replay, deduction/overload, and LowIR groups.
 - `git diff --check`: **PASS**.  The remaining PA23 failures are recorded as
   the semantic work frontier in `pa23/plan.md`, not as unresolved checkpoint
   architecture, performance, shortcut, regression, or audit debt.
+
+## Checkpoint 26 audit — 2026-07-31
+
+### Scope Reviewed
+
+- The latest `Checkpoint Scope` in `pa23/plan.md` (the Checkpoint 24
+  template-template/default-pack scope), its Checkpoint 25/26 results, and
+  the newly refreshed complete PA23 failure inventory and next group.
+- `pa23/README.md`, `TESTING_AND_REFERENCES.md`, the focused PA23 witnesses,
+  the related PA18–PA22 tests, and the required through-PA22 contract.
+- Recent commits `56663fb` (the landed pack and specialization replay
+  checkpoint), `9f8a4fa` (the preceding audit), and `1246a1b` (the preceding
+  candidate-viability implementation), including all changed PA14/PA18
+  source modules and their ownership/indexing changes.
+- The authoritative full-run log at
+  `/home/vishvananda/work/.ralph/luna-gpt-5.6-luna-ultra/last-test.log`, the
+  seven checkpoint witnesses, the exact through-PA22 report, and the PA23
+  source file audit.
+
+### Findings
+
+- The checkpoint remains on the normal compiler pipeline: parsed AST,
+  collection and lookup, typed template argument deduction/substitution and
+  replay, PA14 lowering, and LowIR emission.  There is no skipped compiler
+  phase, dummy or embedded output, interpreter/VM/trampoline substitute,
+  reference-binary or host-compiler invocation, source/test-specific
+  acceptance gate, or unchecked output path.
+- The landed checkpoint preserves semantic facts in the existing typed
+  records and maps: template definitions own conversion-operator identity,
+  `conversion_operator_definitions_by_owner_` indexes those definitions by
+  owner, `active_pack_substitutions_` carries pack elements, and the explicit
+  specialization-argument count records preserve use-site arity.  No new
+  duplicated owner object or downstream recovery of those facts was found.
+- One avoidable performance issue was present in constructor replay: each
+  initializer argument could scan the entire `definitions_` registry twice to
+  rediscover conversion operators from their printed names.  That was a
+  repeated full-registry walk and a stringly recovery of an already-indexed
+  fact; it is fixed below by consuming the owner-indexed conversion records.
+- Active-pack ellipsis expansion had two overlapping scans: the new helper
+  expanded a scalar substitution while `RewriteText` separately walked every
+  active pack and expanded its source token.  The work is now one centralized,
+  identifier-boundary-aware pass.  It remains a source-spelling operation
+  before AST transformation, not reparsing of emitted text or a semantic
+  acceptance path.
+- No timeout workaround, retry budget, timing-based acceptance, or fallback
+  success path was added.  The two reentrant static-query failures in the
+  complete residual set remain ordinary fixed-point semantic coverage and are
+  not converted into success by timeout or substitute execution.
+- The file audit has no fatal finding and retains the same 13 non-fatal
+  repository warnings as the checkpoint baseline.  The fixes stayed in the
+  checked `dev/src` modules; no tests, references, checker rules, generated
+  payloads, hidden fragments, or unchecked paths were added or modified.
+- The current PA23 result is above the turn-start baseline (343/396 versus
+  336/396), and the exact earlier-PA report remains clean.  No checkpoint-level
+  architecture, performance, shortcut, regression, or file-audit blocker
+  remains.
+
+### Changes Made
+
+- Changed `MaterializeInitializerConstructor` to consume the existing
+  `conversion_operator_definitions_by_owner_` vector in both conversion
+  replay paths.  The index is built once from typed `TemplateDefinition`
+  records, so replay no longer scans all definitions or reconstructs
+  conversion-operator status from name spelling for each argument.
+- Consolidated active-pack ellipsis handling in
+  `ExpandActivePackEllipsis`.  It expands both the active pack name and its
+  scalar substitution with identifier boundaries, preserves empty-pack comma
+  cleanup, and removes the duplicate full active-pack loop from `RewriteText`.
+- Added this audit and refreshed `pa23/plan.md` with the exact 24 status and
+  29 LowIR residual fixtures, the concise grouped Remaining Work Map, and the
+  next bundled owner/specialization materialization checkpoint.
+- No tests, `.ref` files, harnesses, acceptance checks, or external tools
+  were changed.
+
+### Validation
+
+- `make build` through the required validation path: **PASS**.
+- The seven checkpoint witnesses: **7/7 PASS**.
+- Required prior-through command (`make test-report-through-pa22`):
+  **PASS, 2100/2100**.
+- `make test-report ACTIVE_TEST_REPORT_PAS='pa23'`: **343/396**, exit 2 only
+  because the 53 remaining PA23 fixtures are not complete; the fresh log
+  contains exactly **24 status** and **29 LowIR** failures.
+- `perl scripts/cppgm_file_audit.pl --stage pa23 --paths dev/src`: **PASS**,
+  with 13 non-fatal warnings and no fatal finding.
+- `git diff --check`: **PASS**.
+- The final committed worktree was checked with `git status --short` and is
+  clean.

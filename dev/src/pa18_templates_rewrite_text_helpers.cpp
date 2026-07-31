@@ -142,16 +142,34 @@ void PA18TemplateExpander::ExpandActivePackEllipsis(string* raw,
 	if(!raw) return;
 	for(map<string, vector<string> >::const_iterator pack = active_pack_substitutions_.begin();
 		pack != active_pack_substitutions_.end(); ++pack) {
-		map<string, string>::const_iterator scalar = substitutions.find(pack->first);
-		if(pack->second.size() < 2 || scalar == substitutions.end() || scalar->second.empty()) continue;
 		string expanded;
 		for(size_t value = 0; value < pack->second.size(); ++value) {
 			if(!expanded.empty()) expanded += ',';
 			expanded += pack->second[value];
 		}
-		const string token = scalar->second + "...";
-		for(size_t at = raw->find(token); at != string::npos;
-			at = raw->find(token, at + expanded.size())) raw->replace(at, token.size(), expanded);
+		const auto expand = [&](const string& name, bool skip_exact) {
+			if(name.empty()) return;
+			const string token = name + "...";
+			if(skip_exact && *raw == token) return;
+			for(size_t at = raw->find(token); at != string::npos;) {
+				const size_t end = at + token.size();
+				bool replaced = false;
+				if((at == 0 || !IsIdentifierCharacter((*raw)[at - 1])) &&
+					(end == raw->size() || !IsIdentifierCharacter((*raw)[end]))) {
+					raw->replace(at, token.size(), expanded);
+					replaced = true;
+					if(expanded.empty()) {
+						if(at < raw->size() && (*raw)[at] == ',') raw->erase(at, 1);
+						else if(at > 0 && (*raw)[at - 1] == ',') raw->erase(--at, 1);
+					}
+				}
+				at = raw->find(token, at + (replaced ? expanded.size() : 1));
+			}
+		};
+		expand(pack->first, true);
+		map<string, string>::const_iterator scalar = substitutions.find(pack->first);
+		if(scalar != substitutions.end() && scalar->second != pack->first)
+			expand(scalar->second, false);
 	}
 }
 

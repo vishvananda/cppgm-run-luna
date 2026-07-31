@@ -81,26 +81,6 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 		template_marker = raw.find("::template ", template_marker))
 		raw.erase(template_marker + 2, 9);
 	ExpandActivePackEllipsis(&raw, substitutions);
-	for(map<string, vector<string> >::const_iterator active_pack =
-		active_pack_substitutions_.begin(); active_pack != active_pack_substitutions_.end();
-		++active_pack) {
-		if(active_pack->first.empty()) continue;
-		const string token = active_pack->first + "...";
-		if(raw == token) continue;
-		string expanded;
-		for(size_t element = 0; element < active_pack->second.size(); ++element) {
-			if(!expanded.empty()) expanded += ',';
-			expanded += active_pack->second[element];
-		}
-		for(size_t at = raw.find(token); at != string::npos;) {
-			raw.replace(at, token.size(), expanded);
-			if(expanded.empty()) {
-				if(at < raw.size() && raw[at] == ',') raw.erase(at, 1);
-				else if(at > 0 && raw[at - 1] == ',') raw.erase(--at, 1);
-			}
-			at = raw.find(token, at + expanded.size());
-		}
-	}
 	raw = CanonicalSpelling(RewriteActivePackSizes(raw)); if(raw.compare(0, 8, "operator") == 0) {
 			const string suffix = raw.substr(8);
 			const string rewritten_suffix = ReplaceIdentifiers(suffix, substitutions);

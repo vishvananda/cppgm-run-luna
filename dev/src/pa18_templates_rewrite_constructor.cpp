@@ -228,17 +228,15 @@ void PA18TemplateExpander::MaterializeInitializerConstructor(
 		map<string, string>::const_iterator source_base = specialization_bases_.find(
 			LastComponent(source_type));
 		if(source_base != specialization_bases_.end()) source_owner = source_base->second;
-		for(map<string, TemplateDefinition>::const_iterator candidate = definitions_.begin();
-			candidate != definitions_.end(); ++candidate) {
-			const TemplateDefinition& definition = candidate->second;
-			const string conversion_name = LastComponent(definition.name);
-			const bool conversion_operator = conversion_name.compare(0, 8, "operator") == 0 &&
-				conversion_name.size() > 8 &&
-				(IsIdentifierCharacter(conversion_name[8]) || conversion_name[8] == ' ');
-			if(definition.class_template || definition.alias_template ||
-				definition.variable_template || !definition.member_template ||
-				!conversion_operator || definition.parameters.empty() ||
-				!SameTemplateOwner(definition.owner, source_owner)) continue;
+		map<string, vector<const TemplateDefinition*> >::const_iterator indexed_conversions =
+			conversion_operator_definitions_by_owner_.find(LastComponent(source_owner));
+		if(indexed_conversions != conversion_operator_definitions_by_owner_.end()) {
+		for(size_t candidate = 0; candidate < indexed_conversions->second.size(); ++candidate) {
+			const TemplateDefinition* definition = indexed_conversions->second[candidate];
+			if(!definition || definition->class_template || definition->alias_template ||
+				definition->variable_template || !SameTemplateOwner(definition->owner, source_owner))
+				continue;
+			const string conversion_name = LastComponent(definition->name);
 			CPPGMAstNodePtr object(new CPPGMAstNode("id-expression"));
 			object->inferred_type = source_type;
 			CPPGMAstNodePtr member(new CPPGMAstNode("member-expression", "."));
@@ -250,12 +248,13 @@ void PA18TemplateExpander::MaterializeInitializerConstructor(
 			conversion_call->children.push_back(member);
 			conversion_call->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
 				"argument-list")));
-				try {
-					if(InstantiateMemberCall(conversion_call, member, conversion_name,
-						context, substitutions, false)) break;
+			try {
+				if(InstantiateMemberCall(conversion_call, member, conversion_name,
+					context, substitutions, false)) break;
 			} catch(const PA18SubstitutionFailure&) {
 			} catch(const logic_error&) {
 			}
+		}
 		}
 	}
 	const auto materialize_conversion_constructor = [&](const string& raw_parameter,
@@ -291,6 +290,8 @@ void PA18TemplateExpander::MaterializeInitializerConstructor(
 			source_owner = base->second;
 			source_name = LastComponent(source_owner);
 		}
+		map<string, vector<const TemplateDefinition*> >::const_iterator indexed_conversions =
+			conversion_operator_definitions_by_owner_.find(LastComponent(source_owner));
 		map<string, vector<string> >::const_iterator indexed = definitions_by_name_.find(source_name);
 		if(indexed != definitions_by_name_.end()) for(size_t candidate = 0;
 			candidate < indexed->second.size(); ++candidate) {
@@ -324,17 +325,13 @@ void PA18TemplateExpander::MaterializeInitializerConstructor(
 		// source object instead of a converting constructor on the destination.
 		// Such a member is often defined out of class and is therefore absent from
 		// the concrete source scope until this replay explicitly instantiates it.
-		for(map<string, TemplateDefinition>::const_iterator candidate = definitions_.begin();
-			candidate != definitions_.end(); ++candidate) {
-			const TemplateDefinition& definition = candidate->second;
-			const string conversion_name = LastComponent(definition.name);
-			const bool conversion_operator = conversion_name.compare(0, 8, "operator") == 0 &&
-				conversion_name.size() > 8 &&
-				(IsIdentifierCharacter(conversion_name[8]) || conversion_name[8] == ' ');
-			if(definition.class_template || definition.alias_template ||
-				definition.variable_template || !definition.member_template ||
-				!conversion_operator || definition.parameters.empty() ||
-				!SameTemplateOwner(definition.owner, source_owner)) continue;
+		if(indexed_conversions != conversion_operator_definitions_by_owner_.end()) {
+		for(size_t candidate = 0; candidate < indexed_conversions->second.size(); ++candidate) {
+			const TemplateDefinition* definition = indexed_conversions->second[candidate];
+			if(!definition || definition->class_template || definition->alias_template ||
+				definition->variable_template || !SameTemplateOwner(definition->owner, source_owner))
+				continue;
+			const string conversion_name = LastComponent(definition->name);
 			CPPGMAstNodePtr object(new CPPGMAstNode("id-expression"));
 			object->inferred_type = parameter_type;
 			CPPGMAstNodePtr member(new CPPGMAstNode("member-expression", "."));
@@ -373,6 +370,7 @@ void PA18TemplateExpander::MaterializeInitializerConstructor(
 					return;
 				}
 			} catch(const PA18SubstitutionFailure&) {}
+		}
 		}
 	};
 	if(target_declaration) for(size_t child = 0; child < target_declaration->children.size(); ++child) {

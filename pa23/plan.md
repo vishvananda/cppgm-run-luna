@@ -3308,3 +3308,103 @@ Implement the owner/specialization replay group first, bundling explicit and
 extern declarations with current/inherited/anonymous owner materialization
 and their LowIR comparisons.  Keep the dependent member-result, typed-value,
 and two reentrant fixed-point fixtures as the regression set.
+
+## Checkpoint 26 audit refresh — 2026-07-31
+
+The fresh required PA23 report is **343/396**.  The complete residual is 24
+status failures and 29 LowIR comparisons, with no change from the checkpoint
+baseline after the audit-only source fixes.  The full authoritative inventory
+is:
+
+### Complete current-PA failure set
+
+#### Status failures (24)
+
+```text
+general/100-default-nontype-qualified-function-lookup.t
+general/100-member-template-specialization-return-prefers-member-call.t
+general/100-selected-specialization-special-member-body.t
+general/200-member-template-implicit-instantiation-not-overload.t
+general/300-dependent-alias-helper-partial-specialization.t
+general/400-anonymous-namespace-partial-specialization.t
+general/400-current-specialization-display-name-member-alias.t
+general/400-member-template-result-pack-preserves-nested-function-pointer-owner.t
+general/400-static-cast-rvalue-ref-skips-conversion-operator.t
+general/500-dependent-function-type-pack-expansion-ctor-init.t
+general/500-dependent-qualified-member-template-result-bool.t
+general/500-member-template-conditional-alias-trailing-return.t
+general/500-mp11-append-alias-template-sfinae.t
+general/500-nontype-alias-reinstantiation-structural-state.t
+general/500-recursive-qualified-member-template-bool-arg.t
+general/500-reentrant-static-query-callable-enable-if-cache.t
+general/500-reentrant-static-query-enable-if-partial.t
+spec/100-extern-template-member-function-declaration.t
+spec/100-extern-template-static-data-declaration.t
+spec/100-local-member-call-constructor-template-instantiation.t
+spec/400-defaulted-nested-class-argument-partial-specialization.t
+spec/400-explicit-type-arg-dependent-qualified-member-template-id.t
+spec/400-qualified-member-template-id-bool-constant.t
+spec/500-conditional-alias-index-sequence-member-template-call.t
+```
+
+#### LowIR comparisons (29)
+
+```text
+general/100-current-specialization-member-body-cast-compare.t
+general/100-dependent-bool-partial-static-value-storage.t
+general/100-explicit-specialization-out-of-class-ctor-replay.t
+general/100-explicit-specialization-pointer-member-definition.t
+general/100-inherited-using-alias-out-of-class-specialization-member.t
+general/100-intermediate-type-transform-value-nontype.t
+general/100-local-qualified-argument-replay.t
+general/100-sizeof-call-result-nontype-template-argument.t
+general/200-adl-explicit-template-id-call.t
+general/200-function-template-reference-cv-alias-partial-order.t
+general/200-function-template-template-parameter-deduction.t
+general/200-member-operator-template-reference-pattern-partial-order.t
+general/300-current-specialization-constructor-template-canonical-owner.t
+general/300-dependent-bool-base-trait-type-argument.t
+general/400-explicit-function-template-type-arg-drops-nontype-overload.t
+general/400-member-variable-template-leaf-sfinae.t
+general/400-nonmember-template-compound-assignment-const-lhs.t
+general/400-out-of-class-partial-member-template-owner-parameter-alias.t
+general/400-variable-template-specializations.t
+spec/100-explicit-instantiation-after-explicit-specialization-no-effect.t
+spec/100-explicit-instantiation-class-prior-member-definitions.t
+spec/100-explicit-specialization-out-of-class-ctor-replay.t
+spec/100-explicit-specialization-out-of-class-member-emits.t
+spec/100-out-of-class-conversion-operator-definition.t
+spec/100-partial-specialization-member-primary-param-name.t
+spec/100-sizeof-union-type-nttp.t
+spec/400-class-template-nttp-scope-value.t
+spec/400-defaulted-template-arg-partial-base-completion.t
+spec/400-template-template-member-alias-owner-shadow.t
+```
+
+### Refreshed Remaining Work Map
+
+- **Owner and specialization replay:** qualified lookup, current/inherited/
+  anonymous/local owners, explicit and extern declarations, special-member
+  replay, and out-of-class conversion/member emission cover the status and
+  LowIR failures that depend on preserving the selected owner into replay.
+- **Candidate viability and dependent results:** member-template overload
+  selection, alias-based SFINAE, rvalue-reference conversion ranking,
+  dependent function/boolean/trailing-return results, MP11 and recursive
+  queries, and the conditional-alias member call remain the semantic
+  candidate path.
+- **Typed values and LowIR materialization:** non-type alias state, `sizeof`,
+  static/variable-template storage, dependent base values, explicit type
+  arguments, and generated body/storage comparisons consume the typed facts
+  after selection.
+- **Fixed-point regressions:** the two reentrant static-query fixtures remain
+  explicit termination coverage; they are not accepted through timing,
+  fallback, or substitute execution behavior.
+
+### Next substantial checkpoint group
+
+Bundle owner/specialization replay with its LowIR materialization: qualified,
+current, inherited, anonymous, and local owner paths together with explicit,
+extern, special-member, conversion, and out-of-class emission cases.  Retain
+the candidate/dependent-result and typed-value groups as regressions, including
+the two fixed-point fixtures, and keep the full failure inventory above as the
+checkpoint's comparison set.
