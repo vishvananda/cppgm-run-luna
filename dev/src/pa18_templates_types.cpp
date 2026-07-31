@@ -10,14 +10,6 @@ string PA18TemplateExpander::MemberAliasType(const string& class_key, const stri
 	const string owner_key = CanonicalSpelling(RemoveMarker(class_key));
 	const string member_name = CanonicalSpelling(RemoveMarker(member));
 	if(owner_key.empty() || member_name.empty()) return string();
-	// A declaration specifier such as `int` can pass through the same type
-	// qualification path as a dependent member name.  Built-in type keywords
-	// are never members, so probing them through generated-class lookup would
-	// manufacture a recursive specialization while replaying a deferred shell.
-	if(member_name == "bool" || member_name == "char" || member_name == "double" ||
-		member_name == "float" || member_name == "int" || member_name == "long" ||
-		member_name == "short" || member_name == "signed" || member_name == "unsigned" ||
-		member_name == "void" || member_name == "wchar_t") return string();
 	for(size_t i = 0; i < member_name.size(); ++i)
 		if(!IsIdentifierCharacter(member_name[i])) return string();
 	map<string, CPPGMAstNodePtr>::const_iterator declaration_it =

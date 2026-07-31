@@ -245,23 +245,10 @@ bool PA18TemplateExpander::EvaluateLogicalIntegralText(const string& raw,
 		}
 	return false;
 	}
-const vector<string>* PA18TemplateExpander::ActivePackValues(const string& name) const
-{
-	map<string, vector<string> >::const_iterator typed =
-		active_pack_substitutions_.find(name);
-	if(typed != active_pack_substitutions_.end()) return &typed->second;
-	map<string, vector<string> >::const_iterator named =
-		active_pack_identifier_substitutions_.find(name);
-	if(named != active_pack_identifier_substitutions_.end()) return &named->second;
-	map<string, vector<string> >::const_iterator function =
-		active_function_pack_substitutions_.find(name);
-	return function == active_function_pack_substitutions_.end() ? 0 : &function->second;
-}
-
-bool PA18TemplateExpander::ExpandIntegralValueOperands(const string& raw,
-	const string& context, const map<string, string>& substitutions,
-	PA19IntegralValue* result)
-{
+	bool PA18TemplateExpander::ExpandIntegralValueOperands(const string& raw,
+		const string& context, const map<string, string>& substitutions,
+		PA19IntegralValue* result)
+	{
 		// Resolve qualified generated `::value` operands independently before
 		// parsing the surrounding boolean/arithmetic expression.  `rfind("::")`
 		// cannot identify the owner of a compound expression such as
@@ -288,79 +275,9 @@ bool PA18TemplateExpander::ExpandIntegralValueOperands(const string& raw,
 			expanded[begin - 1] == ':')) --begin;
 		const size_t length = marker + 7 - begin;
 		const string operand = expanded.substr(begin, length);
-		// A qualified value can itself be the pattern of a pack expansion,
-		// e.g. `is_same<T, V>::value...`.  Resolving only the scalar operand
-		// leaves the ellipsis behind and makes a non-empty pack look like an
-		// empty one (`cx_plus(true...)`); expand the complete value operand while
-		// the typed pack bindings are still available.
-		size_t expansion_end = marker + 7;
-		size_t ellipsis = expansion_end;
-		while(ellipsis < expanded.size() &&
-			isspace(static_cast<unsigned char>(expanded[ellipsis]))) ++ellipsis;
-		const bool value_pack_expansion = ellipsis + 3 <= expanded.size() &&
-			expanded.compare(ellipsis, 3, "...") == 0;
-		if(value_pack_expansion) expansion_end = ellipsis + 3;
-		vector<string> pack_names;
-		for(size_t position = 0; position < operand.size();) {
-			if(!IsIdentifierCharacter(operand[position])) {
-				++position;
-				continue;
-			}
-			const size_t word_begin = position;
-			while(position < operand.size() && IsIdentifierCharacter(operand[position]))
-				++position;
-			const string word = operand.substr(word_begin, position - word_begin);
-			if(active_pack_substitutions_.find(word) != active_pack_substitutions_.end() ||
-				active_pack_identifier_substitutions_.find(word) !=
-					active_pack_identifier_substitutions_.end() ||
-				active_function_pack_substitutions_.find(word) !=
-					active_function_pack_substitutions_.end())
-				if(find(pack_names.begin(), pack_names.end(), word) == pack_names.end())
-					pack_names.push_back(word);
-		}
-		if(value_pack_expansion && !pack_names.empty()) {
-		const vector<string>* values = ActivePackValues(pack_names[0]);
-		bool same_length = values != 0;
-		for(size_t pack = 1; same_length && pack < pack_names.size(); ++pack) {
-			const vector<string>* other = ActivePackValues(pack_names[pack]);
-			if(!other || other->size() != values->size()) same_length = false;
-			}
-			if(same_length) {
-				string replacement;
-				bool elements_known = true;
-				for(size_t value = 0; value < values->size(); ++value) {
-					map<string, string> one = substitutions;
-					for(size_t pack = 0; pack < pack_names.size(); ++pack) {
-						const string& name = pack_names[pack];
-						const vector<string>* selected = ActivePackValues(name);
-						if(!selected || value >= selected->size()) {
-							elements_known = false;
-							break;
-						}
-						one[name] = (*selected)[value];
-					}
-					if(!elements_known) break;
-					PA19IntegralValue element_value;
-					if(!EvaluateIntegralText(operand, context, one, &element_value) ||
-						!element_value.known) {
-						elements_known = false;
-						break;
-					}
-					if(!replacement.empty()) replacement += ',';
-					replacement += IntegralValueSpelling(element_value);
-				}
-				if(elements_known) {
-					expanded.replace(begin, expansion_end - begin, replacement);
-					expanded_any = true;
-					marker = expanded.find("::value", begin);
-					continue;
-				}
-			}
-		}
 		PA19IntegralValue operand_value;
-		const bool operand_ok = !operand.empty() && operand != expanded &&
-			EvaluateIntegralText(operand, context, substitutions, &operand_value);
-		if(!operand_ok) {
+		if(operand.empty() || operand == expanded ||
+			!EvaluateIntegralText(operand, context, substitutions, &operand_value)) {
 			marker = expanded.find("::value", marker + 7);
 			continue;
 		}
@@ -368,15 +285,13 @@ bool PA18TemplateExpander::ExpandIntegralValueOperands(const string& raw,
 		expanded_any = true;
 		marker = expanded.find("::value", begin);
 		}
-	if(expanded_any) {
+		if(expanded_any) {
 			PA19ConstantExpressionParser expanded_parser(constant_values_, substitutions,
 				constant_type_sizes_, constant_type_alignments_, type_aliases_);
-			if(expanded_parser.Evaluate(expanded, result)) {
-					return true;
-			}
+			if(expanded_parser.Evaluate(expanded, result)) return true;
 		}
 	return false;
-}
+	}
 bool PA18TemplateExpander::EvaluateInheritedBaseValue(const TemplateDefinition& definition,
 		const string& context, const map<string, string>& member_substitutions,
 		PA19IntegralValue* result)

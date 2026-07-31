@@ -6,61 +6,6 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
-namespace {
-
-bool HasDependentIdentifierToken(const string& text, const string& identifier)
-{
-	if(identifier.empty()) return false;
-	for(size_t at = text.find(identifier); at != string::npos;
-		at = text.find(identifier, at + identifier.size())) {
-		const bool left = at == 0 || !IsIdentifierCharacter(text[at - 1]);
-		const size_t end = at + identifier.size();
-		if(left && (end == text.size() || !IsIdentifierCharacter(text[end]))) return true;
-	}
-	return false;
-}
-
-bool HasDependentTypeAlias(const TemplateDefinition& definition)
-{
-	if(!definition.declaration) return false;
-	const auto dependent = [&definition](const string& spelling) {
-		// A plain alias such as `typedef R type` can be reconstructed from the
-		// concrete template binding without a class-body fixed point.  Deferring
-		// those aliases turns ordinary traits (`make_`, `next`, and similar) into
-		// self-referential forwards.  Only qualified dependent members need the
-		// type-only shell.
-		if(spelling.find("::") == string::npos &&
-			spelling.find("typename") == string::npos &&
-			spelling.find('<') == string::npos) return false;
-		for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter)
-			if(!definition.parameters[parameter].name.empty() &&
-				HasDependentIdentifierToken(spelling, definition.parameters[parameter].name))
-				return true;
-		return false;
-	};
-	for(size_t child_index = 0; child_index < definition.declaration->children.size();
-		++child_index) {
-		CPPGMAstNodePtr child = definition.declaration->children[child_index];
-		while(child && child->kind == "template-declaration" &&
-			child->children.size() > 1) child = child->children[1];
-		if(!child) continue;
-		if(child->kind == "alias-declaration" && !child->children.empty() &&
-			dependent(SpellNode(child))) return true;
-		if(child->kind != "simple-declaration" || child->children.empty() ||
-			!HasDeclarationSpecifier(child->children[0], "typedef")) continue;
-		const CPPGMAstNodePtr list = ChildOfKindLocal(child, "init-declarator-list");
-		if(!list) continue;
-		for(size_t item = 0; item < list->children.size(); ++item) {
-			const CPPGMAstNodePtr declarator = list->children[item];
-			if(declarator && !declarator->children.empty() &&
-				dependent(SpellNode(child))) return true;
-		}
-	}
-	return false;
-}
-
-} // namespace
-
 bool PA18TemplateExpander::IsDirectCvQualifiedAliasTarget(
 	const CPPGMAstNodePtr& declaration,
 	const vector<TemplateParameter>& parameters) const
@@ -327,53 +272,15 @@ bool PA18TemplateExpander::HasUnavailableGeneratedMemberType(string raw,
 {
 	raw = CanonicalSpelling(RemoveMarker(raw));
 	if(raw.empty() || HasUnresolvedTemplateParameter(raw, context, substitutions)) return false;
-	// This probe is itself used to decide whether a class body can be deferred.
-	// Resolving the owner may therefore revisit the same probe while materializing
-	// a nested member template.  Treat the re-entry as an unavailable member and
-	// let the enclosing candidate defer/fail at its normal substitution boundary;
-	// otherwise the type-only query recursively manufactures the same owner.
-	const string query_key = raw + "|" + context;
-	if(!active_unavailable_member_type_queries_.insert(query_key).second) return true;
-	struct UnavailableMemberQueryScope {
-		set<string>* active;
-		string key;
-		UnavailableMemberQueryScope(set<string>* value, const string& name)
-			: active(value), key(name) {}
-		~UnavailableMemberQueryScope() { active->erase(key); }
-	} query_scope(&active_unavailable_member_type_queries_, query_key);
 	const size_t separator = TopLevelScopeSeparator(raw);
 	if(separator == string::npos) return false;
 	const string owner = raw.substr(0, separator);
 	const string member = raw.substr(separator + 2);
-	// A member-template specialization is a valid typed owner even before its
-	// generated class shell has been indexed.  Recover the source owner directly
-	// so the fixed-point check does not defer a callable whose `impl` body can be
-	// replayed normally.
-	const size_t owner_separator = TopLevelScopeSeparator(owner);
-	if(owner_separator != string::npos) {
-		const string outer_owner = owner.substr(0, owner_separator);
-		string nested_owner = owner.substr(owner_separator + 2);
-		const size_t nested_open = nested_owner.find('<');
-		if(nested_open != string::npos) nested_owner.erase(nested_open);
-		const TemplateDefinition* outer_definition = FindDefinition(outer_owner, context);
-		if(!outer_definition) {
-			map<string, string>::const_iterator generated = specialization_bases_.find(
-				LastComponent(outer_owner));
-			if(generated != specialization_bases_.end())
-				outer_definition = FindDefinition(generated->second, context);
-		}
-		if(outer_definition && FindNestedDefinition(*outer_definition,
-			LastComponent(nested_owner))) return false;
-	}
 	// Only a qualified member of a known type can be a dependent member probe.
 	// Namespace-qualified ordinary types such as `regex_constants::enum_value`
 	// must remain on the normal function-template path.
 	if(!IsKnownTypeSpelling(owner, context)) {
-		// A source template-id with a qualified member (notably a member
-		// template such as `C<T>::impl<U>`) can be known only after its enclosing
-		// replay is complete.  Keep that query in the deferred fixed point rather
-		// than treating the recursive lookup as an ordinary namespace name.
-		return owner.find('<') != string::npos;
+		return false;
 	}
 	// A generated alias may expose a qualified member that is neither a
 	// materialized specialization nor a source class member.  Treat that as
@@ -440,11 +347,8 @@ bool PA18TemplateExpander::HasDeferredDependentClassMember(
 {
 	for(size_t node = 0; node < definition.dependent_member_type_nodes.size(); ++node) {
 		const CPPGMAstNodePtr& candidate = definition.dependent_member_type_nodes[node];
-		map<string, string> protected_substitutions = substitutions;
-		ProtectMaterializedTemplateBases(RemoveMarker(candidate->value), context,
-			substitutions, &protected_substitutions);
 		string raw = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(
-			RemoveMarker(candidate->value), protected_substitutions));
+			RemoveMarker(candidate->value), substitutions));
 		if(raw.compare(0, 8, "typename") == 0 &&
 			(raw.size() == 8 || isspace(static_cast<unsigned char>(raw[8]))))
 			raw = CanonicalSpelling(raw.substr(8));
@@ -459,11 +363,8 @@ bool PA18TemplateExpander::HasDeferredTypeMember(
 {
 	for(size_t node = 0; node < definition.dependent_type_member_nodes.size(); ++node) {
 		const CPPGMAstNodePtr& candidate = definition.dependent_type_member_nodes[node];
-		map<string, string> protected_substitutions = substitutions;
-		ProtectMaterializedTemplateBases(RemoveMarker(candidate->value), context,
-			substitutions, &protected_substitutions);
 		string raw = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(
-			RemoveMarker(candidate->value), protected_substitutions));
+			RemoveMarker(candidate->value), substitutions));
 		if(raw.compare(0, 8, "typename") == 0 &&
 			(raw.size() == 8 || isspace(static_cast<unsigned char>(raw[8]))))
 			raw = CanonicalSpelling(raw.substr(8));
@@ -503,23 +404,52 @@ void PA18TemplateExpander::RegisterGeneratedTypeEntity(
 		const map<string, vector<string> >& pack_substitutions,
 		const string& context, bool explicit_instantiation)
 {
-	RegisterGeneratedAliasEntity(definition, generated, generated_owner, local_name,
-		concrete_owner, substitutions, args, pack_substitutions, context);
+	if(definition.alias_template) {
+		bool reference_argument = false;
+		for(size_t argument = 0; argument < args.size() &&
+			argument < definition.parameters.size(); ++argument)
+			if(definition.parameters[argument].type) {
+				const string resolved = ResolveAlias(args[argument], context);
+				if(!resolved.empty() && resolved[resolved.size() - 1] == '&') {
+					reference_argument = true;
+					break;
+				}
+			}
+		if(reference_argument && definition.reference_alias_cv_parameter) {
+			reference_alias_specializations_[local_name] = true;
+			reference_alias_specializations_[JoinPath(definition.owner, local_name)] = true;
+			reference_alias_specializations_[JoinPath(
+			definition.lexical_owner.empty() ? definition.owner : definition.lexical_owner,
+			local_name)] = true;
+		}
+	}
+	if(definition.alias_template) {
+		RegisterGeneratedTypeAlias(generated, generated_owner);
+		set<string> concrete_owners;
+		if(!concrete_owner.empty()) concrete_owners.insert(concrete_owner);
+		for(map<string, string>::const_iterator substitution = substitutions.begin();
+			substitution != substitutions.end(); ++substitution) {
+			const string value = CanonicalSpelling(substitution->second);
+			if(specialization_bases_.find(LastComponent(value)) !=
+				specialization_bases_.end() &&
+				specialization_arguments_.find(LastComponent(value)) !=
+				specialization_arguments_.end()) concrete_owners.insert(value);
+			const size_t separator = substitution->second.rfind("::");
+			if(separator == string::npos) continue;
+			const string owner = substitution->second.substr(0, separator);
+			if(specialization_bases_.find(LastComponent(owner)) !=
+				specialization_bases_.end() &&
+				specialization_arguments_.find(LastComponent(owner)) !=
+				specialization_arguments_.end()) concrete_owners.insert(owner);
+		}
+		for(set<string>::const_iterator owner = concrete_owners.begin();
+			owner != concrete_owners.end(); ++owner)
+			RegisterGeneratedTypeAlias(generated, *owner);
+	}
 	if(!definition.class_template) return;
-	const string generated_path = JoinPath(GeneratedOwner(definition), local_name);
+	const string generated_path = JoinPath(definition.owner, local_name);
 	class_declarations_[generated_path] = generated;
 	RememberClassPath(generated_path);
-	if(generated->kind == "class-specifier" ||
-		generated->kind == "class-forward-declaration") {
-		const string previous_constant_owner = active_instantiation_name_;
-		active_instantiation_name_.clear();
-		for(size_t child = 0; child < generated->children.size(); ++child)
-			if(generated->children[child] &&
-				generated->children[child]->kind == "simple-declaration")
-				RecordConstantDeclaration(generated->children[child], generated_path,
-					substitutions);
-		active_instantiation_name_ = previous_constant_owner;
-	}
 	// Generated nested class specializations have concrete array bounds and
 	// therefore a layout that was unavailable while collecting the dependent
 	// primary.  Record that typed layout under the generated identity so a
@@ -671,7 +601,7 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 			}
 	}
 	if(definition.class_template) {
-		RememberClassPath(JoinPath(GeneratedOwner(definition), local_name));
+		RememberClassPath(JoinPath(definition.owner, local_name));
 		RememberClassPath(JoinPath(generated_owner, local_name));
 	}
 	const string previous_instantiation_name = active_instantiation_name_;
@@ -777,8 +707,7 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 			else ++specifier;
 		}
 	}
-	if(!definition.class_template && !definition.variable_template &&
-		GeneratedNodeHasUnavailableMemberType(
+	if(!definition.class_template && GeneratedNodeHasUnavailableMemberType(
 		generated, transform_context, substitutions)) {
 		throw PA18SubstitutionFailure("dependent type substitution failed");
 	}
@@ -922,7 +851,7 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 	else {
 	string generated_function_owner = explicit_static_data ? PrefixComponent(definition.owner) :
 		explicit_member_definition ? GeneratedOwner(*member_owner_definition) :
-		flattened_static_member ? (concrete_owner.empty() ? definition.owner : concrete_owner) :
+		flattened_static_member ? definition.owner :
 		(concrete_owner.empty() ? entity_owner : concrete_owner);
 	if(!concrete_owner.empty() && generated_function_owner.find("::") == string::npos &&
 		specialization_bases_.find(LastComponent(concrete_owner)) ==
@@ -1024,20 +953,9 @@ string PA18TemplateExpander::MaterializeInstantiation(const TemplateDefinition& 
 		bool defer_class_definition)
 {
 	map<string, string>::const_iterator cached = specializations_.find(key);
-	// A cached name can be observed while its body is still being replayed.
-	// Do not run ReplayCachedInstantiation recursively for that same semantic
-	// specialization; the enclosing replay owns completion of the fixed point.
-	if(cached != specializations_.end() && active_specializations_.find(key) !=
-		active_specializations_.end()) return cached->second;
 	if(cached != specializations_.end() && definition.class_template &&
-		!defer_class_definition && deferred_type_only_class_instantiations_.find(key) !=
-		deferred_type_only_class_instantiations_.end()) {
-		specializations_.erase(cached);
-		deferred_type_only_class_instantiations_.erase(key);
-		deferred_class_instantiations_.erase(key);
-	} else if(cached != specializations_.end() && definition.class_template &&
 		!defer_class_definition && deferred_class_instantiations_.find(key) !=
-		deferred_class_instantiations_.end() &&
+			deferred_class_instantiations_.end() &&
 		!HasDeferredTypeMember(definition, context, substitutions)) {
 		specializations_.erase(cached);
 		deferred_class_instantiations_.erase(key);
@@ -1071,94 +989,22 @@ string PA18TemplateExpander::MaterializeInstantiation(const TemplateDefinition& 
 	specializations_[key] = local_name;
 	const bool deferred_member = defer_class_definition && definition.class_template &&
 		HasDeferredDependentClassMember(definition, context, substitutions);
-	// A type-only alias use may still name a dependent member (`C<T>::type`)
-	// whose enclosing class body must be replayed later.  Keep only those
-	// member-bearing class templates as typed forwards; ordinary value-like
-	// traits still need their complete body for conversions and static storage.
-	const bool deferred_type_only = defer_class_definition && definition.class_template &&
-		HasDependentTypeAlias(definition);
-	if(deferred_member || deferred_type_only) {
+	if(deferred_member) {
 		const string generated_owner = definition.lexical_owner.empty() ?
 			definition.owner : definition.lexical_owner;
-		const string generated_path = JoinPath(GeneratedOwner(definition), local_name);
+		const string generated_path = JoinPath(definition.owner, local_name);
 		const string lexical_path = JoinPath(generated_owner, local_name);
 		class_declarations_[generated_path] = MakeForwardClass(local_name);
 		class_declarations_[lexical_path] = class_declarations_[generated_path];
 		RememberClassPath(generated_path);
 		RememberClassPath(lexical_path);
-		// A deferred nested class can be requested through a concrete enclosing
-		// specialization.  Keep the typed shell visible at that owner too; the
-		// source-only entries above are insufficient for a qualified lookup such
-		// as `ConcreteOuter::member_template<Args>`.
-		if(!concrete_owner.empty()) {
-			const string concrete_path = JoinPath(concrete_owner, local_name);
-			class_declarations_[concrete_path] = class_declarations_[generated_path];
-			RememberClassPath(concrete_path);
-		}
-		// Keep the internal declaration as a forward so a non-static member query
-		// can still complete the deferred specialization.  The emitted replay,
-		// however, needs the static declarations that PA14 sees during expression
-		// lookup; publish a shallow class shell containing only those safe members.
-		CPPGMAstNodePtr deferred_shell = MakeForwardClass(local_name);
-		deferred_shell->kind = "class-specifier";
-		struct IntegralSubstitutionScope {
-			map<string, PA19IntegralValue>& active;
-			const map<string, PA19IntegralValue> saved;
-			IntegralSubstitutionScope(map<string, PA19IntegralValue>& target,
-				const map<string, PA19IntegralValue>& replacement)
-				: active(target), saved(target) { active = replacement; }
-			~IntegralSubstitutionScope() { active = saved; }
-		} integral_scope(active_integral_substitutions_, integral_substitutions);
-		for(size_t child = 0; definition.declaration &&
-			child < definition.declaration->children.size(); ++child) {
-			CPPGMAstNodePtr declaration = definition.declaration->children[child];
-			while(declaration && declaration->kind == "template-declaration" &&
-				declaration->children.size() > 1)
-				declaration = declaration->children[1];
-			const bool safe_enum = declaration && declaration->kind == "enum-specifier";
-			if(!safe_enum && (!declaration || declaration->kind != "simple-declaration" ||
-				declaration->children.empty() ||
-				(!HasDeclarationSpecifier(declaration->children[0], "const") &&
-					!HasDeclarationSpecifier(declaration->children[0], "constexpr")))) continue;
-			CPPGMAstNodePtr transformed;
-			try {
-				transformed = TransformNode(declaration, generated_path, substitutions);
-			} catch(const PA18SubstitutionFailure&) {}
-			if(transformed) deferred_shell->children.push_back(transformed);
-		}
-		generated_by_owner_[generated_owner].push_back(deferred_shell);
-		if(!concrete_owner.empty() && concrete_owner != generated_owner)
-			generated_by_owner_[concrete_owner].push_back(deferred_shell);
-		// A deferred shell is sufficient for type lookup, but a later expression
-		// can still name a static integral member of that shell (`int_<N>::value`).
-		// Record those source constants under the generated identities now so PA14
-		// can bind the qualified expression without forcing the recursive class body
-		// to replay prematurely.
-		const string previous_constant_owner = active_instantiation_name_;
-		active_instantiation_name_.clear();
-		if(definition.declaration) for(size_t child = 0;
-			child < definition.declaration->children.size(); ++child) {
-			CPPGMAstNodePtr declaration = definition.declaration->children[child];
-			while(declaration && declaration->kind == "template-declaration" &&
-				declaration->children.size() > 1)
-				declaration = declaration->children[1];
-			if(!declaration || declaration->kind != "simple-declaration") continue;
-			RecordConstantDeclaration(declaration, generated_path, substitutions);
-			if(lexical_path != generated_path)
-				RecordConstantDeclaration(declaration, lexical_path, substitutions);
-			if(!concrete_owner.empty())
-				RecordConstantDeclaration(declaration,
-					JoinPath(concrete_owner, local_name), substitutions);
-		}
-		active_instantiation_name_ = previous_constant_owner;
 		deferred_class_instantiations_.insert(key);
-		if(deferred_type_only) deferred_type_only_class_instantiations_.insert(key);
 		return local_name;
 	}
 	if(DeferIncompleteAliasClass(definition, args, context)) {
 		const string generated_owner = definition.lexical_owner.empty() ?
 			definition.owner : definition.lexical_owner;
-		const string generated_path = JoinPath(GeneratedOwner(definition), local_name);
+		const string generated_path = JoinPath(definition.owner, local_name);
 		const string lexical_path = JoinPath(generated_owner, local_name);
 		class_declarations_[generated_path] = MakeForwardClass(local_name);
 		class_declarations_[lexical_path] = class_declarations_[generated_path];
@@ -1316,27 +1162,20 @@ string PA18TemplateExpander::Instantiate(const TemplateDefinition& definition,
 	string concrete_owner = requested_owner ? *requested_owner :
 		active_concrete_owner_.name;
 	if(!ConcreteOwnerMatches(definition, concrete_owner)) concrete_owner.clear();
-	// Completing a class body while replaying that same class template must not
-	// recursively complete the next specialization named by a dependent alias
-	// (`int_<N>::next` is the minimal example).  Keep those nested specializations
-	// as typed shells until a later, non-recursive lookup actually needs them.
-	const map<string, string>::const_iterator active_base =
-		specialization_bases_.find(LastComponent(active_instantiation_name_));
-	if(!active_instantiation_name_.empty() && definition.class_template &&
-		active_base != specialization_bases_.end() &&
-		LastComponent(active_base->second) == LastComponent(definition.qualified_name))
-		defer_class_definition = true;
-	// A top-level class template owns its own generated name, but a nested
-	// class template also needs the enclosing source class binding while its
-	// body is replayed.  Without that distinction a binding inherited from an
-	// unrelated nested argument (for example `ListSet -> call_X`) survives into
-	// `ListSet<T>::impl` and corrupts the dependent owner spelling.
-	const bool bind_enclosing_owner = !definition.class_template ||
-		definition.owner.find('<') != string::npos;
-	InstallOuterOwnerSubstitutions(outer_substitutions, context, &substitutions,
-		bind_enclosing_owner);
+	// A template-template argument can name a member alias on a concrete
+	// specialization (for example `quote_X_::fn`).  Recover the outer class's
+	// typed bindings before replaying the member alias body; the source member
+	// definition itself only names those bindings as dependent parameters.
+	if(outer_substitutions) for(map<string, string>::const_iterator outer =
+		outer_substitutions->begin(); outer != outer_substitutions->end(); ++outer) {
+		const size_t separator = outer->second.rfind("::");
+		if(separator == string::npos) continue;
+		const string owner = outer->second.substr(0, separator);
+		AddConcreteOwnerSubstitutions(owner, context, &substitutions,
+			!definition.class_template);
+	}
 	AddConcreteOwnerSubstitutions(concrete_owner, context, &substitutions,
-		bind_enclosing_owner);
+		!definition.class_template);
 	map<string, PA19IntegralValue> integral_substitutions;
 	map<string, vector<string> > pack_substitutions;
 	// Default non-type arguments can contain sizeof...(Pack).  Argument
@@ -1346,8 +1185,10 @@ string PA18TemplateExpander::Instantiate(const TemplateDefinition& definition,
 	const map<string, vector<string> > previous_argument_packs =
 		active_pack_substitutions_;
 	InstallConcreteOwnerPacks(concrete_owner, context, &substitutions,
-		&pack_substitutions, bind_enclosing_owner);
-	if(pack_hints) for(map<string, vector<string> >::const_iterator hint = pack_hints->begin(); hint != pack_hints->end(); ++hint) if(!hint->first.empty()) active_pack_substitutions_[hint->first] = hint->second;
+		&pack_substitutions, !definition.class_template);
+	if(pack_hints) for(map<string, vector<string> >::const_iterator hint =
+		pack_hints->begin(); hint != pack_hints->end(); ++hint)
+		if(!hint->first.empty()) active_pack_substitutions_[hint->first] = hint->second;
 	try {
 		ResolveTemplateArguments(definition, raw_args, context, &args, &metadata_args,
 			&substitutions, &integral_substitutions, &pack_substitutions, pack_hints);
@@ -1374,7 +1215,17 @@ string PA18TemplateExpander::Instantiate(const TemplateDefinition& definition,
 	if(pack_hints) for(map<string, vector<string> >::const_iterator hint = pack_hints->begin();
 		hint != pack_hints->end(); ++hint)
 		if(!hint->first.empty()) pack_substitutions[hint->first] = hint->second;
-	ApplyForwardingPackHints(forwarding_pack_hints, &pack_substitutions);
+	// Forwarding-reference lvalue categories are carried separately from the
+	// canonical template arguments.  They affect only pack expansion replay;
+	// keeping them out of `substitutions` preserves specialization identity and
+	// the source spelling used by earlier-stage lookup.
+	if(forwarding_pack_hints) for(map<string, vector<string> >::const_iterator hint =
+		forwarding_pack_hints->begin(); hint != forwarding_pack_hints->end(); ++hint) {
+		if(hint->first.empty()) continue;
+		map<string, vector<string> >::iterator current = pack_substitutions.find(hint->first);
+		if(current != pack_substitutions.end() && current->second.size() == hint->second.size())
+			current->second = hint->second;
+	}
 	if(definition.partial_specialization) {
 		map<string, string> specialized;
 		// A dependent partial-pattern mismatch is substitution failure.  It must

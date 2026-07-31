@@ -108,9 +108,7 @@ ExplicitCallSelection PA18TemplateExpander::SelectExplicitCallDefinition(
 			if(TemplateBase(lookup_callee, open, &begin, &base) &&
 						TemplateRange(lookup_callee, open, &argument_text, &close)) {
 						explicit_definition = FindDefinition(base, context);
-				if(explicit_definition && !explicit_definition->class_template &&
-					!explicit_definition->alias_template &&
-					!explicit_definition->variable_template) {
+				if(explicit_definition && !explicit_definition->class_template) {
 					vector<const TemplateDefinition*> overloads = FindFunctionDefinitions(base, context);
 					RankFunctionTemplateCandidatesForCall(&overloads, explicit_deduction_input,
 						context, substitutions);
@@ -149,9 +147,7 @@ ExplicitCallSelection PA18TemplateExpander::SelectExplicitCallDefinition(
 				}
 			}
 
-			if(explicit_definition && !explicit_definition->class_template &&
-				!explicit_definition->alias_template &&
-				!explicit_definition->variable_template) {
+			if(explicit_definition && !explicit_definition->class_template) {
 				state.valid = true;
 				state.definition = explicit_definition;
 				state.deduction_input = explicit_deduction_input;
@@ -412,25 +408,9 @@ bool PA18TemplateExpander::MaterializeNamedCallTarget(
 					new CPPGMAstNode("identifier", member_name)));
 				if(InstantiateMemberCall(result, synthetic_member, member_name,
 					context, substitutions)) {
-					string emitted_member = synthetic_member->children[1]->value;
-					// Static member-template replay writes the generated function
-					// name directly into the call's qualified callee, because the
-					// synthetic object is not part of the emitted expression.  Use
-					// that name when reconstructing the concrete qualified callee.
-					if(result->children.size() > 0 && result->children[0] &&
-						result->children[0]->kind == "id-expression") {
-						const string candidate = LastComponent(result->children[0]->value);
-						if(candidate != member_name &&
-							candidate.compare(0, member_name.size(), member_name) == 0)
-							emitted_member = candidate;
-					}
-					const string materialized = result->children.size() > 0 &&
-						result->children[0] ? result->children[0]->value : string();
-					const bool has_materialized_callee = !materialized.empty() &&
-						materialized != qualified && LastComponent(materialized) != member_name;
 					result->children[0] = CPPGMAstNodePtr(new CPPGMAstNode(
-						"id-expression", has_materialized_callee ? materialized :
-						qualified_owner + "::" + emitted_member));
+						"id-expression", qualified_owner + "::" +
+							synthetic_member->children[1]->value));
 					result->template_instantiation = true;
 					return true;
 				}

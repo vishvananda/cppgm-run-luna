@@ -227,7 +227,7 @@ bool PA18TemplateExpander::SplitDirectFunctionType(const string& raw,
 		};
 		const bool lhs_template_head = template_head(lhs);
 		const bool rhs_template_head = template_head(rhs);
-		if(lhs_template_head != rhs_template_head) return lhs_template_head;
+		if(lhs_template_head != rhs_template_head) return !lhs_template_head;
 	const auto template_head_arity = [&](const TemplateDefinition& definition,
 			size_t* fixed, bool* trailing_pack) {
 			for(size_t pattern_index = 0; pattern_index < definition.specialization_pattern.size();
@@ -575,32 +575,6 @@ void PA18TemplateExpander::RecordUsingDirective(const CPPGMAstNodePtr& original_
 			(*local_substitutions)[visible] = definition->qualified_name;
 	}
 }
-void PA18TemplateExpander::RecordClassReplayConstants(const CPPGMAstNodePtr& child,
-	const string& child_context, const map<string, string>& substitutions,
-	map<string, string>* local_substitutions)
-{
-	if(!child || child->kind != "simple-declaration") return;
-	const string owner = active_instantiation_name_.empty() ? child_context :
-		active_instantiation_name_;
-	if(HasReplayContext(substitutions) || !active_instantiation_name_.empty())
-		RecordConstantDeclaration(child, owner, *local_substitutions);
-	RecordConstantArrayDeclaration(child, owner, *local_substitutions);
-	if(!local_substitutions || child->children.empty() ||
-		!HasDeclarationSpecifier(child->children[0], "const")) return;
-	const CPPGMAstNodePtr constant_list = ChildOfKindLocal(child,
-		"init-declarator-list");
-	if(!constant_list) return;
-	for(size_t constant = 0; constant < constant_list->children.size(); ++constant) {
-		const CPPGMAstNodePtr item = constant_list->children[constant];
-		if(!item || item->children.empty()) continue;
-		const string name = FirstIdentifierLocal(item->children[0]);
-		map<string, PA19IntegralValue>::const_iterator value =
-			constant_values_.find(JoinPath(owner, name));
-		if(value != constant_values_.end() && value->second.known)
-			(*local_substitutions)[name] = IntegralValueSpelling(value->second);
-	}
-}
-
 void PA18TemplateExpander::TransformRegularChildren(const CPPGMAstNodePtr& input,
 	const string& child_context, const string& function_context,
 	const map<string, string>& substitutions,
@@ -651,7 +625,8 @@ void PA18TemplateExpander::TransformRegularChildren(const CPPGMAstNodePtr& input
 						child->children[0] = CPPGMAstNodePtr(new CPPGMAstNode(
 							"literal", IntegralValueSpelling(bound)));
 				}
-			if(child && input->kind == "class-specifier" && child->kind == "simple-declaration") RecordClassReplayConstants(child, child_context, substitutions, local_substitutions);
+			if(child && input->kind == "class-specifier" && child->kind == "simple-declaration" && HasReplayContext(substitutions)) RecordConstantDeclaration(child, active_instantiation_name_.empty() ? child_context : active_instantiation_name_, *local_substitutions);
+			if(child && input->kind == "class-specifier" && child->kind == "simple-declaration") RecordConstantArrayDeclaration(child, active_instantiation_name_.empty() ? child_context : active_instantiation_name_, *local_substitutions);
 				if(!child && input->kind == "decl-specifier-seq" && original_child &&
 					(original_child->kind == "class-specifier" ||
 						original_child->kind == "class-forward-declaration")) {
@@ -667,10 +642,9 @@ void PA18TemplateExpander::TransformRegularChildren(const CPPGMAstNodePtr& input
 				if(original_child && original_child->kind == "alias-declaration" && !original_child->value.empty() &&
 					!original_child->children.empty())
 				{
-					const string alias_raw_type = TypeIdSpelling(original_child->children[0]);
-					const string alias_rewritten_type = RewriteText(alias_raw_type, child_context,
+					(*local_substitutions)[original_child->value] = RewriteText(
+						TypeIdSpelling(original_child->children[0]), child_context,
 						*local_substitutions, 0);
-					(*local_substitutions)[original_child->value] = alias_rewritten_type;
 				}
 			if(original_child && original_child->kind == "using-declaration") {
 				const CPPGMAstNodePtr target = ChildOfKindLocal(original_child, "target");
@@ -731,8 +705,7 @@ bool PA18TemplateExpander::PreserveDependentStaticDeclarator(
 	const map<string, string>& substitutions, const CPPGMAstNodePtr& result,
 	string* promoted_name)
 {
-	if(!input || !result || !promoted_name ||
-		(input->kind != "identifier" && input->kind != "id-expression")) return false;
+	if(!input || (input->kind != "identifier" && input->kind != "id-expression")) return false;
 	const string raw = CanonicalSpelling(RemoveMarker(input->value));
 	const size_t open = raw.find('<');
 	string argument_text;
@@ -800,42 +773,6 @@ bool PA18TemplateExpander::PreserveDependentStaticDeclarator(
 	*promoted_name = string();
 	return true;
 }
-void PA18TemplateExpander::RestoreTypedefDeclaratorNames(
-	const CPPGMAstNodePtr& input, const CPPGMAstNodePtr& result)
-{
-	if(!input || !result) return;
-	if(input->kind == "alias-declaration") result->value = input->value;
-	if(input->kind != "simple-declaration" || input->children.empty() ||
-		!HasDeclarationSpecifier(input->children[0], "typedef")) return;
-	const CPPGMAstNodePtr source_list = ChildOfKindLocal(input,
-		"init-declarator-list");
-	const CPPGMAstNodePtr result_list = ChildOfKindLocal(result,
-		"init-declarator-list");
-	if(!source_list || !result_list) return;
-	for(size_t item = 0; item < source_list->children.size() &&
-		item < result_list->children.size(); ++item) {
-		const CPPGMAstNodePtr source_item = source_list->children[item];
-		const CPPGMAstNodePtr result_item = result_list->children[item];
-		if(!source_item || source_item->children.empty() || !result_item ||
-			result_item->children.empty()) continue;
-		const string source_name = FirstIdentifierLocal(source_item->children[0]);
-		if(source_name.empty()) continue;
-		bool restored = false;
-		function<void(const CPPGMAstNodePtr&)> restore =
-			[&](const CPPGMAstNodePtr& node) {
-				if(!node || restored) return;
-				if(node->kind == "identifier") {
-					node->value = source_name;
-					restored = true;
-					return;
-				}
-				for(size_t child = 0; child < node->children.size(); ++child)
-					restore(node->children[child]);
-			};
-		restore(result_item->children[0]);
-	}
-}
-
 CPPGMAstNodePtr PA18TemplateExpander::FinishRegularNode(
 	const CPPGMAstNodePtr& input, const string& context,
 	const map<string, string>& substitutions,
@@ -879,8 +816,8 @@ CPPGMAstNodePtr PA18TemplateExpander::FinishRegularNode(
 		}
 		map<string, string> local_substitutions = substitutions;
 		struct TypeOnlyScope { size_t& depth; const size_t saved; TypeOnlyScope(size_t& d, bool active) : depth(d), saved(d) { if(active) ++depth; } ~TypeOnlyScope() { depth = saved; } } type_only_scope(defer_type_only_class_definitions_, defer_type_only_classes);
-			TransformRegularChildren(input, child_context, function_context, substitutions, &local_substitutions, result);
-		RestoreTypedefDeclaratorNames(input, result); RecoverDependentSizeofArrayType(input, result);
+		TransformRegularChildren(input, child_context, function_context, substitutions, &local_substitutions, result);
+		RecoverDependentSizeofArrayType(input, result);
 		if(input->kind == "function-definition") MaterializeReturnConversions(input, result, context, function_context, local_substitutions);
 		if(input->kind == "class-specifier" || input->kind == "class-forward-declaration") {
 			string class_name = LastComponent(input->value);
@@ -1079,9 +1016,5 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformRegularNode(
 	CPPGMAstNodePtr rewritten = RewriteRegularNodeValue(
 		input, context, substitutions, result, &promoted_local_class);
 	if(rewritten) return rewritten;
-	const bool defer_type_only_classes = !HasReplayContext(substitutions) &&
-		active_instantiation_name_.empty() &&
-		(input->kind == "alias-declaration" ||
-		(input->kind == "simple-declaration" && !input->children.empty() &&
-		SpellNode(input->children[0]).find("typedef") != string::npos));
+	const bool defer_type_only_classes = input->kind == "alias-declaration" || (input->kind == "simple-declaration" && !input->children.empty() && SpellNode(input->children[0]).find("typedef") != string::npos);
 	return FinishRegularNode(input, context, substitutions, result, promoted_local_class, defer_type_only_classes); } } // namespace pa18_templates_internal

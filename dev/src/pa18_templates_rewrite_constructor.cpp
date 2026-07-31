@@ -129,14 +129,6 @@ void PA18TemplateExpander::MaterializeInitializerConstructor(
 		return;
 	}
 	if(input->kind != "simple-declaration") return;
-	// A typedef declaration has no object construction to materialize.  Treating
-	// its target as an initializer forces recursive type-only aliases such as
-	// `typedef int_<N + 1> next` to instantiate their class body while the
-	// enclosing specialization is still being replayed.
-	if(!input->children.empty() &&
-		(HasDeclarationSpecifier(input->children[0], "typedef") ||
-		 SpellNode(input->children[0]).find("typedef") != string::npos))
-		return;
 	const CPPGMAstNodePtr original_list = ChildOfKindLocal(input,
 		"init-declarator-list");
 	const CPPGMAstNodePtr transformed_list = ChildOfKindLocal(result,
@@ -174,33 +166,6 @@ void PA18TemplateExpander::MaterializeInitializerConstructor(
 	target = CanonicalSpelling(ResolveAlias(RewriteText(target, context,
 		substitutions, 0), context));
 	if(target.empty() || !FindClassDeclaration(target, context)) return;
-	// A typedef may have deliberately installed only a typed forward for its
-	// class template.  A later object initializer is the first point at which
-	// the class body is required: constructor lookup must see the replayed
-	// member bindings instead of the empty forward scope.  Recover the source
-	// template and its already-resolved arguments from the specialization maps;
-	// this keeps the demand at the object-construction boundary and does not
-	// eagerly expand recursive type-only aliases.
-	map<string, string>::const_iterator generated_target_base =
-		specialization_bases_.find(LastComponent(target));
-	map<string, vector<string> >::const_iterator generated_target_arguments =
-		specialization_arguments_.find(LastComponent(target));
-	if(generated_target_base != specialization_bases_.end() &&
-		generated_target_arguments != specialization_arguments_.end()) {
-		const TemplateDefinition* generated_definition = FindDefinition(
-			generated_target_base->second, context);
-		if(!generated_definition)
-			generated_definition = FindDefinition(LastComponent(generated_target_base->second), context);
-		if(generated_definition && generated_definition->class_template) try {
-			Instantiate(*generated_definition, generated_target_arguments->second,
-				context, false);
-		} catch(const PA18SubstitutionFailure&) {
-			// The ordinary initializer path will report an unavailable constructor
-			// if replay cannot produce a viable class specialization.  Do not turn
-			// this typed construction probe into an unrelated hard substitution
-			// diagnostic.
-		}
-	}
 	// A direct initializer can select a non-template constructor of the target
 	// through a user-defined conversion.  Materialize the conversion object's
 	// constructor before PA11 builds constructor bindings; otherwise a template

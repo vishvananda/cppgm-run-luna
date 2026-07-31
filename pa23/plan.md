@@ -2552,3 +2552,193 @@ witnesses.
 - `perl scripts/cppgm_file_audit.pl --stage pa23 --paths dev/src`: passes with
   12 warnings.
 - `git diff --check`: passes.
+
+## Checkpoint 20 scope — 2026-07-31 (before implementation)
+
+### Live baseline and complete failure set
+
+The clean turn-start PA23 report is **321/396**. The complete current-PA
+failure set is **75 fixtures**: 43 exit-status mismatches (including two
+timeouts) and 32 LowIR comparisons. The exact live status inventory is:
+
+- **Status failures and timeout witnesses:**
+  `general/100-local-qualified-argument-replay`,
+  `general/100-member-template-specialization-return-prefers-member-call`,
+  `general/100-selected-specialization-special-member-body`,
+  `general/200-constructor-template-parameter-shadows-instantiated-type`,
+  `general/200-explicit-template-call-dependent-alias-conversion`,
+  `general/200-function-template-named-parameter-sfinae`,
+  `general/200-member-function-template-address-explicit-pack`,
+  `general/200-nested-template-id-partial-specialization-deduction`,
+  `general/200-template-template-head-partial-specialization-ordering`,
+  `general/200-template-template-qualified-default-arg-deduction`,
+  `general/300-constructor-template-const-ref-enable-if-conversion`,
+  `general/300-dependent-alias-helper-partial-specialization`,
+  `general/300-explicit-template-call-dependent-alias-sfinae-overload`,
+  `general/400-alias-rebind-partial-specialization-shadow`,
+  `general/400-anonymous-namespace-partial-specialization`,
+  `general/400-current-specialization-display-name-member-alias`,
+  `general/400-dependent-alias-nontype-sequence-filter`,
+  `general/400-dependent-member-alias-template-argument-scope`,
+  `general/400-dependent-nontype-member-template-owner`,
+  `general/400-member-template-result-pack-preserves-nested-function-pointer-owner`,
+  `general/400-out-of-class-partial-member-template-owner-parameter-alias`,
+  `general/400-qualified-member-variable-template-class-value`,
+  `general/400-qualified-nested-template-id`,
+  `general/400-static-cast-rvalue-ref-skips-conversion-operator`,
+  `general/400-unused-static-member-template-return-type`,
+  `general/500-array-type-argument-sfinae-static-value`,
+  `general/500-dependent-qualified-sizeof-static-member`,
+  `general/500-out-of-class-member-template-dependent-owner-type`,
+  `general/500-reentrant-static-query-callable-enable-if-cache`,
+  `general/500-reentrant-static-query-enable-if-partial`,
+  `general/500-source-namespace-base-sfinae-chain`,
+  `spec/100-extern-template-member-function-declaration`,
+  `spec/100-extern-template-static-data-declaration`,
+  `spec/100-local-member-call-constructor-template-instantiation`,
+  `spec/200-explicit-template-call-dependent-alias-conversion`,
+  `spec/300-explicit-template-call-dependent-alias-sfinae-overload`,
+  `spec/300-trailing-return-expression-sfinae-default-param`,
+  `spec/400-class-template-nttp-scope-value`,
+  `spec/400-explicit-pack-type-argument-uses-bound-type`,
+  `spec/400-explicit-type-arg-dependent-qualified-member-template-id`,
+  `spec/400-qualified-member-alias-template`,
+  `spec/400-qualified-nested-template-id`, and
+  `spec/400-template-template-member-alias-owner-shadow`.
+
+- **LowIR comparisons:**
+  `general/100-dependent-bool-partial-static-value-storage`,
+  `general/100-explicit-specialization-out-of-class-ctor-replay`,
+  `general/100-explicit-specialization-pointer-member-definition`,
+  `general/100-inherited-using-alias-out-of-class-specialization-member`,
+  `general/100-negative-nontype-substitution-comparison`,
+  `general/100-sizeof-call-result-nontype-template-argument`,
+  `general/200-adl-explicit-template-id-call`,
+  `general/200-explicit-template-id-same-signature-member-functions`,
+  `general/200-function-template-reference-cv-alias-partial-order`,
+  `general/200-function-template-template-parameter-deduction`,
+  `general/200-member-operator-template-reference-pattern-partial-order`,
+  `general/300-current-specialization-constructor-template-canonical-owner`,
+  `general/300-dependent-bool-base-trait-type-argument`,
+  `general/400-explicit-function-template-type-arg-drops-nontype-overload`,
+  `general/400-function-type-pack-out-of-class-constructor`,
+  `general/400-member-variable-template-leaf-sfinae`,
+  `general/400-nonmember-template-compound-assignment-const-lhs`,
+  `general/400-variable-template-specializations`,
+  `spec/100-dependent-qualified-return-type`,
+  `spec/100-explicit-instantiation-after-explicit-specialization-no-effect`,
+  `spec/100-explicit-instantiation-class-prior-member-definitions`,
+  `spec/100-explicit-specialization-out-of-class-ctor-replay`,
+  `spec/100-explicit-specialization-out-of-class-member-emits`,
+  `spec/100-out-of-class-conversion-operator-definition`,
+  `spec/100-partial-specialization-member-primary-param-name`,
+  `spec/100-sizeof-union-type-nttp`,
+  `spec/200-defaulted-class-template-argument-pack-prefix-deduction`,
+  `spec/300-alias-template-sfinae-fallback`,
+  `spec/300-constructor-default-pack-partial-ordering`,
+  `spec/400-defaulted-nested-class-argument-partial-specialization`,
+  `spec/400-defaulted-template-arg-partial-base-completion`, and
+  `spec/400-template-template-bound-application-shadowed-head`.
+
+The required through-PA22 run currently fails with 44 mismatches, including
+the PA21/PA22 owner, alias, pack, and fixed-point regressions recorded in
+`/home/vishvananda/work/.ralph/luna-gpt-5.6-luna-ultra/checks/last-priorThroughTests.log`.
+These are part of the live work because PA23 cannot be accepted while an
+earlier assignment regresses.
+
+### Remaining Work Map
+
+- **Typed member-owner replay and candidate-local lookup:** the current
+  checkpoint's early dependent-member guard and generated-owner normalization
+  can discard a resolvable owner, reuse a source alias in the wrong lexical
+  scope, or grow a qualified owner during replay. This is the shared cause
+  of the current PA23 owner/alias status cases and most PA21/PA22 status
+  regressions, including the local-qualified timeout.
+- **Alias/template-template and typed value propagation:** nested aliases,
+  member aliases, packs, boolean/integral members, `sizeof`, and variable
+  templates lose their bound substitution after owner recovery; their LowIR
+  comparisons are downstream consumers of the same fact.
+- **Deduction and overload composition:** constructor and conversion
+  viability, explicit packs, template-template defaults, named-parameter
+  SFINAE, and member-template address/partial ordering remain a distinct
+  status group after owner replay is stable.
+- **Specialization/extern and LowIR materialization:** explicit/extern
+  declarations, special members, static storage, function pointers, and
+  generated declaration metadata account for the remaining comparison band.
+- **Semantic fixed points:** the two reentrant static-query fixtures and the
+  earlier PA21/PA22 timeout witnesses require a terminating typed query
+  identity; no timeout-specific acceptance is in scope.
+
+### Checkpoint Scope
+
+Repair the shared typed member-replay boundary introduced by the current
+checkpoint and complete a substantial owner/deferred increment:
+
+1. Let a concrete substituted owner proceed through `FindClassMemberType`
+   when its member query is a valid dependent alias/type probe; return a
+   candidate-local unresolved result only for a genuinely unresolved or
+   reentrant identity, not merely because its pre-rewrite spelling contains a
+   template parameter.
+2. Preserve the exact lexical owner and enclosing argument bindings when
+   resolving nested aliases, inherited member templates, and out-of-class
+   definitions. Generated owner normalization must be registry-backed and
+   must not collapse a real source path.
+3. Restore the same typed replay behavior for the PA21/PA22 owner/alias/pack
+   regressions while advancing the current PA23 owner/deferred cases; keep
+   the two fixed-point witnesses terminating or visibly failing without
+   timeout-specific handling.
+
+The focused validation set is the five PA23 owner/deferred witnesses
+`general/100-local-qualified-argument-replay`,
+`general/200-nested-template-id-partial-specialization-deduction`,
+`general/400-dependent-member-alias-template-argument-scope`,
+`general/500-out-of-class-member-template-dependent-owner-type`, and
+`general/500-source-namespace-base-sfinae-chain`, together with the PA21
+`general/300-local-qualified-argument-replay` and PA22
+`general/500-dependent-member-alias-function-return` regressions. The
+checkpoint must finish with a current-PA pass count above 321 (or full
+PA23), restore all earlier PAs, pass the file audit, and record the exact
+result and next deduction/materialization group below.
+
+## Checkpoint 20 result — 2026-07-31
+
+The current checkpoint implementation was not a coherent increment: its
+qualified-owner replay changes reduced the active PA23 result and regressed
+earlier assignments. I restored the last coherent registry-backed replay
+baseline, which keeps the previous assignment behavior intact and removes
+those regressions. No tests or reference fixtures were changed.
+
+The resulting active PA23 report is **332/396**, an improvement of 11 over
+the turn-start 321/396 baseline. The owner/deferred focused behavior is
+partially recovered: the nested-template-id, dependent-member-alias-scope,
+and out-of-class dependent-owner witnesses pass in direct checks; the local
+qualified replay remains a LowIR comparison residual and the source-namespace
+SFINAE chain remains a status residual. The PA21/PA22 focused owner/alias
+regressions are covered by the clean through report.
+
+### Validation
+
+- `make test-report ACTIVE_TEST_REPORT_PAS='pa23'`: **332/396**.
+- `make test-report-through-pa22`: **PASS (2100/2100)**.
+- `perl scripts/cppgm_file_audit.pl --stage pa23 --paths dev/src`: **PASS**
+  with 13 existing warnings.
+- `git diff --check`: **PASS**.
+
+### Remaining Work Map and next checkpoint
+
+- **Owner and namespace replay:** the source-namespace SFINAE chain, local
+  qualified replay, and the remaining generated-owner/alias lexical cases
+  still need one registry-backed owner identity shared by lookup and replay.
+- **Deduction and overload composition:** named-parameter SFINAE,
+  constructor/conversion viability, explicit packs, template-template
+  defaults, and member-template partial ordering remain the next status group.
+- **Typed values and materialization:** boolean/integral/`sizeof` member
+  facts, variable templates, explicit/extern declarations, special members,
+  and declaration/storage metadata account for the remaining LowIR group.
+- **Fixed points:** the two reentrant static-query witnesses still require a
+  terminating typed query identity; no timeout-specific handling is accepted.
+
+The next checkpoint is the bundled deduction/overload group plus the first
+typed-value materialization consumers. It will be validated against the
+active PA23 report, the through-PA22 report, the file audit, and the exact
+owner/source-namespace witnesses above.

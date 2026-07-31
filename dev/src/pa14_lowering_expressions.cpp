@@ -355,11 +355,8 @@ PA14Lowerer::Value PA14Lowerer::EmitAssignment(const CPPGMAstNodePtr& node, Scop
     ExprInfo left_info = Infer(node->children[0], scope);
     TypePtr left_type = expression_value_type(left_info);
     if(!left_type) throw logic_error("assignment has no target type");
-	ExprInfo right_order_info;
-	const bool conditional_rhs = op == "=" && node->children[1] &&
-		node->children[1]->kind == "conditional-expression";
-	if(op == "=") right_order_info = conditional_rhs ?
-		Infer(node->children[1], scope) : Infer(node->children[1], scope, left_type);
+    ExprInfo right_order_info;
+    if(op == "=") right_order_info = Infer(node->children[1], scope, left_type);
     Binding* target_binding = node->children[0] &&
       node->children[0]->kind == "member-expression" ?
       MemberBinding(node->children[0], scope) : left_info.binding;
@@ -393,8 +390,7 @@ PA14Lowerer::Value PA14Lowerer::EmitAssignment(const CPPGMAstNodePtr& node, Scop
       const ExprInfo& right_info = right_order_info;
 		if(ConversionRank(right_info, left_type) < 0)
 			throw logic_error("invalid assignment conversion");
-		right = EmitValue(node->children[1], scope, conditional_rhs ? TypePtr() : left_type);
-		if(conditional_rhs) right = ConvertValue(right, left_type);
+      right = EmitValue(node->children[1], scope, left_type);
       // A constant scalar assignment already has its final value; retaining
       // the literal avoids manufacturing a widening/truncation instruction
       // just to store a byte-sized array element.
@@ -789,7 +785,7 @@ PA14Lowerer::Value PA14Lowerer::EmitBinary(const CPPGMAstNodePtr& node, Scope* s
     else if(op == "|") binary = "or";
     else if(op == "^") binary = "xor";
     else if(op == "<<") binary = "shl";
-		else if(op == ">>") binary = common && is_unsigned_type(common) ? "ushr" : "shr";
+    else if(op == ">>") binary = "shr";
     else throw logic_error("unsupported binary operator");
     Value result;
     result.type = result_type;

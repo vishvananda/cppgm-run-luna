@@ -7,8 +7,7 @@ namespace pa18_templates_internal {
 
 bool PA18TemplateExpander::ResolveMaterializedClassOwner(
 	const string& source_base, const vector<string>& requested_arguments,
-	const string& context, string* resolved_owner,
-	const map<string, string>& substitutions) const
+	const string& context, string* resolved_owner) const
 {
 	if(!resolved_owner) return false;
 	resolved_owner->clear();
@@ -51,21 +50,15 @@ bool PA18TemplateExpander::ResolveMaterializedClassOwner(
 					ResolveIntegralArgument(*parameter, raw, context, substitutions, &value);
 				if(!resolved.empty()) normalized = resolved;
 			} catch(...) {
-				// A source owner can still carry a dependent non-type parameter
-				// while its concrete generated specialization is being matched.
-				// Keep that spelling as an unresolved comparison value; a failed
-				// secondary evaluator probe must not escape this lookup boundary.
-				try {
-					if(const_cast<PA18TemplateExpander*>(this)->EvaluateIntegralText(
-						raw, context, substitutions, &value) && value.known)
-						normalized = TemplateIntegralValueSpelling(value);
-				} catch(...) {}
+				if(const_cast<PA18TemplateExpander*>(this)->EvaluateIntegralText(
+					raw, context, substitutions, &value) && value.known)
+					normalized = TemplateIntegralValueSpelling(value);
 			}
 		}
 		return CollapseRepeatedQualifiedPath(CollapseRepeatedQualifier(
 			NormalizeTypeArgument(CanonicalSpelling(RestoreSpecializationSpelling(normalized)))));
 	};
-	const auto arguments_match = [this, &context, &normalize_argument](const vector<string>& expected,
+	const auto arguments_match = [&normalize_argument](const vector<string>& expected,
 		const vector<string>& actual, const TemplateDefinition& definition) {
 		if(expected.size() > actual.size()) return false;
 		for(size_t argument = 0; argument < expected.size(); ++argument) {
@@ -79,27 +72,10 @@ bool PA18TemplateExpander::ResolveMaterializedClassOwner(
 			if(argument >= definition.parameters.size()) return false;
 			const TemplateParameter& parameter = definition.parameters[argument];
 			if(!parameter.pack && parameter.default_type.empty()) return false;
-			if(parameter.pack) continue;
-			// A source template-id may omit a defaulted argument while the
-			// materialized registry records the concrete default.  Matching only
-			// the supplied prefix would conflate distinct specializations such as
-			// `make_if_<T,...,false>` and its explicit `true` partial.
-			map<string, string> default_substitutions;
-			for(size_t prior = 0; prior < expected.size() &&
-				prior < definition.parameters.size(); ++prior)
-				if(!definition.parameters[prior].name.empty())
-					default_substitutions[definition.parameters[prior].name] = expected[prior];
-			string default_argument = parameter.default_type;
-			try {
-				default_argument = const_cast<PA18TemplateExpander*>(this)->RewriteText(
-					default_argument, context, default_substitutions, 0, true, true);
-			} catch(...) {}
-			if(normalize_argument(default_argument, &parameter) !=
-				normalize_argument(actual[argument], &parameter)) return false;
 		}
 		return true;
 	};
-	const auto owner_path = [this, &context, &substitutions](const string& raw_owner) {
+	const auto owner_path = [this, &context](const string& raw_owner) {
 		string owner = CanonicalSpelling(raw_owner);
 		const size_t owner_open = owner.find('<');
 		if(owner_open == string::npos) return owner;
@@ -109,8 +85,7 @@ bool PA18TemplateExpander::ResolveMaterializedClassOwner(
 			return owner;
 		string owner_path_result;
 		if(ResolveMaterializedClassOwner(owner.substr(0, owner_open),
-			SplitTemplateArguments(owner_arguments_text), context, &owner_path_result,
-			substitutions))
+			SplitTemplateArguments(owner_arguments_text), context, &owner_path_result))
 			return owner_path_result;
 		return owner;
 	};

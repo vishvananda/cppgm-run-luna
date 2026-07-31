@@ -1029,10 +1029,10 @@ bool PA18TemplateExpander::DeduceMemberCandidate(
 		// argument vector while a defaulted enable-if is not viable.  Validate
 		// that candidate before materialization; otherwise a constructor body
 		// recursively selects itself (the inherited-constructor `tag` case).
-	if(!ValidateTemplateDefaults(inference_definition, member_arguments, context,
+		if(!ValidateTemplateDefaults(inference_definition, member_arguments, context,
 			deduction_substitutions)) {
 		return false;
-	}
+		}
 		bool dependent_member_arguments = false;
 		for(size_t parameter = 0; parameter < definition.parameters.size() &&
 			!dependent_member_arguments; ++parameter) {
@@ -1046,7 +1046,7 @@ bool PA18TemplateExpander::DeduceMemberCandidate(
 					const size_t end = at + name.size();
 					const bool right = end == member_arguments[argument].size() ||
 						!IsIdentifierCharacter(member_arguments[argument][end]);
-		if(left && right) { dependent_member_arguments = true; break; }
+					if(left && right) { dependent_member_arguments = true; break; }
 				}
 		}
 		// Constructor templates commonly carry dependent default template
@@ -1057,9 +1057,7 @@ bool PA18TemplateExpander::DeduceMemberCandidate(
 		// boundary.
 		const bool constructor_template = !definition.owner.empty() &&
 			LastComponent(definition.name) == LastComponent(definition.owner);
-	if(dependent_member_arguments && !constructor_template) {
-		return false;
-	}
+		if(dependent_member_arguments && !constructor_template) return false;
 		vector<string>& instantiation_member_arguments = candidate->instantiation_member_arguments;
 	instantiation_member_arguments = member_arguments;
 		if(constructor_template && explicit_arguments.empty() &&
@@ -1143,51 +1141,10 @@ bool PA18TemplateExpander::EmitMemberCandidate(
 		vector<string> raw_instantiation_arguments = BuildInstantiationRawArguments(
 			inference_definition, instantiation_member_arguments, inferred_pack_values,
 			bound_pack_values);
-		// Non-template members are materialized through this call path rather than
-		// through the enclosing class replay.  Preserve the enclosing class's
-		// typed packs for their bodies (`index_sequence_for<A...>` in a member of
-		// `list<A...>`); the member's own argument vector contains no `A...` entry
-		// from which Instantiate could recover them.
-		if(concrete_owner) {
-			map<string, string>::const_iterator owner_base = specialization_bases_.find(
-				LastComponent(requested_owner));
-			map<string, vector<string> >::const_iterator owner_args =
-				specialization_arguments_.find(LastComponent(requested_owner));
-			if(owner_base != specialization_bases_.end() &&
-				owner_args != specialization_arguments_.end()) {
-				const TemplateDefinition* owner_definition = FindDefinition(
-					owner_base->second, context);
-				if(owner_definition && owner_definition->class_template) {
-					size_t owner_argument = 0;
-					for(size_t parameter = 0; parameter < owner_definition->parameters.size();
-						++parameter) {
-						const TemplateParameter& detail = owner_definition->parameters[parameter];
-						if(detail.pack) {
-							size_t trailing_fixed = 0;
-							for(size_t later = parameter + 1;
-								later < owner_definition->parameters.size(); ++later)
-								if(!owner_definition->parameters[later].pack) ++trailing_fixed;
-							const size_t available = owner_args->second.size() > owner_argument ?
-								owner_args->second.size() - owner_argument : 0;
-							const size_t count = available > trailing_fixed ?
-								available - trailing_fixed : 0;
-							if(!detail.name.empty() &&
-								instantiation_pack_hints.find(detail.name) ==
-								instantiation_pack_hints.end()) {
-								vector<string>& values = instantiation_pack_hints[detail.name];
-								for(size_t element = 0; element < count; ++element)
-									values.push_back(owner_args->second[owner_argument + element]);
-							}
-							owner_argument += count;
-						} else if(owner_argument < owner_args->second.size()) ++owner_argument;
-					}
-				}
-			}
-		}
 		string& generated_name = candidate->generated_name;
 	const ConcreteOwnerContext previous_concrete_owner = active_concrete_owner_;
 		if(requested_owner_pointer) SetActiveConcreteOwner(requested_owner, context);
-		try {
+	try {
 			generated_name = Instantiate(restored_function_defaults ? materialization_definition :
 				inference_definition, raw_instantiation_arguments, context,
 				 explicit_instantiation, &instantiation_pack_hints, &candidate_substitutions,
@@ -1245,10 +1202,10 @@ bool PA18TemplateExpander::EmitMemberCandidate(
 			definition.owner.find('<') == string::npos &&
 			FindClassDeclaration(definition.owner, context) != CPPGMAstNodePtr() &&
 			!definition.member_template;
-	const string emitted_member_name = definition.member_template ? generated_name : member_name;
+		const string emitted_member_name = definition.member_template ? generated_name : member_name;
 		if(static_member && definition.owner.find("::") == string::npos && concrete_owner) {
 			call->children[0] = CPPGMAstNodePtr(new CPPGMAstNode("id-expression",
-				requested_owner + "::" + emitted_member_name));
+				definition.owner + "::" + emitted_member_name));
 		} else callee->children[1]->value =
 			(ordinary_class_member && !generated_operator) ? member_name :
 			(concrete_owner && !generated_operator ?

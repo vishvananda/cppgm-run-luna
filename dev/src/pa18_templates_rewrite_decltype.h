@@ -582,7 +582,6 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 		}
 		for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter) {
 			const TemplateParameter& detail = definition.parameters[parameter];
-			if(detail.type && !detail.default_type.empty() && explicit_prefix && parameter >= explicit_prefix->size()) { string default_type; try { default_type = RewriteText(detail.default_type, context, local, 0); } catch(const PA18SubstitutionFailure&) { return false; } default_type = NormalizeTypeArgument(ReplaceIdentifiers(default_type, local)); if(default_type.empty() || HasUnavailableGeneratedMemberType(default_type, context, local)) return false; }
 			if(detail.type || detail.non_type_type.empty()) continue;
 			string declared = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(detail.non_type_type, local));
 			string base, argument_text; size_t open = declared.find('<'), begin = 0, close = string::npos;
@@ -1065,9 +1064,10 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 		*result = ExpressionTypeSpelling(normalized, context, substitutions);
 		return !result->empty();
 	}
-	string TemplateMemberType(const TemplateDefinition& definition, const vector<string>& arguments, const string& member, const string& context);
-	string TemplateMemberType(const TemplateDefinition& definition, const vector<string>& arguments, const string& member, const string& context, const map<string, string>& inherited_substitutions);
-	string FinishTemplateMemberType(const string& active_key, const map<string, vector<string> >& previous_packs, const string& value);
+	string TemplateMemberType(const TemplateDefinition& definition,
+		const vector<string>& arguments, const string& member, const string& context);
+	string FinishTemplateMemberType(const string& active_key,
+		const map<string, vector<string> >& previous_packs, const string& value);
 	void PrepareTemplateMemberSubstitutions(const TemplateDefinition& definition,
 		const vector<string>& arguments, const string& context,
 		map<string, string>* local);

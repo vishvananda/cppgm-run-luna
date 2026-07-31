@@ -139,6 +139,96 @@ bool PA18TemplateExpander::GeneratedFunctionCallResultType(
 	*result = generated_ellipsis_result;
 	return true;
 }
+string PA18TemplateExpander::FunctionArgumentObjectType(string raw,
+	const string& context) const
+{
+	// A dependent call result can retain the source template-id spelling while
+	// a nondependent overload parameter has already been reduced through its
+	// typedef alias.  Normalize concrete template-ids through the same typed
+	// specialization table before comparing the object types.
+	if(raw.find('<') != string::npos) try {
+		raw = const_cast<PA18TemplateExpander*>(this)->RewriteText(raw, context,
+		map<string, string>(), 0);
+	} catch(const PA18SubstitutionFailure&) {
+		// The caller will reject an actually unavailable operand below.
+	}
+	raw = CanonicalSpelling(ResolveAlias(raw, context));
+	while(raw.compare(0, 6, "const ") == 0)
+		raw = CanonicalSpelling(raw.substr(6));
+	while(raw.compare(0, 9, "volatile ") == 0)
+		raw = CanonicalSpelling(raw.substr(9));
+	while(raw.size() > 6 && raw.compare(raw.size() - 6, 6, " const") == 0)
+		raw = CanonicalSpelling(raw.substr(0, raw.size() - 6));
+	while(raw.size() > 9 && raw.compare(raw.size() - 9, 9, " volatile") == 0)
+		raw = CanonicalSpelling(raw.substr(0, raw.size() - 9));
+	while(raw.size() >= 2 && raw.compare(raw.size() - 2, 2, "&&") == 0)
+		raw = CanonicalSpelling(raw.substr(0, raw.size() - 2));
+	while(!raw.empty() && raw[raw.size() - 1] == '&')
+		raw = CanonicalSpelling(raw.substr(0, raw.size() - 1));
+	// Removing a reference exposes the cv-qualifier on a spelling such as
+	// `const T&`.  Normalize that qualifier after the reference transport has
+	// been removed so class lookup compares the object type, not `T const`.
+	while(raw.size() > 6 && raw.compare(raw.size() - 6, 6, " const") == 0)
+		raw = CanonicalSpelling(raw.substr(0, raw.size() - 6));
+	while(raw.size() > 9 && raw.compare(raw.size() - 9, 9, " volatile") == 0)
+		raw = CanonicalSpelling(raw.substr(0, raw.size() - 9));
+	return raw;
+}
+bool PA18TemplateExpander::HasClassConversion(const string& expected,
+	const string& actual, const string& context) const
+{
+	const CPPGMAstNodePtr declaration = FindClassDeclaration(actual, context);
+	if(!declaration) return false;
+	string class_name = CanonicalSpelling(actual);
+	vector<string> class_arguments;
+	string primary_name = class_name;
+	const size_t open = class_name.find('<');
+	if(open != string::npos) {
+		string argument_text;
+		size_t close = string::npos;
+		if(!TemplateRange(class_name, open, &argument_text, &close)) return false;
+		class_arguments = SplitTemplateArguments(argument_text);
+		primary_name = CanonicalSpelling(class_name.substr(0, open));
+	} else {
+		map<string, vector<string> >::const_iterator generated_arguments =
+			specialization_arguments_.find(LastComponent(class_name));
+		map<string, string>::const_iterator generated_base =
+			specialization_bases_.find(LastComponent(class_name));
+		if(generated_arguments != specialization_arguments_.end())
+			class_arguments = generated_arguments->second;
+		if(generated_base != specialization_bases_.end() &&
+			!generated_base->second.empty()) primary_name = generated_base->second;
+	}
+	const TemplateDefinition* primary = FindDefinition(primary_name, context);
+	if(!primary) primary = FindDefinition(LastComponent(primary_name), context);
+	map<string, string> class_substitutions;
+	if(primary) for(size_t parameter = 0; parameter < primary->parameters.size() &&
+		parameter < class_arguments.size(); ++parameter)
+		if(!primary->parameters[parameter].name.empty())
+			class_substitutions[primary->parameters[parameter].name] =
+				class_arguments[parameter];
+	const auto conversion_target_matches = [&](string target) {
+		target = CanonicalSpelling(ReplaceIdentifiers(target, class_substitutions));
+		if(target.empty()) return false;
+		try {
+			target = const_cast<PA18TemplateExpander*>(this)->RewriteText(
+				target, context, class_substitutions, 0);
+		} catch(const PA18SubstitutionFailure&) {
+			return false;
+		}
+		return FunctionArgumentObjectType(target, context) == expected;
+	};
+	function<bool(const CPPGMAstNodePtr&)> visit = [&](const CPPGMAstNodePtr& node) {
+		if(!node) return false;
+		const string name = RemoveMarker(node->value);
+		if(name.compare(0, 8, "operator") == 0 && name.size() > 8 &&
+			conversion_target_matches(name.substr(8))) return true;
+		for(size_t child = 0; child < node->children.size(); ++child)
+			if(visit(node->children[child])) return true;
+		return false;
+	};
+	return visit(declaration);
+}
 bool PA18TemplateExpander::FunctionArgumentViable(const string& parameter,
 	const string& actual, const string& context) const
 {
@@ -165,61 +255,6 @@ bool PA18TemplateExpander::FunctionArgumentViable(const string& parameter,
 		return true;
 	if(IsBuiltinArithmeticType(expected) && FindClassDeclaration(received, context))
 		return false;
-	// Pointer arguments do not acquire an arbitrary user-defined conversion just
-	// because both pointees are class types.  The old fallback below was
-	// intentionally permissive for object arguments, but it made an overload
-	// taking `case_fold_tag*` viable for `version_2_tag*`; that changes the
-	// expression-SFINAE result of the classic `sizeof(check(...))` probe.  Keep
-	// pointer viability typed: identical pointees, `void*`, or a derived-to-base
-	// conversion are the only class-pointer paths needed here.
-	const bool expected_pointer = !expected.empty() && expected[expected.size() - 1] == '*' &&
-		expected.find("(*)") == string::npos;
-	const bool received_pointer = !received.empty() && received[received.size() - 1] == '*' &&
-		received.find("(*)") == string::npos;
-	if(expected_pointer || received_pointer) {
-		if(!expected_pointer || !received_pointer) return false;
-		string expected_pointee = CanonicalSpelling(expected.substr(0, expected.size() - 1));
-		string received_pointee = CanonicalSpelling(received.substr(0, received.size() - 1));
-		while(expected_pointee.compare(0, 6, "const ") == 0)
-			expected_pointee = CanonicalSpelling(expected_pointee.substr(6));
-		while(expected_pointee.compare(0, 9, "volatile ") == 0)
-			expected_pointee = CanonicalSpelling(expected_pointee.substr(9));
-		while(received_pointee.compare(0, 6, "const ") == 0)
-			received_pointee = CanonicalSpelling(received_pointee.substr(6));
-		while(received_pointee.compare(0, 9, "volatile ") == 0)
-			received_pointee = CanonicalSpelling(received_pointee.substr(9));
-		expected_pointee = CanonicalSpelling(ResolveAlias(expected_pointee, context));
-		received_pointee = CanonicalSpelling(ResolveAlias(received_pointee, context));
-		if(expected_pointee == received_pointee || expected_pointee == "void") return true;
-		if(IsBuiltinArithmeticType(expected_pointee) || IsBuiltinArithmeticType(received_pointee))
-			return false;
-		const auto is_derived_from = [&](const string& derived, const string& base) {
-			set<string> active;
-			function<bool(const string&, const string&)> visit =
-				[&](const string& current, const string& wanted) {
-					const string key = current + "->" + wanted;
-					if(!active.insert(key).second) return false;
-					const CPPGMAstNodePtr declaration = FindClassDeclaration(current, context);
-					if(!declaration) return false;
-					for(size_t child = 0; child < declaration->children.size(); ++child) {
-						const CPPGMAstNodePtr clause = declaration->children[child];
-						if(!clause || clause->kind != "base-clause") continue;
-						for(size_t item = 0; item < clause->children.size(); ++item) {
-							const CPPGMAstNodePtr base_name = ChildOfKindLocal(
-								clause->children[item], "base-name");
-							if(!base_name) continue;
-							const string candidate = CanonicalSpelling(ResolveAlias(
-								RemoveMarker(base_name->value), context));
-							if(candidate == wanted || LastComponent(candidate) == LastComponent(wanted) ||
-								visit(candidate, wanted)) return true;
-						}
-					}
-					return false;
-				};
-			return visit(derived, base);
-		};
-		return is_derived_from(received_pointee, expected_pointee);
-	}
 	// A hidden friend may deliberately take a lightweight proxy object while
 	// callers probe it with the associated property type.  Model the ordinary
 	// converting-constructor path before looking for conversion operators on the
@@ -253,6 +288,64 @@ bool PA18TemplateExpander::FunctionArgumentViable(const string& parameter,
 		return HasClassConversion(expected, received, context);
 	return true;
 }
+string PA18TemplateExpander::FunctionLookupContext(const string& context) const
+{
+	string generated_owner = active_instantiation_name_.empty() ?
+		LastComponent(context) : active_instantiation_name_;
+	map<string, string>::const_iterator generated_base = specialization_bases_.find(
+		LastComponent(generated_owner));
+	return generated_base == specialization_bases_.end() || generated_base->second.empty() ?
+		context : generated_base->second;
+}
+bool PA18TemplateExpander::EvaluateNewExpression(const string& expression,
+	const string& context, const map<string, string>& substitutions, string* result)
+{
+	if(!result) return false;
+	size_t new_start = string::npos;
+	if(expression.compare(0, 5, "::new") == 0 &&
+		(expression.size() == 5 || !IsIdentifierCharacter(expression[5]))) new_start = 5;
+	else if(expression.compare(0, 3, "new") == 0 &&
+		(expression.size() == 3 || !IsIdentifierCharacter(expression[3]))) new_start = 3;
+	if(new_start == string::npos) return false;
+	string allocated = Trim(expression.substr(new_start));
+	if(!allocated.empty() && allocated[0] == '(') {
+		int depth = 0;
+		size_t close = string::npos;
+		for(size_t position = 0; position < allocated.size(); ++position) {
+			if(allocated[position] == '(') ++depth;
+			else if(allocated[position] == ')' && --depth == 0) {
+				close = position;
+				break;
+			}
+		}
+		if(close == string::npos) return false;
+		allocated = Trim(allocated.substr(close + 1));
+	}
+	int angle = 0;
+	size_t initializer = allocated.size();
+	for(size_t position = 0; position < allocated.size(); ++position) {
+		const char ch = allocated[position];
+		if(ch == '<' && IsTemplateAngleOpen(allocated, position)) ++angle;
+		else if(ch == '>' && angle > 0 && IsTemplateAngleClose(allocated, position)) --angle;
+		else if(angle == 0 && (ch == '(' || ch == '[' || ch == '{')) {
+			initializer = position;
+			break;
+		}
+	}
+	allocated = Trim(allocated.substr(0, initializer));
+	allocated = ResolveDecltypeTypeName(RewriteText(allocated, context, substitutions, 0),
+		context, substitutions);
+	if(!IsKnownTypeSpelling(allocated, context)) return false;
+	string object_type = allocated;
+	while(object_type.compare(0, 6, "const ") == 0)
+		object_type = NormalizeTypeArgument(object_type.substr(6));
+	while(object_type.compare(0, 9, "volatile ") == 0)
+		object_type = NormalizeTypeArgument(object_type.substr(9));
+	if(object_type == "void") return false;
+	*result = NormalizeTypeArgument(allocated + "*");
+	return true;
+}
+
 const TemplateDefinition* PA18TemplateExpander::FindExplicitFunctionTemplate(
 	const string& base, const string& context) const
 {
@@ -661,8 +754,7 @@ string PA18TemplateExpander::FinishTemplateMemberType(const string& active_key,
 {
 	active_pack_substitutions_ = previous_packs;
 	active_template_member_types_.erase(active_key);
-	string result = CollapseRepeatedTemplateOwnerPath(
-		NormalizeTypeArgument(CollapseRepeatedQualifier(value)));
+	string result = NormalizeTypeArgument(CollapseRepeatedQualifier(value));
 	string cv_prefix;
 	while(result.compare(0, 6, "const ") == 0) {
 		cv_prefix += "const ";
@@ -814,8 +906,7 @@ string PA18TemplateExpander::RewriteTemplateMemberSpelling(
 			open += replacement.size() + 2;
 		} else open = spelling.find('[', close + 1);
 	}
-	const string result = NormalizeTypeArgument(ResolveAlias(ReplaceIdentifiers(spelling, local), context));
-	return result;
+	return NormalizeTypeArgument(ResolveAlias(ReplaceIdentifiers(spelling, local), context));
 }
 
 bool PA18TemplateExpander::FindDirectTemplateMemberType(
@@ -853,9 +944,9 @@ bool PA18TemplateExpander::FindDirectTemplateMemberType(
 			const string spelling = RewriteTemplateMemberSpelling(definition, arguments,
 				TypeIdSpelling(child->children[0]), context, *local);
 			(*local)[child->value] = spelling;
-				if(child->value == member) {
-					*result = spelling;
-					return true;
+			if(child->value == member) {
+				*result = spelling;
+				return true;
 			}
 			continue;
 		}
@@ -868,13 +959,13 @@ bool PA18TemplateExpander::FindDirectTemplateMemberType(
 			if(!item || item->children.empty() ||
 				LastComponent(FirstIdentifierLocal(item->children[0])).empty()) continue;
 			const string name = LastComponent(FirstIdentifierLocal(item->children[0]));
-				const string spelling = RewriteTemplateMemberSpelling(definition, arguments,
-					DeclaratorTypeSpelling(NodeTypeSpelling(child->children[0]),
-						item->children[0]), context, *local);
+			const string spelling = RewriteTemplateMemberSpelling(definition, arguments,
+				DeclaratorTypeSpelling(NodeTypeSpelling(child->children[0]),
+					item->children[0]), context, *local);
 			(*local)[name] = spelling;
-				if(name == member) {
-					*result = spelling;
-					return true;
+			if(name == member) {
+				*result = spelling;
+				return true;
 			}
 		}
 	}
@@ -943,13 +1034,8 @@ bool PA18TemplateExpander::FindInheritedTemplateMemberType(
 			}
 				for(size_t argument = 0; argument < base_arguments.size(); ++argument) {
 					const string source_argument = CanonicalSpelling(base_arguments[argument]);
-					const bool resolve_base_member = argument < base_definition->parameters.size() &&
-						base_definition->parameters[argument].type &&
-						(source_argument.find("::") != string::npos ||
-						 source_argument.find("typename") != string::npos);
 					base_arguments[argument] = NormalizeTypeArgument(RewriteText(
-						base_arguments[argument], context, local, 0,
-						resolve_base_member, resolve_base_member));
+						base_arguments[argument], context, local, 0, false, false));
 					map<string, string> second_pass_local = local;
 					for(map<string, string>::const_iterator substitution = local.begin();
 						substitution != local.end(); ++substitution) {
@@ -986,27 +1072,9 @@ bool PA18TemplateExpander::FindInheritedTemplateMemberType(
 				base_definition, base_arguments, context);
 			if(!selected) continue;
 			const string generated = Instantiate(*selected, base_arguments, context);
-			const string generated_path = JoinPath(GeneratedOwner(*selected), generated);
-			// The inherited declaration is replayed in the base specialization's
-			// scope.  Preserve the concrete base bindings while looking up its
-			// member; an empty map loses names such as `T` from `nested_type<T>`
-			// and leaves a later qualified member as the unresolved `next::value`.
-			map<string, string> inherited_substitutions = local;
-			for(size_t parameter = 0; parameter < base_definition->parameters.size() &&
-				parameter < base_arguments.size(); ++parameter)
-				if(!base_definition->parameters[parameter].name.empty())
-					inherited_substitutions[base_definition->parameters[parameter].name] =
-						base_arguments[parameter];
-			if(selected->partial_specialization) {
-				map<string, string> specialized;
-				if(MatchClassSpecializationPattern(*selected, base_arguments,
-					&specialized, context))
-					for(map<string, string>::const_iterator binding = specialized.begin();
-						binding != specialized.end(); ++binding)
-						inherited_substitutions[binding->first] = binding->second;
-			}
+			const string generated_path = JoinPath(selected->owner, generated);
 			set<string> active;
-			if(FindClassMemberType(generated_path, member, inherited_substitutions, context,
+			if(FindClassMemberType(generated_path, member, map<string, string>(), context,
 				result, &active, true)) return true;
 		}
 	}
@@ -1094,21 +1162,6 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 			owner_definition->parameters[owner_argument].template_template;
 		if(!template_entity)
 			owner_arguments[owner_argument] = ResolveAlias(owner_arguments[owner_argument], context);
-		// A non-type class argument can be a dependent integral member such as
-		// `similar<T, U>::value`.  Partial-specialization selection needs its
-		// evaluated bool spelling; leaving the qualified member expression intact
-		// makes the primary `if_c_impl<C, T, E>` win over `if_c_impl<true, T, E>`.
-		if(owner_base == "if_c_impl" && owner_argument < owner_definition->parameters.size() &&
-			!owner_definition->parameters[owner_argument].type && !template_entity) {
-			PA19IntegralValue value;
-			bool evaluated = EvaluateIntegralTextKnownValues(owner_arguments[owner_argument],
-				context, substitutions, &value);
-			if(!evaluated)
-				evaluated = EvaluateIntegralText(owner_arguments[owner_argument], context,
-					substitutions, &value);
-			if(evaluated && value.known)
-				owner_arguments[owner_argument] = TemplateIntegralValueSpelling(value);
-		}
 	}
 	const TemplateDefinition* selected_owner = SelectClassTemplateDefinition(
 		owner_definition, owner_arguments, context);
@@ -1200,20 +1253,20 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 	const bool pure_nested_range_found = pure_nested_open != string::npos &&
 		TemplateRange(*raw, pure_nested_open, &pure_nested_arguments_text, &pure_nested_close);
 	if(nested_template_id && nested_name.empty() && pure_nested_range_found && !nested_member.empty()) {
-			const TemplateDefinition* nested_definition = FindNestedDefinition(*selected_owner, nested_member);
-			if(nested_definition && nested_definition->class_template) {
+		const TemplateDefinition* nested_definition = FindNestedDefinition(*selected_owner, nested_member);
+		if(nested_definition && nested_definition->class_template) {
 			map<string, string> nested_substitutions = substitutions;
 			for(size_t parameter = 0; parameter < selected_owner->parameters.size() && parameter < owner_arguments.size(); ++parameter)
 				if(!selected_owner->parameters[parameter].name.empty()) nested_substitutions[selected_owner->parameters[parameter].name] = owner_arguments[parameter];
 			AddConcreteOwnerSubstitutions(owner_local_name, context, &nested_substitutions);
 			nested_substitutions[selected_owner->name] = owner_local_name;
 			vector<string> nested_arguments = SplitTemplateArguments(pure_nested_arguments_text);
-				for(size_t argument = 0; argument < nested_arguments.size(); ++argument) {
-					nested_arguments[argument] = NormalizeTypeArgument(RewriteText(nested_arguments[argument], context, nested_substitutions, 0, false, false));
-					nested_arguments[argument] = NormalizeTypeArgument(ReplaceIdentifiers(nested_arguments[argument], nested_substitutions));
-				}
-				const TemplateDefinition* selected_nested = SelectClassTemplateDefinition(nested_definition, nested_arguments, context);
-				if(selected_nested && !selected_nested->partial_specialization) {
+			for(size_t argument = 0; argument < nested_arguments.size(); ++argument) {
+				nested_arguments[argument] = NormalizeTypeArgument(RewriteText(nested_arguments[argument], context, nested_substitutions, 0, false, false));
+				nested_arguments[argument] = NormalizeTypeArgument(ReplaceIdentifiers(nested_arguments[argument], nested_substitutions));
+			}
+			const TemplateDefinition* selected_nested = SelectClassTemplateDefinition(nested_definition, nested_arguments, context);
+			if(selected_nested && !selected_nested->partial_specialization) {
 				const string nested_owner = owner_local_name;
 				const string nested_local_name = Instantiate(*selected_nested, nested_arguments, context, false, 0, &nested_substitutions, &nested_owner);
 				if(!nested_local_name.empty()) {
@@ -1333,15 +1386,15 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 								(qualifier == 8 || !IsIdentifierCharacter((*raw)[qualifier - 9]));
 							// Preserve expression-member spelling without `typename`.
 							if(!typename_qualified) {
-							raw->replace(begin, nested_close - begin + 1, concrete_nested);
-							if(template_replaced) *template_replaced = true;
-							if(search) *search = begin + concrete_nested.size();
-							return true;
-						}
-						const string member_context = selected_nested->qualified_name.empty() ?
-							context : selected_nested->qualified_name;
-						concrete_member = NormalizeTypeArgument(RewriteText(
-							concrete_member, member_context, nested_substitutions, 0));
+								raw->replace(begin, nested_close - begin + 1, concrete_nested);
+								if(template_replaced) *template_replaced = true;
+								if(search) *search = begin + concrete_nested.size();
+								return true;
+							}
+							const string member_context = selected_nested->qualified_name.empty() ?
+								context : selected_nested->qualified_name;
+							concrete_member = NormalizeTypeArgument(RewriteText(
+								concrete_member, member_context, nested_substitutions, 0));
 							size_t replacement_begin = begin;
 							while(replacement_begin > 0 && isspace(static_cast<unsigned char>(
 								(*raw)[replacement_begin - 1]))) --replacement_begin;
@@ -1349,8 +1402,8 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 								8, "typename") == 0 && (replacement_begin == 8 ||
 								!IsIdentifierCharacter((*raw)[replacement_begin - 9])))
 								replacement_begin -= 8;
-						raw->replace(replacement_begin, member_end - replacement_begin,
-							concrete_member);
+							raw->replace(replacement_begin, member_end - replacement_begin,
+								concrete_member);
 							if(template_replaced) *template_replaced = true;
 							if(search) *search = replacement_begin + concrete_member.size();
 							return true;
@@ -1418,29 +1471,16 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 string PA18TemplateExpander::TemplateMemberType(const TemplateDefinition& definition,
 	const vector<string>& arguments, const string& member, const string& context)
 {
-	const map<string, string> inherited_substitutions;
-	return TemplateMemberType(definition, arguments, member, context,
-		inherited_substitutions);
-}
-
-string PA18TemplateExpander::TemplateMemberType(const TemplateDefinition& definition,
-	const vector<string>& arguments, const string& member, const string& context,
-	const map<string, string>& inherited_substitutions)
-{
 	if(!definition.declaration) return string();
 	ostringstream key_stream;
 	key_stream << definition.qualified_name;
 	for(size_t argument = 0; argument < arguments.size(); ++argument)
 		key_stream << "|" << CanonicalSpelling(arguments[argument]);
-	key_stream << "|" << member << "|" << context;
-	for(map<string, string>::const_iterator binding = inherited_substitutions.begin();
-		binding != inherited_substitutions.end(); ++binding)
-		key_stream << "|" << binding->first << "=" <<
-			CanonicalSpelling(binding->second);
+	key_stream << "|" << member;
 	const string active_key = key_stream.str();
 	if(!active_template_member_types_.insert(active_key).second) return string();
 	const map<string, vector<string> > previous_packs = active_pack_substitutions_;
-	map<string, string> local = inherited_substitutions;
+	map<string, string> local;
 	PrepareTemplateMemberSubstitutions(definition, arguments, context, &local);
 	if(definition.class_template && !definition.name.empty() &&
 		local.find(definition.name) == local.end()) {

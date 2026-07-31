@@ -39,27 +39,6 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformUnaryExpression(
 	CPPGMAstNodePtr operand = preserve_qualified_template_address ?
 		CloneNode(input->children[0]) : TransformNode(input->children[0], context, substitutions);
 	if(!operand) return CPPGMAstNodePtr();
-	// Taking the address of a named function is a built-in unary operation.  It
-	// must not be routed through synthetic member lookup: the operand has no
-	// class owner, and probing `operator&` there can reinterpret the function's
-	// name as a stale variable binding.  Keep the typed function identity on the
-	// ordinary unary node and let the later call/parameter pass handle decay.
-	if(operation == "&" && operand->kind == "id-expression" &&
-		FindFunctionSignature(operand->value, context)) {
-		CPPGMAstNodePtr result(new CPPGMAstNode(input->kind, input->value));
-		result->initializer_form = input->initializer_form;
-		result->template_instantiation = input->template_instantiation;
-		result->explicit_specialization = input->explicit_specialization;
-		result->explicit_instantiation = input->explicit_instantiation;
-		result->extern_instantiation = input->extern_instantiation;
-		result->dependent_base_lookup = input->dependent_base_lookup;
-		result->materialize_object_address = input->materialize_object_address;
-		result->materialize_object_name = input->materialize_object_name;
-		result->source_token_begin = input->source_token_begin;
-		result->source_token_end = input->source_token_end;
-		result->children.push_back(operand);
-		return result;
-	}
 	// Materialize qualified member-template addresses through owner-aware lookup.
 	if(operation == "&" && operand->kind == "id-expression") {
 		const string raw = RemoveMarker(operand->value);

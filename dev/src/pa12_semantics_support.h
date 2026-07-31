@@ -99,23 +99,6 @@ inline bool PA12HasVolatile(const TypePtr& type)
 	return type && type->is_volatile;
 }
 
-inline string PA12NormalizeFunctionPackSpelling(string value)
-{
-	// A class-template argument such as `void(Args...)` is recorded once
-	// before the enclosing function pack is expanded and once after expansion.
-	// The typed class identities then differ only by the source ellipsis, even
-	// though both denote the same concrete function type.  Normalize that
-	// parameter-pack marker only in function-parameter position; an ellipsis in
-	// an ordinary template argument remains significant.
-	for(size_t at = value.find("..."); at != string::npos;
-		at = value.find("...", at)) {
-		const size_t next = at + 3;
-		if(next < value.size() && value[next] == ')') value.erase(at, 3);
-		else at = next;
-	}
-	return value;
-}
-
 inline bool PA12SameType(const TypePtr& left, const TypePtr& right, bool ignore_cv = true)
 {
 	if (!left || !right) return left == right;
@@ -124,24 +107,8 @@ inline bool PA12SameType(const TypePtr& left, const TypePtr& right, bool ignore_
 		left->is_volatile != right->is_volatile)) return false;
 	switch (left->kind)
 	{
-	case TYPE_CLASS:
-		if (left->name != right->name || left->tag != right->tag)
-			return false;
-		// A materialized concrete class may be referenced once through its
-		// generated name and once through the specialization metadata retained by
-		// template replay.  Equal concrete names identify the same class even if
-		// only one side still carries that metadata.
-		if (!left->template_specialization || !right->template_specialization)
-			return true;
-		if (left->template_primary != right->template_primary ||
-			left->template_arguments.size() != right->template_arguments.size())
-			return false;
-		for (size_t argument = 0; argument < left->template_arguments.size(); ++argument)
-			if (PA12NormalizeFunctionPackSpelling(left->template_arguments[argument]) !=
-				PA12NormalizeFunctionPackSpelling(right->template_arguments[argument]))
-				return false;
-		return true;
 	case TYPE_FUNDAMENTAL:
+	case TYPE_CLASS:
 	case TYPE_ENUM:
 	case TYPE_TEMPLATE_PARAMETER:
 	case TYPE_TEMPLATE_TEMPLATE_PARAMETER:
