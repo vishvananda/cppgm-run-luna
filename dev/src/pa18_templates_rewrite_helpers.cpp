@@ -19,16 +19,17 @@ bool PA18TemplateExpander::ConsumeMaterializedStaticAssert(
 	const CPPGMAstNodePtr& input, const CPPGMAstNodePtr& result,
 	const string& context, const map<string, string>& substitutions)
 {
-	if(!input || input->kind != "static-assert-declaration" ||
-		active_instantiation_name_.empty() || !result || result->children.empty()) return false;
+	if(!input || input->kind != "static-assert-declaration" || !result ||
+		result->children.empty()) return false;
 	PA19IntegralValue value;
 	const string expression = ConstantExpressionSpelling(result->children[0]);
+	if(active_instantiation_name_.empty() && expression.find("::") == string::npos) return false;
 	const bool evaluated = EvaluateIntegralText(expression, context, substitutions, &value);
 	if(!evaluated || !value.known) return false;
-	if(PA19Raw(value) == 0) {
+	if(PA19Raw(value) == 0 && !active_instantiation_name_.empty()) {
 		throw logic_error("static assertion failed");
 	}
-	return true;
+	return PA19Raw(value) != 0;
 }
 
 string PA18TemplateExpander::PromotedLocalClass(const string& name,

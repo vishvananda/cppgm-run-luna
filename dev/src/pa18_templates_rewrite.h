@@ -583,6 +583,7 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 		const map<string, string>& substitutions, bool* template_replaced,
 		bool resolve_alias = true, bool resolve_member = true,
 		bool defer_class_definition = false);
+	string RewriteTextMemberSuffix(string raw, const string& source_spelling, const string& context, const map<string, string>& substitutions, bool* template_replaced, bool materialized_member_type, bool preserved_static_member, bool resolve_alias, bool resolve_member);
 	bool RewriteConcreteNestedMember(string* raw, size_t begin, size_t close, const string& base, const string& context, const map<string, string>& substitutions, bool* template_replaced, size_t* search);
 	const TemplateDefinition* SelectFunctionTemplateOverload(const string& raw, const string& lookup_base, const vector<string>& explicit_arguments, const string& context, const map<string, string>& substitutions, const vector<const TemplateDefinition*>& overloads);
 	void ProtectMaterializedSubstitutions(const string& source_spelling, const string& raw, const string& context, const map<string, string>& substitutions, bool materialized_member_type, map<string, string>* final_substitutions) const;
@@ -1072,6 +1073,7 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 		}
 		if(input->kind == "template-declaration") {
 			if(input->children.size() > 1 && input->children[1] && input->children[1]->kind == "simple-declaration" && !input->children[1]->children.empty() && HasFriendSpecifier(input->children[1]->children[0]) && !DescendantOfKind(input->children[1], "parameter-clause")) return TransformRegularNode(input, context, substitutions);
+			if(input->children.size() > 1 && input->children[0] && Parameters(input->children[0]).empty() && input->children[1] && (input->children[1]->kind == "class-specifier" || input->children[1]->kind == "class-forward-declaration") && input->children[1]->value.find('<') != string::npos) explicit_class_specializations_seen_.insert(input->children[1].get());
 			CheckExplicitSpecializationOrder(input, context);
 			if(TransformExplicitSpecialization(input, context, substitutions))
 				return CPPGMAstNodePtr();

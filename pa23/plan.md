@@ -4077,3 +4077,150 @@ value demand and signedness at the LowIR boundary.  Keep the passing rvalue
 conversion witness and the through-PA22 report as regression gates, and retain
 the empty-object conversion fixture as a materialization regression while
 testing the next group.
+
+## Checkpoint 30 scope — 2026-07-31 (before implementation)
+
+### Current PA23 failure inventory
+
+The current baseline is **355/396**.  The completed Checkpoint 29 conversion
+witness is removed; the complete residual set is **18 status failures** and
+**23 LowIR comparisons**:
+
+- **Status — owner/specialization replay (11):**
+  `general/100-default-nontype-qualified-function-lookup.t`,
+  `general/100-selected-specialization-special-member-body.t`,
+  `general/300-dependent-alias-helper-partial-specialization.t`,
+  `general/400-anonymous-namespace-partial-specialization.t`,
+  `general/400-current-specialization-display-name-member-alias.t`,
+  `general/400-member-template-result-pack-preserves-nested-function-pointer-owner.t`,
+  `general/500-nontype-alias-reinstantiation-structural-state.t`,
+  `general/500-recursive-qualified-member-template-bool-arg.t`,
+  `spec/100-local-member-call-constructor-template-instantiation.t`,
+  `spec/400-defaulted-nested-class-argument-partial-specialization.t`,
+  `spec/400-explicit-type-arg-dependent-qualified-member-template-id.t`.
+- **Status — dependent result/SFINAE and query fixed points (5):**
+  `general/500-dependent-function-type-pack-expansion-ctor-init.t`,
+  `general/500-dependent-qualified-member-template-result-bool.t`,
+  `general/500-mp11-append-alias-template-sfinae.t`,
+  `general/500-reentrant-static-query-callable-enable-if-cache.t`,
+  `general/500-reentrant-static-query-enable-if-partial.t`.
+- **Status — qualified member-id/alias-pack replay (2):**
+  `spec/400-qualified-member-template-id-bool-constant.t` and
+  `spec/500-conditional-alias-index-sequence-member-template-call.t`.
+- **LowIR — typed values, storage, and layout (8):**
+  `general/100-dependent-bool-partial-static-value-storage.t`,
+  `general/100-intermediate-type-transform-value-nontype.t`,
+  `general/100-inherited-using-alias-out-of-class-specialization-member.t`,
+  `general/100-sizeof-call-result-nontype-template-argument.t`,
+  `general/400-variable-template-specializations.t`,
+  `spec/100-partial-specialization-member-primary-param-name.t`,
+  `spec/100-sizeof-union-type-nttp.t`,
+  `spec/400-class-template-nttp-scope-value.t`.
+- **LowIR — call/owner/materialization identity (15):**
+  `general/100-current-specialization-member-body-cast-compare.t`,
+  `general/100-local-qualified-argument-replay.t`,
+  `general/200-adl-explicit-template-id-call.t`,
+  `general/200-function-template-reference-cv-alias-partial-order.t`,
+  `general/200-function-template-template-parameter-deduction.t`,
+  `general/200-member-operator-template-reference-pattern-partial-order.t`,
+  `general/300-current-specialization-constructor-template-canonical-owner.t`,
+  `general/300-dependent-bool-base-trait-type-argument.t`,
+  `general/400-explicit-function-template-type-arg-drops-nontype-overload.t`,
+  `general/400-member-variable-template-leaf-sfinae.t`,
+  `general/400-nonmember-template-compound-assignment-const-lhs.t`,
+  `general/400-out-of-class-partial-member-template-owner-parameter-alias.t`,
+  `spec/100-out-of-class-conversion-operator-definition.t`,
+  `spec/400-defaulted-template-arg-partial-base-completion.t`,
+  `spec/400-template-template-member-alias-owner-shadow.t`.
+
+### Remaining Work Map
+
+- **Typed value/storage/layout:** preserve the declared integral type and
+  specialization value through template replay, static-member demand, variable
+  template selection, and `sizeof` layout reconstruction.
+- **Call/owner materialization:** preserve typed owner identity, selected
+  overloads, and generated function bodies through LowIR lowering.
+- **Dependent replay:** complete alias/pack substitution, qualified member-id
+  lookup, and fixed-point query identity for the 18 status failures.
+
+### Checkpoint Scope
+
+Implement the typed non-type/storage subgroup as one coherent increment.  The
+scope covers: union-versus-struct layout when evaluating `sizeof` as an NTTP;
+static integral member values that already have typed compile-time facts;
+variable-template partial/explicit specialization selection; and signedness
+preservation for inherited aliases and selected partial-specialization values.
+The validation witnesses are the eight LowIR fixtures in the typed-values
+group above, with `general/400-static-cast-rvalue-ref-skips-conversion-operator.t`
+and the through-PA22 report retained as regression gates.  The empty-object
+conversion fixture remains a separate materialization regression.  After the
+increment, rerun focused witnesses, the complete PA23 report, through-PA22,
+and the file audit before recording the next checkpoint.
+
+## Checkpoint 30 result — 2026-07-31
+
+The typed non-type/storage increment is complete. PA12/PA14 now preserve the
+small integral promotions needed by typed NTTPs; PA18 carries typed static
+member values through materialization, retains variable-template specialization
+facts, reconstructs floating/union layout for `sizeof`, and tracks source order
+when class specialization demand is discovered during collection. The text
+rewriter’s member suffix pass was split into a registered source file so the
+implementation remains within the PA23 file-audit limits.
+
+Validation:
+
+- focused checkpoint witnesses: **10/10 pass** (the eight typed-value/storage
+  witnesses, the rvalue-reference conversion regression, and the union-size
+  witness);
+- `make test-report ACTIVE_TEST_REPORT_PAS='pa23'`: **363/396**, up from the
+  **354/396** turn-start baseline;
+- `make test-report-through-pa22`: **2100/2100**;
+- `perl scripts/cppgm_file_audit.pl --stage pa23 --paths dev/src`: **pass** with
+  13 advisory warnings;
+- `git diff --check`: **pass**.
+
+### Remaining Work Map after Checkpoint 30
+
+- **Owner/specialization replay — 9 status failures:**
+  `general/100-default-nontype-qualified-function-lookup.t`,
+  `general/100-dependent-recursive-arity-specialization-order.t`,
+  `general/100-selected-specialization-special-member-body.t`,
+  `general/300-dependent-alias-helper-partial-specialization.t`,
+  `general/400-anonymous-namespace-partial-specialization.t`,
+  `general/400-current-specialization-display-name-member-alias.t`,
+  `spec/100-local-member-call-constructor-template-instantiation.t`,
+  `spec/400-defaulted-nested-class-argument-partial-specialization.t`,
+  `spec/400-explicit-type-arg-dependent-qualified-member-template-id.t`.
+- **Dependent result/SFINAE and fixed-point queries — 10 status failures:**
+  `general/400-dependent-default-nontype-argument-eval.t` (timeout),
+  `general/400-member-template-result-pack-preserves-nested-function-pointer-owner.t`,
+  `general/500-dependent-function-type-pack-expansion-ctor-init.t`,
+  `general/500-dependent-qualified-member-template-result-bool.t`,
+  `general/500-mp11-append-alias-template-sfinae.t`,
+  `general/500-nontype-alias-reinstantiation-structural-state.t`,
+  `general/500-recursive-qualified-member-template-bool-arg.t`,
+  `general/500-reentrant-static-query-callable-enable-if-cache.t`,
+  `general/500-reentrant-static-query-enable-if-partial.t` (timeout),
+  `spec/500-conditional-alias-index-sequence-member-template-call.t`.
+- **LowIR owner/call/materialization identity — 14 comparisons:**
+  `general/100-current-specialization-member-body-cast-compare.t`,
+  `general/100-local-qualified-argument-replay.t`,
+  `general/200-adl-explicit-template-id-call.t`,
+  `general/200-function-template-reference-cv-alias-partial-order.t`,
+  `general/200-function-template-template-parameter-deduction.t`,
+  `general/200-member-operator-template-reference-pattern-partial-order.t`,
+  `general/300-current-specialization-constructor-template-canonical-owner.t`,
+  `general/300-dependent-bool-base-trait-type-argument.t`,
+  `general/400-explicit-function-template-type-arg-drops-nontype-overload.t`,
+  `general/400-member-variable-template-leaf-sfinae.t`,
+  `general/400-nonmember-template-compound-assignment-const-lhs.t`,
+  `general/400-out-of-class-partial-member-template-owner-parameter-alias.t`,
+  `spec/100-out-of-class-conversion-operator-definition.t`,
+  `spec/400-defaulted-template-arg-partial-base-completion.t`.
+
+### Next checkpoint group
+
+Take the owner/specialization replay group first, using the 19 status cases as
+the diagnostic boundary and retaining all 10 checkpoint witnesses plus the
+through-PA22 report as regression gates. Then address the remaining LowIR
+owner/materialization comparisons and the two fixed-point timeouts.

@@ -1,5 +1,6 @@
 #include "pa18_templates_collection.h"
 #include "pa18_templates_rewrite.h"
+
 using namespace std;
 namespace pa18_templates_internal {
 namespace {
@@ -159,6 +160,75 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				}
 					break;
 				}
+				const bool static_member_expression = HasStaticMember(0, current->second, member) ||
+					HasStaticMember(definition, current->second, member);
+				bool typed_static_value = false;
+				if(static_member_expression && !member_type.empty()) {
+					const TemplateDefinition* selected_static_definition =
+						SelectClassTemplateDefinition(definition, arguments->second, context);
+					string declared_type;
+					if(selected_static_definition && selected_static_definition->declaration)
+						for(size_t child_index = 0; child_index <
+							selected_static_definition->declaration->children.size(); ++child_index) {
+							CPPGMAstNodePtr child = selected_static_definition->declaration->children[child_index];
+							if(!child) continue;
+							while(child->kind == "template-declaration" && child->children.size() > 1)
+								child = child->children[1];
+							if(child->kind != "simple-declaration" || child->children.empty()) continue;
+							const CPPGMAstNodePtr list = ChildOfKindLocal(child, "init-declarator-list");
+							if(!list) continue;
+							for(size_t item_index = 0; item_index < list->children.size(); ++item_index) {
+								const CPPGMAstNodePtr item = list->children[item_index];
+								if(!item || item->children.empty() ||
+									LastComponent(FirstIdentifierLocal(item->children[0])) != member) continue;
+								declared_type = DeclaratorTypeSpelling(
+									NodeTypeSpelling(child->children[0]), item->children[0]);
+								break;
+							}
+							if(!declared_type.empty()) break;
+						}
+					PA19IntegralValue typed_value;
+					const string resolved_declared_type = ResolveAlias(
+						ReplaceIdentifiers(declared_type, substitutions), context);
+					const PA19IntegralType expected_type = PA19Type(resolved_declared_type);
+					if(expected_type.integral && resolved_declared_type != "bool" &&
+						EvaluateIntegralText(member_type, context,
+						substitutions, &typed_value) && typed_value.known) {
+						typed_value = PA19Convert(typed_value, expected_type);
+						member_type = IntegralValueSpelling(typed_value);
+						typed_static_value = true;
+					}
+				}
+				// The declared member type is part of the semantic fact.  A typed
+				// literal keeps signedness and width in the ordinary lowerer; retain
+				// the qualified spelling only when no integral fact is available.
+				if(static_member_expression && !typed_static_value) {
+					raw.replace(at, current->first.size(), current->second);
+					preserved_static_member = true;
+					at += current->second.size();
+					continue;
+				}
+				size_t replacement_end = end;
+				// A dependent alias-template member can be replayed as
+				// `defer_impl<...>::type<Arg>`.  The member lookup produces the
+				// partially applied `value_pair<Fixed>` spelling; keep the trailing
+				// application attached so the alias receives all template arguments.
+				if(end < raw.size() && raw[end] == '<') {
+					string trailing_arguments;
+					size_t trailing_close = string::npos;
+					const size_t member_open = member_type.find('<');
+					string existing_arguments;
+					size_t existing_close = string::npos;
+					if(member_open != string::npos &&
+						TemplateRange(member_type, member_open, &existing_arguments, &existing_close) &&
+						existing_close + 1 == member_type.size() &&
+						TemplateRange(raw, end, &trailing_arguments, &trailing_close)) {
+						member_type = member_type.substr(0, existing_close) +
+							(existing_arguments.empty() ? string() : string(",")) +
+							trailing_arguments + ">";
+						replacement_end = trailing_close + 1;
+					}
+				}
 				if(!member_type.empty()) { string member_context = context; map<string, string>::const_iterator owner = specialization_bases_.find(LastComponent(current->second));
 					if(owner != specialization_bases_.end() && !PrefixComponent(owner->second).empty()) member_context = PrefixComponent(owner->second);
 					member_type = QualifyTypeArgument(member_type, member_context, member_context, true); }
@@ -208,7 +278,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 						replacement_begin -= 8;
 				}
 			}
-			raw.replace(replacement_begin, end - replacement_begin, member_type);
+				raw.replace(replacement_begin, replacement_end - replacement_begin, member_type);
 			materialized_member_type = true;
 			at = replacement_begin + member_type.size();
 		}
@@ -1259,12 +1329,43 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 							active_concrete_owner_ = previous_concrete_owner;
 							throw;
 						}
-			active_concrete_owner_ = previous_concrete_owner;
-			// A bare class template-id in a declaration type (notably a typedef)
+		active_concrete_owner_ = previous_concrete_owner;
+		bool explicit_class_specialization = definition->explicit_specialization &&
+			(!definition->declaration ||
+			 !DescendantOfKind(definition->declaration, "parameter-clause"));
+		if(!explicit_class_specialization) {
+			map<string, vector<TemplateDefinition> >::const_iterator specializations =
+				class_specializations_.find(definition->qualified_name);
+			if(specializations != class_specializations_.end())
+				for(size_t candidate = 0; candidate < specializations->second.size(); ++candidate) {
+					const TemplateDefinition& specialization = specializations->second[candidate];
+					if(!specialization.explicit_specialization &&
+						!(specialization.partial_specialization &&
+							specialization.specialization_parameters.empty())) continue;
+					if(specialization.declaration && explicit_class_specializations_seen_.find(
+						specialization.declaration.get()) == explicit_class_specializations_seen_.end()) {
+						map<const CPPGMAstNode*, size_t>::const_iterator source_order =
+							source_order_.find(specialization.declaration.get());
+						if(source_order == source_order_.end() ||
+							active_source_order_ == static_cast<size_t>(-1) ||
+							source_order->second > active_source_order_) continue;
+					}
+					map<string, string> inferred;
+					if(!MatchClassSpecializationPattern(specialization, args, &inferred, context)) continue;
+					const bool has_member_function = specialization.declaration &&
+						DescendantOfKind(specialization.declaration, "parameter-clause");
+					if(!has_member_function) {
+						explicit_class_specialization = true;
+						break;
+					}
+				}
+		}
+		// A bare class template-id in a declaration type (notably a typedef)
 			// does not instantiate the class definition.  Member-qualified uses do
 			// require the concrete class and are the source-order event relevant to
 			// a later explicit specialization.
-			if(resolve_member && definition->class_template && close + 2 < raw.size() &&
+			if(resolve_member && definition->class_template &&
+				!explicit_class_specialization && close + 2 < raw.size() &&
 				raw.compare(close + 1, 2, "::") == 0) {
 				instantiated_class_specializations_.insert(
 					MakeClassSpecializationIdentity(*definition, args, context));
@@ -1334,147 +1435,8 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			if(template_replaced) *template_replaced = true;
 			search = begin + replacement.size();
 		}
-	map<string, string> final_substitutions = substitutions;
-	ProtectMaterializedSubstitutions(source_spelling, raw, context, substitutions,
-		materialized_member_type, &final_substitutions);
-	raw = ReplaceIdentifiersPreservingPackSizes(raw, final_substitutions);
-	// A concrete generated owner can appear without its source template-id after
-	// an earlier member substitution (`list2<...>::child0` -> `expr_X::member`).
-	// Resolve those typed member aliases in a second pass so a chain such as
-	// `Args::child0::proto_grammar` is reduced from the inside out.
-	const auto next_scope_separator = [this](const string& text, size_t start) {
-		int angle = 0;
-		for(size_t position = 0; position + 1 < text.size(); ++position) {
-			if(text[position] == '<' && IsTemplateAngleOpen(text, position)) ++angle;
-			else if(text[position] == '>' && angle > 0 && IsTemplateAngleClose(text, position)) --angle;
-			if(position >= start && angle == 0 && text.compare(position, 2, "::") == 0)
-				return position;
-		}
-		return string::npos;
-	};
-	if(resolve_member) for(size_t separator = next_scope_separator(raw, 0);
-		separator != string::npos; ) {
-		size_t member_begin = separator + 2;
-		while(member_begin < raw.size() && isspace(static_cast<unsigned char>(raw[member_begin])))
-			++member_begin;
-		if(member_begin >= raw.size() || !IsIdentifierCharacter(raw[member_begin])) {
-			separator = next_scope_separator(raw, separator + 2);
-			continue;
-		}
-		size_t member_end = member_begin + 1;
-		while(member_end < raw.size() && IsIdentifierCharacter(raw[member_end])) ++member_end;
-		size_t owner_end = separator;
-		while(owner_end > 0 && isspace(static_cast<unsigned char>(raw[owner_end - 1]))) --owner_end;
-		while(owner_end > 0 && (raw[owner_end - 1] == '&' || raw[owner_end - 1] == '*')) --owner_end;
-		while(owner_end > 0 && isspace(static_cast<unsigned char>(raw[owner_end - 1]))) --owner_end;
-		size_t owner_begin = owner_end;
-		if(owner_begin > 0 && raw[owner_begin - 1] == '>') {
-			int nested_angle = 0;
-			while(owner_begin > 0) {
-				const char ch = raw[owner_begin - 1];
-				if(ch == '>') ++nested_angle;
-				else if(ch == '<' && nested_angle > 0) {
-					--nested_angle;
-					if(nested_angle == 0) {
-						--owner_begin;
-						break;
-					}
-				}
-				--owner_begin;
-			}
-			while(owner_begin > 0 && IsIdentifierCharacter(raw[owner_begin - 1])) --owner_begin;
-		} else while(owner_begin > 0 && IsIdentifierCharacter(raw[owner_begin - 1])) --owner_begin;
-		if(owner_begin == owner_end) {
-			separator = next_scope_separator(raw, member_end);
-			continue;
-		}
-		while(owner_begin >= 2 && raw.compare(owner_begin - 2, 2, "::") == 0) {
-			size_t component_begin = owner_begin - 2;
-			while(component_begin > 0 &&
-				IsIdentifierCharacter(raw[component_begin - 1])) --component_begin;
-			owner_begin = component_begin;
-		}
-		const string owner = raw.substr(owner_begin, separator - owner_begin);
-		string owner_key = CanonicalSpelling(owner);
-		while(!owner_key.empty() && (owner_key[owner_key.size() - 1] == '&' ||
-			owner_key[owner_key.size() - 1] == '*')) owner_key.erase(owner_key.size() - 1);
-		while(owner_key.compare(0, 6, "const ") == 0)
-			owner_key = CanonicalSpelling(owner_key.substr(6));
-		while(owner_key.compare(0, 9, "volatile ") == 0)
-			owner_key = CanonicalSpelling(owner_key.substr(9));
-		const bool known_owner = specialization_bases_.find(LastComponent(owner_key)) !=
-			specialization_bases_.end() || owner.find('<') != string::npos;
-		if(!known_owner) {
-			separator = next_scope_separator(raw, member_end);
-			continue;
-		}
-		string member_type;
-		set<string> member_active;
-	const string member_name = raw.substr(member_begin, member_end - member_begin);
-		string lookup_owner = owner;
-		// The generated owner can have been formed by a prior scalar pass over a
-		// nested dependent type (`vector<Property>` becoming `vector<unsigned
-		// long>`).  Recover the source owner from this RewriteText boundary so
-		// member lookup can apply the typed `Property -> Vertex` binding once.
-		const size_t source_separator = next_scope_separator(source_spelling, 0);
-		if(source_separator != string::npos) {
-			size_t source_member_begin = source_separator + 2;
-			while(source_member_begin < source_spelling.size() &&
-				isspace(static_cast<unsigned char>(source_spelling[source_member_begin]))) ++source_member_begin;
-			size_t source_member_end = source_member_begin;
-			while(source_member_end < source_spelling.size() &&
-				IsIdentifierCharacter(source_spelling[source_member_end])) ++source_member_end;
-			if(source_spelling.substr(source_member_begin, source_member_end - source_member_begin) ==
-				member_name) {
-				const string source_owner = source_spelling.substr(0, source_separator);
-				if(source_owner.find('<') != string::npos)
-					lookup_owner = source_owner;
-			}
-		}
-		const bool found_member = FindClassMemberType(lookup_owner, member_name,
-			substitutions, context, &member_type, &member_active, true);
-		if(!found_member || member_type.empty()) {
-			separator = next_scope_separator(raw, member_end);
-			continue;
-		}
-		const bool static_member_expression = HasStaticMember(0, owner_key, member_name) ||
-			HasStaticMember(0, owner, member_name) ||
-			HasStaticMember(0, LastComponent(owner_key), member_name);
-		if(static_member_expression) {
-			preserved_static_member = true;
-			separator = next_scope_separator(raw, member_end);
-			continue;
-		}
-		materialized_member_type = true;
-		if(member_type.find("::") == string::npos) {
-			const string resolved_member_type = ResolveAlias(member_type, context);
-			if(!resolved_member_type.empty()) member_type = resolved_member_type;
-		}
-		size_t replacement_begin = owner_begin;
-		while(replacement_begin > 0 && isspace(static_cast<unsigned char>(raw[replacement_begin - 1])))
-			--replacement_begin;
-		const size_t prefix_end = replacement_begin;
-		size_t prefix_begin = prefix_end;
-		while(prefix_begin > 0 && IsIdentifierCharacter(raw[prefix_begin - 1])) --prefix_begin;
-		if(prefix_end > prefix_begin &&
-			(raw.substr(prefix_begin, prefix_end - prefix_begin) == "const" ||
-			 raw.substr(prefix_begin, prefix_end - prefix_begin) == "volatile"))
-			replacement_begin = owner_begin;
-		if(replacement_begin >= 8 && raw.compare(replacement_begin - 8, 8, "typename") == 0 &&
-			(replacement_begin == 8 || !IsIdentifierCharacter(raw[replacement_begin - 9])))
-			replacement_begin -= 8;
-		raw.replace(replacement_begin, member_end - replacement_begin,
-			NormalizeTypeArgument(member_type));
-		if(template_replaced) *template_replaced = true;
-		separator = next_scope_separator(raw, replacement_begin + member_type.size());
-		}
-			raw = CollapseReferenceSpelling(raw);
-	if(preserved_static_member) return raw;
-		if(!resolve_alias || raw.find("::") == string::npos) return raw;
-		if(constant_values_.find(raw) != constant_values_.end()) {
-			return raw;
-		}
-		const string result = ResolveAlias(raw, context);
-		return result;
+	return RewriteTextMemberSuffix(raw, source_spelling, context, substitutions,
+		template_replaced, materialized_member_type, preserved_static_member,
+		resolve_alias, resolve_member);
 	}
 } // namespace pa18_templates_internal

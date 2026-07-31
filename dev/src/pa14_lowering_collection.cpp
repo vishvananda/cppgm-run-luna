@@ -1150,6 +1150,12 @@ bool PA14Lowerer::PrepareGlobalDeclaration(const CPPGMAstNodePtr& node,
     const bool integral_storage = record_value &&
       (is_integral_type(record_value) ||
        (record_value->kind == TYPE_FUNDAMENTAL && record_value->name == "bool"));
+    const bool bool_static_storage = record_value &&
+      record_value->kind == TYPE_FUNDAMENTAL && record_value->name == "bool" &&
+      record->template_owner && record->template_owner->owned_scope &&
+      record->template_owner->owned_scope->local("type") &&
+      (record->template_owner->owned_scope->local("type")->kind == BIND_TYPE ||
+       record->template_owner->owned_scope->local("type")->kind == BIND_TYPE_ALIAS);
     Binding* member_binding = semantic_binding;
     if(record->template_owner && record->template_owner->owned_scope &&
        name.find("::") != string::npos) {
@@ -1167,6 +1173,7 @@ bool PA14Lowerer::PrepareGlobalDeclaration(const CPPGMAstNodePtr& node,
       !initializer && member_binding && member_binding->is_member &&
       member_binding->is_static && integral_storage &&
       (member_binding->has_value || facts.is_const || facts.is_constexpr) &&
+      !bool_static_storage &&
       !(record->template_owner && complete_template_parameter_uses_.find(
         record->template_owner.get()) != complete_template_parameter_uses_.end()) &&
       !(record->template_owner && complete_template_object_uses_.find(

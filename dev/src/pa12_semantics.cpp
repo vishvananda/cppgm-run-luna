@@ -284,8 +284,10 @@ private:
 		TypePtr value = PA12ValueType(type);
 		if (value && value->kind == TYPE_ENUM && !value->scoped_enum) return Fundamental("int"); if (!value || value->kind != TYPE_FUNDAMENTAL) return value;
 		if (value->name == "bool" || value->name == "char" || value->name == "signed char" ||
-			value->name == "unsigned char" || value->name == "short int" ||
-			value->name == "unsigned short int") return Fundamental("int");
+			value->name == "unsigned char" || value->name == "short" ||
+			value->name == "short int" || value->name == "unsigned short" ||
+			value->name == "unsigned short int" || value->name == "char16_t")
+			return Fundamental("int");
 		return value;
 	}
 	int ConversionRank(const PA12ExprInfo& source, const TypePtr& target) const

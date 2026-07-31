@@ -585,7 +585,8 @@ string PA14Lowerer::TemplateGlobalObjectName(const GlobalRecord& global) const
     for(size_t i = 0; i < components.size(); ++i) owner += abi_component(components[i]);
   }
   if(owner.empty()) return string();
-  if(global.node && !global.node->template_primary.empty() &&
+  if(!global.explicit_specialization && global.node &&
+     !global.node->template_primary.empty() &&
      !global.node->template_arguments.empty()) {
     const string primary_member = abi_last_component(global.node->template_primary);
     if(generated_member == primary_member ||

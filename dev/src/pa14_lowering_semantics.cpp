@@ -572,6 +572,25 @@ PA14Lowerer::VariablePlan* PA14Lowerer::FindLocalPlan(const string& name) const
 PA14Lowerer::ExprInfo PA14Lowerer::InferIdentifier(const CPPGMAstNodePtr& node, Scope* scope,
                            const TypePtr& expected) const
 {
+    if(node && !node->value.empty() &&
+       (isdigit(static_cast<unsigned char>(node->value[0])) ||
+        ((node->value[0] == '-' || node->value[0] == '+') && node->value.size() > 1 &&
+         isdigit(static_cast<unsigned char>(node->value[1]))))) {
+      TypePtr literal_type;
+      long long literal_value = 0;
+      bool literal_known = false;
+      const string literal = canonical_literal(node->value, &literal_type,
+        &literal_value, &literal_known);
+      if(literal_known) {
+        ExprInfo result;
+        result.type = literal_type;
+        result.operand = literal;
+        result.category = "prvalue";
+        result.known_constant = true;
+        result.constant = literal_value;
+        return result;
+      }
+    }
     ExprInfo result;
     VariablePlan* local = FindLocalPlan(node->value);
     if(local) {
@@ -627,9 +646,7 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferIdentifier(const CPPGMAstNodePtr& node, 
       if(selected) result.binding = selected;
     }
     if(result.binding) result.candidates.clear();
-	if(!result.binding && result.candidates.empty()) {
-		throw logic_error("unknown expression name: " + node->value);
-	}
+	if(!result.binding && result.candidates.empty()) throw logic_error("unknown expression name: " + node->value);
     if(!result.binding && result.candidates.size() == 1)
       result.binding = result.candidates[0];
     if(result.binding && !IsAccessible(result.binding, scope))

@@ -515,7 +515,7 @@ private:
 	map<string, vector<string> > definitions_by_name_, pending_using_declarations_, using_namespace_directives_; map<string, vector<const TemplateDefinition*> > using_declaration_targets_, using_directive_exports_;
 	set<string> template_pack_names_, template_parameter_names_;
 	map<string, vector<TemplateDefinition> > class_specializations_; map<string, set<string> > class_specialization_groups_by_name_;
-	map<const CPPGMAstNode*, string> lexical_contexts_; set<string> lexical_namespace_paths_;
+	map<const CPPGMAstNode*, string> lexical_contexts_; set<string> lexical_namespace_paths_; map<const CPPGMAstNode*, size_t> source_order_; size_t active_source_order_ = static_cast<size_t>(-1);
 	map<string, string> lexical_namespace_logical_;
 	map<string, string> specializations_;
 	set<string> active_specializations_;
@@ -588,7 +588,7 @@ private:
 	// class-template defaults that the caller did not write.
 	map<string, size_t> specialization_explicit_argument_counts_;
 	map<string, vector<string> > specialization_names_by_base_; map<string, set<string> > specialization_name_sets_by_base_;
-	set<ClassSpecializationIdentity> instantiated_class_specializations_;
+	set<ClassSpecializationIdentity> instantiated_class_specializations_; set<const CPPGMAstNode*> explicit_class_specializations_seen_;
 	map<string, TemplateDefinition> explicit_function_specializations_;
 	map<const TemplateDefinition*, map<string, TemplateDefinition> >
 		explicit_function_specializations_by_primary_;
@@ -1018,7 +1018,7 @@ private:
 		template_definitions_by_declaration_[declaration.get()] = item;
 		bool has_non_type_parameter = false; for(size_t parameter = 0; parameter < item.parameters.size(); ++parameter) if(!item.parameters[parameter].type && !item.parameters[parameter].template_template) has_non_type_parameter = true;
 		if(!item.class_template && !item.alias_template && !item.variable_template && has_non_type_parameter && declaration && (declaration->kind == "function-definition" || declaration->kind == "simple-declaration" || declaration->kind == "special-member-definition" || declaration->kind == "special-member-declaration")) template_function_signatures_.insert(declaration.get());
-		if(item.parameters.empty() && !item.class_template &&
+		if(item.parameters.empty() && !item.class_template && (!item.variable_template || declaration_spelling.find("::") != string::npos) &&
 			(declaration->kind == "function-definition" ||
 			 declaration->kind == "simple-declaration") &&
 			RegisterExplicitFunctionSpecialization(node, declaration,
@@ -1077,7 +1077,7 @@ private:
 	bool HasStaticMember(const TemplateDefinition* definition, const string& owner, const string& name) const;
 	void Collect(const CPPGMAstNodePtr& node, const string& context, bool type_reference = false)
 	{
-		if(!node) return;
+		if(!node) return; map<const CPPGMAstNode*, size_t>::const_iterator source_order = source_order_.find(node.get()); if(source_order != source_order_.end()) active_source_order_ = source_order->second;
 		const bool elaborated_type_reference = type_reference && node->kind == "class-forward-declaration";
 		if(node->kind == "using-directive") { const CPPGMAstNodePtr target = ChildOfKindLocal(node, "target"); if(target) { string target_name = CanonicalSpelling(RemoveMarker(target->value)); while(!target_name.empty() && target_name[0] == ':') target_name.erase(0, 1); if(!target_name.empty()) { vector<string>& directives = using_namespace_directives_[context]; if(find(directives.begin(), directives.end(), target_name) == directives.end()) directives.push_back(target_name); } } } if(node->kind == "using-declaration") { const CPPGMAstNodePtr target = ChildOfKindLocal(node, "target"); if(target) { const string target_name = RemoveMarker(target->value); if(!target_name.empty() && target_name.find("::") != string::npos) pending_using_declarations_[context].push_back(target_name); } }
 		if(node->kind == "translation-unit") {

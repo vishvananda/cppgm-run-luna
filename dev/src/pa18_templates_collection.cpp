@@ -914,6 +914,13 @@ vector<CPPGMAstNodePtr> PA18TemplateExpander::Run(
 {
 	active_static_member_ = false;
 	generated_by_primary_.clear();
+	source_order_.clear();
+	size_t source_order = 0;
+	function<void(const CPPGMAstNodePtr&)> index_source_order =
+		[&](const CPPGMAstNodePtr& node) { if(!node) return; source_order_[node.get()] = source_order++;
+			for(size_t child = 0; child < node->children.size(); ++child) index_source_order(node->children[child]); };
+	for(size_t i = 0; i < input.size(); ++i) index_source_order(input[i]);
+	active_source_order_ = static_cast<size_t>(-1);
 	ValidateTemplateDiagnostics(input);
 	for(size_t i = 0; i < input.size(); ++i)
 		CollectLexical(input[i], string(), string());

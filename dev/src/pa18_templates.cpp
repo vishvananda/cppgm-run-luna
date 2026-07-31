@@ -1,7 +1,6 @@
 #include <functional>
 #include "pa18_templates_collection.h"
 #include "pa18_templates_rewrite.h"
-
 using namespace pa18_templates_internal;
 
 namespace {
@@ -148,6 +147,7 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformTranslationUnit(
 	CPPGMAstNodePtr result(new CPPGMAstNode("translation-unit"));
 	map<string, string> top_level_substitutions;
 	for(size_t i = 0; i < input->children.size(); ++i) {
+		active_source_order_ = source_order_.find(input->children[i].get()) == source_order_.end() ? static_cast<size_t>(-1) : source_order_.find(input->children[i].get())->second;
 		CPPGMAstNodePtr child = TransformNode(input->children[i], string(),
 			top_level_substitutions);
 		if(child) result->children.push_back(child);
@@ -313,7 +313,6 @@ bool PA18TemplateExpander::EvaluateExpandedSizeofText(const string& raw,
 	if(expanded) *expanded = expanded_size;
 	return false;
 }
-
 size_t PA18TemplateExpander::EstimateTypeSize(string raw, const string& context) const
 {
 	raw = CanonicalSpelling(raw);
@@ -357,6 +356,7 @@ size_t PA18TemplateExpander::EstimateTypeSize(string raw, const string& context)
 		}
 	}
 	if(!raw.empty() && (raw[raw.size() - 1] == '*' || raw[raw.size() - 1] == '&')) return 8;
+	if(raw == "float") return 4; if(raw == "double") return 8; if(raw == "long double") return 16;
 	const PA19IntegralType fundamental = PA19Type(raw);
 	if(fundamental.integral) return fundamental.bits <= 8 ? 1 :
 		fundamental.bits <= 16 ? 2 : fundamental.bits <= 32 ? 4 : 8;
@@ -510,6 +510,9 @@ void PA18TemplateExpander::RecordClassTypeSize(const CPPGMAstNodePtr& node,
 {
 	if(!node || (node->kind != "class-specifier" &&
 		node->kind != "class-forward-declaration")) return;
+	const string class_spelling = SpellNode(node);
+	const bool union_type = class_spelling.compare(0, 5, "union") == 0 &&
+		(class_spelling.size() == 5 || isspace(static_cast<unsigned char>(class_spelling[5])));
 	size_t offset = 0;
 	size_t alignment = 1;
 	for(size_t i = 0; i < node->children.size(); ++i) {
@@ -531,8 +534,11 @@ void PA18TemplateExpander::RecordClassTypeSize(const CPPGMAstNodePtr& node,
 			if(!size) continue;
 			const size_t member_alignment = size > 8 ? 8 : size;
 			alignment = max(alignment, member_alignment);
-			offset = (offset + member_alignment - 1) / member_alignment * member_alignment;
-			offset += size;
+			if(union_type) offset = max(offset, size);
+			else {
+				offset = (offset + member_alignment - 1) / member_alignment * member_alignment;
+				offset += size;
+			}
 		}
 	}
 	if(!offset) offset = 1;

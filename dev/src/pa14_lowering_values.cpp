@@ -70,6 +70,24 @@ string PA14Lowerer::AdjustDerivedAddress(const string& base,
 PA14Lowerer::Value PA14Lowerer::EmitIdentifier(const CPPGMAstNodePtr& node, Scope* scope,
                        const TypePtr& expected)
 {
+    if(node && !node->value.empty() &&
+       (isdigit(static_cast<unsigned char>(node->value[0])) ||
+        ((node->value[0] == '-' || node->value[0] == '+') && node->value.size() > 1 &&
+         isdigit(static_cast<unsigned char>(node->value[1]))))) {
+      TypePtr literal_type;
+      long long literal_value = 0;
+      bool literal_known = false;
+      const string literal = canonical_literal(node->value, &literal_type,
+        &literal_value, &literal_known);
+      if(literal_known) {
+        Value result;
+        result.type = literal_type;
+        result.operand = literal;
+        result.known_constant = true;
+        result.constant = literal_value;
+        return result;
+      }
+    }
     Value result;
     VariablePlan* local = LocalForName(node->value);
     if(local) {
@@ -207,6 +225,8 @@ PA14Lowerer::Value PA14Lowerer::EmitIdentifier(const CPPGMAstNodePtr& node, Scop
 		early_demanded_global->template_instantiation &&
 		early_demanded_global->initializer && binding->member_owner &&
 		binding->member_owner->template_specialization && binding->has_value &&
+		binding_value_type && binding_value_type->kind == TYPE_FUNDAMENTAL &&
+		binding_value_type->name == "bool" &&
 		template_function_static_use;
 	const bool materialized_template_static = qualified_materialized_template_static ||
 		qualified_template_static_use;

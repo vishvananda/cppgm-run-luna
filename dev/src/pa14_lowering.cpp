@@ -1094,9 +1094,7 @@ TypePtr PA14Lowerer::IntegralPromotion(const TypePtr& raw) const
     TypePtr type = type_value(raw);
     if(type && type->kind == TYPE_ENUM && !type->scoped_enum) return Fundamental("int");
     if(!type || type->kind != TYPE_FUNDAMENTAL) return type;
-    if(type->name == "bool" || type->name == "char" || type->name == "signed char" ||
-       type->name == "unsigned char" || type->name == "short int" ||
-       type->name == "unsigned short int") return Fundamental("int");
+	if(type->name == "bool" || type->name == "char" || type->name == "signed char" || type->name == "unsigned char" || type->name == "short" || type->name == "short int" || type->name == "unsigned short" || type->name == "unsigned short int" || type->name == "char16_t") return Fundamental("int");
     return type;
   }
 

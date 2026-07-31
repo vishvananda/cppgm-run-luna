@@ -1,6 +1,7 @@
 #include "pa18_templates_collection.h"
 #include "pa18_templates_rewrite.h"
 
+
 using namespace std;
 
 namespace pa18_templates_internal {
@@ -154,6 +155,38 @@ bool PA18TemplateExpander::HasStaticMember(const TemplateDefinition* definition,
 			if(current.empty()) return false;
 			const string active_key = current + "|" + name;
 			if(!active.insert(active_key).second) return false;
+			map<string, string>::const_iterator generated = specialization_bases_.find(
+				LastComponent(current));
+			map<string, vector<string> >::const_iterator generated_arguments =
+				specialization_arguments_.find(LastComponent(current));
+			if(generated != specialization_bases_.end() &&
+				generated_arguments != specialization_arguments_.end()) {
+				const TemplateDefinition* source_definition = FindDefinition(
+					generated->second, PrefixComponent(current));
+				if(source_definition && source_definition->class_template) {
+					const TemplateDefinition* selected = SelectClassTemplateDefinition(
+						source_definition, generated_arguments->second,
+						PrefixComponent(current));
+					bool has_non_type_parameter = false;
+					if(selected) for(size_t parameter = 0;
+						parameter < selected->parameters.size(); ++parameter)
+						if(!selected->parameters[parameter].type &&
+							!selected->parameters[parameter].template_template) {
+							has_non_type_parameter = true;
+							break;
+						}
+					bool nested_argument = false;
+					for(size_t argument = 0; selected &&
+						argument < generated_arguments->second.size(); ++argument)
+						if(generated_arguments->second[argument].find('<') != string::npos) {
+							nested_argument = true;
+							break;
+						}
+					if(selected && selected->static_members.find(name) != selected->static_members.end() &&
+						(has_non_type_parameter || (!selected->partial_specialization && nested_argument)))
+						return true;
+				}
+			}
 			// A partially replayed function-type pack can leave an ellipsis on a
 			// concrete template argument (`is_same<T, U...>`).  Recover the typed
 			// materialized specialization before walking its inherited bases.

@@ -266,7 +266,7 @@ const TemplateDefinition* PA18TemplateExpander::SelectClassTemplateDefinition(
 			if(parameter.type || parameter.template_template || parameter.non_type_type.empty()) continue;
 			PA19IntegralValue value;
 			if(!const_cast<PA18TemplateExpander*>(this)->EvaluateIntegralText(
-				matching_arguments[argument], context, map<string, string>(), &value) ||
+				matching_arguments[argument], context, default_substitutions, &value) ||
 				!value.known) continue;
 			const PA19IntegralType expected_type = PA19Type(ResolveAlias(
 				parameter.non_type_type, context));
