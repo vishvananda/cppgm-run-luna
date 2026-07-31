@@ -3605,3 +3605,94 @@ fixtures that fail before LowIR, then validate the associated comparison
 fixtures and preserve the two fixed-point witnesses as regressions.  Follow
 with the residual typed-value/materialization set; every increment must rerun
 the PA23 report, the through-PA22 report, and the file audit.
+
+## Checkpoint 27 audit refresh — 2026-07-31
+
+The fresh required PA23 report remains **351/396**, preserving the checkpoint
+baseline improvement from **343/396**.  The complete current-PA failure set is
+**22 exit-status failures**, **23 LowIR comparisons**, and **one timeout**.
+The owner-registry ambiguity found during audit was fixed before this refresh;
+the earlier PA reports and file audit remain clean.
+
+### Complete current-PA failure set
+
+#### Status failures (22)
+
+```text
+general/100-default-nontype-qualified-function-lookup.t
+general/100-member-template-specialization-return-prefers-member-call.t
+general/100-selected-specialization-special-member-body.t
+general/200-member-template-implicit-instantiation-not-overload.t
+general/300-dependent-alias-helper-partial-specialization.t
+general/400-anonymous-namespace-partial-specialization.t
+general/400-current-specialization-display-name-member-alias.t
+general/400-member-template-result-pack-preserves-nested-function-pointer-owner.t
+general/400-static-cast-rvalue-ref-skips-conversion-operator.t
+general/500-dependent-function-type-pack-expansion-ctor-init.t
+general/500-dependent-qualified-member-template-result-bool.t
+general/500-member-template-conditional-alias-trailing-return.t
+general/500-mp11-append-alias-template-sfinae.t
+general/500-nontype-alias-reinstantiation-structural-state.t
+general/500-recursive-qualified-member-template-bool-arg.t
+general/500-reentrant-static-query-callable-enable-if-cache.t
+general/500-reentrant-static-query-enable-if-partial.t
+spec/100-local-member-call-constructor-template-instantiation.t
+spec/400-defaulted-nested-class-argument-partial-specialization.t
+spec/400-explicit-type-arg-dependent-qualified-member-template-id.t
+spec/400-qualified-member-template-id-bool-constant.t
+spec/500-conditional-alias-index-sequence-member-template-call.t
+```
+
+#### LowIR comparisons (23)
+
+```text
+general/100-current-specialization-member-body-cast-compare.t
+general/100-dependent-bool-partial-static-value-storage.t
+general/100-inherited-using-alias-out-of-class-specialization-member.t
+general/100-intermediate-type-transform-value-nontype.t
+general/100-local-qualified-argument-replay.t
+general/100-sizeof-call-result-nontype-template-argument.t
+general/200-adl-explicit-template-id-call.t
+general/200-function-template-reference-cv-alias-partial-order.t
+general/200-function-template-template-parameter-deduction.t
+general/200-member-operator-template-reference-pattern-partial-order.t
+general/300-current-specialization-constructor-template-canonical-owner.t
+general/300-dependent-bool-base-trait-type-argument.t
+general/400-explicit-function-template-type-arg-drops-nontype-overload.t
+general/400-member-variable-template-leaf-sfinae.t
+general/400-nonmember-template-compound-assignment-const-lhs.t
+general/400-out-of-class-partial-member-template-owner-parameter-alias.t
+general/400-variable-template-specializations.t
+spec/100-out-of-class-conversion-operator-definition.t
+spec/100-partial-specialization-member-primary-param-name.t
+spec/100-sizeof-union-type-nttp.t
+spec/400-class-template-nttp-scope-value.t
+spec/400-defaulted-template-arg-partial-base-completion.t
+spec/400-template-template-member-alias-owner-shadow.t
+```
+
+### Refreshed Remaining Work Map
+
+- **Dependent owner and candidate replay:** the status failures cover
+  qualified/defaulted lookup, current/inherited/anonymous/local owner paths,
+  member-template overload selection, alias-based SFINAE, and qualified
+  constructor/member calls.
+- **Dependent result formation and conversion ranking:** the remaining status
+  and comparison cases cover dependent function/boolean/trailing results,
+  MP11 and recursive member queries, rvalue-reference conversion selection,
+  template-template deduction, and member-operator partial ordering.
+- **Typed values and LowIR materialization:** the comparisons cover static and
+  variable-template storage, non-type alias state, `sizeof`, explicit type
+  arguments, partial member owners, and generated body/storage metadata.
+- **Fixed-point regressions:** the two reentrant static-query fixtures remain
+  visible as termination coverage and are not accepted through timeout or
+  fallback behavior.
+
+### Next substantial checkpoint group
+
+Bundle the dependent owner/candidate replay status group with its dependent
+member-result and conversion-ranking consumers: qualified member lookup,
+member-template selection, alias/SFINAE formation, constructor replay, and the
+related LowIR comparisons.  Keep the typed-value/materialization comparisons
+and both reentrant fixed-point fixtures as regressions.  Rerun the PA23 report,
+the through-PA22 report, and the file audit at the end of that group.

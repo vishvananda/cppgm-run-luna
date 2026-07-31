@@ -1543,3 +1543,100 @@ the owner/specialization replay, deduction/overload, and LowIR groups.
 - `git diff --check`: **PASS**.
 - The final committed worktree was checked with `git status --short` and is
   clean.
+
+## Checkpoint 27 audit — 2026-07-31
+
+### Scope Reviewed
+
+- The latest `Checkpoint 27 Scope` and result in `pa23/plan.md`, including
+  the explicit/extern specialization-materialization contract, its 343/396
+  baseline, and the recorded 351/396 result.
+- `pa23/README.md`, `TESTING_AND_REFERENCES.md`, the PA23 owner/replay
+  witnesses, and the earlier PA18–PA22 report contract.
+- HEAD `053b3dd` (`Implement PA23 explicit specialization replay`), the
+  preceding audit/implementation commits, and every changed PA14, parser,
+  ABI, and PA18 replay module in the checkpoint diff.
+- The authoritative full-run log at
+  `/home/vishvananda/work/.ralph/luna-gpt-5.6-luna-ultra/last-test.log`, the
+  fresh through-PA22 report, and the PA23 source file audit.
+
+### Findings
+
+- The checkpoint stays on the required pipeline: parser AST, semantic
+  collection and lookup, typed template replay, PA14 lowering, and LowIR
+  emission.  No compiler phase is skipped, and there is no dummy output,
+  embedded payload, interpreter/VM/trampoline substitute, reference-binary or
+  host-compiler call, source/test-specific acceptance gate, or unchecked
+  output path.
+- Explicit and extern instantiation handling uses the existing typed class,
+  template-definition, `FunctionRecord`, and `GlobalRecord` facts.  Extern
+  declarations do not materialize a body; explicit instantiations are
+  constrained by the parsed source-token boundary; and explicit function
+  specializations remain selected as typed entities.  These are not fallback
+  success paths.
+- The owner-registry fallback had one checkpoint-level ownership defect: its
+  specialization match compared only the terminal template-name component.
+  Two source-qualified templates such as `a::Box<T>` and `b::Box<T>` could
+  therefore select the wrong typed class when their arguments matched.  This
+  was fixed in the audit by requiring exact equality when both primary paths
+  are source-qualified, while retaining terminal-name compatibility only when
+  one side is an unqualified generated primary.
+- The ABI correction consumes typed specialization primary/argument fields;
+  its generated-name compatibility branch is confined to symbol encoding and
+  cannot accept a declaration or choose a candidate.  No new semantic fact is
+  recovered by reparsing emitted LowIR text.
+- No timeout workaround, retry budget, timing-based acceptance, broad catch-all
+  success path, repeated full-suite walk, or new hot-path quadratic scan was
+  introduced.  The one reentrant timeout remains an ordinary failing semantic
+  fixture and is still visible in the complete report.
+- The file audit has no fatal finding and the same 13 pre-existing warnings as
+  the checkpoint baseline.  All implementation changes remain in checked
+  `dev/src`; no tests, references, harnesses, checker rules, generated
+  payloads, or hidden implementation fragments were changed.
+- The current PA23 count is above the turn-start baseline (351/396 versus
+  343/396), and the earlier assignments remain clean.  No checkpoint-level
+  shortcut, ownership, performance, regression, or file-audit blocker remains.
+
+### Changes Made
+
+- Added `PA14OwnerPrimaryMatches` and used it in `ResolveClassOwner` so the
+  typed class-registry fallback cannot conflate source-qualified owners that
+  share a terminal template name.
+- Kept unqualified generated-primary compatibility for materialized replay,
+  so the fix does not turn the existing generated-owner handoff into a
+  spelling mismatch.
+- Refreshed `pa23/plan.md` with the exact fresh 22 status failures and 23
+  LowIR comparisons, the grouped Remaining Work Map, and the next bundled
+  checkpoint group.
+- No tests or `.ref` files were modified.
+
+### Validation
+
+- `make build`: **PASS**.
+- Required prior-through command (`n=23; ... make test-report-through-pa22`):
+  **PASS, 2100/2100**.
+- `make test-report ACTIVE_TEST_REPORT_PAS='pa23'`: **351/396**, with the
+  expected residual **22 status failures**, **23 LowIR comparisons**, and
+  **one timeout**; no new failure appeared.
+- `perl scripts/cppgm_file_audit.pl --stage pa23 --paths dev/src`:
+  **PASS**, with 13 non-fatal pre-existing warnings.
+- `git diff --check`: **PASS**.
+- The final post-commit `git status --short` check is required to be empty.
+
+### Refreshed Remaining Work Map
+
+- **Dependent owner and candidate replay:** qualified function/member lookup,
+  current/inherited/anonymous owners, member-template selection, alias-based
+  SFINAE, local constructor replay, and qualified member-template calls remain
+  the status frontier.
+- **Dependent result formation and conversion ranking:** dependent function and
+  boolean results, trailing aliases, MP11/recursive queries, rvalue-reference
+  conversion selection, and the remaining template-template/member-operator
+  comparisons remain the next semantic group.
+- **Typed values and LowIR materialization:** static/variable-template
+  storage, non-type alias state, `sizeof`, explicit type arguments, partial
+  member owners, and generated body/storage comparisons remain after candidate
+  selection is stable.
+- **Fixed-point coverage:** the two reentrant static-query fixtures remain
+  explicit termination regressions and are not accepted through timing or
+  fallback behavior.

@@ -86,6 +86,24 @@ vector<string> PA14OwnerTemplateArguments(const string& value, size_t open)
     return result;
 }
 
+bool PA14OwnerPrimaryMatches(const string& candidate_raw,
+                             const string& requested_raw)
+{
+    string candidate = PA14TrimOwnerSpelling(candidate_raw);
+    string requested = PA14TrimOwnerSpelling(requested_raw);
+    while(candidate.compare(0, 2, "::") == 0) candidate.erase(0, 2);
+    while(requested.compare(0, 2, "::") == 0) requested.erase(0, 2);
+    if(candidate == requested) return true;
+    // An unqualified generated primary can be compared by its terminal name,
+    // but two source-qualified primaries with the same terminal component are
+    // distinct owners.  Do not let the registry fallback select `b::Box<T>`
+    // while resolving a definition for `a::Box<T>`.
+    if(candidate.find("::") != string::npos &&
+       requested.find("::") != string::npos) return false;
+    return !candidate.empty() && !requested.empty() &&
+        LastComponent(candidate) == LastComponent(requested);
+}
+
 } // namespace
 
 bool PA14Lowerer::HasInline(const CPPGMAstNodePtr& node) const
@@ -143,8 +161,9 @@ TypePtr PA14Lowerer::ResolveClassOwner(Scope* scope, const string& raw) const
         return candidate;
       if(open == string::npos || !candidate->template_specialization ||
          candidate->template_arguments.size() != wanted_arguments.size()) continue;
-      if(LastComponent(candidate->template_primary) != lookup_base &&
-         LastComponent(candidate->name) != lookup_name) continue;
+      if(candidate->template_primary.empty() ||
+         !PA14OwnerPrimaryMatches(candidate->template_primary, wanted_base))
+        continue;
       bool same_arguments = true;
       for(size_t argument = 0; argument < wanted_arguments.size(); ++argument)
         if(PA14TrimOwnerSpelling(candidate->template_arguments[argument]) !=
