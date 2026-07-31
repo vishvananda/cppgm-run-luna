@@ -579,6 +579,10 @@ private:
 	map<string, vector<string> > function_signatures_by_name_;
 	map<string, vector<FunctionSignature> > function_overloads_; set<const CPPGMAstNode*> template_function_signatures_; map<string, string> specialization_bases_;
 	map<string, vector<string> > specialization_arguments_;
+	// Keep the use-site arity alongside the fully default-expanded specialization
+	// arguments.  Function-template deduction must not bind a trailing pack to
+	// class-template defaults that the caller did not write.
+	map<string, size_t> specialization_explicit_argument_counts_;
 	map<string, vector<string> > specialization_names_by_base_; map<string, set<string> > specialization_name_sets_by_base_;
 	set<ClassSpecializationIdentity> instantiated_class_specializations_;
 	map<string, TemplateDefinition> explicit_function_specializations_;
@@ -639,8 +643,8 @@ private:
 	bool IsTopLevelPackPattern(const string& value) const;
 	CPPGMAstNodePtr FunctionDeclarator(const CPPGMAstNodePtr& declaration) const; CPPGMAstNodePtr FunctionParameterDefaultNode(const TemplateDefinition& definition, size_t parameter) const; bool FunctionParameterHasDefault(const TemplateDefinition& definition, size_t parameter) const; bool RestoreFunctionParameterDefaults(const TemplateDefinition& definition, TemplateDefinition* result) const;
 	bool IsBuiltinArithmeticType(string raw) const; bool IsKnownTypeSpelling(string raw, const string& context) const; bool HasUnavailableGeneratedMemberType(string raw, const string& context, const map<string, string>& substitutions) const; bool GeneratedNodeHasUnavailableMemberType(const CPPGMAstNodePtr& node, const string& context, const map<string, string>& substitutions) const; bool HasUnavailableGeneratedClassMemberType(const CPPGMAstNodePtr& generated, const string& generated_path, const string& generated_owner, const string& local_name, const string& concrete_owner, const string& context, const map<string, string>& substitutions);
-	bool HasDeferredDependentClassMember(const TemplateDefinition& definition, const string& context, const map<string, string>& substitutions) const;
-	bool HasDeferredTypeMember(const TemplateDefinition& definition, const string& context, const map<string, string>& substitutions) const;
+	bool HasDeferredDependentClassMember(const TemplateDefinition& definition, const string& context, const map<string, string>& substitutions, const map<string, vector<string> >& pack_substitutions = map<string, vector<string> >()) const;
+	bool HasDeferredTypeMember(const TemplateDefinition& definition, const string& context, const map<string, string>& substitutions, const map<string, vector<string> >& pack_substitutions = map<string, vector<string> >()) const;
 	bool HasUnresolvedTemplateParameter(string raw, const string& context, const map<string, string>& substitutions) const;
 	string CommonBuiltinArithmeticType(const string& left, const string& right) const;
 	bool InferOperatorResult(const string& operation, const string& left, const string& right, const string& context, string* result) const;
@@ -661,7 +665,8 @@ private:
 		const CPPGMAstNodePtr& callee, const string& original_member,
 		const string& context,
 		const map<string, string>& substitutions,
-		bool explicit_instantiation = false, bool constructor_replay = false);
+		bool explicit_instantiation = false, bool constructor_replay = false,
+		bool address_replay = false);
 	int MemberTemplatePatternScore(const TemplateDefinition* candidate) const; void RestoreMemberTemplateDefaults(const string& member_name, const TemplateDefinition& definition, TemplateDefinition* result) const; bool ContainsSubstitutionIdentifier(const string& text, const map<string, string>& substitutions) const; bool FunctionTemplateCvPointerTie(const TemplateDefinition& lhs, const TemplateDefinition& rhs) const; bool FunctionTemplateMoreSpecialized(const TemplateDefinition& lhs, const TemplateDefinition& rhs, const string& context) const; bool PreserveFunctionLookupOrder(const vector<const TemplateDefinition*>& definitions, const string& context, const map<string, string>& substitutions) const; void SortFunctionTemplateCandidates(vector<const TemplateDefinition*>* candidates, const string& context) const; void RankFunctionTemplateCandidatesForCall(vector<const TemplateDefinition*>* candidates, const CPPGMAstNodePtr& call, const string& context, const map<string, string>& substitutions) const;
 	void RankMemberCandidatesByClassExactness(vector<const TemplateDefinition*>* candidates, const CPPGMAstNodePtr& call, const map<string, string>& substitutions, const string& context); bool ValidateTemplateDefaults(const TemplateDefinition& definition, const vector<string>& arguments, const string& context, const map<string, string>& substitutions); bool TransformQualifiedMemberTemplateCall(const CPPGMAstNodePtr& input,
 		const CPPGMAstNodePtr& input_callee, const string& context,

@@ -80,6 +80,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 		template_marker != string::npos;
 		template_marker = raw.find("::template ", template_marker))
 		raw.erase(template_marker + 2, 9);
+	ExpandActivePackEllipsis(&raw, substitutions);
 	for(map<string, vector<string> >::const_iterator active_pack =
 		active_pack_substitutions_.begin(); active_pack != active_pack_substitutions_.end();
 		++active_pack) {
@@ -100,8 +101,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			at = raw.find(token, at + expanded.size());
 		}
 	}
-	raw = CanonicalSpelling(RewriteActivePackSizes(raw));
-		if(raw.compare(0, 8, "operator") == 0) {
+	raw = CanonicalSpelling(RewriteActivePackSizes(raw)); if(raw.compare(0, 8, "operator") == 0) {
 			const string suffix = raw.substr(8);
 			const string rewritten_suffix = ReplaceIdentifiers(suffix, substitutions);
 			if(rewritten_suffix != suffix) {
@@ -109,8 +109,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				if(template_replaced) *template_replaced = true;
 			}
 		}
-	raw = RewriteDecltypeText(raw, context, substitutions, template_replaced);
-	if(resolve_member) {
+	raw = RewriteDecltypeText(raw, context, substitutions, template_replaced); if(resolve_member) {
 		const size_t owner_separator = TopLevelScopeSeparator(raw);
 		if(owner_separator != string::npos && owner_separator + 2 < raw.size()) {
 			const string owner = raw.substr(0, owner_separator);
@@ -908,12 +907,13 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 					function_pointer_alias = function_pointer_alias_spelling(substituted_source_argument);
 				if(!function_pointer_alias.empty()) args[i] = function_pointer_alias;
 				else args[i] = ResolveAlias(args[i], context);
-						args[i] = NormalizeTypeArgument(RewriteText(rewrite_source, context,
-							*argument_substitutions, 0, true, true, defer_nested_class_argument));
-					if(function_pointer_alias.empty()) args[i] = ResolveAlias(args[i], context);
-					else args[i] = function_pointer_alias;
-					args[i] = QualifyTypeArgument(args[i], context, definition->owner,
-						preserve_elaborated_type_owner);
+				args[i] = NormalizeTypeArgument(RewriteText(rewrite_source, context,
+					*argument_substitutions, 0, true, true, defer_nested_class_argument));
+				if(function_pointer_alias.empty()) {
+					args[i] = ResolveAlias(args[i], context);
+				} else args[i] = function_pointer_alias;
+				args[i] = QualifyTypeArgument(args[i], context, definition->owner,
+					preserve_elaborated_type_owner);
 					// Preserve a typedef spelling that denotes a reference while
 					// replaying an alias template.  Substituting its expanded
 					// `int&` spelling into `const T` would incorrectly turn the
@@ -1489,7 +1489,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 		separator = next_scope_separator(raw, replacement_begin + member_type.size());
 		}
 			raw = CollapseReferenceSpelling(raw);
-		if(preserved_static_member) return raw;
+	if(preserved_static_member) return raw;
 		if(!resolve_alias || raw.find("::") == string::npos) return raw;
 		if(constant_values_.find(raw) != constant_values_.end()) {
 			return raw;

@@ -831,7 +831,7 @@ void PA14Lowerer::CollectImplicitConstructor(const TypePtr& owner, Scope* scope,
           break;
         }
       }
-    const string name = source_named_constructor && !owner->template_primary.empty() ?
+    const string name = owner->template_specialization && !owner->template_primary.empty() ?
       LastComponent(owner->template_primary) : generated_name;
     vector<Binding*> constructors = DirectBindings(scope, generated_name);
     bool has_constructor = false;

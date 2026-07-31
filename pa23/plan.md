@@ -3086,3 +3086,225 @@ cases that fail during candidate selection, including explicit-pack and
 constructor-default-pack witnesses.  Keep the dependent member-result and
 typed-value comparisons in the following group, with the two reentrant cases
 as regression coverage.
+
+## Checkpoint 24 scope — 2026-07-31 (before implementation)
+
+### Baseline and grouped current failure set
+
+The live PA23 report is **336/396**, so the complete current-PA failure set is
+the 28 status failures and 32 LowIR comparisons listed verbatim in the
+Checkpoint 23 audit refresh above.  Grouped by shared behavior, those 60
+fixtures are:
+
+- **Template-template/defaulted deduction and pack binding:**
+  `general/200-template-template-qualified-default-arg-deduction`,
+  `general/200-member-function-template-address-explicit-pack`,
+  `general/200-member-template-implicit-instantiation-not-overload`,
+  `general/200-function-template-template-parameter-deduction`,
+  `general/400-function-type-pack-out-of-class-constructor`,
+  `general/400-explicit-function-template-type-arg-drops-nontype-overload`,
+  `spec/200-defaulted-class-template-argument-pack-prefix-deduction`,
+  `spec/300-constructor-default-pack-partial-ordering`,
+  `spec/400-explicit-pack-type-argument-uses-bound-type`,
+  `spec/400-function-type-pack-template-argument`, and
+  `spec/400-template-template-bound-application-shadowed-head`.
+- **Owner/member and specialization replay:**
+  `general/100-default-nontype-qualified-function-lookup`,
+  `general/100-member-template-specialization-return-prefers-member-call`,
+  `general/100-selected-specialization-special-member-body`,
+  `general/100-current-specialization-member-body-cast-compare`,
+  `general/100-explicit-specialization-out-of-class-ctor-replay`,
+  `general/100-explicit-specialization-pointer-member-definition`,
+  `general/100-inherited-using-alias-out-of-class-specialization-member`,
+  `general/100-local-qualified-argument-replay`,
+  `general/200-adl-explicit-template-id-call`,
+  `general/300-current-specialization-constructor-template-canonical-owner`,
+  `general/400-anonymous-namespace-partial-specialization`,
+  `general/400-current-specialization-display-name-member-alias`,
+  `general/400-member-template-result-pack-preserves-nested-function-pointer-owner`,
+  `general/400-out-of-class-partial-member-template-owner-parameter-alias`,
+  `spec/100-explicit-instantiation-after-explicit-specialization-no-effect`,
+  `spec/100-explicit-instantiation-class-prior-member-definitions`,
+  `spec/100-explicit-specialization-out-of-class-ctor-replay`,
+  `spec/100-explicit-specialization-out-of-class-member-emits`,
+  `spec/100-extern-template-member-function-declaration`,
+  `spec/100-extern-template-static-data-declaration`,
+  `spec/100-local-member-call-constructor-template-instantiation`,
+  `spec/100-out-of-class-conversion-operator-definition`,
+  `spec/100-partial-specialization-member-primary-param-name`,
+  `spec/400-defaulted-nested-class-argument-partial-specialization`,
+  `spec/400-explicit-type-arg-dependent-qualified-member-template-id`,
+  `spec/400-qualified-member-alias-template`,
+  `spec/400-qualified-nested-template-id`, and
+  `spec/400-template-template-member-alias-owner-shadow`.
+- **Typed values, dependent member results, and materialization:**
+  `general/100-dependent-bool-partial-static-value-storage`,
+  `general/100-intermediate-type-transform-value-nontype`,
+  `general/100-sizeof-call-result-nontype-template-argument`,
+  `general/200-function-template-reference-cv-alias-partial-order`,
+  `general/200-member-operator-template-reference-pattern-partial-order`,
+  `general/300-dependent-bool-base-trait-type-argument`,
+  `general/400-member-variable-template-leaf-sfinae`,
+  `general/400-nonmember-template-compound-assignment-const-lhs`,
+  `general/400-variable-template-specializations`,
+  `general/500-dependent-function-type-pack-expansion-ctor-init`,
+  `general/500-dependent-qualified-member-template-result-bool`,
+  `general/500-member-template-conditional-alias-trailing-return`,
+  `general/500-mp11-append-alias-template-sfinae`,
+  `general/500-nontype-alias-reinstantiation-structural-state`,
+  `general/500-recursive-qualified-member-template-bool-arg`,
+  `spec/100-dependent-qualified-return-type`,
+  `spec/100-sizeof-union-type-nttp`,
+  `spec/200-defaulted-class-template-argument-pack-prefix-deduction`,
+  `spec/400-class-template-nttp-scope-value`, and
+  `spec/400-qualified-member-template-id-bool-constant`.
+- **Conversion/overload viability and fixed-point regressions:**
+  `general/400-static-cast-rvalue-ref-skips-conversion-operator`,
+  `spec/300-constructor-default-pack-partial-ordering`,
+  `general/500-reentrant-static-query-callable-enable-if-cache`, and
+  `general/500-reentrant-static-query-enable-if-partial`.
+
+The groups intentionally overlap at their semantic boundaries; their union is
+the exact live set above.  The reentrant pair remains regression coverage and
+is not a timeout-specific success target for this checkpoint.
+
+### Remaining Work Map
+
+- **Template-template/defaulted deduction:** compatible template-template
+  parameter lists are checked before defaults and qualified arguments are
+  normalized; this drops viable constructor candidates and loses the selected
+  pack shape.
+- **Typed explicit/function packs:** explicit member-template prefixes,
+  direct function types, and class-template defaults flatten bound packs into
+  printable text before partial matching, so the later specialization sees
+  the wrong arity or a fresh type spelling.
+- **Owner/specialization replay:** qualified lookup, anonymous/local owners,
+  explicit/extern declarations, and special-member materialization still lose
+  source owner identity after candidate selection.
+- **Typed values and dependent results:** boolean/integral/`sizeof` values,
+  variable templates, aliases, and dependent member results are downstream
+  consumers of the missing typed pack/owner facts.
+- **Fixed points:** the two reentrant static-query cases still require a
+  terminating typed query identity; no timing or fallback workaround is in
+  scope.
+
+### Checkpoint Scope
+
+Implement the shared candidate argument path for the template-template and
+pack group:
+
+1. Keep template-template arguments as typed template entities while applying
+   defaulted nested arguments, including qualified template names; compatible
+   parameter-list checking must use the bound template's effective defaults.
+2. Preserve an explicit function-template pack's already-bound type elements
+   through member-address deduction and through direct function-type partial
+   specialization matching.  Reconstruct `R(P...)` structurally so a bound
+   result type and bound parameter pack are not replaced by a scalar textual
+   placeholder.
+3. Make constructor deduction retain the fixed prefix/default pack boundary
+   when ranking candidates, so `in_place_type_t<T>, Args&&...` wins over the
+   unconstrained forwarding constructor where required.  Preserve the earlier
+   PA18–PA22 deduction and owner regressions.
+
+The focused validation set is:
+`general/200-template-template-qualified-default-arg-deduction`,
+`general/200-member-function-template-address-explicit-pack`,
+`general/400-function-type-pack-out-of-class-constructor`,
+`spec/200-defaulted-class-template-argument-pack-prefix-deduction`,
+`spec/300-constructor-default-pack-partial-ordering`,
+`spec/400-explicit-pack-type-argument-uses-bound-type`, and
+`spec/400-function-type-pack-template-argument`, plus the related PA18–PA22
+pack/template-template witnesses.  The checkpoint must raise the PA23 pass
+count above 336 (or complete PA23), pass the through-PA22 report and file
+audit, and record the exact result and next owner/materialization group below.
+
+## Checkpoint 25 result — 2026-07-31
+
+The required full PA23 report is **341/396**, up five tests from the
+336/396 turn-start baseline.  The seven-test checkpoint scope is complete:
+
+- qualified template-template default deduction and qualified nested type
+  parsing now preserve the source scope;
+- explicit member-template address replay records an empty trailing pack;
+- class-template defaulted packs retain their use-site arity during partial
+  matching;
+- constructor ranking keeps the structured fixed prefix ahead of the generic
+  forwarding-pack candidate;
+- explicit pack elements retain their bound type through local typedef replay;
+- direct function-type packs materialize dependent member results after pack
+  expansion; and
+- lowering emits out-of-class specializations only when their concrete object
+  demand requires them, while retaining explicit cross-specialization
+  conversion constructors.
+
+The focused seven-test set is **7/7**, and `git diff --check` is clean.  The
+full report still exits nonzero because 55 PA23 comparisons remain; the
+current remainder is grouped as follows:
+
+- **Owner and specialization replay:** current/inherited/anonymous owners,
+  explicit and extern declarations, local qualified replay, special-member
+  bodies, and out-of-class conversion/member emission.
+- **Dependent member results and typed values:** dependent boolean and
+  trailing aliases, recursive/member queries, MP11 aliases, non-type alias
+  state, `sizeof`, static/variable-template storage, and their LowIR bodies.
+- **Candidate viability and conversions:** implicit member-template overload
+  selection, alias-based SFINAE, rvalue-reference conversion ranking, and
+  dependent constructor/member results.
+- **Fixed points:** the two reentrant static-query fixtures remain explicit
+  termination regression coverage.
+
+### Next checkpoint group
+
+Take the owner/specialization replay group first, bundling the explicit/extern
+and current-specialization fixtures with their LowIR emission comparisons.
+Use the dependent member-result and typed-value fixtures as the regression
+set; defer the reentrant pair until the shared typed query identity is clear.
+
+## Checkpoint 26 final result — 2026-07-31
+
+The regression-safe implementation of the PA23 candidate/pack checkpoint is
+complete.  The exact required report is **343/396** (**53** remaining), up
+from the 336/396 turn-start baseline.  All seven checkpoint witnesses pass in
+the full report, including the qualified template-template default case and
+the out-of-class function-type-pack constructor case.
+
+The implementation preserves typed facts across the shared path: global and
+dependent qualified parameter types, explicit pack elements and use-site
+arity, active function-type pack expansion, structured constructor prefixes,
+member-address replay, and concrete-object demand for out-of-class template
+special members.  A broader generated-special-member-template classification
+was rejected because it introduced duplicate constructor object aliases in
+PA18 and PA21; the narrower concrete-demand rule passes those earlier gates.
+
+Validation completed:
+
+- `make test-report ACTIVE_TEST_REPORT_PAS='pa23'`: **343/396** (expected
+  nonzero because the remaining 53 fixtures are not complete).
+- `make test-report-through-pa22`: **pass**.
+- `perl scripts/cppgm_file_audit.pl --stage pa23 --paths dev/src`: **pass**
+  with the repository's 13 existing warnings.
+- `git diff --check`: **pass**.
+
+### Final Remaining Work Map
+
+- **Owner and specialization replay:** qualified lookup, anonymous/current
+  owners, explicit and extern declarations, local qualified replay,
+  special-member bodies, and out-of-class conversion/member emission remain
+  status or LowIR failures.
+- **Dependent member results and typed values:** dependent boolean and
+  trailing aliases, recursive and MP11 member queries, non-type alias state,
+  `sizeof`, variable-template storage, and generated LowIR body/storage facts
+  remain downstream failures.
+- **Candidate viability and conversions:** implicit member-template overload
+  selection, alias-based SFINAE, rvalue-reference conversion ranking, and
+  dependent constructor/member-result formation remain unresolved.
+- **Fixed points:** the two reentrant static-query fixtures still need a
+  terminating typed query identity; timing and fallback behavior are not
+  accepted.
+
+### Next Checkpoint Group
+
+Implement the owner/specialization replay group first, bundling explicit and
+extern declarations with current/inherited/anonymous owner materialization
+and their LowIR comparisons.  Keep the dependent member-result, typed-value,
+and two reentrant fixed-point fixtures as the regression set.

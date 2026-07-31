@@ -36,6 +36,24 @@ string CollapseRepeatedQualifier(string raw)
 string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& context,
 	const string& template_owner, bool preserve_nested_namespace) const
 {
+	const bool global_qualified = spelling.compare(0, 2, "::") == 0;
+	map<string, string>::const_iterator generated_context = specialization_bases_.find(
+		LastComponent(context));
+	string unqualified_global = spelling;
+	while(unqualified_global.compare(0, 2, "::") == 0)
+		unqualified_global.erase(0, 2);
+	bool active_pack_type = false;
+	for(map<string, vector<string> >::const_iterator pack =
+		active_pack_substitutions_.begin(); pack != active_pack_substitutions_.end() &&
+		!active_pack_type; ++pack)
+		for(size_t value = 0; value < pack->second.size(); ++value)
+			if(CanonicalSpelling(pack->second[value]) == CanonicalSpelling(unqualified_global)) {
+				active_pack_type = true;
+				break;
+			}
+	const bool preserve_global_qualifier = global_qualified &&
+		(active_pack_type || generated_context != specialization_bases_.end());
+	while(spelling.compare(0, 2, "::") == 0) spelling.erase(0, 2);
 	if(!context.empty() && (context[0] == '!' || context[0] == '~' ||
 		context[0] == '+' || context[0] == '-')) {
 		string lookup_context = context;
@@ -194,7 +212,7 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 		return true;
 	};
 	string indexed_spelling;
-	if(spelling.find("::") != string::npos &&
+	if(!global_qualified && spelling.find("::") != string::npos &&
 		indexed_type_path(spelling, template_owner, context, &indexed_spelling)) {
 		const size_t open = spelling.find('<');
 		spelling = indexed_spelling + (open == string::npos ? string() : spelling.substr(open));
@@ -281,7 +299,7 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 				spelling = definition->qualified_name + spelling.substr(template_open);
 		}
 	}
-	if(spelling.find("::") != string::npos && spelling[0] != ':') {
+	if(!global_qualified && spelling.find("::") != string::npos && spelling[0] != ':') {
 		// During replay the lexical context still names the primary class
 		// (`direct_heap`), while the nested declaration belongs to the concrete
 		// class identity (`direct_heap_int_`).  Recover that owner from the
@@ -330,6 +348,7 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 				class_declarations_.find(spelling) != class_declarations_.end())
 				spelling = active_instantiation_name_ + "::" + LastComponent(spelling);
 		}
+	if(!global_qualified && spelling.find("::") != string::npos) {
 	const size_t separator = spelling.find("::");
 	const string first = spelling.substr(0, separator);
 	const string remainder = spelling.substr(separator);
@@ -351,7 +370,8 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 		else current.erase(parent);
 	}
 	}
-	if(!template_owner.empty()) {
+	}
+	if(!preserve_global_qualifier && !template_owner.empty()) {
 	const string owner_prefix = template_owner + "::";
 	if(spelling.compare(0, owner_prefix.size(), owner_prefix) == 0) {
 		// Keep a fully-qualified generated specialization when it is used as a
@@ -368,7 +388,7 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 			spelling.erase(0, owner_prefix.size());
 	}
 	}
-	if(spelling.find("::") == string::npos && spelling.find('<') == string::npos) {
+	if(!global_qualified && spelling.find("::") == string::npos && spelling.find('<') == string::npos) {
 	const bool direct_global_class = class_declarations_.find(spelling) !=
 		class_declarations_.end() || named_type_contexts_.find(spelling) !=
 		named_type_contexts_.end();
@@ -447,6 +467,8 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 	}
 	}
 	string result = CollapseRepeatedQualifier(CanonicalSpelling(prefix + spelling + suffix));
+	if(preserve_global_qualifier && result.compare(prefix.size(), 2, "::") != 0)
+		result.insert(prefix.size(), "::");
 	const size_t nested_open = result.find('<');
 	if((context.find("<unnamed>") != string::npos ||
 		result.find("<unnamed>") != string::npos) && nested_open != string::npos) {

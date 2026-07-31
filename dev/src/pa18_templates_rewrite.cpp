@@ -636,9 +636,7 @@ void PA18TemplateExpander::TransformRegularChildren(const CPPGMAstNodePtr& input
 						result->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
 							"decl-specifier", "TT_IDENTIFIER:" + LastComponent(promoted->second))));
 				}
-				if(child && !drop_function_using && !(input->kind == "compound-statement" && HasReplayContext(substitutions) &&
-					(original_child->kind == "simple-declaration" &&
-					SpellNode(original_child->children.empty() ? CPPGMAstNodePtr() : original_child->children[0]).find("typedef") != string::npos))) result->children.push_back(child);
+				if(child && !drop_function_using) result->children.push_back(child);
 				if(original_child && original_child->kind == "alias-declaration" && !original_child->value.empty() &&
 					!original_child->children.empty())
 				{

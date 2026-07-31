@@ -349,7 +349,8 @@ class PA14Lowerer
 	void IndexFriendOwners();
 	void IndexClassTypesByName();
 	void IndexMaterializedMemberObjectUses();
-	void IndexCompleteTemplateObjectUses(const CPPGMAstNodePtr& node);
+  void IndexCompleteTemplateObjectUses(const CPPGMAstNodePtr& node,
+                                       bool class_member_declaration = false);
 	void PrepareLoweringProgram();
 	void EmitInitialFunctionRoots(vector<string>& entries);
 	void EmitNestedRootOperations(vector<string>& entries);

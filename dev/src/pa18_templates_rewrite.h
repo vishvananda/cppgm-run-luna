@@ -575,6 +575,8 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 	}
 	string ExpandPackCallText(string raw,
 		const map<string, vector<string> >& packs) const;
+	void ExpandActivePackEllipsis(string* raw,
+		const map<string, string>& substitutions) const;
 	void ExpandNestedTemplateArgumentPacks(vector<string>* arguments,
 		string* arguments_text);
 	string RewriteText(string raw, const string& context,
@@ -1180,6 +1182,6 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 		if(input->kind == "namespace-definition") return TransformNamespace(input, context, substitutions);
 		if(input->kind == "call-expression") return TransformCallExpression(input, context, substitutions);
 		return TransformRegularNode(input, context, substitutions); }
-bool ReplayMemberCall(const CPPGMAstNodePtr& call, const CPPGMAstNodePtr& callee, const string& original_member, const string& context, const map<string, string>& substitutions, bool explicit_instantiation, bool constructor_replay); bool ParseMemberCall(MemberCallState* state); bool ResolveMemberObject(MemberCallState* state); bool ResolveMemberOwner(MemberCallState* state); bool CollectMemberCallCandidates(MemberCallState* state); bool PrepareMemberCandidate(MemberCallState* state, size_t candidate_index, MemberCallCandidateState* candidate); bool PrepareMemberCandidateArguments(MemberCallCandidateState* candidate); void BindExpectedMemberConversion(MemberCallCandidateState* candidate); bool DeduceMemberCandidate(MemberCallCandidateState* candidate); bool EmitMemberCandidate(MemberCallCandidateState* candidate); bool TryMemberCandidate(MemberCallState* state, size_t candidate_index);
+	bool ReplayMemberCall(const CPPGMAstNodePtr& call, const CPPGMAstNodePtr& callee, const string& original_member, const string& context, const map<string, string>& substitutions, bool explicit_instantiation, bool constructor_replay, bool address_replay); bool ParseMemberCall(MemberCallState* state); bool ResolveMemberObject(MemberCallState* state); bool ResolveMemberOwner(MemberCallState* state); bool CollectMemberCallCandidates(MemberCallState* state); bool PrepareMemberCandidate(MemberCallState* state, size_t candidate_index, MemberCallCandidateState* candidate); bool PrepareMemberCandidateArguments(MemberCallCandidateState* candidate); void BindExpectedMemberConversion(MemberCallCandidateState* candidate); bool DeduceMemberCandidate(MemberCallCandidateState* candidate); bool EmitMemberCandidate(MemberCallCandidateState* candidate); bool TryMemberCandidate(MemberCallState* state, size_t candidate_index);
 };
 } // namespace pa18_templates_internal

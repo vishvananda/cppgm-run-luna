@@ -16,6 +16,21 @@ string FirstDeclaratorIdentifier(const CPPGMAstNodePtr& node)
 	return string();
 }
 
+size_t LastTopLevelScopeSeparator(const string& spelling)
+{
+	int angle_depth = 0;
+	size_t result = string::npos;
+	for (size_t position = 0; position < spelling.size(); ++position) {
+		if (spelling[position] == '<') ++angle_depth;
+		else if (spelling[position] == '>' && angle_depth > 0) --angle_depth;
+		else if (angle_depth == 0 && spelling.compare(position, 2, "::") == 0) {
+			result = position;
+			++position;
+		}
+	}
+	return result;
+}
+
 } // namespace
 
 namespace cppgm_pa10 {
@@ -506,14 +521,19 @@ CPPGMAstNodePtr Parser::ParseParameterClause()
 			parameter->children[0]->children[0]) {
 			string spelling = parameter->children[0]->children[0]->value;
 			const size_t marker = spelling.find(':');
-			if (marker != string::npos) spelling = spelling.substr(marker + 1);
-			const size_t separator = spelling.rfind("::");
+			if (marker != string::npos && marker + 1 < spelling.size() &&
+				spelling[marker + 1] != ':') spelling = spelling.substr(marker + 1);
+			const size_t separator = LastTopLevelScopeSeparator(spelling);
 			const string last = separator == string::npos ? spelling :
 				spelling.substr(separator + 2);
 			const size_t last_angle = last.find('<');
 			const string last_name = last_angle == string::npos ? last :
 				last.substr(0, last_angle);
-			if (separator != string::npos && types_.find(last_name) == types_.end() &&
+			if (separator != string::npos &&
+				!parameter->children[0]->children[0]->explicit_typename &&
+				spelling.find("typename ") != 0 &&
+				last_name.find("template ") != 0 &&
+				types_.find(last_name) == types_.end() &&
 				templates_.find(last_name) == templates_.end()) {
 				Restore(mark);
 				return CPPGMAstNodePtr();
@@ -539,14 +559,19 @@ CPPGMAstNodePtr Parser::ParseParameterClause()
 				parameter->children[0]->children[0]) {
 				string spelling = parameter->children[0]->children[0]->value;
 				const size_t marker = spelling.find(':');
-				if (marker != string::npos) spelling = spelling.substr(marker + 1);
-				const size_t separator = spelling.rfind("::");
+				if (marker != string::npos && marker + 1 < spelling.size() &&
+					spelling[marker + 1] != ':') spelling = spelling.substr(marker + 1);
+				const size_t separator = LastTopLevelScopeSeparator(spelling);
 				const string last = separator == string::npos ? spelling :
 					spelling.substr(separator + 2);
 				const size_t last_angle = last.find('<');
 				const string last_name = last_angle == string::npos ? last :
 					last.substr(0, last_angle);
-				if (separator != string::npos && types_.find(last_name) == types_.end() &&
+				if (separator != string::npos &&
+					!parameter->children[0]->children[0]->explicit_typename &&
+					spelling.find("typename ") != 0 &&
+					last_name.find("template ") != 0 &&
+					types_.find(last_name) == types_.end() &&
 					templates_.find(last_name) == templates_.end()) {
 					Restore(mark);
 					return CPPGMAstNodePtr();

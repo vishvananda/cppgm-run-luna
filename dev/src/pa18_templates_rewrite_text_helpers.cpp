@@ -136,6 +136,25 @@ string PA18TemplateExpander::ExpandPackCallText(string raw,
 	return raw;
 }
 
+void PA18TemplateExpander::ExpandActivePackEllipsis(string* raw,
+	const map<string, string>& substitutions) const
+{
+	if(!raw) return;
+	for(map<string, vector<string> >::const_iterator pack = active_pack_substitutions_.begin();
+		pack != active_pack_substitutions_.end(); ++pack) {
+		map<string, string>::const_iterator scalar = substitutions.find(pack->first);
+		if(pack->second.size() < 2 || scalar == substitutions.end() || scalar->second.empty()) continue;
+		string expanded;
+		for(size_t value = 0; value < pack->second.size(); ++value) {
+			if(!expanded.empty()) expanded += ',';
+			expanded += pack->second[value];
+		}
+		const string token = scalar->second + "...";
+		for(size_t at = raw->find(token); at != string::npos;
+			at = raw->find(token, at + expanded.size())) raw->replace(at, token.size(), expanded);
+	}
+}
+
 void PA18TemplateExpander::ExpandNestedTemplateArgumentPacks(
 	vector<string>* arguments, string* arguments_text)
 {

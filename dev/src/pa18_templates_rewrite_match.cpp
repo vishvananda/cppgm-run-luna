@@ -161,6 +161,11 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 	if(parameter_names.find(pattern) != parameter_names.end())
 		return MatchDirectTypeParameter(pattern, actual, parameter_names, inferred,
 			context, class_pattern);
+	// A leading global qualifier is lookup syntax, not part of a type's
+	// identity.  Recursive matching reaches qualified template arguments as
+	// standalone spellings, so normalize it here as well as at the outer type.
+	while(pattern.compare(0, 2, "::") == 0) pattern.erase(0, 2);
+	while(actual.compare(0, 2, "::") == 0) actual.erase(0, 2);
 	if(pattern.find('<') != string::npos) {
 		set<string> active_aliases;
 		pattern = ExpandAliasPattern(pattern, context, &active_aliases);
@@ -644,10 +649,17 @@ int PA18TemplateExpander::MatchTypePatternCompound(const string& pattern,
 		const TemplateDefinition* actual_definition = FindDefinition(actual, context);
 		if(actual_definition && actual_definition->class_template &&
 			LastComponent(actual_definition->qualified_name) == pattern) return 1;
-		const string qualified_pattern = CanonicalSpelling(QualifyTypeArgument(
-			pattern, context));
-		const string qualified_actual = CanonicalSpelling(QualifyTypeArgument(
-			actual, context));
+	}
+	if((pattern.find("::") == string::npos) != (actual.find("::") == string::npos)) {
+		string qualified_pattern = CanonicalSpelling(QualifyTypeArgument(pattern, context));
+		string qualified_actual = CanonicalSpelling(QualifyTypeArgument(actual, context));
+		if(pattern.find("::") != string::npos && actual.find("::") == string::npos) {
+			const string expected_scope = PrefixComponent(pattern);
+			if(!expected_scope.empty()) qualified_actual = CanonicalSpelling(
+				QualifyTypeArgument(actual, expected_scope, expected_scope, true));
+		}
+		while(qualified_pattern.compare(0, 2, "::") == 0) qualified_pattern.erase(0, 2);
+		while(qualified_actual.compare(0, 2, "::") == 0) qualified_actual.erase(0, 2);
 		if(!qualified_pattern.empty() && qualified_pattern == qualified_actual) return 1;
 	}
 	return 0;
@@ -751,7 +763,17 @@ int PA18TemplateExpander::MatchClassTemplateBasePattern(const string& pattern,
 		}
 		return 1;
 	}
-	if(actual_parts) *actual_parts = specialization->second;
+	if(actual_parts) {
+		*actual_parts = specialization->second;
+		if(!pattern_parts.empty() && pattern_parts.back().size() > 3 &&
+			pattern_parts.back().compare(pattern_parts.back().size() - 3, 3, "...") == 0) {
+			map<string, size_t>::const_iterator explicit_count =
+				specialization_explicit_argument_counts_.find(LastComponent(actual));
+			if(explicit_count != specialization_explicit_argument_counts_.end() &&
+				explicit_count->second < actual_parts->size())
+				actual_parts->resize(explicit_count->second);
+		}
+	}
 	return -1;
 }
 
@@ -897,9 +919,33 @@ bool PA18TemplateExpander::MatchClassTemplateArgumentLists(
 		}
 	if(!pattern_omits_defaults)
 		ExpandClassPatternDefaults(pattern_definition, &pattern_parts);
-	ExpandClassPatternDefaults(actual_definition, &actual_parts);
-	if(!pattern_parts.empty() && pattern_parts.back().size() > 3 &&
-		pattern_parts.back().compare(pattern_parts.back().size() - 3, 3, "...") == 0) {
+	const bool pattern_trailing_pack = !pattern_parts.empty() &&
+		pattern_parts.back().size() > 3 &&
+		pattern_parts.back().compare(pattern_parts.back().size() - 3, 3, "...") == 0;
+	// A trailing pack in the deduction pattern consumes only the arguments
+	// written at the use site.  Expanding the actual class's default arguments
+	// first would make `tuple<T0, Ts...>` bind Ts to every defaulted null_type,
+	// even though those defaults were not part of the caller's argument list.
+	if(!pattern_trailing_pack) ExpandClassPatternDefaults(actual_definition, &actual_parts);
+	if(pattern_trailing_pack && actual_definition) {
+		map<string, string> actual_bindings;
+		for(size_t parameter = 0; parameter < actual_definition->parameters.size() &&
+			parameter < actual_parts.size(); ++parameter)
+			if(!actual_definition->parameters[parameter].name.empty())
+				actual_bindings[actual_definition->parameters[parameter].name] =
+					actual_parts[parameter];
+		while(!actual_parts.empty() && actual_parts.size() <=
+			actual_definition->parameters.size()) {
+			const size_t parameter = actual_parts.size() - 1;
+			const TemplateParameter& detail = actual_definition->parameters[parameter];
+			if(detail.pack || detail.default_type.empty()) break;
+			const string expected = NormalizeTypeArgument(ResolveAlias(
+				ReplaceIdentifiers(detail.default_type, actual_bindings), context));
+			if(expected != NormalizeTypeArgument(actual_parts.back())) break;
+			actual_parts.pop_back();
+		}
+	}
+	if(pattern_trailing_pack) {
 		const string pack_pattern = CanonicalSpelling(pattern_parts.back().substr(
 			0, pattern_parts.back().size() - 3));
 		if(parameter_names.find(pack_pattern) != parameter_names.end() ||

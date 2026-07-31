@@ -8,10 +8,10 @@ bool PA18TemplateExpander::InstantiateMemberCall(
 	const CPPGMAstNodePtr& call, const CPPGMAstNodePtr& callee,
 	const string& original_member, const string& context,
 	const map<string, string>& substitutions,
-	bool explicit_instantiation, bool constructor_replay)
+	bool explicit_instantiation, bool constructor_replay, bool address_replay)
 {
 	return ReplayMemberCall(call, callee, original_member, context, substitutions,
-		explicit_instantiation, constructor_replay);
+		explicit_instantiation, constructor_replay, address_replay);
 }
 
 void PA18TemplateExpander::CollectInheritedMemberTemplates(const string& raw_class,

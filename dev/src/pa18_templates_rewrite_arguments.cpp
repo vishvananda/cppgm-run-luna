@@ -395,12 +395,10 @@ void PA18TemplateExpander::ResolveTemplateArguments(const TemplateDefinition& de
 			size_t trailing_fixed = 0;
 			for(size_t later = i + 1; later < definition.parameters.size(); ++later)
 				if(!definition.parameters[later].pack) ++trailing_fixed;
-			const size_t available = raw_args.size() > raw_index ?
-				raw_args.size() - raw_index : 0;
+			const size_t available = raw_args.size() > raw_index ? raw_args.size() - raw_index : 0;
 			size_t count = available > trailing_fixed ? available - trailing_fixed : 0;
 			if(pack_hints && !parameter.name.empty()) {
-				map<string, vector<string> >::const_iterator hint =
-					pack_hints->find(parameter.name);
+				map<string, vector<string> >::const_iterator hint = pack_hints->find(parameter.name);
 				if(hint != pack_hints->end()) count = hint->second.size();
 			}
 			for(size_t element = 0; element < count; ++element) {
@@ -413,29 +411,32 @@ void PA18TemplateExpander::ResolveTemplateArguments(const TemplateDefinition& de
 				PA19IntegralValue integral_value;
 				if(parameter.template_template) {
 					string normalized;
-					if(!CompatibleTemplateTemplateArgument(parameter, argument, context,
-						*substitutions, &normalized))
-						throw logic_error("template-template argument does not match");
+						if(!CompatibleTemplateTemplateArgument(parameter, argument, context, *substitutions, &normalized)) throw logic_error("template-template argument does not match");
 					argument = normalized;
 				} else if(parameter.type) {
 					argument = RewriteText(argument, context, *substitutions, 0);
 					argument = NormalizeTypeArgument(argument);
-				if(!PreservesMaterializedTypeName(argument, *substitutions, context)) argument = NormalizeTypeArgument(ReplaceIdentifiers(argument, *substitutions));
+					if(!PreservesMaterializedTypeName(argument, *substitutions, context))
+						argument = NormalizeTypeArgument(ReplaceIdentifiers(argument, *substitutions));
 					const string function_pointer_alias = FunctionPointerAliasSpelling(argument, context);
 					argument = ResolveAlias(argument, context);
-					if(!PreservesMaterializedTypeName(argument, *substitutions, context)) argument = RewriteText(argument, context, *substitutions, 0);
+					if(!PreservesMaterializedTypeName(argument, *substitutions, context))
+						argument = RewriteText(argument, context, *substitutions, 0);
 					argument = NormalizeTypeArgument(argument);
 					if(!function_pointer_alias.empty()) argument = function_pointer_alias;
-				argument = QualifyTypeArgument(argument, context, definition.owner);
+					argument = QualifyTypeArgument(argument, context, definition.owner);
 					if(!function_pointer_alias.empty()) argument = function_pointer_alias;
 				} else {
 					try {
 						argument = ResolveIntegralArgument(parameter, argument, context,
 							*substitutions, &integral_value);
-						} catch(const PA18SubstitutionFailure& error) { throw PA18SubstitutionFailure("definition=" + definition.qualified_name + " " + error.what());
-						} catch(const logic_error& error) { throw logic_error("definition=" + definition.qualified_name + " " + error.what()); }
-		if(!parameter.name.empty()) (*integral_substitutions)[parameter.name] = integral_value;
-		}
+					} catch(const PA18SubstitutionFailure& error) {
+						throw PA18SubstitutionFailure("definition=" + definition.qualified_name + " " + error.what());
+					} catch(const logic_error& error) {
+						throw logic_error("definition=" + definition.qualified_name + " " + error.what());
+					}
+					if(!parameter.name.empty()) (*integral_substitutions)[parameter.name] = integral_value;
+				}
 				if(argument.empty()) throw logic_error("missing template argument");
 				values.push_back(argument);
 				args->push_back(argument);
@@ -459,11 +460,9 @@ void PA18TemplateExpander::ResolveTemplateArguments(const TemplateDefinition& de
 			if(argument.empty() && integral != integral_substitutions->end()) argument = TemplateIntegralValueSpelling(integral->second);
 		}
 		if(argument.empty()) { argument = parameter.default_type; from_default = !argument.empty(); }
-		if(!parameter.default_type.empty() && argument == parameter.default_type)
-			from_default = true;
+		if(!parameter.default_type.empty() && argument == parameter.default_type) from_default = true;
 		const string argument_context = from_default && !definition.owner.empty() ? definition.owner : context;
-		const bool preserve_source_type = parameter.type &&
-			IsSubstitutedTypeName(source_type_argument, *substitutions, context);
+		const bool preserve_source_type = parameter.type && IsSubstitutedTypeName(source_type_argument, *substitutions, context);
 		if(parameter.template_template) {
 			string normalized;
 			if(!CompatibleTemplateTemplateArgument(parameter, argument, context,
@@ -478,7 +477,7 @@ void PA18TemplateExpander::ResolveTemplateArguments(const TemplateDefinition& de
 			if(!PreservesMaterializedTypeName(argument, *substitutions, context))
 				argument = NormalizeTypeArgument(ReplaceIdentifiers(argument, *substitutions));
 			string function_pointer_alias = FunctionPointerAliasSpelling(source_type_argument, context); if(function_pointer_alias.empty()) function_pointer_alias = FunctionPointerAliasSpelling(argument, context);
-				argument = ResolveAlias(argument, context);
+			argument = ResolveAlias(argument, context);
 			if(!preserve_source_type && !PreservesMaterializedTypeName(argument, *substitutions, context))
 				argument = RewriteText(argument, context, *substitutions, 0);
 			argument = NormalizeTypeArgument(argument);
@@ -503,7 +502,8 @@ void PA18TemplateExpander::ResolveTemplateArguments(const TemplateDefinition& de
 		if(argument.empty()) throw logic_error("missing template argument");
 		args->push_back(argument); metadata_args->push_back(TemplateArgumentMetadata(parameter, argument,
 			integral_value, context, *substitutions));
-		if(!parameter.name.empty()) (*substitutions)[parameter.name] = argument; }
+		if(!parameter.name.empty()) (*substitutions)[parameter.name] = argument;
+	}
 	if(raw_index != raw_args.size()) throw logic_error("too many template arguments");
 }
 

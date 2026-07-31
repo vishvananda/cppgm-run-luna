@@ -57,7 +57,9 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformUnaryExpression(
 				string owner = CanonicalSpelling(RewriteText(raw.substr(0, separator),
 					context, substitutions, 0));
 				owner = CanonicalSpelling(ResolveAlias(owner, context));
-				const string member_spelling = raw.substr(member_begin);
+				string member_spelling = RewriteText(raw.substr(member_begin), context,
+					substitutions, 0);
+				member_spelling = ReplaceIdentifiers(member_spelling, substitutions);
 				CPPGMAstNodePtr object(new CPPGMAstNode("id-expression"));
 				object->value = owner;
 				object->inferred_type = owner;
@@ -69,8 +71,9 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformUnaryExpression(
 				synthetic_call->children.push_back(synthetic_member);
 				synthetic_call->children.push_back(CPPGMAstNodePtr(
 					new CPPGMAstNode("argument-list")));
-				if(InstantiateMemberCall(synthetic_call, synthetic_member, member_spelling,
-					context, substitutions)) {
+				const bool instantiated = InstantiateMemberCall(synthetic_call, synthetic_member,
+					member_spelling, context, substitutions, false, false, true);
+				if(instantiated) {
 					CPPGMAstNodePtr address(new CPPGMAstNode(input->kind, input->value));
 					address->initializer_form = input->initializer_form;
 					address->template_instantiation = input->template_instantiation;

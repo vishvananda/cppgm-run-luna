@@ -98,7 +98,7 @@ struct MemberCallState
 	string object_type, qualified_owner;
 	map<string, string> substitutions, member_substitutions;
 	vector<string> explicit_member_arguments, parent_arguments;
-	bool explicit_instantiation, constructor_replay, object_const, object_volatile;
+	bool explicit_instantiation, constructor_replay, address_replay, object_const, object_volatile;
 	const TemplateDefinition* parent;
 	const vector<TemplateParameter>* enclosing_parameters;
 	vector<const TemplateDefinition*> candidates, direct_candidates;
@@ -106,12 +106,14 @@ struct MemberCallState
 	map<const TemplateDefinition*, size_t> candidate_occurrences;
 	MemberCallState(const CPPGMAstNodePtr& c, const CPPGMAstNodePtr& x,
 		const string& member, const string& where,
-		const map<string, string>& bindings, bool explicit_call, bool replay)
+		const map<string, string>& bindings, bool explicit_call, bool replay,
+		bool address)
 		: call(c), callee(x), original_member(member), context(where),
 		  expected_result(), member_name(), member_qualifier(), object_type(),
 		  qualified_owner(), substitutions(bindings), member_substitutions(),
 		  explicit_member_arguments(), parent_arguments(),
 		  explicit_instantiation(explicit_call), constructor_replay(replay),
+		  address_replay(address),
 		  object_const(false), object_volatile(false), parent(0),
 		  enclosing_parameters(0), candidates(), direct_candidates(),
 		  inherited_owners(), candidate_occurrences() {}
@@ -144,11 +146,11 @@ bool PA18TemplateExpander::ReplayMemberCall(
 	const CPPGMAstNodePtr& call, const CPPGMAstNodePtr& callee,
 	const string& original_member, const string& context,
 	const map<string, string>& substitutions, bool explicit_instantiation,
-	bool constructor_replay)
+	bool constructor_replay, bool address_replay)
 {
 	if(!call || !callee) return false;
 	MemberCallState state(call, callee, original_member, context, substitutions,
-		explicit_instantiation, constructor_replay);
+		explicit_instantiation, constructor_replay, address_replay);
 	const bool parsed = ParseMemberCall(&state);
 	const bool object_resolved = parsed && ResolveMemberObject(&state);
 	const bool owner_resolved = object_resolved && ResolveMemberOwner(&state);
@@ -971,6 +973,7 @@ bool PA18TemplateExpander::DeduceMemberCandidate(
 	const bool object_const = candidate->owner->object_const;
 	const bool object_volatile = candidate->owner->object_volatile;
 	const bool explicit_instantiation = candidate->owner->explicit_instantiation;
+	const bool address_replay = candidate->owner->address_replay;
 	const TemplateDefinition* parent = candidate->owner->parent;
 	const vector<string>& parent_arguments = candidate->owner->parent_arguments;
 	const vector<TemplateParameter>* enclosing_parameters = candidate->owner->enclosing_parameters;
@@ -994,6 +997,37 @@ bool PA18TemplateExpander::DeduceMemberCandidate(
 				&inferred_function_values, &bound_pack_values, &forwarding_pack_values);
 		} catch(const logic_error&) {
 			inferred = false;
+		}
+		// A function address has no runtime call arguments.  Once an explicit
+		// member-template-id supplies every fixed template parameter, the
+		// remaining trailing function-template pack is deduced as empty rather
+		// than being rejected by ordinary call-arity checking.
+		if(!inferred && address_replay && call->children.size() >= 2 &&
+			call->children[1] && call->children[1]->kind == "argument-list" &&
+			call->children[1]->children.empty() && !explicit_arguments.empty()) {
+			vector<string> address_arguments;
+			size_t explicit_index = 0;
+			bool viable = true;
+			for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter) {
+				const TemplateParameter& detail = definition.parameters[parameter];
+				if(detail.pack) {
+					for(size_t later = parameter + 1; later < definition.parameters.size(); ++later)
+						if(!definition.parameters[later].pack) viable = false;
+					vector<string>& values = inferred_pack_values[detail.name];
+					while(explicit_index < explicit_arguments.size())
+						values.push_back(explicit_arguments[explicit_index++]);
+					address_arguments.insert(address_arguments.end(), values.begin(), values.end());
+					continue;
+				}
+				if(explicit_index < explicit_arguments.size())
+					address_arguments.push_back(explicit_arguments[explicit_index++]);
+				else if(detail.default_type.empty()) viable = false;
+			}
+			if(explicit_index != explicit_arguments.size()) viable = false;
+			if(viable) {
+				member_arguments = address_arguments;
+				inferred = true;
+			}
 		}
 		// The active enclosing pack is a typed replay fact for materialization.
 		// Leave deduction free to inspect the concrete call arguments first: an

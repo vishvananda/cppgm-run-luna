@@ -143,6 +143,14 @@ void PA18TemplateExpander::MaterializeInitializerConstructor(
 		original_item->children[1] : CPPGMAstNodePtr();
 	const CPPGMAstNodePtr transformed_initializer = transformed_item->children.size() > 1 ?
 		transformed_item->children[1] : CPPGMAstNodePtr();
+	if(original_initializer && !transformed_initializer) return;
+	if(input->children.empty()) return;
+	const CPPGMAstNodePtr declarator = original_item->children[0];
+	string target = DeclaratorTypeSpelling(NodeTypeSpelling(input->children[0]),
+		declarator);
+	target = CanonicalSpelling(ResolveAlias(RewriteText(target, context,
+		substitutions, 0), context));
+	if(target.empty() || !FindClassDeclaration(target, context)) return;
 	vector<CPPGMAstNodePtr> arguments;
 	if(transformed_initializer) {
 		CPPGMAstNodePtr initializer_expression = transformed_initializer;
@@ -152,20 +160,36 @@ void PA18TemplateExpander::MaterializeInitializerConstructor(
 		if(initializer_expression->kind == "paren-initializer" ||
 			initializer_expression->kind == "braced-init-list")
 			arguments = initializer_expression->children;
-		else if(initializer_expression->kind != "initializer")
+		else if(initializer_expression->kind == "call-expression" &&
+			initializer_expression->children.size() > 1 &&
+			initializer_expression->children[0] &&
+			initializer_expression->children[0]->kind == "id-expression") {
+			// `T value = T(args...)` is represented as an initializer containing
+			// the complete functional construction call.  Materialization needs
+			// the constructor's arguments, not the temporary object as a single
+			// conversion argument; the latter makes a generated constructor result
+			// look like `T::T` and recursively rejects the otherwise valid call.
+			string callee = RemoveMarker(initializer_expression->children[0]->value);
+			const size_t callee_open = callee.find('<');
+			if(callee_open != string::npos) callee.erase(callee_open);
+			string target_base = target;
+			map<string, string>::const_iterator target_specialization =
+				specialization_bases_.find(LastComponent(target));
+			if(target_specialization != specialization_bases_.end())
+				target_base = target_specialization->second;
+			if(LastComponent(callee) == LastComponent(target_base) ||
+				LastComponent(callee) == LastComponent(target)) {
+				const CPPGMAstNodePtr call_arguments = initializer_expression->children[1];
+				if(call_arguments && call_arguments->kind == "argument-list")
+					arguments = call_arguments->children;
+			}
+			if(arguments.empty()) arguments.push_back(initializer_expression);
+		} else if(initializer_expression->kind != "initializer")
 			arguments.push_back(initializer_expression);
 		if(arguments.empty() && original_initializer &&
 			original_initializer->kind != "paren-initializer" &&
 			original_initializer->kind != "braced-init-list") return;
 	}
-	if(original_initializer && !transformed_initializer) return;
-	if(input->children.empty()) return;
-	const CPPGMAstNodePtr declarator = original_item->children[0];
-	string target = DeclaratorTypeSpelling(NodeTypeSpelling(input->children[0]),
-		declarator);
-	target = CanonicalSpelling(ResolveAlias(RewriteText(target, context,
-		substitutions, 0), context));
-	if(target.empty() || !FindClassDeclaration(target, context)) return;
 	// A direct initializer can select a non-template constructor of the target
 	// through a user-defined conversion.  Materialize the conversion object's
 	// constructor before PA11 builds constructor bindings; otherwise a template

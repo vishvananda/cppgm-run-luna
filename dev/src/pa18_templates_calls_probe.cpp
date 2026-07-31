@@ -133,12 +133,41 @@ bool PA18TemplateExpander::FunctionTemplateMoreSpecialized(
 	}
 	const bool lhs_trailing_pack = !lhs_packs.empty() && lhs_packs.back();
 	const bool rhs_trailing_pack = !rhs_packs.empty() && rhs_packs.back();
+	const auto is_forwarding_parameter = [](const TemplateDefinition& definition,
+		const string& raw) {
+		string base = CanonicalSpelling(raw);
+		if(base.size() < 2 || base.compare(base.size() - 2, 2, "&&") != 0)
+			return false;
+		base = CanonicalSpelling(base.substr(0, base.size() - 2));
+		for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter)
+			if(!definition.parameters[parameter].pack &&
+				definition.parameters[parameter].name == base) return true;
+		return false;
+	};
+	const auto structured_class_precedes_forwarding =
+		[&](const TemplateDefinition& structured,
+			const vector<string>& structured_patterns,
+			const TemplateDefinition& forwarding,
+			const vector<string>& forwarding_patterns) {
+		const size_t count = min(structured_patterns.size(), forwarding_patterns.size());
+		for(size_t parameter = 0; parameter < count; ++parameter)
+			if(structured_patterns[parameter].find('<') != string::npos &&
+				is_forwarding_parameter(forwarding, forwarding_patterns[parameter]))
+				return true;
+		return false;
+	};
 	// A function parameter pack broadens the callable's arity.  Preserve
 	// that ordering fact before comparing the type patterns: a fixed-arity
 	// template beats the corresponding trailing-pack fallback, and between
 	// two trailing packs the template with the longer fixed prefix is more
 	// specialized.
-	if(lhs_trailing_pack != rhs_trailing_pack) return !lhs_trailing_pack;
+	if(lhs_trailing_pack != rhs_trailing_pack) {
+		if(lhs_trailing_pack && structured_class_precedes_forwarding(lhs,
+			lhs_patterns, rhs, rhs_patterns)) return true;
+		if(rhs_trailing_pack && structured_class_precedes_forwarding(rhs,
+			rhs_patterns, lhs, lhs_patterns)) return false;
+		return !lhs_trailing_pack;
+	}
 	if(lhs_trailing_pack && rhs_trailing_pack &&
 		lhs_patterns.size() != rhs_patterns.size())
 		return lhs_patterns.size() > rhs_patterns.size();

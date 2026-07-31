@@ -6,6 +6,28 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
+namespace {
+string ExpandDeferredPackSpelling(string raw,
+	const map<string, vector<string> >& pack_substitutions)
+{
+	for(map<string, vector<string> >::const_iterator pack =
+		pack_substitutions.begin(); pack != pack_substitutions.end(); ++pack) {
+		if(pack->first.empty()) continue;
+		const string token = pack->first + "...";
+		string expanded;
+		for(size_t value = 0; value < pack->second.size(); ++value) {
+			if(!expanded.empty()) expanded += ',';
+			expanded += pack->second[value];
+		}
+		for(size_t at = raw.find(token); at != string::npos;) {
+			raw.replace(at, token.size(), expanded);
+			at = raw.find(token, at + expanded.size());
+		}
+	}
+	return raw;
+}
+}
+
 bool PA18TemplateExpander::IsDirectCvQualifiedAliasTarget(
 	const CPPGMAstNodePtr& declaration,
 	const vector<TemplateParameter>& parameters) const
@@ -412,12 +434,14 @@ bool PA18TemplateExpander::MentionsGeneratedTypeOutsideFunctionBodies(
 
 bool PA18TemplateExpander::HasDeferredDependentClassMember(
 	const TemplateDefinition& definition, const string& context,
-	const map<string, string>& substitutions) const
+	const map<string, string>& substitutions,
+	const map<string, vector<string> >& pack_substitutions) const
 {
 	for(size_t node = 0; node < definition.dependent_member_type_nodes.size(); ++node) {
 		const CPPGMAstNodePtr& candidate = definition.dependent_member_type_nodes[node];
 		string raw = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(
 			RemoveMarker(candidate->value), substitutions));
+		raw = ExpandDeferredPackSpelling(raw, pack_substitutions);
 		if(raw.compare(0, 8, "typename") == 0 &&
 			(raw.size() == 8 || isspace(static_cast<unsigned char>(raw[8]))))
 			raw = CanonicalSpelling(raw.substr(8));
@@ -428,12 +452,14 @@ bool PA18TemplateExpander::HasDeferredDependentClassMember(
 
 bool PA18TemplateExpander::HasDeferredTypeMember(
 	const TemplateDefinition& definition, const string& context,
-	const map<string, string>& substitutions) const
+	const map<string, string>& substitutions,
+	const map<string, vector<string> >& pack_substitutions) const
 {
 	for(size_t node = 0; node < definition.dependent_type_member_nodes.size(); ++node) {
 		const CPPGMAstNodePtr& candidate = definition.dependent_type_member_nodes[node];
 		string raw = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(
 			RemoveMarker(candidate->value), substitutions));
+		raw = ExpandDeferredPackSpelling(raw, pack_substitutions);
 		if(raw.compare(0, 8, "typename") == 0 &&
 			(raw.size() == 8 || isspace(static_cast<unsigned char>(raw[8]))))
 			raw = CanonicalSpelling(raw.substr(8));
@@ -1044,13 +1070,13 @@ string PA18TemplateExpander::MaterializeInstantiation(const TemplateDefinition& 
 	const map<string, vector<string> >& pack_substitutions, const string& context,
 	bool explicit_instantiation, const string& key, const string& concrete_owner,
 	const map<string, FunctionSignature>& function_substitutions,
-		bool defer_class_definition)
+	bool defer_class_definition, size_t explicit_argument_count)
 {
 	map<string, string>::const_iterator cached = specializations_.find(key);
 	if(cached != specializations_.end() && definition.class_template &&
 		!defer_class_definition && deferred_class_instantiations_.find(key) !=
 			deferred_class_instantiations_.end() &&
-		!HasDeferredTypeMember(definition, context, substitutions)) {
+		!HasDeferredTypeMember(definition, context, substitutions, pack_substitutions)) {
 		specializations_.erase(cached);
 		deferred_class_instantiations_.erase(key);
 	} else if(cached != specializations_.end()) {
@@ -1069,7 +1095,7 @@ string PA18TemplateExpander::MaterializeInstantiation(const TemplateDefinition& 
 			specializations_.erase(cached);
 		} else {
 			if(definition.class_template && HasDeferredDependentClassMember(
-				definition, context, substitutions)) return cached->second;
+				definition, context, substitutions, pack_substitutions)) return cached->second;
 			ReplayCachedInstantiation(definition, args, cached->second, context,
 				explicit_instantiation, pack_substitutions);
 			return cached->second;
@@ -1079,10 +1105,13 @@ string PA18TemplateExpander::MaterializeInstantiation(const TemplateDefinition& 
 		metadata_args, substitutions, context, concrete_owner,
 		explicit_instantiation);
 	RegisterGeneratedSpecialization(definition, metadata_args, local_name);
+	if(definition.class_template && explicit_argument_count != static_cast<size_t>(-1))
+		specialization_explicit_argument_counts_[local_name] = explicit_argument_count;
 	if(definition.class_template) substitutions[definition.name] = local_name;
 	specializations_[key] = local_name;
 	const bool deferred_member = defer_class_definition && definition.class_template &&
-		HasDeferredDependentClassMember(definition, context, substitutions);
+		HasDeferredDependentClassMember(definition, context, substitutions,
+			pack_substitutions);
 	if(deferred_member) {
 		const string generated_owner = definition.lexical_owner.empty() ?
 			definition.owner : definition.lexical_owner;
@@ -1354,7 +1383,7 @@ string PA18TemplateExpander::Instantiate(const TemplateDefinition& definition,
 			function_substitutions);
 	return MaterializeInstantiation(definition, args, metadata_args, substitutions,
 		integral_substitutions, pack_substitutions, context, explicit_instantiation, key,
-		concrete_owner, function_substitutions, defer_class_definition);
+		concrete_owner, function_substitutions, defer_class_definition, raw_args.size());
 }
 
 

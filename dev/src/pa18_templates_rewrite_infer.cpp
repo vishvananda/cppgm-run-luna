@@ -113,20 +113,22 @@ bool PA18TemplateExpander::MergeInferredFunctionArgument(
 		substitution != substitutions.end(); ++substitution)
 		if(parameter_names.find(substitution->first) == parameter_names.end()) {
 			pattern_substitutions[substitution->first] = substitution->second;
-			const size_t position = pattern.find(substitution->first);
-			const size_t end = position == string::npos ? string::npos :
-				position + substitution->first.size();
-			const bool left = position == 0 || position == string::npos ||
-				!IsIdentifierCharacter(pattern[position - 1]);
-			const bool right = position == string::npos || end == pattern.size() ||
-				!IsIdentifierCharacter(pattern[end]);
-			if(position != string::npos && left && right) {
+			for(size_t position = pattern.find(substitution->first);
+				position != string::npos;
+				position = pattern.find(substitution->first,
+					position + substitution->first.size())) {
+				const size_t end = position + substitution->first.size();
+				const bool left = position == 0 ||
+					!IsIdentifierCharacter(pattern[position - 1]);
+				const bool right = end == pattern.size() ||
+					!IsIdentifierCharacter(pattern[end]);
+				if(!left || !right) continue;
 				if(!FindDefinition(substitution->first, context) &&
 					class_contexts_.find(substitution->first) == class_contexts_.end())
 					dependent_substitution = true;
-			}
-			if(type_aliases_by_name_.find(substitution->first) != type_aliases_by_name_.end()) {
-				if(position != string::npos && left && right) alias_substitution = true;
+				if(type_aliases_by_name_.find(substitution->first) !=
+					type_aliases_by_name_.end()) alias_substitution = true;
+				break;
 			}
 		}
 	for(map<string, string>::const_iterator value = inferred->begin();

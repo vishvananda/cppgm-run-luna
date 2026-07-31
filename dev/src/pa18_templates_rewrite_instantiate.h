@@ -164,7 +164,24 @@
 			map<string, vector<string> >::const_iterator arguments =
 				specialization_arguments_.find(word);
 			if(base != specialization_bases_.end() && arguments != specialization_arguments_.end()) {
-				result += base->second + "<";
+				string base_spelling = base->second;
+				const string base_namespace = PrefixComponent(base_spelling);
+				// A generated name can be reached through a shortened enclosing
+				// scope (`lib::inner::X_int_`) even though its source owner is
+				// fully qualified.  Replace the overlapping suffix before restoring
+				// the typed specialization spelling.
+				size_t overlap = string::npos;
+				for(size_t begin = 0; begin < base_namespace.size(); ++begin) {
+					if(begin != 0 && base_namespace[begin - 1] != ':') continue;
+					const string tail = base_namespace.substr(begin) + "::";
+					if(result.size() >= tail.size() && result.compare(
+						result.size() - tail.size(), tail.size(), tail) == 0) {
+						overlap = tail.size();
+						break;
+					}
+				}
+				if(overlap != string::npos) result.erase(result.size() - overlap);
+				result += base_spelling + "<";
 				for(size_t argument = 0; argument < arguments->second.size(); ++argument) {
 					if(argument != 0) result += ", ";
 					result += RestoreSpecializationSpelling(arguments->second[argument]);
@@ -994,7 +1011,8 @@
 					string argument_spelling = enum_argument ? metadata_args[i] : args[i];
 					if(definition.class_template && i < definition.parameters.size() &&
 						definition.parameters[i].type)
-						argument_spelling = QualifyTypeArgument(argument_spelling, context,
+						argument_spelling = QualifyTypeArgument(argument_spelling,
+							definition.owner.empty() ? context : definition.owner,
 							string(), true);
 					const bool plain_function_type = definition.class_template &&
 						i < definition.parameters.size() && definition.parameters[i].type &&
@@ -1082,7 +1100,8 @@
 		const string& concrete_owner,
 		const map<string, FunctionSignature>& function_substitutions =
 			map<string, FunctionSignature>(),
-		bool defer_class_definition = false);
+		bool defer_class_definition = false,
+		size_t explicit_argument_count = static_cast<size_t>(-1));
 	void ReplayCachedInstantiation(const TemplateDefinition& definition,
 			const vector<string>& args, const string& cached, const string& context,
 			bool explicit_instantiation,

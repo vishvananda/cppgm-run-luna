@@ -174,6 +174,32 @@ bool PA18TemplateExpander::TransformExplicitFunctionCall(
 			if(explicit_definition && !explicit_definition->class_template) {
 				vector<string> explicit_args = SplitTemplateArguments(argument_text);
 				map<string, string> explicit_substitutions = substitutions;
+				// A pack element is already a typed argument from the caller's
+				// scope.  When the instantiated body introduces a local typedef
+				// with the same spelling, do not let explicit-argument replay
+				// resolve that bound class through the new lexical alias.
+				set<string> protected_bound_names;
+				for(map<string, string>::iterator substitution =
+					explicit_substitutions.begin(); substitution != explicit_substitutions.end();
+					++substitution) {
+					for(map<string, vector<string> >::const_iterator pack =
+						active_pack_substitutions_.begin();
+						pack != active_pack_substitutions_.end(); ++pack) {
+						for(size_t value = 0; value < pack->second.size(); ++value) {
+							const string bound = CanonicalSpelling(pack->second[value]);
+							if(bound.empty() || bound.find("::") != string::npos ||
+								CanonicalSpelling(substitution->second) != bound ||
+								class_contexts_.find(bound) == class_contexts_.end() ||
+								ResolveAlias(bound, context) == bound) continue;
+								substitution->second = "::" + bound;
+								protected_bound_names.insert(bound);
+								value = pack->second.size();
+						}
+					}
+				}
+				for(set<string>::const_iterator name = protected_bound_names.begin();
+					name != protected_bound_names.end(); ++name)
+					explicit_substitutions.erase(*name);
 				for(map<string, PA19IntegralValue>::const_iterator integral =
 					active_integral_substitutions_.begin();
 					integral != active_integral_substitutions_.end(); ++integral) {
