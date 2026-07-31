@@ -204,8 +204,19 @@ bool PA18TemplateExpander::ParseMemberCall(MemberCallState* state)
 	// not as a template-id delimiter.  Let ordinary member lookup see those
 	// names; explicit operator template-ids are handled by the parsed member
 	// spelling when a real range is present.
-	const size_t qualified_template_separator = member_open == string::npos ?
-		string::npos : member_spelling.find("::", member_open);
+	size_t qualified_template_separator = string::npos;
+	if(member_open != string::npos && member_spelling.compare(0, 8, "operator") != 0) {
+		// A global-qualified template argument (`member<::Type>`) contains
+		// `::` inside the angle range.  It is not an owner qualifier; only a
+		// scope separator after the matching template-id denotes `Owner<T>::`.
+		string ignored_base, ignored_arguments;
+		size_t ignored_begin = 0, ignored_close = string::npos;
+		if(TemplateBase(member_spelling, member_open, &ignored_begin, &ignored_base) &&
+			TemplateRange(member_spelling, member_open, &ignored_arguments, &ignored_close) &&
+			ignored_close + 2 < member_spelling.size() &&
+			member_spelling.compare(ignored_close + 1, 2, "::") == 0)
+			qualified_template_separator = ignored_close + 1;
+	}
 	if(member_open != string::npos && qualified_template_separator != string::npos &&
 		member_spelling.compare(0, 8, "operator") != 0) {
 		// `base<T>::operator=` is a qualified member name, not a member

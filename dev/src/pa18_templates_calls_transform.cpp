@@ -650,7 +650,7 @@ CPPGMAstNodePtr PA18TemplateExpander::MaterializeOperatorCallTargets(
 }
 
 bool PA18TemplateExpander::MaterializeImplicitMemberCall(
-	const CPPGMAstNodePtr& result, const CPPGMAstNodePtr& result_callee,
+	const CPPGMAstNodePtr& result, CPPGMAstNodePtr& result_callee,
 	const CPPGMAstNodePtr& input_callee, const string& context,
 	const map<string, string>& substitutions)
 {
@@ -697,6 +697,26 @@ bool PA18TemplateExpander::MaterializeImplicitMemberCall(
 				context, substitutions)) {
 				result_callee->value = synthetic_member->children[1]->value;
 				implicit_member_instantiated = true;
+			} else if(HasReplayContext(substitutions) && context.find('<') != string::npos) {
+				// An ordinary member can hide a namespace function even when the
+				// replay path has no member-template specialization to emit.  Keep
+				// the lookup receiver in the typed AST in that case; leaving the
+				// source id-expression bare would incorrectly fall through to free
+				// lookup (and loses calls from explicit member specializations).
+				string object_type;
+				if(InferArgument(synthetic_object, &object_type, substitutions, context)) {
+					string member_type;
+					set<string> active;
+					const bool found_member = FindClassMemberType(object_type, result_callee->value,
+						substitutions, context, &member_type, &active, false);
+					if(found_member) {
+						CPPGMAstNodePtr qualified_member(new CPPGMAstNode("id-expression",
+							object_type + "::" + result_callee->value));
+						result->children[0] = qualified_member;
+						result_callee = qualified_member;
+						implicit_member_instantiated = true;
+					}
+				}
 			}
 		}
 	}

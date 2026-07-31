@@ -390,6 +390,62 @@ bool PA18TemplateExpander::InferIdentifierArgument(const CPPGMAstNodePtr& expres
 		*result = ReplaceIdentifiers(ResolveAlias(source, context), substitutions);
 		if(!result->empty()) return true;
 	}
+	// `variable_types_` is a translation-unit fallback and intentionally keeps
+	// the spelling of template parameters from every collected function.  It
+	// must not hide a visible namespace function when a later call is replayed
+	// from another scope (`handler` in `main` can otherwise acquire the
+	// unrelated `Handler&&` type of a member template parameter).  A variable in
+	// an actually visible function scope still wins, as required by ordinary
+	// name hiding.
+	const string variable_name = LastComponent(qualified_name);
+	bool scoped_variable = false;
+	for(string current = context; ; ) {
+		map<string, map<string, string> >::const_iterator scope =
+			function_parameter_types_.find(current);
+		if(scope != function_parameter_types_.end() && scope->second.find(variable_name) !=
+			scope->second.end()) {
+			scoped_variable = true;
+			break;
+		}
+		if(current.empty()) break;
+		const size_t separator = current.rfind("::");
+		if(separator == string::npos) current.clear();
+		else current.erase(separator);
+	}
+	// Namespace and local objects are indexed by their qualified typed name;
+	// unlike the translation-unit fallback map, that fact is sufficient to
+	// preserve an object imported through an enclosing namespace (including an
+	// anonymous namespace).  Do not let an unrelated function signature hide
+	// such an object when the name is replayed from another function.
+	map<string, string>::const_iterator qualified_variable =
+		variable_qualified_names_.find(variable_name);
+	if(!scoped_variable && qualified_variable != variable_qualified_names_.end()) {
+		const string variable_owner = PrefixComponent(qualified_variable->second);
+		for(string current = context; ; ) {
+			if(variable_owner == current || variable_owner == JoinPath(current, "<unnamed>")) {
+				scoped_variable = true;
+				break;
+			}
+			map<string, string>::const_iterator logical_owner =
+				lexical_namespace_logical_.find(variable_owner);
+			if(logical_owner != lexical_namespace_logical_.end() &&
+				logical_owner->second == current) {
+				scoped_variable = true;
+				break;
+			}
+			if(current.empty()) break;
+			const size_t separator = current.rfind("::");
+			if(separator == string::npos) current.clear();
+			else current.erase(separator);
+		}
+	}
+	const FunctionSignature* visible_function = FindFunctionSignature(
+		expression->value, context);
+	if(!scoped_variable && visible_function) {
+		*result = FunctionSignatureType(*visible_function);
+		if(function_signature) *function_signature = *visible_function;
+		return true;
+	}
 	string variable_type;
 	if(LookupVariableType(expression->value, context, &variable_type)) {
 		string promoted_type = variable_type;
@@ -413,7 +469,8 @@ bool PA18TemplateExpander::InferIdentifierArgument(const CPPGMAstNodePtr& expres
 		*result = ReplaceIdentifiers(ResolveAlias(promoted_type, context), substitutions);
 		return !result->empty();
 	}
-	const FunctionSignature* signature = FindFunctionSignature(expression->value, context);
+	const FunctionSignature* signature = visible_function ? visible_function :
+		FindFunctionSignature(expression->value, context);
 	if(signature) {
 		*result = FunctionSignatureType(*signature);
 		if(function_signature) *function_signature = *signature;
