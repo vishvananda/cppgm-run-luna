@@ -424,6 +424,9 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
     record->static_member = is_static;
 	record->member_template = record->member_template ||
 		(is_member && IsGeneratedMemberTemplate(node, raw_name));
+	record->member_template_frame |= node->template_instantiation && member_owner &&
+		member_owner->template_specialization && node->template_arguments.size() !=
+		member_owner->template_arguments.size();
 	record->template_instantiation = record->template_instantiation ||
 		node->template_instantiation ||
 		(member_owner && member_owner->template_specialization);
@@ -761,6 +764,9 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
 	record->member_template = record->member_template ||
 		(conversion_operator && node->template_instantiation &&
 		 node->template_primary.find("operator") != string::npos);
+	record->member_template_frame = record->member_template_frame ||
+		(node->template_instantiation && owner->template_specialization &&
+		 node->template_arguments.size() != owner->template_arguments.size());
 	const bool out_of_class_definition = definition && out_of_class_member;
 	record->out_of_class_definition = record->out_of_class_definition ||
 		out_of_class_definition;

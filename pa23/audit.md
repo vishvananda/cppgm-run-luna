@@ -1362,3 +1362,96 @@ MP11 append, qualified boolean results, trailing-return aliases, and the
 conditional-alias index-sequence member call. Keep the two reentrant cases as
 fixed-point regression coverage with no timing-based acceptance. Follow with
 the owner/specialization replay, deduction/overload, and LowIR groups.
+
+## Checkpoint 23 audit — 2026-07-31
+
+### Scope Reviewed
+
+- The Checkpoint 23 scope, result, and refreshed complete failure inventory in
+  `pa23/plan.md`, including the dependent candidate-viability contract and
+  the selected next checkpoint group.
+- `pa23/README.md`, `TESTING_AND_REFERENCES.md`, the relevant PA23 general and
+  specification tests, and the through-PA22 validation contract.
+- Commit `1246a1b` (`Implement PA23 dependent candidate viability checkpoint`),
+  its recent parents, and the changed implementation in
+  `pa14_lowering_constructors.cpp`, `pa14_lowering_control.cpp`,
+  `pa14_lowering_collection.cpp`, `pa14_lowering.h`,
+  `pa18_templates_rewrite.cpp`, `pa18_templates_rewrite_emit.cpp`,
+  `pa18_templates_rewrite_match.cpp`,
+  `pa18_templates_rewrite_specialization.cpp`, and the related PA18 headers.
+- The authoritative active log at
+  `/home/vishvananda/work/.ralph/luna-gpt-5.6-luna-ultra/last-test.log`, the
+  four checkpoint witnesses, the exact through-PA22 report, and the PA23
+  source file audit.
+
+### Findings
+
+- The checkpoint remains on the normal compiler pipeline: parsed AST,
+  semantic collection and lookup, typed template substitution/replay, and
+  LowIR emission.  There is no skipped phase, dummy or embedded output,
+  interpreter/VM/trampoline substitute, reference-binary or host-compiler
+  invocation, source/test-specific acceptance gate, or unchecked output path.
+- The landed replay exception used a flattened `SpellNode(...).find("static")`
+  test.  That was a stringly declaration fact and could silently apply the
+  candidate-local skip to the wrong declaration.  It now uses the AST
+  declaration-specifier fact, and the catch remains limited to the intended
+  static member replay substitution boundary.
+- The landed constructor duplicate-entry suppression rediscovered a
+  function-template frame at a downstream call site from template-argument
+  counts.  That was replaced with explicit `member_template_frame` provenance
+  collected for both ordinary and special-member records, so the base-entry
+  demand decision consumes an owned semantic fact.
+- The landed scalar matching changes duplicated substring replacements in
+  two replay paths.  Those replacements were both stringly and unsafe around
+  identifier text.  Scalar spelling normalization is now centralized and
+  token-aware, with invalid combinations left untouched.
+- Temporary generated-class declaration indexing now has scoped restoration,
+  including exception paths.  The bounded probe covers only the generated,
+  logical, and concrete owner paths; it does not scan the registry or retain a
+  failed declaration after substitution.
+- Constructor initializer matching now asks the semantic analyzer and
+  `PA12SameType` first.  The compact generated-name spelling comparison is
+  only a fallback for lowered identities that intentionally differ from the
+  source template-id, rather than the primary semantic fact.
+- No timeout workaround, retry budget, timing-based acceptance, or fallback
+  success path was added.  The two reentrant static-query status failures in
+  the complete residual set remain ordinary fixed-point semantic coverage and
+  are not accepted through a timeout or substitute execution path.
+- The first post-fix file audit caught two real structural limit violations:
+  one source file was 1501 lines and the replay helper was 123 lines.  The
+  implementation was compacted without weakening the audit, and the final
+  audit has no fatal finding and the same 13 repository warnings as the
+  checkpoint baseline.
+
+### Changes Made
+
+- Added explicit member-template-frame ownership to PA14 function records and
+  populated it at collection time; changed constructor base-entry emission to
+  consume that field instead of recomputing context from the active call.
+- Added semantic-first constructor base matching with a generated-identity
+  fallback, preserving the constructor-shadow witness while removing the
+  downstream text-only decision.
+- Replaced raw declaration-text static detection with
+  `HasDeclarationSpecifier`, centralized builtin scalar canonicalization for
+  both match and specialization inference, and removed the duplicate
+  substring-replacement helpers.
+- Added RAII restoration for the temporary generated-class declaration index
+  and kept the source/function-size audit limits intact.
+- Updated `pa23/plan.md` with the exact 28 status and 32 LowIR residual
+  fixtures, the grouped Remaining Work Map, and the next bundled checkpoint
+  group.  No tests, references, checker rules, or external tools were
+  modified for acceptance.
+
+### Validation
+
+- Serial compiler build: **PASS**.
+- Named-parameter SFINAE, unused static-member return, constructor
+  const-reference conversion, and constructor-parameter shadowing: **4/4**.
+- `make test-report ACTIVE_TEST_REPORT_PAS='pa23'`: **336/396**, preserving
+  the audit-turn baseline and introducing no new failure.
+- Required prior-through command: **PASS, 2100/2100 through PA22**.
+- `perl scripts/cppgm_file_audit.pl --stage pa23 --paths dev/src`: **PASS**,
+  with 13 non-fatal repository warnings and no fatal issue.
+- `git diff --check`: **PASS**.  The remaining PA23 failures are recorded as
+  the semantic work frontier in `pa23/plan.md`, not as unresolved checkpoint
+  architecture, performance, shortcut, regression, or audit debt.

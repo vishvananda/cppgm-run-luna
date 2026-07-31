@@ -30,8 +30,8 @@ static string TypedConstructorTypeSpelling(const TypePtr& raw_type)
     return type->name;
 }
 
-static bool ConstructorInitializerNamesType(const string& raw_name,
-                                            const TypePtr& target_type)
+static bool ConstructorInitializerSpellingMatchesType(
+    const string& raw_name, const TypePtr& target_type)
 {
     if(!target_type) return false;
     const string candidate = CompactConstructorTypeSpelling(raw_name);
@@ -41,6 +41,24 @@ static bool ConstructorInitializerNamesType(const string& raw_name,
     if(candidate == typed || candidate == CompactConstructorTypeSpelling(target_type->name))
       return true;
     return false;
+}
+
+bool PA14Lowerer::ConstructorInitializerNamesType(const string& raw_name,
+                                                  const TypePtr& target_type,
+                                                  Scope* scope) const
+{
+    if(!target_type) return false;
+    // Resolve the initializer through the semantic type table first.  The
+    // spelling fallback is only needed for generated class identities whose
+    // lowered name intentionally differs from the source template-id.
+    try {
+      TypePtr resolved = type_value(analyzer_.ResolveType(scope, raw_name));
+      if(PA12SameType(resolved, type_value(target_type), true)) return true;
+    } catch(const logic_error&) {
+      // An unresolved dependent spelling is not a hard constructor error;
+      // the generated-name comparison below handles materialized bases.
+    }
+    return ConstructorInitializerSpellingMatchesType(raw_name, target_type);
 }
 
 string PA14Lowerer::EmitTemporaryObjectAddress(const CPPGMAstNodePtr& node,
@@ -428,7 +446,7 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
         if(!initializer || initializer->kind != "mem-initializer") continue;
         CPPGMAstNodePtr name_node = ChildOfKind(initializer, "mem-initializer-id");
         bool matches_base = name_node &&
-          (ConstructorInitializerNamesType(name_node->value, base) ||
+          (ConstructorInitializerNamesType(name_node->value, base, scope) ||
            LastComponent(name_node->value) == LastComponent(base->name) ||
            name_node->value == base->name);
         if(name_node && !matches_base) {
@@ -552,7 +570,7 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
       vector<CPPGMAstNodePtr> arguments = argument_node ? argument_node->children :
         vector<CPPGMAstNodePtr>();
       const bool is_base_initializer = base &&
-        ((name_node && ConstructorInitializerNamesType(name_node->value, base)) ||
+        ((name_node && ConstructorInitializerNamesType(name_node->value, base, scope)) ||
          name == LastComponent(base->name) || name == base->name);
       if(owner->polymorphic && !vptr_stored && !delegating &&
          !is_base_initializer && name != LastComponent(owner->name)) {

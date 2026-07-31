@@ -133,6 +133,50 @@ bool HasTopLevelIndirection(const string& raw)
 	return false;
 }
 
+class ScopedClassDeclarationIndex
+{
+	map<string, CPPGMAstNodePtr>& declarations_;
+	map<string, CPPGMAstNodePtr> previous_;
+	set<string> paths_;
+
+	void Restore()
+	{
+		for(set<string>::const_iterator path = paths_.begin();
+			path != paths_.end(); ++path) {
+			map<string, CPPGMAstNodePtr>::const_iterator prior = previous_.find(*path);
+			if(prior == previous_.end()) declarations_.erase(*path);
+			else declarations_[*path] = prior->second;
+		}
+	}
+
+public:
+	ScopedClassDeclarationIndex(map<string, CPPGMAstNodePtr>& declarations,
+		const set<string>& paths, const CPPGMAstNodePtr& generated)
+		: declarations_(declarations), previous_(), paths_()
+	{
+		for(set<string>::const_iterator path = paths.begin();
+			path != paths.end(); ++path) {
+			if(path->empty()) continue;
+			paths_.insert(*path);
+			map<string, CPPGMAstNodePtr>::const_iterator prior =
+				declarations_.find(*path);
+			if(prior != declarations_.end()) previous_[*path] = prior->second;
+		}
+		try {
+			for(set<string>::const_iterator path = paths_.begin();
+				path != paths_.end(); ++path) declarations_[*path] = generated;
+		} catch(...) {
+			Restore();
+			throw;
+		}
+	}
+
+	~ScopedClassDeclarationIndex()
+	{
+		Restore();
+	}
+};
+
 } // namespace
 
 void PA18TemplateExpander::AdjustGeneratedFunctionPosition(
@@ -431,24 +475,10 @@ bool PA18TemplateExpander::HasUnavailableGeneratedClassMemberType(
 	probe_paths.insert(generated_path);
 	probe_paths.insert(JoinPath(generated_owner, local_name));
 	if(!concrete_owner.empty()) probe_paths.insert(JoinPath(concrete_owner, local_name));
-	map<string, CPPGMAstNodePtr> previous;
-	for(set<string>::const_iterator path = probe_paths.begin();
-		path != probe_paths.end(); ++path) {
-		if(path->empty()) continue;
-		map<string, CPPGMAstNodePtr>::const_iterator found = class_declarations_.find(*path);
-		if(found != class_declarations_.end()) previous[*path] = found->second;
-		class_declarations_[*path] = generated;
-	}
-	const bool unavailable = GeneratedNodeHasUnavailableMemberType(
-		generated, context, substitutions);
-	for(set<string>::const_iterator path = probe_paths.begin();
-		path != probe_paths.end(); ++path) {
-		if(path->empty()) continue;
-		map<string, CPPGMAstNodePtr>::const_iterator found = previous.find(*path);
-		if(found == previous.end()) class_declarations_.erase(*path);
-		else class_declarations_[*path] = found->second;
-	}
-	return unavailable;
+	ScopedClassDeclarationIndex generated_scope(class_declarations_,
+		probe_paths, generated);
+	return GeneratedNodeHasUnavailableMemberType(generated, context,
+		substitutions);
 }
 
 

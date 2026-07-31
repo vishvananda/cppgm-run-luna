@@ -287,11 +287,8 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
       const TypePtr first_parameter = record->source_type && !record->source_type->parameters.empty() ? record->source_type->parameters[0] : TypePtr();
       const bool inherited_constructor_wrapper = state_ && state_->record &&
         state_->record->inherited_constructor_wrapper;
-      const bool function_template_context = state_ && state_->record &&
-        state_->record->member_owner &&
-        state_->record->member_owner->template_specialization &&
-        state_->record->template_arguments.size() !=
-          state_->record->member_owner->template_arguments.size();
+      const bool replayed_member_template = state_ && state_->record &&
+        state_->record->member_template_frame;
       const bool out_of_class_template_constructor = record->out_of_class_definition;
       if(record->template_instantiation &&
          (!raw_arguments.empty() || out_of_class_template_constructor) &&
@@ -299,7 +296,7 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
           raw_arguments.size() > 1) && !inherited_constructor_wrapper &&
           // A member-template replay already has a typed base-entry call;
           // retaining the primary C1 entry here creates an unused duplicate.
-          !function_template_context)
+          !replayed_member_template)
         record->needed = true;
       FunctionRecord* entry = BaseEntryFor(record);
       if(!entry) {

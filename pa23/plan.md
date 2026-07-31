@@ -2980,3 +2980,109 @@ turn-start **321/396** and the prior checkpoint's **332/396**.
 The next checkpoint is the template-template/defaulted deduction group,
 bundled with the remaining owner-replay cases that fail during candidate
 selection rather than LowIR materialization.
+
+## Checkpoint 23 audit refresh — 2026-07-31
+
+The final active report remains **336/396**, preserving the audit-turn
+baseline of 336/396 and the four checkpoint witnesses.  The residual set is
+28 exit-status failures and 32 LowIR comparisons; none is a new regression
+from the audit fixes.
+
+### Complete current-PA failure set
+
+Status failures (28):
+
+```text
+general/100-default-nontype-qualified-function-lookup.t
+general/100-member-template-specialization-return-prefers-member-call.t
+general/100-selected-specialization-special-member-body.t
+general/200-member-function-template-address-explicit-pack.t
+general/200-member-template-implicit-instantiation-not-overload.t
+general/200-template-template-qualified-default-arg-deduction.t
+general/300-dependent-alias-helper-partial-specialization.t
+general/400-anonymous-namespace-partial-specialization.t
+general/400-current-specialization-display-name-member-alias.t
+general/400-member-template-result-pack-preserves-nested-function-pointer-owner.t
+general/400-static-cast-rvalue-ref-skips-conversion-operator.t
+general/500-dependent-function-type-pack-expansion-ctor-init.t
+general/500-dependent-qualified-member-template-result-bool.t
+general/500-member-template-conditional-alias-trailing-return.t
+general/500-mp11-append-alias-template-sfinae.t
+general/500-nontype-alias-reinstantiation-structural-state.t
+general/500-recursive-qualified-member-template-bool-arg.t
+general/500-reentrant-static-query-callable-enable-if-cache.t
+general/500-reentrant-static-query-enable-if-partial.t
+spec/100-extern-template-member-function-declaration.t
+spec/100-extern-template-static-data-declaration.t
+spec/100-local-member-call-constructor-template-instantiation.t
+spec/400-defaulted-nested-class-argument-partial-specialization.t
+spec/400-explicit-pack-type-argument-uses-bound-type.t
+spec/400-explicit-type-arg-dependent-qualified-member-template-id.t
+spec/400-function-type-pack-template-argument.t
+spec/400-qualified-member-template-id-bool-constant.t
+spec/500-conditional-alias-index-sequence-member-template-call.t
+```
+
+LowIR comparisons (32):
+
+```text
+general/100-current-specialization-member-body-cast-compare.t
+general/100-dependent-bool-partial-static-value-storage.t
+general/100-explicit-specialization-out-of-class-ctor-replay.t
+general/100-explicit-specialization-pointer-member-definition.t
+general/100-inherited-using-alias-out-of-class-specialization-member.t
+general/100-intermediate-type-transform-value-nontype.t
+general/100-local-qualified-argument-replay.t
+general/100-sizeof-call-result-nontype-template-argument.t
+general/200-adl-explicit-template-id-call.t
+general/200-function-template-reference-cv-alias-partial-order.t
+general/200-function-template-template-parameter-deduction.t
+general/200-member-operator-template-reference-pattern-partial-order.t
+general/300-current-specialization-constructor-template-canonical-owner.t
+general/300-dependent-bool-base-trait-type-argument.t
+general/400-explicit-function-template-type-arg-drops-nontype-overload.t
+general/400-function-type-pack-out-of-class-constructor.t
+general/400-member-variable-template-leaf-sfinae.t
+general/400-nonmember-template-compound-assignment-const-lhs.t
+general/400-out-of-class-partial-member-template-owner-parameter-alias.t
+general/400-variable-template-specializations.t
+spec/100-explicit-instantiation-after-explicit-specialization-no-effect.t
+spec/100-explicit-instantiation-class-prior-member-definitions.t
+spec/100-explicit-specialization-out-of-class-ctor-replay.t
+spec/100-explicit-specialization-out-of-class-member-emits.t
+spec/100-out-of-class-conversion-operator-definition.t
+spec/100-partial-specialization-member-primary-param-name.t
+spec/100-sizeof-union-type-nttp.t
+spec/200-defaulted-class-template-argument-pack-prefix-deduction.t
+spec/300-constructor-default-pack-partial-ordering.t
+spec/400-class-template-nttp-scope-value.t
+spec/400-defaulted-template-arg-partial-base-completion.t
+spec/400-template-template-member-alias-owner-shadow.t
+```
+
+### Refreshed Remaining Work Map
+
+- **Template-template/defaulted deduction and overload composition:** the
+  qualified default-argument and template-template cases, explicit packs,
+  function-type packs, constructor default-pack ordering, reference partial
+  ordering, and member-template overload/convertibility selection form the
+  next candidate-selection group.
+- **Owner and specialization replay:** qualified/defaulted function lookup,
+  current and inherited owners, anonymous/local paths, explicit/extern
+  declarations, special-member replay, and conversion-owner materialization
+  remain the main cross-owner group.
+- **Dependent member results and typed values:** dependent boolean/trailing
+  aliases, MP11 and recursive member queries, non-type alias state, static
+  and variable-template storage, `sizeof`, and generated LowIR body/storage
+  comparisons remain after candidate selection is repaired.
+- **Fixed points:** the two reentrant static-query fixtures remain explicit
+  fixed-point regression coverage; they are not accepted through timing or
+  fallback behavior.
+
+### Next substantial checkpoint group
+
+Bundle template-template/defaulted deduction with the owner/specialization
+cases that fail during candidate selection, including explicit-pack and
+constructor-default-pack witnesses.  Keep the dependent member-result and
+typed-value comparisons in the following group, with the two reentrant cases
+as regression coverage.

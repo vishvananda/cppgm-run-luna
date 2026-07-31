@@ -4,34 +4,6 @@ using namespace std;
 
 namespace pa18_templates_internal {
 namespace {
-
-string NormalizeInferredBuiltinScalar(string raw)
-{
-	raw = CanonicalSpelling(raw);
-	if(raw.find('<') != string::npos || raw.find('>') != string::npos ||
-		raw.find("::") != string::npos) return raw;
-	const pair<const char*, const char*> aliases[] = {
-		{"unsigned long long int", "unsigned long long"},
-		{"long long int", "long long"},
-		{"unsigned long int", "unsigned long"},
-		{"long int", "long"},
-		{"unsigned short int", "unsigned short"},
-		{"short int", "short"},
-		{"unsigned int", "unsigned"},
-		{"signed int", "signed"}
-	};
-	for(size_t alias = 0; alias < sizeof(aliases) / sizeof(aliases[0]); ++alias) {
-		const string from = aliases[alias].first;
-		const string to = aliases[alias].second;
-		size_t at = raw.find(from);
-		while(at != string::npos) {
-			raw.replace(at, from.size(), to);
-			at = raw.find(from, at + to.size());
-		}
-	}
-	return CanonicalSpelling(raw);
-}
-
 }
 
 int PA18TemplateExpander::MatchDirectTypeParameter(const string& pattern,
@@ -42,11 +14,11 @@ int PA18TemplateExpander::MatchDirectTypeParameter(const string& pattern,
 		(!class_pattern && pattern.find('<') != string::npos)) return -1;
 	map<string, string>::const_iterator prior = inferred->find(pattern);
 	if(prior != inferred->end()) {
-		if(NormalizeInferredBuiltinScalar(prior->second) ==
-			NormalizeInferredBuiltinScalar(actual)) return 1;
-		const string prior_type = NormalizeInferredBuiltinScalar(
+		if(CanonicalBuiltinScalarSpelling(prior->second) ==
+			CanonicalBuiltinScalarSpelling(actual)) return 1;
+		const string prior_type = CanonicalBuiltinScalarSpelling(
 			CanonicalSpelling(ResolveAlias(prior->second, context)));
-		string actual_type = NormalizeInferredBuiltinScalar(
+		string actual_type = CanonicalBuiltinScalarSpelling(
 			CanonicalSpelling(ResolveAlias(actual, context)));
 		if(prior_type != actual_type && actual.find("::") == string::npos) {
 			const size_t separator = prior_type.rfind("::");
@@ -66,7 +38,7 @@ int PA18TemplateExpander::MatchDirectTypeParameter(const string& pattern,
 		}
 		if(prior_type != actual_type) return 0;
 	}
-	(*inferred)[pattern] = NormalizeInferredBuiltinScalar(actual);
+	(*inferred)[pattern] = CanonicalBuiltinScalarSpelling(actual);
 	return 1;
 }
 

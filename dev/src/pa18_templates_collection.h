@@ -481,6 +481,7 @@ struct FunctionSignature
 	CPPGMAstNodePtr declarator;
 	CPPGMAstNodePtr parameters; bool lvalue_argument; bool deleted; FunctionSignature() : result_specifiers(), declarator(), parameters(), lvalue_argument(false), deleted(false) {}
 }; bool IsDeletedFunctionDeclaration(const CPPGMAstNodePtr& declaration);
+string CanonicalBuiltinScalarSpelling(string raw);
 struct ExplicitCallSelection; struct MemberCallState; struct MemberCallCandidateState; class PA18TemplateExpander
 {
 public:

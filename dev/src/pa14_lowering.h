@@ -102,6 +102,11 @@ class PA14Lowerer
     bool template_instantiation;
     bool explicit_specialization;
     bool member_template;
+    // A replayed member-template constructor carries a function-template
+    // argument frame in addition to its enclosing class specialization.  Keep
+    // that provenance explicit instead of rediscovering it at each base-entry
+    // demand site from the current call's argument count.
+    bool member_template_frame;
 	bool extern_template;
 	bool inline_definition;
 	bool object_root;
@@ -139,7 +144,7 @@ class PA14Lowerer
         hidden_friend(false),
         explicit_constructor(false),
 		builtin(false),
-        template_instantiation(false), explicit_specialization(false), member_template(false), extern_template(false), inline_definition(false), object_root(false), weak_binding(false),
+        template_instantiation(false), explicit_specialization(false), member_template(false), member_template_frame(false), extern_template(false), inline_definition(false), object_root(false), weak_binding(false),
         defaulted(false), deleted(false),
 		destructor(false), deleting_entry(false), needed(false),
         emitted(false), variadic(false), unwind_no(false), noreturn(false), base_entry(false),
@@ -910,6 +915,10 @@ bool EmitDestructorAt(const TypePtr& object_type, const string& address, Scope* 
                       bool force_empty = false);
 
 void EmitConstructorInitializers(FunctionRecord& function, Scope* scope);
+
+bool ConstructorInitializerNamesType(const string& raw_name,
+                                     const TypePtr& target_type,
+                                     Scope* scope) const;
 
 void EmitDestructorBody(FunctionRecord& function, Scope* scope);
 

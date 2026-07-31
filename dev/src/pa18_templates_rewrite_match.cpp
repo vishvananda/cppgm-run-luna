@@ -81,33 +81,76 @@ string MatchPatternTemplateBase(string raw)
 	return CanonicalSpelling(raw);
 }
 
-string NormalizeBuiltinScalarSpelling(string raw)
+bool IsBuiltinScalarWord(const string& word)
 {
-	raw = CanonicalSpelling(raw);
-	if(raw.find('<') != string::npos || raw.find('>') != string::npos ||
-		raw.find("::") != string::npos) return raw;
-	const pair<const char*, const char*> aliases[] = {
-		{"unsigned long long int", "unsigned long long"},
-		{"long long int", "long long"},
-		{"unsigned long int", "unsigned long"},
-		{"long int", "long"},
-		{"unsigned short int", "unsigned short"},
-		{"short int", "short"},
-		{"unsigned int", "unsigned"},
-		{"signed int", "signed"}
-	};
-	for(size_t alias = 0; alias < sizeof(aliases) / sizeof(aliases[0]); ++alias) {
-		const string from = aliases[alias].first;
-		const string to = aliases[alias].second;
-		size_t at = raw.find(from);
-		while(at != string::npos) {
-			raw.replace(at, from.size(), to);
-			at = raw.find(from, at + to.size());
-		}
-	}
-	return CanonicalSpelling(raw);
+	return word == "bool" || word == "char" || word == "double" ||
+		word == "float" || word == "int" || word == "long" ||
+		word == "short" || word == "signed" || word == "unsigned" ||
+		word == "void" || word == "wchar_t" || word == "char16_t" ||
+		word == "char32_t" || word == "nullptr_t";
 }
 
+}
+
+string CanonicalBuiltinScalarSpelling(string raw)
+{
+	raw = NormalizeTypeArgument(CanonicalSpelling(raw));
+	vector<string> words;
+	string word;
+	for(size_t i = 0; i <= raw.size(); ++i) {
+		const char ch = i < raw.size() ? raw[i] : ' ';
+		if(isspace(static_cast<unsigned char>(ch))) {
+			if(!word.empty()) {
+				words.push_back(word);
+				word.clear();
+			}
+		} else word += ch;
+	}
+	if(words.empty()) return raw;
+	bool add_const = false, add_volatile = false, is_signed = false,
+		is_unsigned = false, is_short = false, has_int = false;
+	int long_count = 0;
+	string base;
+	for(size_t i = 0; i < words.size(); ++i) {
+		const string& current = words[i];
+		if(current == "const") add_const = true;
+		else if(current == "volatile") add_volatile = true;
+		else if(current == "signed") is_signed = true;
+		else if(current == "unsigned") is_unsigned = true;
+		else if(current == "short") is_short = true;
+		else if(current == "long") ++long_count;
+		else if(current == "int") has_int = true;
+		else if(IsBuiltinScalarWord(current) && base.empty()) base = current;
+		else return raw;
+	}
+	if((is_signed && is_unsigned) || (is_short && long_count != 0) ||
+		long_count > 2)
+		return raw;
+	if(base.empty()) base = "int";
+	string normalized;
+	if(base == "int") {
+		if(is_short) normalized = "short";
+		else if(long_count == 1) normalized = "long";
+		else if(long_count == 2) normalized = "long long";
+		else normalized = "int";
+		if(is_unsigned) normalized = "unsigned" +
+			(normalized == "int" ? string() : " " + normalized);
+		else if(is_signed && normalized == "int") normalized = "signed";
+	} else if(base == "double" && long_count <= 1 && !is_short &&
+		!is_signed && !is_unsigned && !has_int)
+		normalized = long_count == 1 ? "long double" : "double";
+	else if((base == "char" || base == "bool" || base == "float" ||
+		base == "void" || base == "wchar_t" || base == "char16_t" ||
+		base == "char32_t" || base == "nullptr_t") && long_count == 0 &&
+		!is_short && !has_int && (base == "char" ||
+			(!is_signed && !is_unsigned))) {
+		normalized = base;
+		if(base == "char" && is_unsigned) normalized = "unsigned char";
+		else if(base == "char" && is_signed) normalized = "signed char";
+	} else return raw;
+	if(add_const) normalized = "const " + normalized;
+	if(add_volatile) normalized = "volatile " + normalized;
+	return CanonicalSpelling(normalized);
 }
 
 bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
@@ -186,8 +229,8 @@ int PA18TemplateExpander::MatchTypePatternNormalized(string pattern, string actu
 	}
 	pattern = SeparatePatternCv(pattern);
 	actual = SeparatePatternCv(actual);
-	if(NormalizeBuiltinScalarSpelling(pattern) ==
-		NormalizeBuiltinScalarSpelling(actual)) {
+	if(CanonicalBuiltinScalarSpelling(pattern) ==
+		CanonicalBuiltinScalarSpelling(actual)) {
 		return 1;
 	}
 	pattern = CanonicalSpelling(pattern);
