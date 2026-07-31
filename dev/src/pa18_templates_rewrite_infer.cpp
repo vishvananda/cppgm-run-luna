@@ -832,7 +832,9 @@ bool PA18TemplateExpander::InferFunctionParameter(
 					deduction_type, signature, parameter_substitutions, context, parameter_names,
 					inferred, inferred_packs, inferred_functions, bound_pack_values,
 					fixed_template_parameters);
-				if(!merged) return false;
+				if(!merged) {
+					return false;
+				}
 		}
 		++*argument_index;
 	}

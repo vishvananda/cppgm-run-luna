@@ -86,6 +86,7 @@ inline string CanonicalSpelling(string raw)
 }
 string CollapseRepeatedQualifier(string raw);
 string CollapseRepeatedQualifiedPath(string value);
+string CollapseRepeatedTemplateOwnerPath(string value);
 string NormalizeTypeArgument(string raw);
 string PA18ExplicitSpecializationKey(const string& qualified_name,
 	const vector<string>& arguments);
@@ -265,7 +266,9 @@ inline string ReplaceIdentifiers(const string& raw, const map<string, string>& s
 			map<string, string>::const_iterator found = substitutions.find(word);
 			const bool already_qualified = i >= 2 && result.size() >= 2 &&
 				result.compare(result.size() - 2, 2, "::") == 0;
-			if(found != substitutions.end() && !already_qualified) result += found->second;
+			size_t replacement_end = end; while(replacement_end < raw.size() && isspace(static_cast<unsigned char>(raw[replacement_end]))) ++replacement_end;
+			const bool replacement_has_template_head = found != substitutions.end() && found->second.find('<') != string::npos && replacement_end < raw.size() && raw[replacement_end] == '<';
+			if(found != substitutions.end() && !already_qualified && !replacement_has_template_head && !found->second.empty()) result += found->second;
 			else if(found != substitutions.end()) result += word;
 			else {
 				bool compact_substitution = false;
@@ -589,10 +592,13 @@ private:
 	set<string> extern_instantiation_keys_;
 	map<string, CPPGMAstNodePtr> extern_instantiation_declarations_;
 	map<string, set<string> > requested_nested_classes_;
-	set<string> materialized_nested_classes_, materialized_member_definitions_, deferred_class_instantiations_; size_t defer_type_only_class_definitions_ = 0; size_t active_template_declaration_depth_ = 0; set<string> active_template_member_types_;
+	set<string> materialized_nested_classes_, materialized_member_definitions_, deferred_class_instantiations_, deferred_type_only_class_instantiations_; size_t defer_type_only_class_definitions_ = 0; size_t active_template_declaration_depth_ = 0; set<string> active_template_member_types_;
 	mutable set<string> active_member_type_lookups_,
 		active_alias_resolutions_,
 		active_function_results_,
+		active_integral_queries_,
+		active_unavailable_member_type_queries_,
+		active_type_argument_qualifications_,
 		active_class_template_selections_, active_class_template_selection_families_,
 		active_class_template_selection_probes_,
 		active_class_specialization_matches_;
@@ -682,7 +688,7 @@ private:
 	void MaterializeOrdinaryConversion(const string& raw_parameter, const CPPGMAstNodePtr& argument, const string& context, const map<string, string>& substitutions); bool ResolveOrdinaryConversionTypes(const string& raw_parameter, const CPPGMAstNodePtr& argument, const string& context, const map<string, string>& substitutions, string* target_type, string* source_type, CPPGMAstNodePtr* source_declaration); bool ReplayOrdinaryConversion(const string& source_type, const string& target_type, const CPPGMAstNodePtr& source_declaration, const string& context, const map<string, string>& substitutions); bool TryOrdinaryConversionDefinition(const TemplateDefinition& definition, const string& source_type, const string& target_type, const string& expected_pattern, const CPPGMAstNodePtr& source_declaration, const string& context, const map<string, string>& substitutions);
 	void MaterializeReturnConversions(const CPPGMAstNodePtr& function, const CPPGMAstNodePtr& result, const string& context, const string& function_context, const map<string, string>& substitutions);
 	bool ValidateExplicitFunctionCandidate(const TemplateDefinition& definition, const CPPGMAstNodePtr& input, const string& context, const map<string, string>& substitutions, const vector<string>& raw_explicit_args, vector<string>* arguments); bool HasAbstractFunctionParameter(const TemplateDefinition& definition, const vector<string>& arguments, const string& context, const map<string, string>& substitutions);
-	bool IsAbstractClassType(const string& raw, const string& context, set<string>* active) const; bool IsAbstractObjectSpelling(const string& raw, const string& context) const; string ResolveAlias(string spelling, const string& context) const; bool FindUnqualifiedGeneratedAliasPath(const string& spelling, const string& context, string* alias_path) const; bool FindLogicalNamespaceAlias(const string& spelling, string* alias_key) const; bool IsArrayTypeAlias(const string& alias_name, const string& context) const; bool HasPackBeforeFixed(const TemplateDefinition& definition) const; bool ResolveGeneratedMemberAlias(const string& class_key, const string& member, const string& context, string* member_type) const; bool ResolveContextMemberAlias(const string& class_key, const string& member, const string& context, string* member_type) const;
+	bool IsAbstractClassType(const string& raw, const string& context, set<string>* active) const; bool IsAbstractObjectSpelling(const string& raw, const string& context) const; string ResolveAlias(string spelling, const string& context, const map<string, string>& substitutions = map<string, string>()) const; bool ResolveAliasMember(string* spelling, const string& context, const map<string, string>& substitutions) const; bool FindUnqualifiedGeneratedAliasPath(const string& spelling, const string& context, string* alias_path) const; bool FindLogicalNamespaceAlias(const string& spelling, string* alias_key) const; bool IsArrayTypeAlias(const string& alias_name, const string& context) const; bool HasPackBeforeFixed(const TemplateDefinition& definition) const; bool ResolveGeneratedMemberAlias(const string& class_key, const string& member, const string& context, string* member_type, const map<string, string>& substitutions = map<string, string>()) const; bool ResolveContextMemberAlias(const string& class_key, const string& member, const string& context, string* member_type) const;
 	bool LookupVariableType(const string& name, const string& context,
 		string* result) const;
 	bool ContainsName(const CPPGMAstNodePtr& node, const string& name) const;
@@ -975,8 +981,11 @@ private:
 	map<const CPPGMAstNode*, string>::const_iterator lexical = lexical_contexts_.find(node.get());
 	item.lexical_owner = lexical == lexical_contexts_.end() || rooted_prefix ? item.owner :
 		JoinPath(lexical->second, normalized_prefix);
-	item.qualified_name = JoinPath(item.owner, name);
-	item.declaration = declaration;
+	const string canonical_owner = CollapseRepeatedTemplateOwnerPath(item.owner);
+	if(!item.lexical_owner.empty() && canonical_owner == item.lexical_owner)
+		item.owner = canonical_owner;
+		item.qualified_name = JoinPath(item.owner, name);
+		item.declaration = declaration;
 		IndexDeclarationTypeDependencies(declaration, item.owner,
 			item.declaration_type_dependencies);
 		IndexDependentMemberTypeNodes(declaration, item.dependent_member_type_nodes,

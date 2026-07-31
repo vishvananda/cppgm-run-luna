@@ -154,10 +154,10 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformTranslationUnit(
 		const CPPGMAstNodePtr original = input->children[i];
 		if(original && original->kind == "using-directive")
 			RecordUsingDirective(original, &top_level_substitutions);
-		if(original && original->kind == "simple-declaration" &&
-			!original->children.empty() &&
-			SpellNode(original->children[0]).find("typedef") != string::npos)
-			RecordTypedefSubstitutions(original, string(), &top_level_substitutions);
+			if(original && original->kind == "simple-declaration" &&
+				!original->children.empty() &&
+				SpellNode(original->children[0]).find("typedef") != string::npos)
+				RecordTypedefSubstitutions(original, string(), &top_level_substitutions);
 		if(original && original->kind == "alias-declaration" &&
 			!original->value.empty() && !original->children.empty()) {
 			const string alias = original->value;
@@ -299,9 +299,15 @@ bool PA18TemplateExpander::EvaluateExpandedSizeofText(const string& raw,
 			if(size) {
 			const string replacement = IntegralValueSpelling(PA19IntegralValue::Unsigned(
 				static_cast<unsigned long long>(size), "unsigned long", 64));
-			expanded_size.replace(search, close - search + 1, replacement);
-			expanded_size_any = true; search += replacement.size(); continue;
-		}
+				expanded_size.replace(search, close - search + 1, replacement);
+				expanded_size_any = true;
+				// `close` belongs to the pre-replacement spelling.  Advancing the
+				// old absolute position skips a following sizeof operand (for
+				// example `sizeof(call()) == sizeof(char)`) and leaves the
+				// constant-expression parser with an unevaluated sizeof.
+				search = expanded_size.find("sizeof(", search + replacement.size());
+				continue;
+			}
 		search = expanded_size.find("sizeof(", close + 1);
 	}
 	if(expanded_size_any && expanded_size != raw) {

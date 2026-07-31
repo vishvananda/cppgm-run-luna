@@ -20,6 +20,7 @@
 	bool ExpandIntegralValueOperands(const string& raw,
 		const string& context, const map<string, string>& substitutions,
 		PA19IntegralValue* result);
+	const vector<string>* ActivePackValues(const string& name) const;
 	bool EvaluateInheritedBaseValue(const TemplateDefinition& definition,
 		const string& context, const map<string, string>& member_substitutions,
 		PA19IntegralValue* result);
@@ -442,6 +443,27 @@
 		for(size_t i = 0; i < parent.parameters.size() && i < parent_args.size(); ++i)
 			if(!parent.parameters[i].name.empty())
 				substitutions[parent.parameters[i].name] = parent_args[i];
+		// Out-of-class nested definitions may rename the enclosing parameters
+		// (`basic_tree<K,D,C>::iterator` for a primary declared with
+		// `Key,Data,Compare`).  Bind the names used by that owner pattern before
+		// replaying the nested body, while leaving any parameters belonging to the
+		// nested template itself dependent.
+		if(nested) {
+			const size_t owner_open = nested->owner.find('<');
+			string owner_arguments;
+			size_t owner_close = string::npos;
+			if(owner_open != string::npos && TemplateRange(nested->owner, owner_open,
+				&owner_arguments, &owner_close)) {
+				const vector<string> owner_names = SplitTemplateArguments(owner_arguments);
+				for(size_t i = 0; i < owner_names.size() && i < parent_args.size(); ++i) {
+					const string name = CanonicalSpelling(owner_names[i]);
+					bool identifier = !name.empty() && IsIdentifierCharacter(name[0]);
+					for(size_t character = 1; identifier && character < name.size(); ++character)
+						if(!IsIdentifierCharacter(name[character])) identifier = false;
+					if(identifier) substitutions[name] = parent_args[i];
+				}
+			}
+		}
 		substitutions[parent.name] = parent_local_name;
 		const vector<const TemplateDefinition*> candidates = NestedDefinitions(parent);
 		for(size_t i = 0; i < candidates.size(); ++i) {
@@ -555,7 +577,7 @@
 				if(early_type.integral) early_value = PA19Convert(early_value, early_type); if(typed_result) *typed_result = early_value;
 				return TemplateIntegralValueSpelling(early_value); }
 			throw PA18SubstitutionFailure("dependent sizeof is not a valid template argument"); }
-		string expanded_pack;
+	string expanded_pack;
 		if(ExpandIntegralPackExpression(source_raw, context, substitutions,
 			&expanded_pack)) raw = expanded_pack;
 		else {
@@ -1109,6 +1131,32 @@
 		const map<string, string>& substitutions, const vector<string>& args,
 		const map<string, vector<string> >& pack_substitutions,
 		const string& context, bool explicit_instantiation);
+	void RegisterGeneratedAliasEntity(const TemplateDefinition& definition,
+		const CPPGMAstNodePtr& generated, const string& generated_owner,
+		const string& local_name, const string& concrete_owner,
+		const map<string, string>& substitutions, const vector<string>& args,
+		const map<string, vector<string> >& pack_substitutions,
+		const string& context);
+	set<string> RegisterGeneratedAliasOwners(const TemplateDefinition& definition,
+		const CPPGMAstNodePtr& generated, const string& generated_owner,
+		const string& local_name, const string& concrete_owner,
+		const map<string, string>& substitutions, const vector<string>& args,
+		const string& context);
+	string ExpandGeneratedAliasSourceTarget(string source_target,
+		const map<string, vector<string> >& pack_substitutions,
+		const map<string, string>& substitutions) const;
+	string FindGeneratedAliasMemberTarget(const TemplateDefinition& definition,
+		const string& source_target, const map<string, string>& substitutions,
+		const string& context);
+	string ComputeGeneratedAliasTarget(const TemplateDefinition& definition,
+		const map<string, string>& substitutions,
+		const map<string, vector<string> >& pack_substitutions,
+		const string& context);
+	void InstallOuterOwnerSubstitutions(const map<string, string>* outer_substitutions,
+		const string& context, map<string, string>* substitutions,
+		bool bind_enclosing_owner);
+	void ApplyForwardingPackHints(const map<string, vector<string> >* hints,
+		map<string, vector<string> >* pack_substitutions);
 	string EmitInstantiation(const TemplateDefinition& definition,
 		const vector<string>& args, const vector<string>& metadata_args,
 		map<string, string> substitutions,

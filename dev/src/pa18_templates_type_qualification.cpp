@@ -47,6 +47,18 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 				preserve_nested_namespace);
 	}
 	spelling = CanonicalSpelling(spelling);
+	const string qualification_key = spelling + "|" +
+		(spelling.find('<') != string::npos ? string() : context) + "|" +
+		template_owner + "|" + (preserve_nested_namespace ? "1" : "0");
+	if(!active_type_argument_qualifications_.insert(qualification_key).second)
+		return spelling;
+	struct TypeArgumentQualificationScope {
+		set<string>* active;
+		string key;
+		TypeArgumentQualificationScope(set<string>* value, const string& name)
+			: active(value), key(name) {}
+		~TypeArgumentQualificationScope() { active->erase(key); }
+	} qualification_scope(&active_type_argument_qualifications_, qualification_key);
 	while(spelling.compare(0, 8, "typename") == 0 &&
 		(spelling.size() == 8 || isspace(static_cast<unsigned char>(spelling[8]))))
 		spelling = CanonicalSpelling(spelling.substr(8));
@@ -141,6 +153,16 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 			return false;
 		};
 		if(try_scope(primary) || try_scope(secondary)) return true;
+		const string qualified_owner = PrefixComponent(base);
+		const bool materialized_qualified_owner = !qualified_owner.empty() &&
+			class_contexts_.find(qualified_owner) != class_contexts_.end() &&
+			specialization_bases_.find(LastComponent(qualified_owner)) !=
+				specialization_bases_.end();
+		// A member template may not have an indexed declaration until it is
+		// instantiated.  Do not replace its qualified owner with a different
+		// class found through the short member name (for example, map
+		// `list_set_char_::impl` to a generated `call_...::impl`).
+		if(materialized_qualified_owner) return false;
 		const auto try_short_scope = [&](const string& scope) {
 			for(string current = scope; ; ) {
 				const string candidate = JoinPath(current, short_name);
@@ -224,7 +246,11 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 			}
 		if(!anonymous_candidate.empty()) spelling = anonymous_candidate;
 	}
-	const string promoted_local = PromotedLocalClass(spelling, context);
+	// A function-local class can already have acquired its lexical owner while
+	// this type spelling is being qualified (`run::pair_like`).  Promotion is
+	// keyed by the local class's short name, so qualify the lookup by the final
+	// component rather than constructing `run::run::pair_like`.
+	const string promoted_local = PromotedLocalClass(LastComponent(spelling), context);
 	if(!promoted_local.empty()) spelling = promoted_local;
 	const bool direct_function = SplitDirectFunctionType(spelling, 0, 0, 0);
 	if(spelling.size() > 5 && spelling.compare(spelling.size() - 5, 5, "const") == 0 &&
@@ -434,7 +460,7 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 	map<string, vector<string> >::const_iterator generated_arguments =
 		specialization_arguments_.find(LastComponent(result));
 	if(generated != specialization_bases_.end() && generated_arguments !=
-		specialization_arguments_.end()) {
+		 specialization_arguments_.end()) {
 		const string generated_namespace = PrefixComponent(generated->second);
 		const function<string(const string&)> identity =
 			[&](const string& raw_value) {

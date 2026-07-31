@@ -92,9 +92,9 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 	if(TransformUnqualifiedMemberTemplateCall(input, input_callee, context,
 		substitutions, result))
 		return result;
-	if(TransformExplicitFunctionCall(input, input_callee, context,
-		substitutions, result))
-		return result;
+	const bool explicit_call = TransformExplicitFunctionCall(input, input_callee, context,
+		substitutions, result);
+	if(explicit_call) return result;
 	if(input_callee && input_callee->kind == "id-expression" &&
 		active_function_pointer_substitutions_.find(
 			RemoveMarker(input_callee->value)) !=
@@ -112,8 +112,9 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 	result_callee = MaterializeStaticCastCall(result, result_callee, context, substitutions);
 	bool constructor_replayed = false;
 	if(MaterializeNamedCallTarget(result, &result_callee, context, substitutions,
-		&constructor_replayed))
+		&constructor_replayed)) {
 		return result;
+	}
 	result_callee = MaterializeOperatorCallTargets(result, input_callee, result_callee,
 		context, substitutions);
 	const bool implicit_member_instantiated = MaterializeImplicitMemberCall(result,

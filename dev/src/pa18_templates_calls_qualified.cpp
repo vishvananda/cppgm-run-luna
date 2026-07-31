@@ -204,8 +204,15 @@ bool PA18TemplateExpander::TransformQualifiedMemberTemplateCall(
 	const string emitted_member = member->children.size() > 1 &&
 		member->children[1] ? LastComponent(member->children[1]->value) :
 		LastComponent(member_base);
+	string materialized_member = emitted_member;
+	if(result->children.size() > 0 && result->children[0] &&
+		result->children[0]->kind == "id-expression") {
+		const string candidate = LastComponent(result->children[0]->value);
+		if(candidate != member_base && candidate != emitted_member)
+			materialized_member = candidate;
+	}
 	result->children[0] = CPPGMAstNodePtr(new CPPGMAstNode("id-expression",
-		owner + "::" + emitted_member));
+		owner + "::" + materialized_member));
 	return true;
 }
 

@@ -994,8 +994,13 @@ int PA14Lowerer::ConversionRankToClass(const ExprInfo& source,
 {
     const TypePtr target_value = type_value(target);
     if(!target_value || target_value->kind != TYPE_CLASS) return -1;
-    const vector<Binding*> constructors =
-      MemberBindings(target_value, last_component(target_value->name));
+    const string constructor_name = target_value->template_specialization &&
+      !target_value->template_primary.empty() ?
+      last_component(target_value->template_primary) :
+      last_component(target_value->name);
+    vector<Binding*> constructors = MemberBindings(target_value, constructor_name);
+    if(constructors.empty() && constructor_name != last_component(target_value->name))
+      constructors = MemberBindings(target_value, last_component(target_value->name));
     for(size_t i = 0; i < constructors.size(); ++i) {
       Binding* binding = constructors[i];
       if(!binding || binding->kind != BIND_FUNCTION || !binding->is_member ||
@@ -1060,8 +1065,13 @@ int PA14Lowerer::ConversionRank(const ExprInfo& source, const TypePtr& target) c
            IsDerivedFrom(source_value, target_value))
           return BaseDistance(source_value, target_value);
         if(target_value->kind == TYPE_CLASS && target_value->is_const) {
-          const vector<Binding*> constructors =
-            MemberBindings(target_value, last_component(target_value->name));
+          const string constructor_name = target_value->template_specialization &&
+            !target_value->template_primary.empty() ?
+            last_component(target_value->template_primary) :
+            last_component(target_value->name);
+          vector<Binding*> constructors = MemberBindings(target_value, constructor_name);
+          if(constructors.empty() && constructor_name != last_component(target_value->name))
+            constructors = MemberBindings(target_value, last_component(target_value->name));
           for(size_t i = 0; i < constructors.size(); ++i) {
             Binding* binding = constructors[i];
             if(!binding || binding->kind != BIND_FUNCTION ||
@@ -1107,8 +1117,13 @@ int PA14Lowerer::ConversionRank(const ExprInfo& source, const TypePtr& target) c
          IsDerivedFrom(source_value, target_value))
         return BaseDistance(source_value, target_value);
       if(target_value->kind == TYPE_CLASS) {
-        const vector<Binding*> constructors =
-          MemberBindings(target_value, last_component(target_value->name));
+        const string constructor_name = target_value->template_specialization &&
+          !target_value->template_primary.empty() ?
+          last_component(target_value->template_primary) :
+          last_component(target_value->name);
+        vector<Binding*> constructors = MemberBindings(target_value, constructor_name);
+        if(constructors.empty() && constructor_name != last_component(target_value->name))
+          constructors = MemberBindings(target_value, last_component(target_value->name));
         for(size_t i = 0; i < constructors.size(); ++i) {
           Binding* binding = constructors[i];
           if(!binding || binding->kind != BIND_FUNCTION ||

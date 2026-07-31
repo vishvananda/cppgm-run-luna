@@ -19,9 +19,10 @@ void PA18TemplateExpander::RecordTypedefSubstitutions(
 		const string raw_type = DeclaratorTypeSpelling(
 			NodeTypeSpelling(original_child->children[0]), item->children[0]);
 		const string rewritten_type = RewriteText(raw_type, child_context,
-			*local_substitutions, 0);
+			*local_substitutions, 0, true, true,
+			defer_type_only_class_definitions_ != 0);
 		if(raw_type.empty() || rewritten_type.empty()) continue;
-		string materialized_type = rewritten_type;
+		string materialized_type = CollapseRepeatedTemplateOwnerPath(rewritten_type);
 		// Preserve evaluated bounds when a local typedef is used through a type-id.
 		for(size_t search_end = materialized_type.size(); search_end > 0;) {
 			const size_t close = materialized_type.rfind(']', search_end - 1);

@@ -147,6 +147,7 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 		vector<const TemplateDefinition*> qualified_candidates;
 		string qualified_member_name;
 		string qualified_owner;
+		string qualified_owner_spelling;
 		bool qualified_member_call = false;
 		vector<const TemplateDefinition*> dot_member_candidates;
 		string dot_member_name;
@@ -156,9 +157,10 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 		if(qualified_separator != string::npos) {
 			const string owner_spelling = callee.substr(0, qualified_separator);
 			qualified_member_name = callee.substr(qualified_separator + 2);
-			if(!qualified_member_name.empty()) {
-				qualified_member_call = true;
-				qualified_owner = CanonicalSpelling(ReplaceIdentifiers(owner_spelling,
+				if(!qualified_member_name.empty()) {
+					qualified_member_call = true;
+					qualified_owner_spelling = owner_spelling;
+					qualified_owner = CanonicalSpelling(ReplaceIdentifiers(owner_spelling,
 					substitutions));
 				try {
 					qualified_owner = RewriteText(qualified_owner, function_context,
@@ -439,6 +441,127 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 		else if(qualified_member_call) candidates = qualified_candidates;
 		else if(dot_member_call) candidates = dot_member_candidates;
 		else candidates = FindFunctionDefinitions(callee, function_context);
+		// Ordinary members are collected from the source class body in the
+		// repeated class scope (`Class::Class::member`).  A qualified call on a
+		// generated specialization has no TemplateDefinition candidate for such
+		// a declaration, but its typed signature still participates in overload
+		// resolution.  Replay the enclosing class arguments into that signature
+		// set before falling through to unrelated namespace overloads.
+		if(candidates.empty() && qualified_member_call && !qualified_member_name.empty()) {
+			vector<string> ordinary_owners;
+			set<string> ordinary_owner_seen;
+			const auto add_ordinary_owner = [&](string owner) {
+				owner = CanonicalSpelling(owner);
+				const size_t open = owner.find('<');
+				if(open != string::npos) owner.erase(open);
+				if(!owner.empty() && ordinary_owner_seen.insert(owner).second)
+					ordinary_owners.push_back(owner);
+			};
+			add_ordinary_owner(qualified_owner);
+			add_ordinary_owner(qualified_owner_spelling);
+			map<string, string>::const_iterator generated_base =
+				specialization_bases_.find(LastComponent(qualified_owner));
+			if(generated_base != specialization_bases_.end())
+				add_ordinary_owner(generated_base->second);
+			for(size_t owner_index = 0; owner_index < ordinary_owners.size(); ++owner_index) {
+				const string& owner = ordinary_owners[owner_index];
+				vector<string> keys;
+				keys.push_back(JoinPath(owner, qualified_member_name));
+				keys.push_back(JoinPath(owner, JoinPath(LastComponent(owner),
+					qualified_member_name)));
+				map<string, vector<FunctionSignature> >::const_iterator overloads =
+					function_overloads_.end();
+				for(size_t key = 0; key < keys.size() &&
+					overloads == function_overloads_.end(); ++key) {
+					map<string, vector<FunctionSignature> >::const_iterator found =
+						function_overloads_.find(keys[key]);
+					if(found != function_overloads_.end()) overloads = found;
+				}
+				if(overloads == function_overloads_.end()) continue;
+				map<string, string> member_substitutions = substitutions;
+				const TemplateDefinition* owner_definition = FindDefinition(owner,
+					function_context);
+				if(!owner_definition) owner_definition = FindDefinition(LastComponent(owner),
+					function_context);
+				vector<string> owner_arguments;
+				map<string, vector<string> >::const_iterator generated_arguments =
+					specialization_arguments_.find(LastComponent(qualified_owner));
+				if(generated_arguments != specialization_arguments_.end())
+					owner_arguments = generated_arguments->second;
+				if(owner_arguments.empty()) {
+					const string owner_source = qualified_owner_spelling.find('<') == string::npos ?
+						(generated_base == specialization_bases_.end() ? qualified_owner_spelling :
+						generated_base->second) : qualified_owner_spelling;
+					const size_t open = owner_source.find('<');
+					string argument_text;
+					size_t close = string::npos;
+					if(open != string::npos && TemplateRange(owner_source, open,
+						&argument_text, &close))
+						owner_arguments = SplitTemplateArguments(argument_text);
+				}
+				if(owner_definition) for(size_t parameter = 0;
+					parameter < owner_definition->parameters.size() &&
+					parameter < owner_arguments.size(); ++parameter)
+					if(!owner_definition->parameters[parameter].name.empty())
+						member_substitutions[owner_definition->parameters[parameter].name] =
+							owner_arguments[parameter];
+				string selected_result;
+				bool selected_ellipsis = true;
+				for(size_t overload = 0; overload < overloads->second.size(); ++overload) {
+					const FunctionSignature& signature = overloads->second[overload];
+					if(signature.deleted || !signature.parameters ||
+						!signature.result_specifiers) continue;
+					size_t actual = 0;
+					bool viable = true, has_ellipsis = false;
+					for(size_t parameter = 0; parameter < signature.parameters->children.size();
+						++parameter) {
+						const CPPGMAstNodePtr node = signature.parameters->children[parameter];
+						if(!node) continue;
+						if(node->kind == "ellipsis" || IsFunctionParameterPack(node)) {
+							has_ellipsis = true;
+							continue;
+						}
+						if(node->kind != "parameter-declaration") continue;
+						if(actual >= actual_types.size()) {
+							if(!ChildOfKindLocal(node, "default-argument")) viable = false;
+							continue;
+						}
+						string expected = ParameterTypeSpelling(node);
+						try {
+							expected = NormalizeTypeArgument(ReplaceIdentifiers(RewriteText(
+								expected, function_context, member_substitutions, 0),
+								member_substitutions));
+						} catch(const PA18SubstitutionFailure&) {
+							viable = false;
+							break;
+						}
+						if(!FunctionArgumentViable(expected, actual_types[actual],
+							function_context)) viable = false;
+						++actual;
+					}
+					if(actual != actual_types.size() && !has_ellipsis) viable = false;
+					if(!viable) continue;
+					string ordinary_result = NodeTypeSpelling(signature.result_specifiers) +
+						ReturnDeclaratorSuffix(signature.declarator);
+					try {
+						ordinary_result = NormalizeTypeArgument(ReplaceIdentifiers(
+							RewriteText(ordinary_result, function_context,
+								member_substitutions, 0), member_substitutions));
+					} catch(const PA18SubstitutionFailure&) {
+						continue;
+					}
+					if(ordinary_result.empty()) continue;
+					if(selected_result.empty() || (selected_ellipsis && !has_ellipsis)) {
+						selected_result = ordinary_result;
+						selected_ellipsis = has_ellipsis;
+					}
+				}
+				if(!selected_result.empty()) {
+					*result = selected_result;
+					return true;
+				}
+			}
+		}
 		// Ordinary (non-template) members are kept in the typed signature index,
 		// not in TemplateDefinition lookup.  A dependent `decltype` probe can
 		// still call one after its object type has become concrete, so consult that
@@ -522,12 +645,13 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 						continue;
 					}
 				}
-				try {
-					if(!FunctionArgumentsViable(definition, arguments, actual_types,
-					function_context, &candidate_substitutions,
-					explicit_definition ? &explicit_arguments : 0)) {
-						continue;
-					}
+					try {
+						const bool viable_arguments = FunctionArgumentsViable(definition, arguments, actual_types,
+						function_context, &candidate_substitutions,
+						explicit_definition ? &explicit_arguments : 0);
+						if(!viable_arguments) {
+							continue;
+						}
 				if(HasAbstractFunctionParameter(definition, arguments,
 					function_context, candidate_substitutions)) {
 					continue;
@@ -540,7 +664,7 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 				candidate_result = FunctionResultType(definition, arguments,
 					function_context, &candidate_substitutions,
 					explicit_definition ? &explicit_arguments : 0);
-				} catch(const PA18SubstitutionFailure&) {
+					} catch(const PA18SubstitutionFailure&) {
 					continue;
 				}
 			if(candidate_result.empty()) continue;

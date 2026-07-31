@@ -1,5 +1,4 @@
 #include "pa14_lowering.h"
-
 #include <cstdlib>
 #include <functional>
 using namespace std;
@@ -626,7 +625,7 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferIdentifier(const CPPGMAstNodePtr& node, 
       }
       if(selected) result.binding = selected;
     }
-    if(result.binding) result.candidates.clear();
+	if(result.binding) result.candidates.clear();
 	if(!result.binding && result.candidates.empty()) {
 		throw logic_error("unknown expression name: " + node->value);
 	}

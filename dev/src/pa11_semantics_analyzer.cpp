@@ -140,6 +140,29 @@ TypePtr Analyzer::ExpressionCallType(const CPPGMAstNodePtr& expression,
 				candidates.push_back(templates->second[i]);
 	Binding* selected = 0;
 	int selected_score = 1000000;
+	const auto class_conversion_viable = [&](TypePtr actual_raw, TypePtr formal_raw) {
+		while (actual_raw && (actual_raw->kind == TYPE_LVALUE_REFERENCE ||
+			actual_raw->kind == TYPE_RVALUE_REFERENCE)) actual_raw = actual_raw->child;
+		while (formal_raw && (formal_raw->kind == TYPE_LVALUE_REFERENCE ||
+			formal_raw->kind == TYPE_RVALUE_REFERENCE)) formal_raw = formal_raw->child;
+		if(!actual_raw || !formal_raw || actual_raw->kind != TYPE_CLASS) return false;
+		for(TypePtr current = actual_raw; current; current = current->direct_base) {
+			Scope* owner = ScopeForType(current);
+			if(!owner) continue;
+			for(size_t member = 0; member < owner->bindings.size(); ++member) {
+				const Binding& conversion = owner->bindings[member];
+				if(conversion.kind != BIND_FUNCTION ||
+					conversion.type == 0 || conversion.type->kind != TYPE_FUNCTION ||
+					conversion.type->parameters.size() != 0 || !conversion.type->child ||
+					conversion.name.compare(0, 8, "operator") != 0) continue;
+				TypePtr target = conversion.type->child;
+				while(target && (target->kind == TYPE_LVALUE_REFERENCE ||
+					target->kind == TYPE_RVALUE_REFERENCE)) target = target->child;
+				if(target && SameTypeIgnoringTopCv(target, formal_raw)) return true;
+			}
+		}
+		return false;
+	};
 	for (size_t i = 0; i < candidates.size(); ++i) {
 		Binding* candidate = candidates[i];
 		if (!candidate->type || candidate->type->kind != TYPE_FUNCTION) continue;
@@ -157,7 +180,9 @@ TypePtr Analyzer::ExpressionCallType(const CPPGMAstNodePtr& expression,
 			const CPPGMAstNodePtr actual_expression = expression->children[1]->children[argument];
 			const bool null_pointer_constant = IsNullPointerConstantExpression(actual_expression, scope);
 			if (formal && formal->kind == TYPE_TEMPLATE_PARAMETER) score += 10;
-			else if (SameTypeIgnoringTopCv(actual, formal)) {} else if (null_pointer_constant && formal && formal->kind == TYPE_POINTER) score += 3;
+			else if (SameTypeIgnoringTopCv(actual, formal)) {} else if (
+				class_conversion_viable(actual, formal)) score += 5;
+			else if (null_pointer_constant && formal && formal->kind == TYPE_POINTER) score += 3;
 			else if (actual && formal && actual->kind == TYPE_FUNDAMENTAL && formal->kind == TYPE_FUNDAMENTAL) score += 2;
 			else { viable = false; break; }
 		}
@@ -1460,41 +1485,5 @@ TypePtr Analyzer::ProcessClass(const CPPGMAstNodePtr& node, Scope* scope)
 	else
 		ComputeClassLayout(node, type, class_scope);
 	class_types_[node.get()] = type;
-	return type;
-}
-
-TypePtr Analyzer::ProcessForwardClass(const CPPGMAstNodePtr& node, Scope* scope)
-{
-	const string raw_name = node->value;
-	const string name = LastComponent(raw_name);
-	if (name.empty()) throw logic_error("anonymous class forward declaration");
-	Scope* owner = scope;
-	if (TopLevelScopeSeparator(raw_name) != string::npos)
-	{
-		const size_t separator = TopLevelScopeSeparator(raw_name);
-		PathTarget prefix = ResolvePath(scope, raw_name.substr(0, separator));
-		owner = prefix.binding ? ScopeForType(prefix.binding->type) : prefix.scope;
-		if (!owner) throw logic_error("unknown forward class owner");
-	}
-	Binding* existing = owner->local(name);
-	if (existing && existing->kind == BIND_TYPE)
-	{
-		if (existing->type && existing->type->kind == TYPE_CLASS)
-			ApplyClassAttributes(node, existing->type, scope);
-		return existing->type;
-	}
-	existing = ResolveBinding(scope, name);
-	if (existing && (existing->kind == BIND_TYPE || existing->kind == BIND_TYPE_ALIAS) &&
-		existing->type && existing->type->kind == TYPE_CLASS)
-	{
-		ApplyClassAttributes(node, existing->type, scope);
-		return existing->type;
-	}
-	TypePtr type(new Type(TYPE_CLASS, name));
-	type->tag = ClassKey(node);
-	type->complete = false;
-	ApplyClassAttributes(node, type, scope);
-	if (!owner->qualified_prefix.empty()) type->name = owner->qualified_prefix + "::" + name;
-	AddTypeBinding(owner, name, type);
 	return type;
 }

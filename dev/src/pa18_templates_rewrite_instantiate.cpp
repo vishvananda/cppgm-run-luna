@@ -29,6 +29,15 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformInstantiatedNode(
 		active_function_pointer_substitutions_;
 	active_integral_substitutions_ = integral_substitutions;
 	active_function_substitutions_ = function_substitutions;
+	// Non-type bindings participate in dependent type-ids as well as in
+	// constant expressions.  Keep the typed value in the ordinary rewrite map
+	// while replaying a materialized declaration; the evaluator still retains
+	// the full PA19 value in active_integral_substitutions_.
+	map<string, string> effective_substitutions = substitutions;
+	for(map<string, PA19IntegralValue>::const_iterator integral =
+		integral_substitutions.begin(); integral != integral_substitutions.end(); ++integral)
+		if(integral->second.known)
+			effective_substitutions[integral->first] = IntegralValueSpelling(integral->second);
 	active_function_pointer_substitutions_.clear();
 	for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter) {
 		const TemplateParameter& item = definition.parameters[parameter];
@@ -73,7 +82,8 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformInstantiatedNode(
 		else active_function_pack_substitutions_[identifier] = vector<string>();
 	}
 	try {
-		CPPGMAstNodePtr result = TransformNode(definition.declaration, context, substitutions);
+		CPPGMAstNodePtr result = TransformNode(definition.declaration, context,
+			effective_substitutions);
 		active_integral_substitutions_ = previous;
 		active_pack_substitutions_ = previous_packs;
 		active_pack_identifier_substitutions_ = previous_pack_identifiers; active_function_pack_substitutions_ = previous_function_packs;
@@ -269,22 +279,37 @@ vector<const TemplateDefinition*> PA18TemplateExpander::MemberDefinitions(
 	}
 	return result;
 }
-	void PA18TemplateExpander::RecordConstantDeclaration(
+void PA18TemplateExpander::RecordConstantDeclaration(
 	const CPPGMAstNodePtr& node, const string& context,
 	const map<string, string>& substitutions)
 {
 	if(!node || node->kind != "simple-declaration" || node->children.empty()) return;
 	RecordConstantArrayDeclaration(node, context, substitutions);
 	if(!HasDeclarationSpecifier(node->children[0], "const") &&
-		!HasDeclarationSpecifier(node->children[0], "constexpr")) return;
+		!HasDeclarationSpecifier(node->children[0], "constexpr")) {
+		return;
+	}
 	const string base_type = NodeTypeSpelling(node->children[0]);
 	const string resolved_base_type = ResolveAlias(ReplaceIdentifiers(base_type, substitutions), context);
-	if(!PA19Type(resolved_base_type).integral) return;
+	string integral_base_type = resolved_base_type;
+	while(integral_base_type.size() > 6 &&
+		integral_base_type.compare(integral_base_type.size() - 6, 6, " const") == 0)
+		integral_base_type = CanonicalSpelling(integral_base_type.substr(0,
+			integral_base_type.size() - 6));
+	while(integral_base_type.size() > 9 &&
+		integral_base_type.compare(integral_base_type.size() - 9, 9, " volatile") == 0)
+		integral_base_type = CanonicalSpelling(integral_base_type.substr(0,
+			integral_base_type.size() - 9));
+	if(!PA19Type(integral_base_type).integral) {
+		return;
+	}
 	const CPPGMAstNodePtr list = ChildOfKindLocal(node, "init-declarator-list");
 	if(!list) return;
 	for(size_t i = 0; i < list->children.size(); ++i) {
 		const CPPGMAstNodePtr item = list->children[i];
-		if(!item || item->children.size() < 2 || !item->children[0]) continue;
+		if(!item || item->children.size() < 2 || !item->children[0]) {
+			continue;
+		}
 		if(!DeclaratorArraySuffix(item->children[0]).empty()) continue;
 		const string name = FirstIdentifierLocal(item->children[0]);
 		const CPPGMAstNodePtr initializer = item->children[1];
@@ -294,8 +319,10 @@ vector<const TemplateDefinition*> PA18TemplateExpander::MemberDefinitions(
 		const string expression_text = ConstantExpressionSpelling(expression);
 		if(!HasReplayContext(substitutions) && HasUnresolvedTemplateParameter(expression_text, context, substitutions)) continue;
 		if(!HasReplayContext(substitutions) && expression_text.find("decltype(") != string::npos) continue;
-		if(!EvaluateIntegralText(expression_text, context, substitutions, &value)) continue;
-		const bool size_expression = ContainsSizeOrAlignExpression(expression);
+		if(!EvaluateIntegralText(expression_text, context, substitutions, &value)) {
+			continue;
+		}
+	const bool size_expression = ContainsSizeOrAlignExpression(expression);
 		if(size_expression &&
 			initializer->kind == "initializer" && initializer->children.size() == 1)
 			initializer->children[0] = CPPGMAstNodePtr(new CPPGMAstNode("literal",
@@ -549,6 +576,18 @@ bool PA18TemplateExpander::EvaluateActivePackSize(string raw,
 			selected = &pack->second;
 			break;
 		}
+	// A replayed partial specialization can pass a concrete pack through the
+	// scalar substitution map after its typed pack scope has ended.  The compact
+	// spelling is a top-level comma-separated list (`sizeof...(A, B, C)`), not a
+	// source-level pack identifier, but it still carries the pack's arity.
+	if(!selected) {
+		const vector<string> flattened = SplitTemplateArguments(operand);
+		if(flattened.size() > 1) {
+			*result = PA19IntegralValue::Unsigned(
+				static_cast<unsigned long long>(flattened.size()), "unsigned long", 64);
+			return true;
+		}
+	}
 	if(!selected) return false;
 	*result = PA19IntegralValue::Unsigned(
 		static_cast<unsigned long long>(selected->size()), "unsigned long", 64);
@@ -576,130 +615,6 @@ string PA18TemplateExpander::RewriteActivePackSizes(string raw) const
 		} else search = raw.find("sizeof...", close + 1);
 	}
 	return raw;
-}
-bool PA18TemplateExpander::EvaluateUnqualifiedConstantMember(
-	const string& raw, const string& context,
-	const map<string, string>& substitutions, PA19IntegralValue* result,
-	const string& preferred_owner)
-{
-	if(!result || raw.empty()) return false;
-	// Collection visits the primary/partial declaration before it has a
-	// concrete substitution scope.  Its dependent initializer must stay
-	// deferred; attempting to resolve an unqualified member against that same
-	// source declaration recursively re-enters this helper.
-	if(context.find('<') != string::npos && !HasReplayContext(substitutions) &&
-		active_pack_substitutions_.empty() &&
-		active_pack_identifier_substitutions_.empty()) return false;
-	for(size_t i = 0; i < raw.size(); ++i)
-		if(!IsIdentifierCharacter(raw[i])) return false;
-	map<string, vector<string> >::const_iterator owners =
-		constant_member_owners_.find(raw);
-	if(owners == constant_member_owners_.end()) return false;
-	vector<size_t> owner_order;
-	for(size_t owner = 0; owner < owners->second.size(); ++owner)
-		owner_order.push_back(owner);
-	if(!preferred_owner.empty()) for(size_t owner = 0; owner < owner_order.size(); ++owner) {
-		const string& owner_name = owners->second[owner_order[owner]];
-		if(owner_name != preferred_owner) continue;
-		if(owner != 0) swap(owner_order[0], owner_order[owner]);
-		break;
-	}
-	for(size_t ordered = 0; ordered < owner_order.size(); ++ordered) {
-		const size_t owner_index = owner_order[ordered];
-		const string& owner_name = owners->second[owner_index];
-		if(!preferred_owner.empty() && ordered > 0) {
-			// The source class that owns the replayed specialization is the only
-			// valid unqualified scope for this targeted member-argument lookup.
-			continue;
-		}
-		map<string, CPPGMAstNodePtr>::const_iterator candidate =
-			class_declarations_.find(owner_name);
-		if(candidate == class_declarations_.end() || !candidate->second) continue;
-		const CPPGMAstNodePtr owner_declaration = candidate->second;
-		for(size_t child = 0; child < owner_declaration->children.size(); ++child) {
-			const CPPGMAstNodePtr member_declaration = owner_declaration->children[child];
-			if(!member_declaration || member_declaration->kind != "simple-declaration" ||
-				member_declaration->children.empty()) continue;
-			const CPPGMAstNodePtr list = ChildOfKindLocal(member_declaration,
-				"init-declarator-list");
-			if(!list) continue;
-			for(size_t item = 0; item < list->children.size(); ++item) {
-				const CPPGMAstNodePtr declarator = list->children[item];
-				if(!declarator || declarator->children.size() < 2 ||
-					LastComponent(FirstIdentifierLocal(declarator->children[0])) != raw)
-					continue;
-			const CPPGMAstNodePtr initializer = declarator->children[1];
-			if(!initializer || initializer->children.empty()) continue;
-			map<string, string> member_substitutions = substitutions;
-				map<string, string>::const_iterator base = specialization_bases_.find(
-					LastComponent(candidate->first));
-				map<string, vector<string> >::const_iterator arguments =
-					specialization_arguments_.find(LastComponent(candidate->first));
-				const TemplateDefinition* owner_definition = 0;
-				map<string, vector<string> > owner_packs;
-				if(base != specialization_bases_.end() && arguments != specialization_arguments_.end()) {
-					owner_definition = FindDefinition(base->second, context);
-					if(owner_definition) {
-						size_t argument = 0;
-						for(size_t parameter = 0; parameter < owner_definition->parameters.size();
-							++parameter) {
-							const TemplateParameter& item_parameter = owner_definition->parameters[parameter];
-							if(item_parameter.pack) {
-								vector<string> values;
-								size_t trailing_fixed = 0;
-								for(size_t later = parameter + 1;
-									later < owner_definition->parameters.size(); ++later)
-									if(!owner_definition->parameters[later].pack) ++trailing_fixed;
-								const size_t available = arguments->second.size() > argument ?
-									arguments->second.size() - argument : 0;
-								const size_t count = available > trailing_fixed ?
-									available - trailing_fixed : 0;
-								for(size_t value = 0; value < count; ++value)
-									values.push_back(arguments->second[argument++]);
-								if(!item_parameter.name.empty()) {
-									owner_packs[item_parameter.name] = values;
-									if(!values.empty()) member_substitutions[item_parameter.name] = values[0];
-									else member_substitutions.erase(item_parameter.name);
-								}
-								continue;
-							}
-							if(argument < arguments->second.size()) {
-								if(!item_parameter.name.empty())
-									member_substitutions[item_parameter.name] = arguments->second[argument];
-								++argument;
-							}
-						}
-					}
-				}
-				const map<string, vector<string> > previous_packs = active_pack_substitutions_;
-				for(map<string, vector<string> >::const_iterator pack = owner_packs.begin();
-					pack != owner_packs.end(); ++pack)
-					if(!pack->first.empty()) active_pack_substitutions_[pack->first] = pack->second;
-				const string expression = ConstantExpressionSpelling(initializer->children[0]);
-				bool evaluated = false;
-					evaluated = EvaluatePreferredOwnerConstantExpression(expression, raw,
-						preferred_owner, member_substitutions, result);
-				if(expression != raw && !evaluated)
-					evaluated = EvaluateIntegralText(expression, candidate->first,
-						member_substitutions, result);
-			active_pack_substitutions_ = previous_packs;
-				if(evaluated) {
-					const PA19IntegralType type = PA19Type(ResolveAlias(
-						NodeTypeSpelling(member_declaration->children[0]), candidate->first));
-					if(type.integral) *result = PA19Convert(*result, type);
-					return result->known;
-				}
-			}
-		}
-	}
-	return false;
-}
-bool PA18TemplateExpander::EvaluateQualifiedConstantMember(const string& raw, const map<string, string>& substitutions, PA19IntegralValue* result) {
-	if(!result) return false;
-	const size_t separator = raw.rfind("::"); if(separator == string::npos || separator == 0 || separator + 2 >= raw.size()) return false;
-	const string owner = raw.substr(0, separator); const string member = raw.substr(separator + 2);
-	for(size_t character = 0; character < member.size(); ++character) if(!IsIdentifierCharacter(member[character])) return false;
-	return EvaluateUnqualifiedConstantMember(member, owner, substitutions, result);
 }
 bool PA18TemplateExpander::ExpandNamedIntegralOperands(
 	const string& raw, const string& context,
@@ -1026,6 +941,8 @@ bool PA18TemplateExpander::EvaluateIntegralTextFallbacks(const string& raw,
 	if(EvaluateMaterializedTemplateValue(raw, context, substitutions, result)) return true;
 	if(ExpandIntegralValueOperands(raw, context, substitutions, result)) return true;
 	if(EvaluateInheritedIntegralValue(raw, context, substitutions, result)) return true;
+	if(raw.find("::") != string::npos && EvaluateQualifiedConstantMember(
+		raw, substitutions, result)) return true;
 	if(class_contexts_.find(raw) != class_contexts_.end()) {
 		map<string, PA19IntegralValue>::const_iterator object_value =
 			constant_values_.find(raw + "::value");
@@ -1071,6 +988,15 @@ bool PA18TemplateExpander::EvaluateIntegralTextFallbacks(const string& raw,
 bool PA18TemplateExpander::EvaluateIntegralText(string raw, const string& context,
 	const map<string, string>& substitutions, PA19IntegralValue* result)
 {
+	if(!result) return false;
+	const string query_key = raw + "\x1f" + context;
+	if(!active_integral_queries_.insert(query_key).second) return false;
+	struct IntegralTextScope {
+		set<string>* active; string key;
+		IntegralTextScope(set<string>* value, const string& name)
+			: active(value), key(name) {}
+		~IntegralTextScope() { active->erase(key); }
+	} query_scope(&active_integral_queries_, query_key);
 	// A compact replay can replace the operand of `sizeof...(Pack)` with the
 	// first scalar element before the dependent-scope guard runs.  The active
 	// typed pack still carries the complete arity, so resolve this value before
@@ -1423,6 +1349,7 @@ string PA18TemplateExpander::FindConcreteInstantiationOwner(
 	const auto materialized_context = [&](const string& candidate) {
 		if(candidate.empty()) return string();
 		if(class_contexts_.find(candidate) != class_contexts_.end()) return candidate;
+		if(class_declarations_.find(candidate) != class_declarations_.end()) return candidate;
 		for(set<string>::const_iterator it = class_contexts_.begin();
 			it != class_contexts_.end(); ++it) {
 			if(LastComponent(*it) != LastComponent(candidate)) continue;
@@ -1441,10 +1368,14 @@ string PA18TemplateExpander::FindConcreteInstantiationOwner(
 			concrete_owner = materialized_context(substitution->second);
 			break;
 		}
-	if(!concrete_owner.empty()) return concrete_owner;
+	if(!concrete_owner.empty()) {
+		return concrete_owner;
+	}
 	if(ConcreteOwnerMatches(definition, requested_owner)) {
 		concrete_owner = materialized_context(requested_owner);
-		if(!concrete_owner.empty()) return concrete_owner;
+		if(!concrete_owner.empty()) {
+			return concrete_owner;
+		}
 	}
 	const size_t owner_open = definition.owner.find('<');
 	string owner_arguments_text;
@@ -1474,7 +1405,10 @@ string PA18TemplateExpander::FindConcreteInstantiationOwner(
 				break;
 			}
 		}
-		if(same) return materialized_context(candidate);
+		if(same) {
+			const string resolved = materialized_context(candidate);
+			return resolved;
+		}
 	}
 	return string(); }
 } // namespace pa18_templates_internal

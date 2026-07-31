@@ -5,6 +5,19 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
+namespace {
+
+void CheckTemplateArgumentCount(const TemplateDefinition& definition,
+	size_t raw_index, size_t raw_count)
+{
+	if(raw_index == raw_count) return;
+	if(definition.alias_template || definition.member_template)
+		throw PA18SubstitutionFailure("too many template arguments");
+	throw logic_error("too many template arguments");
+}
+
+} // namespace
+
 string PA18TemplateExpander::FunctionPointerAliasSpelling(const string& spelling,
 	const string& context) const
 {
@@ -504,7 +517,7 @@ void PA18TemplateExpander::ResolveTemplateArguments(const TemplateDefinition& de
 		args->push_back(argument); metadata_args->push_back(TemplateArgumentMetadata(parameter, argument,
 			integral_value, context, *substitutions));
 		if(!parameter.name.empty()) (*substitutions)[parameter.name] = argument; }
-	if(raw_index != raw_args.size()) throw logic_error("too many template arguments");
+	CheckTemplateArgumentCount(definition, raw_index, raw_args.size());
 }
 
 } // namespace pa18_templates_internal

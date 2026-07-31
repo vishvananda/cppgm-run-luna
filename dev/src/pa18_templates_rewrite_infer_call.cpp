@@ -11,6 +11,34 @@ bool PA18TemplateExpander::InferCallIdentifierArgument(
 {
 	if(!expression || expression->children.empty() || !expression->children[0] ||
 		expression->children[0]->kind != "id-expression") return false;
+	// `declval<T>()` is a declaration-only transport expression.  It need not
+	// be materialized as a callable function just to deduce an enclosing
+	// forwarding-reference parameter; preserve the requested type and its
+	// xvalue category directly here, matching FunctionCallResultType.
+	const string callee_spelling = RemoveMarker(expression->children[0]->value);
+	const size_t declval_open = callee_spelling.find('<');
+	if(declval_open != string::npos) {
+		string declval_base, declval_arguments;
+		size_t declval_begin = 0, declval_close = string::npos;
+		if(TemplateBase(callee_spelling, declval_open, &declval_begin, &declval_base) &&
+			LastComponent(declval_base) == "declval" &&
+			TemplateRange(callee_spelling, declval_open, &declval_arguments,
+				&declval_close) && declval_close + 1 == callee_spelling.size()) {
+			const vector<string> requested = SplitTemplateArguments(declval_arguments);
+			if(requested.size() == 1) {
+				string type = NormalizeTypeArgument(ReplaceIdentifiers(
+					requested[0], substitutions));
+				type = NormalizeTypeArgument(ResolveAlias(type, context));
+				if(!type.empty()) {
+					if(type[type.size() - 1] != '&' &&
+						(type.size() < 2 || type.compare(type.size() - 2, 2, "&&") != 0))
+						type += "&&";
+					*result = CollapseReferenceSpelling(type);
+					return true;
+				}
+			}
+		}
+	}
 	// A callable data member has a typed operator() result; do not let an
 	// unknown operand trigger unrelated free-function template deduction.
 	string callable_object_type;

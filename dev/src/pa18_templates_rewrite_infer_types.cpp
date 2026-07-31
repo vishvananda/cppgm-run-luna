@@ -390,8 +390,36 @@ bool PA18TemplateExpander::InferIdentifierArgument(const CPPGMAstNodePtr& expres
 		*result = ReplaceIdentifiers(ResolveAlias(source, context), substitutions);
 		if(!result->empty()) return true;
 	}
+	// `variable_types_` is a translation-unit fallback and can contain a
+	// same-spelled parameter collected from an unrelated function template.
+	// Resolve a function identifier before consulting that fallback, while
+	// retaining the ordinary local-variable shadowing rule for scopes visible at
+	// this call site.
+	bool scoped_variable = false;
+	for(string current = context; ; ) {
+		map<string, map<string, string> >::const_iterator scope =
+			function_parameter_types_.find(current);
+		if(scope != function_parameter_types_.end() &&
+			scope->second.find(expression->value) != scope->second.end()) {
+			scoped_variable = true;
+			break;
+		}
+		if(current.empty()) break;
+		const size_t separator = current.rfind("::");
+		if(separator == string::npos) current.clear();
+		else current.erase(separator);
+	}
+	if(!scoped_variable) {
+		const FunctionSignature* signature = FindFunctionSignature(expression->value, context);
+		if(signature) {
+			*result = FunctionSignatureType(*signature);
+			if(function_signature) *function_signature = *signature;
+			return true;
+		}
+	}
 	string variable_type;
-	if(LookupVariableType(expression->value, context, &variable_type)) {
+	if(LookupVariableType(expression->value, context, &variable_type) &&
+		!variable_type.empty()) {
 		string promoted_type = variable_type;
 		const size_t array_suffix = promoted_type.find('[');
 		const string variable_base = CanonicalSpelling(promoted_type.substr(0,

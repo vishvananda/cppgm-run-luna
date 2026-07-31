@@ -29,256 +29,86 @@ string CollapseRepeatedMemberPaths(string value)
 
 } // namespace
 
-bool PA18TemplateExpander::RewriteMemberTemplateAliasApplication(string* raw,
-	size_t begin, size_t close, const string& base, const string& context,
-	const map<string, string>& substitutions, bool* template_replaced, size_t* search)
-{
-	if(!raw || close <= begin || LastComponent(base) != "mp_apply_q") return false;
-	const size_t open = raw->find('<', begin);
-	if(open == string::npos || open >= close) return false;
-	const vector<string> apply_arguments = SplitTemplateArguments(raw->substr(
-		open + 1, close - open - 1));
-	if(apply_arguments.size() != 2) return false;
-	string q = CanonicalSpelling(ReplaceIdentifiers(apply_arguments[0], substitutions));
-	while(q.compare(0, 8, "typename") == 0)
-		q = CanonicalSpelling(q.substr(8));
-	if(q.compare(0, 9, "template ") == 0) q = CanonicalSpelling(q.substr(9));
-	const size_t list_open = q.empty() ? string::npos :
-		apply_arguments[1].find('<');
-	if(list_open == string::npos) return false;
-	string list_arguments_text;
-	size_t list_close = string::npos;
-	if(!TemplateRange(apply_arguments[1], list_open, &list_arguments_text,
-		&list_close)) return false;
-	vector<string> call_arguments = SplitTemplateArguments(list_arguments_text);
-	if(call_arguments.empty()) return false;
-	for(size_t argument = 0; argument < call_arguments.size(); ++argument)
-		call_arguments[argument] = CanonicalSpelling(ReplaceIdentifiers(
-			call_arguments[argument], substitutions));
-	const string callable_source = q + "::fn";
-	const string callable = NormalizeTemplateTemplateArgument(callable_source,
-		context, substitutions);
-	if(callable.empty()) return false;
-	const size_t callable_separator = callable.rfind("::");
-	if(callable_separator == string::npos) return false;
-	const string callable_owner = callable.substr(0, callable_separator);
-	const string callable_name = callable.substr(callable_separator + 2);
-	string target = MemberAliasType(callable_owner, callable_name);
-	if(target.empty()) {
-		set<string> active;
-		FindClassMemberType(callable_owner, callable_name, substitutions, context,
-			&target, &active, true);
-	}
-	if(target.empty()) return false;
-	map<string, string> local = substitutions;
-	const string source_parent = [&]() {
-		const string parent = PrefixComponent(callable_owner);
-		map<string, string>::const_iterator generated = specialization_bases_.find(
-			LastComponent(parent));
-		return generated == specialization_bases_.end() ? string() : generated->second;
-	}();
-	const map<string, vector<string> >::const_iterator indexed = definitions_by_name_.find(
-		callable_name);
-	const TemplateDefinition* callable_definition = FindDefinition(callable_source,
-		context);
-	int callable_definition_score = callable_definition ? 1 : 0;
-	if(indexed != definitions_by_name_.end()) for(size_t candidate = 0;
-		candidate < indexed->second.size(); ++candidate) {
-		map<string, TemplateDefinition>::const_iterator found = definitions_.find(
-			indexed->second[candidate]);
-		if(found == definitions_.end() || !found->second.alias_template) continue;
-		const string owner = found->second.owner;
-		if(LastComponent(owner) != LastComponent(callable_owner)) continue;
-		int score = 1;
-		const string candidate_parent = PrefixComponent(owner);
-		if(!source_parent.empty() && LastComponent(candidate_parent) ==
-			LastComponent(source_parent)) score = 3;
-		if(!source_parent.empty() && candidate_parent.find(source_parent + "::") == 0)
-			score = 4;
-		if(score > callable_definition_score) {
-			callable_definition = &found->second;
-			callable_definition_score = score;
-		}
-	}
-	if(callable_definition) for(size_t parameter = 0;
-		parameter < callable_definition->parameters.size() &&
-		parameter < call_arguments.size(); ++parameter)
-		if(!callable_definition->parameters[parameter].name.empty())
-			local[callable_definition->parameters[parameter].name] = call_arguments[parameter];
-	const char* const member_names[] = {"key_type", "value_type", "reference", "next_binding"};
-	for(size_t name = 0; name < sizeof(member_names) / sizeof(member_names[0]); ++name) {
-		const string owner = name == 3 ? callable_owner : PrefixComponent(callable_owner);
-		string member_type = MemberAliasType(owner, member_names[name]);
-		if(member_type.empty()) {
-			set<string> active;
-			FindClassMemberType(owner, member_names[name], substitutions, context,
-				&member_type, &active, true);
-		}
-		if(member_type.empty()) continue;
-		try {
-			member_type = CanonicalSpelling(RewriteText(member_type, context, local, 0));
-		} catch(const PA18SubstitutionFailure&) {}
-		local[member_names[name]] = member_type;
-	}
-	string rewritten;
-	try {
-		rewritten = CanonicalSpelling(RewriteText(target, context, local, 0));
-	} catch(const PA18SubstitutionFailure&) {
-		return false;
-	}
-	if(rewritten.empty() || rewritten == target) return false;
-	raw->replace(begin, close - begin + 1, rewritten);
-	if(template_replaced) *template_replaced = true;
-	if(search) *search = begin + rewritten.size();
-	return true;
-}
 
-bool PA18TemplateExpander::RewriteResolvedTemplateMember(string* raw, size_t begin,
-	size_t close, const string& context, const map<string, string>& substitutions,
-	const TemplateDefinition* definition, const vector<string>& args,
-	bool* template_replaced, size_t* search)
-{
-	if(!raw || !definition || close + 2 >= raw->size() ||
-		raw->compare(close + 1, 2, "::") != 0) return false;
-	RecordTemplateArrayValues(*definition, args, context, substitutions,
-		active_pack_substitutions_);
-	size_t nested_end = close + 3;
-	while(nested_end < raw->size() && IsIdentifierCharacter((*raw)[nested_end])) ++nested_end;
-	const string nested = raw->substr(close + 3, nested_end - close - 3);
-	if(nested.empty()) return false;
-	const string template_owner = raw->substr(begin, close - begin + 1);
-	const string concrete_template_owner = ReplaceIdentifiersPreservingPackSizes(
-		template_owner, substitutions);
-	map<string, string> inherited_owner_bindings;
-	const size_t inherited_separator = TopLevelScopeSeparator(concrete_template_owner);
-	if(inherited_separator != string::npos) {
-		const string outer_owner = concrete_template_owner.substr(0, inherited_separator);
-		const size_t outer_open = outer_owner.find('<');
-		string outer_arguments_text;
-		size_t outer_close = string::npos;
-		if(outer_open != string::npos && TemplateRange(outer_owner, outer_open,
-			&outer_arguments_text, &outer_close)) {
-			const string outer_base = outer_owner.substr(0, outer_open);
-			const TemplateDefinition* outer_definition = FindDefinition(outer_base, context);
-			if(outer_definition && outer_definition->class_template) {
-				const vector<string> outer_arguments = SplitTemplateArguments(outer_arguments_text);
-				const TemplateDefinition* selected_outer = SelectClassTemplateDefinition(
-					outer_definition, outer_arguments, context);
-				if(selected_outer) outer_definition = selected_outer;
-				for(size_t parameter = 0; parameter < outer_definition->parameters.size() &&
-					parameter < outer_arguments.size(); ++parameter)
-					if(!outer_definition->parameters[parameter].name.empty())
-							inherited_owner_bindings[outer_definition->parameters[parameter].name] =
-								outer_arguments[parameter];
-				}
-			}
-	}
-	string member_type;
-	set<string> member_active;
-	const TemplateDefinition* member_definition = definition;
-	if(member_definition->class_template) {
-		const TemplateDefinition* selected_member = SelectClassTemplateDefinition(
-			member_definition, args, context);
-		if(selected_member) member_definition = selected_member;
-	}
-	if(member_definition->declaration && !inherited_owner_bindings.empty()) {
-		map<string, string> member_substitutions = substitutions;
-		for(map<string, string>::const_iterator binding = inherited_owner_bindings.begin();
-			binding != inherited_owner_bindings.end(); ++binding)
-			member_substitutions[binding->first] = binding->second;
-		for(size_t parameter = 0; parameter < member_definition->parameters.size() &&
-			parameter < args.size(); ++parameter)
-			if(!member_definition->parameters[parameter].name.empty())
-				member_substitutions[member_definition->parameters[parameter].name] = args[parameter];
-		string direct_member_type;
-		bool found = FindDirectTemplateMemberType(*member_definition, args, nested,
-			context, &member_substitutions, &direct_member_type) && !direct_member_type.empty();
-		if(!found) found = FindInheritedTemplateMemberType(*member_definition, nested,
-			context, member_substitutions, &direct_member_type) && !direct_member_type.empty();
-		if(found) member_type = direct_member_type;
-	}
-	if(member_type.empty()) {
-		bool found = FindClassMemberType(concrete_template_owner, nested, substitutions,
-			context, &member_type, &member_active, true);
-		if(!found || member_type.empty()) {
-			found = FindClassMemberType(template_owner, nested, substitutions, context,
-				&member_type, &member_active, true);
-			if(!found || member_type.empty())
-				member_type = TemplateMemberType(*definition, args, nested, context);
-		}
-	}
-	const bool static_template_member = HasStaticMember(0, concrete_template_owner, nested) ||
-		HasStaticMember(0, template_owner, nested);
-	if(static_template_member)
-		return false;
-	const size_t owner_separator = TopLevelScopeSeparator(concrete_template_owner);
-	if(owner_separator != string::npos) {
-		const string outer_owner = concrete_template_owner.substr(0, owner_separator);
-		const size_t outer_open = outer_owner.find('<');
-		string outer_arguments_text;
-		size_t outer_close = string::npos;
-		if(outer_open != string::npos && TemplateRange(outer_owner, outer_open,
-			&outer_arguments_text, &outer_close)) {
-			const string outer_base = outer_owner.substr(0, outer_open);
-			const TemplateDefinition* outer_definition = FindDefinition(outer_base, context);
-			if(outer_definition && outer_definition->class_template) {
-				const vector<string> outer_arguments = SplitTemplateArguments(outer_arguments_text);
-				const TemplateDefinition* selected_outer = SelectClassTemplateDefinition(
-					outer_definition, outer_arguments, context);
-				if(selected_outer) outer_definition = selected_outer;
-				map<string, string> outer_bindings;
-				for(size_t parameter = 0; parameter < outer_definition->parameters.size() &&
-					parameter < outer_arguments.size(); ++parameter)
-					if(!outer_definition->parameters[parameter].name.empty())
-						outer_bindings[outer_definition->parameters[parameter].name] =
-							outer_arguments[parameter];
-				member_type = ReplaceIdentifiersPreservingPackSizes(member_type, outer_bindings);
-			}
-		}
-	}
-	if(member_type.empty() || member_type.find('[') != string::npos) {
-		requested_nested_classes_[definition->qualified_name].insert(nested);
-		requested_nested_classes_[LastComponent(definition->qualified_name)].insert(nested);
-		return false;
-	}
-	// Replace the complete dependent owner before its member type; the resolved
-	// type already names the materialized owner and needs no `template` qualifier.
-	size_t replacement_begin = begin;
-	size_t qualifier = begin;
-	while(qualifier > 0 && isspace(static_cast<unsigned char>((*raw)[qualifier - 1]))) --qualifier;
-	if(qualifier >= 8 && raw->compare(qualifier - 8, 8, "template") == 0) {
-		qualifier -= 8;
-		while(qualifier > 0 && isspace(static_cast<unsigned char>((*raw)[qualifier - 1]))) --qualifier;
-		if(qualifier >= 2 && raw->compare(qualifier - 2, 2, "::") == 0) {
-			qualifier -= 2;
-			while(qualifier > 0 && isspace(static_cast<unsigned char>((*raw)[qualifier - 1]))) --qualifier;
-			while(qualifier > 0) {
-				const size_t component_end = qualifier;
-				while(qualifier > 0 && IsIdentifierCharacter((*raw)[qualifier - 1])) --qualifier;
-				if(component_end == qualifier || qualifier < 2 ||
-					raw->compare(qualifier - 2, 2, "::") != 0) break;
-				qualifier -= 2;
-				while(qualifier > 0 && isspace(static_cast<unsigned char>((*raw)[qualifier - 1]))) --qualifier;
-			}
-			replacement_begin = qualifier;
-		}
-	}
-	raw->replace(replacement_begin, nested_end - replacement_begin, member_type);
-	if(template_replaced) *template_replaced = true;
-	if(search) *search = replacement_begin + member_type.size();
-	return true;
-}
 
 bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const string& member,
 	const map<string, string>& substitutions, const string& context,
 	string* result, set<string>* active, bool aliases_only) const
 {
 	if(!result || !active) return false;
+	const bool unresolved_lookup = HasUnresolvedTemplateParameter(raw_class, context, substitutions) ||
+		HasUnresolvedTemplateParameter(member, context, substitutions);
+	if(unresolved_lookup) {
+		return false;
+	}
+	// ResolveAlias and partial-specialization selection can ask for the same
+	// member before the owner has acquired its generated declaration.  Guard the
+	// owner/member identity before any alias or class-template probe; the later
+	// normalized guard is too late for that re-entry and lets replay contexts
+	// manufacture a fresh key at every nesting level.
+	ostringstream substitution_key_stream;
+	for(map<string, string>::const_iterator binding = substitutions.begin();
+		binding != substitutions.end(); ++binding)
+		substitution_key_stream << "|" << binding->first << "=" <<
+			CanonicalSpelling(binding->second);
+	const string substitution_key = substitution_key_stream.str();
+	const string raw_lookup_key = "raw|" + CollapseRepeatedQualifiedPath(
+		CollapseRepeatedQualifier(CanonicalSpelling(RestoreSpecializationSpelling(raw_class)))) +
+		"|" + member + "|" + context + substitution_key;
+	if(!active_member_type_lookups_.insert(raw_lookup_key).second) {
+		return false;
+	}
+	struct RawLookupScope {
+		set<string>* active; string key;
+		RawLookupScope(set<string>* value, const string& name) : active(value), key(name) {}
+		~RawLookupScope() { active->erase(key); }
+	} raw_lookup_scope(&active_member_type_lookups_, raw_lookup_key);
 	// Member lookup owns the dependent owner spelling.  Resolve its typed
 	// bindings for every probe instead of using helper-name text as a proxy for
 	// dependency; aliases and user-defined traits take the same semantic path.
+	// A materialized specialization is represented by both its generated owner
+	// name and its source template-id.  Do not replace the source base first:
+	// doing so turns `ListSet<int>` into `ListSet_int_<int>`, after which the
+	// nested argument parser can no longer recover the specialization identity.
+	map<string, string> class_key_substitutions = substitutions;
+	ProtectMaterializedTemplateBases(raw_class, context, substitutions,
+		&class_key_substitutions);
 	string class_key = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(
-		raw_class, substitutions));
+		raw_class, class_key_substitutions));
+	// `aliases_only` is used while rewriting a qualified type spelling.  A
+	// static value member is intentionally left as an expression for the
+	// integral evaluator; selecting every partial specialization merely to ask
+	// for its type can re-enter a callable's own `is_applyable<T>::value` query.
+	if(aliases_only && member == "value") return false;
+	if(aliases_only) {
+		map<string, set<string> >::const_iterator indexed_static =
+			static_members_by_class_.find(class_key);
+		if(indexed_static != static_members_by_class_.end() &&
+			indexed_static->second.find(member) != indexed_static->second.end()) return false;
+		string static_base = class_key;
+		const size_t static_open = static_base.find('<');
+		if(static_open != string::npos) static_base.erase(static_open);
+		const TemplateDefinition* static_definition = FindDefinition(static_base, context);
+		if(static_definition) {
+			if(static_definition->static_members.find(member) !=
+				static_definition->static_members.end()) return false;
+			if(static_definition->declaration) for(size_t child_index = 0;
+				child_index < static_definition->declaration->children.size(); ++child_index) {
+				CPPGMAstNodePtr child = static_definition->declaration->children[child_index];
+				while(child && child->kind == "template-declaration" &&
+					child->children.size() > 1) child = child->children[1];
+				if(!child || child->kind != "simple-declaration" || child->children.empty() ||
+					(!HasDeclarationSpecifier(child->children[0], "const") &&
+					 !HasDeclarationSpecifier(child->children[0], "constexpr"))) continue;
+				const CPPGMAstNodePtr list = ChildOfKindLocal(child, "init-declarator-list");
+				if(!list) continue;
+				for(size_t item = 0; item < list->children.size(); ++item)
+					if(list->children[item] && !list->children[item]->children.empty() &&
+						LastComponent(FirstIdentifierLocal(
+							list->children[item]->children[0])) == member) return false;
+			}
+		}
+	}
 	// A generated replay can duplicate a qualified owner while redirecting a
 	// dependent member query.  Collapse only when the normalized spelling is a
 	// known generated specialization and the original spelling is not a source
@@ -300,13 +130,31 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 		if(!resolved_class_key.empty() && resolved_class_key != class_key)
 			class_key = resolved_class_key;
 	}
-	const string lookup_key = class_key + "|" + member + "|" + context;
-	if(!active_member_type_lookups_.insert(lookup_key).second) return false;
+	const string lookup_key = class_key + "|" + member + "|" + context + substitution_key;
+	if(!active_member_type_lookups_.insert(lookup_key).second) {
+		return false;
+	}
 	struct LookupScope {
 		set<string>* active; string key;
 		LookupScope(set<string>* value, const string& name) : active(value), key(name) {}
 		~LookupScope() { active->erase(key); }
 	} lookup_scope(&active_member_type_lookups_, lookup_key);
+	// A member-template specialization is a materialized class in its own
+	// right.  During a nested replay the caller can ask for the generated
+	// member component (`owner::impl_<args>`) before the source partial's
+	// unparameterized `impl` declaration is visited.  Let the typed declaration
+	// index answer that request directly; reducing it to the source owner would
+	// lose the member's concrete template arguments and make the next
+	// `::result_type` lookup start from an unrelated primary.
+	const string generated_member_path = JoinPath(class_key, member);
+	map<string, CPPGMAstNodePtr>::const_iterator generated_member =
+		class_declarations_.find(generated_member_path);
+	if(generated_member != class_declarations_.end() && generated_member->second &&
+		(generated_member->second->kind == "class-specifier" ||
+			 generated_member->second->kind == "class-forward-declaration")) {
+		*result = generated_member_path;
+		return true;
+	}
 	for(size_t template_marker = class_key.find("template ");
 		template_marker != string::npos;
 		template_marker = class_key.find("template ", template_marker))
@@ -401,8 +249,8 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 					CollapseRepeatedQualifier(source_template_base));
 				if(collapsed_source == source_template_base) {
 					string materialized_owner;
-					if(ResolveMaterializedClassOwner(source_template_base, requested_arguments,
-						context, &materialized_owner)) class_key = materialized_owner;
+						if(ResolveMaterializedClassOwner(source_template_base, requested_arguments,
+							context, &materialized_owner, substitutions)) class_key = materialized_owner;
 				}
 			}
 			// A source class whose requested alias contains a dependent member
@@ -453,12 +301,18 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 						break;
 					}
 				}
-				if(contains_call) try {
-					const string generated = const_cast<PA18TemplateExpander*>(this)->Instantiate(
-						*source_definition, requested_arguments, context, false, 0,
-						&substitutions);
-					const string qualified_generated = source_definition->owner.empty() ? generated :
-						JoinPath(source_definition->owner, generated);
+					const bool member_template_request = member.find('<') != string::npos ||
+						member.find("template ") != string::npos;
+					const bool incomplete_source_owner = class_declarations_.find(class_key) !=
+						class_declarations_.end() && class_declarations_.find(class_key)->second &&
+						class_declarations_.find(class_key)->second->kind ==
+							"class-forward-declaration";
+					if((contains_call || (member_template_request && incomplete_source_owner))) try {
+						const string generated = const_cast<PA18TemplateExpander*>(this)->Instantiate(
+							*source_definition, requested_arguments, context, false, 0,
+							&substitutions);
+					const string qualified_generated = GeneratedOwner(*source_definition).empty() ? generated :
+						JoinPath(GeneratedOwner(*source_definition), generated);
 					if(class_declarations_.find(qualified_generated) != class_declarations_.end())
 						class_key = qualified_generated;
 					else if(class_declarations_.find(generated) != class_declarations_.end())
@@ -477,11 +331,13 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 		size_t generated_begin = 0;
 		string generated_arguments;
 		size_t generated_close = string::npos;
-			if(TemplateBase(class_key, generated_open, &generated_begin, &generated_base) &&
+		if(TemplateBase(class_key, generated_open, &generated_begin, &generated_base) &&
 				TemplateRange(class_key, generated_open, &generated_arguments, &generated_close) &&
 				specialization_bases_.find(LastComponent(generated_base)) !=
 					specialization_bases_.end()) {
 				string qualified_generated;
+				if(class_declarations_.find(generated_base) != class_declarations_.end())
+					class_key = generated_base;
 				map<string, vector<string> >::const_iterator indexed_paths =
 					class_paths_by_name_.find(LastComponent(generated_base));
 				if(indexed_paths != class_paths_by_name_.end()) for(size_t path = 0;
@@ -552,12 +408,39 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 						selected_owner_base->second, context);
 					if(!owner_definition || !owner_definition->class_template)
 						owner_definition = FindDefinition(LastComponent(selected_owner_base->second), context);
-					if(owner_definition && owner_definition->class_template)
-						for(size_t parameter = 0; parameter < owner_definition->parameters.size() &&
-							parameter < selected_owner_arguments->second.size(); ++parameter)
-							if(!owner_definition->parameters[parameter].name.empty())
-								class_substitutions[owner_definition->parameters[parameter].name] =
-									selected_owner_arguments->second[parameter];
+					if(owner_definition && owner_definition->class_template) {
+						// The recorded owner arguments are the arguments of the class
+						// template-id, not the parameter list of a partial
+						// specialization.  A callable specialization such as
+						// `call<Fun(A0)>` therefore has one actual argument but two
+						// specialization parameters.  Positional binding here maps
+						// `Fun` to the complete function type and leaves `A0`
+						// unresolved, corrupting every nested member replay.
+						const TemplateDefinition* owner_primary = owner_definition;
+						const size_t owner_open = selected_owner_base->second.find('<');
+						if(owner_open != string::npos) {
+							const string owner_base = selected_owner_base->second.substr(0, owner_open);
+							const TemplateDefinition* source_primary = FindDefinition(owner_base, context);
+							if(source_primary && source_primary->class_template)
+								owner_primary = source_primary;
+						}
+						const TemplateDefinition* selected_owner = SelectClassTemplateDefinition(
+							owner_primary, selected_owner_arguments->second, context);
+						if(selected_owner && selected_owner->partial_specialization) {
+							map<string, string> specialized;
+							if(MatchClassSpecializationPattern(*selected_owner,
+								selected_owner_arguments->second, &specialized, context))
+								for(map<string, string>::const_iterator binding = specialized.begin();
+									binding != specialized.end(); ++binding)
+									class_substitutions[binding->first] = binding->second;
+						} else if(selected_owner) {
+							for(size_t parameter = 0; parameter < selected_owner->parameters.size() &&
+								parameter < selected_owner_arguments->second.size(); ++parameter)
+								if(!selected_owner->parameters[parameter].name.empty())
+									class_substitutions[selected_owner->parameters[parameter].name] =
+										selected_owner_arguments->second[parameter];
+						}
+					}
 				}
 			}
 		}
@@ -712,10 +595,13 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 						};
 						for(size_t parameter = 0; parameter < class_definition->parameters.size() &&
 							parameter < class_arguments.size(); ++parameter)
-							if(!class_definition->parameters[parameter].name.empty()) {
-								const string argument = preserves_materialized_argument(class_arguments[parameter]) ?
-									CanonicalSpelling(class_arguments[parameter]) : CanonicalSpelling(ReplaceIdentifiers(
-									class_arguments[parameter], class_substitutions));
+						if(!class_definition->parameters[parameter].name.empty()) {
+							map<string, string> argument_substitutions = class_substitutions;
+							ProtectMaterializedTemplateBases(class_arguments[parameter], context,
+								class_substitutions, &argument_substitutions);
+							const string argument = preserves_materialized_argument(class_arguments[parameter]) ?
+								CanonicalSpelling(class_arguments[parameter]) : CanonicalSpelling(ReplaceIdentifiers(
+								class_arguments[parameter], argument_substitutions));
 							class_substitutions[class_definition->parameters[parameter].name] =
 								class_definition->parameters[parameter].template_template ? argument :
 								CanonicalSpelling(ResolveAlias(argument, context));
@@ -768,11 +654,14 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 								generated_arguments->second.size() != class_arguments.size() ||
 								LastComponent(generated_base->second) !=
 								LastComponent(selected_class->qualified_name)) continue;
-							bool same_arguments = true;
-							for(size_t argument = 0; argument < class_arguments.size(); ++argument) {
-								const string actual = CollapseRepeatedQualifier(NormalizeTypeArgument(
-									RestoreSpecializationSpelling(ResolveAlias(ReplaceIdentifiers(
-										class_arguments[argument], substitutions), context))));
+					bool same_arguments = true;
+					for(size_t argument = 0; argument < class_arguments.size(); ++argument) {
+						map<string, string> argument_substitutions = substitutions;
+						ProtectMaterializedTemplateBases(class_arguments[argument], context,
+							substitutions, &argument_substitutions);
+									const string actual = CollapseRepeatedQualifier(NormalizeTypeArgument(
+										RestoreSpecializationSpelling(ResolveAlias(ReplaceIdentifiers(
+											class_arguments[argument], argument_substitutions), context))));
 								const string expected = CollapseRepeatedQualifier(NormalizeTypeArgument(
 									RestoreSpecializationSpelling(generated_arguments->second[argument])));
 								if(actual != expected) {
@@ -781,7 +670,7 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 								}
 							}
 							if(!same_arguments) continue;
-							const string generated_path = JoinPath(selected_class->owner, generated_name);
+						const string generated_path = JoinPath(GeneratedOwner(*selected_class), generated_name);
 							map<string, CPPGMAstNodePtr>::const_iterator generated_declaration =
 								class_declarations_.find(generated_path);
 							if(generated_declaration == class_declarations_.end() ||
@@ -816,35 +705,6 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 	// a dependent member operator cannot deduce its other class parameter.
 	if(specialization_definition && specialization_arguments !=
 		specialization_arguments_.end()) {
-		size_t argument_index = 0;
-		for(size_t parameter = 0; parameter < specialization_definition->parameters.size() &&
-			parameter < specialization_arguments->second.size(); ++parameter)
-		{
-			const TemplateParameter& template_parameter =
-				specialization_definition->parameters[parameter];
-			if(template_parameter.pack) {
-				vector<string> values;
-				size_t trailing_fixed = 0;
-				for(size_t later = parameter + 1;
-					later < specialization_definition->parameters.size(); ++later)
-					if(!specialization_definition->parameters[later].pack) ++trailing_fixed;
-				const size_t limit = specialization_arguments->second.size() > trailing_fixed ?
-					specialization_arguments->second.size() - trailing_fixed : argument_index;
-				while(argument_index < limit)
-					values.push_back(specialization_arguments->second[argument_index++]);
-				active_packs.Set(template_parameter.name, values);
-				if(!template_parameter.name.empty() && !values.empty())
-					class_substitutions[template_parameter.name] = values[0];
-			} else {
-				if(argument_index >= specialization_arguments->second.size()) break;
-				if(!template_parameter.name.empty())
-					class_substitutions[template_parameter.name] =
-						specialization_arguments->second[argument_index];
-				++argument_index;
-			}
-		}
-		if(!specialization_definition->name.empty())
-			class_substitutions[specialization_definition->name] = class_key;
 		// The generated name records the primary template's concrete arguments,
 		// but its declaration may have been emitted from a class partial
 		// specialization.  Replaying a member alias from the primary bindings
@@ -866,10 +726,147 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 				for(map<string, string>::const_iterator binding = specialized_bindings.begin();
 					binding != specialized_bindings.end(); ++binding)
 					class_substitutions[binding->first] = binding->second;
+			for(size_t pack = 0; pack < selected_specialization->specialization_pack_names.size();
+				++pack) {
+				const string& name = selected_specialization->specialization_pack_names[pack];
+				map<string, string>::const_iterator binding = specialized_bindings.find(name);
+				const vector<string> values = binding == specialized_bindings.end() ||
+					binding->second.empty() ? vector<string>() : SplitTemplateArguments(binding->second);
+				active_packs.Set(name, values);
+				if(!name.empty() && !values.empty()) class_substitutions[name] = values[0];
+			}
+		} else if(selected_specialization) {
+			size_t argument_index = 0;
+			for(size_t parameter = 0; parameter < selected_specialization->parameters.size();
+				++parameter) {
+				const TemplateParameter& template_parameter =
+					selected_specialization->parameters[parameter];
+				if(template_parameter.pack) {
+					vector<string> values;
+					size_t trailing_fixed = 0;
+					for(size_t later = parameter + 1;
+						later < selected_specialization->parameters.size(); ++later)
+						if(!selected_specialization->parameters[later].pack) ++trailing_fixed;
+					const size_t limit = specialization_arguments->second.size() > trailing_fixed ?
+						specialization_arguments->second.size() - trailing_fixed : argument_index;
+					while(argument_index < limit)
+						values.push_back(specialization_arguments->second[argument_index++]);
+					active_packs.Set(template_parameter.name, values);
+					if(!template_parameter.name.empty() && !values.empty())
+						class_substitutions[template_parameter.name] = values[0];
+				} else {
+					if(argument_index >= specialization_arguments->second.size()) break;
+					if(!template_parameter.name.empty())
+						class_substitutions[template_parameter.name] =
+							specialization_arguments->second[argument_index];
+					++argument_index;
+				}
+			}
 		}
+		// A nested class template specialization carries its enclosing source
+		// template-id on `owner`, while the generated owner keeps the concrete
+		// class arguments in the specialization registry.  Restore those outer
+		// bindings before replaying the nested declaration's own parameters.
+		if(selected_specialization && !selected_specialization->owner.empty()) {
+			const string owner_source = LastComponent(selected_specialization->owner);
+			const size_t owner_open = owner_source.find('<');
+			string generated_owner = PrefixComponent(raw_class);
+			if(generated_owner.empty()) generated_owner = PrefixComponent(class_key);
+			map<string, vector<string> >::const_iterator owner_arguments =
+				specialization_arguments_.find(LastComponent(generated_owner));
+			// This lookup may be replaying the source nested spelling rather than
+			// the generated nested name.  Recover the generated path by matching
+			// the source nested specialization entry; its prefix is the concrete
+			// enclosing owner whose arguments we need.
+			if(owner_arguments == specialization_arguments_.end())
+				for(map<string, string>::const_iterator generated = specialization_bases_.begin();
+					generated != specialization_bases_.end(); ++generated) {
+					if(generated->second != specialization->second) continue;
+					const string candidate_owner = PrefixComponent(generated->first);
+					if(candidate_owner.empty()) continue;
+					map<string, vector<string> >::const_iterator candidate_arguments =
+						specialization_arguments_.find(LastComponent(candidate_owner));
+					if(candidate_arguments == specialization_arguments_.end()) continue;
+					generated_owner = candidate_owner;
+					owner_arguments = candidate_arguments;
+					break;
+				}
+			if(owner_open != string::npos && owner_arguments != specialization_arguments_.end()) {
+				const TemplateDefinition* owner_primary = FindDefinition(
+					owner_source.substr(0, owner_open), context);
+				if(owner_primary && owner_primary->class_template) {
+					const TemplateDefinition* selected_owner = SelectClassTemplateDefinition(
+						owner_primary, owner_arguments->second, context);
+					if(selected_owner && selected_owner->partial_specialization) {
+						map<string, string> owner_bindings;
+						if(MatchClassSpecializationPattern(*selected_owner,
+							owner_arguments->second, &owner_bindings, context))
+							for(map<string, string>::const_iterator binding = owner_bindings.begin();
+								binding != owner_bindings.end(); ++binding)
+								class_substitutions[binding->first] = binding->second;
+					} else if(selected_owner) {
+						for(size_t parameter = 0; parameter < selected_owner->parameters.size() &&
+							parameter < owner_arguments->second.size(); ++parameter)
+							if(!selected_owner->parameters[parameter].name.empty())
+								class_substitutions[selected_owner->parameters[parameter].name] =
+									owner_arguments->second[parameter];
+					}
+				}
+			}
+		}
+		if(specialization_definition && specialization_definition->owner.empty() &&
+			!specialization_definition->name.empty())
+			class_substitutions[specialization_definition->name] = class_key;
 	}
-	if(specialization != specialization_bases_.end() && incomplete_concrete)
-		class_key = specialization->second;
+	if(specialization != specialization_bases_.end() && incomplete_concrete) {
+		// A type-only replay may have installed only a forward shell for the
+		// concrete specialization.  A dependent member query is the point at
+		// which that body is required, so complete the cached specialization before
+		// falling back to the source primary.  The source fallback loses partial
+		// bindings and leaves inherited aliases such as `append_impl::type`
+		// unresolved.
+		bool completed = false;
+		if(specialization_arguments != specialization_arguments_.end()) {
+			const TemplateDefinition* source_definition = FindDefinition(
+				specialization->second, context);
+			if(source_definition && source_definition->class_template) {
+				const TemplateDefinition* selected_definition =
+					SelectClassTemplateDefinition(source_definition,
+						specialization_arguments->second, context);
+				if(selected_definition) try {
+					// If this lookup is occurring while the same specialization is
+					// being emitted, Instantiate can only return its active forward
+					// name.  Replay the selected source member directly first; this
+					// handles an inherited alias without manufacturing another shell.
+						const string source_member = const_cast<PA18TemplateExpander*>(this)->
+							TemplateMemberType(*selected_definition,
+							specialization_arguments->second, member, context,
+							class_substitutions);
+						if(!source_member.empty()) {
+						*result = source_member;
+						return true;
+					}
+					const string generated_name = const_cast<PA18TemplateExpander*>(this)->Instantiate(
+						*selected_definition, specialization_arguments->second, context, false,
+						0, &class_substitutions);
+					string generated_path = JoinPath(GeneratedOwner(*selected_definition),
+						generated_name);
+					if(class_declarations_.find(generated_path) == class_declarations_.end())
+						generated_path = generated_name;
+					map<string, CPPGMAstNodePtr>::const_iterator generated_declaration =
+						class_declarations_.find(generated_path);
+					if(generated_declaration != class_declarations_.end() &&
+						generated_declaration->second &&
+						generated_declaration->second->children.size() > 1) {
+						class_key = generated_path;
+						selected_specialization_declaration.reset();
+						completed = true;
+					}
+				} catch(const PA18SubstitutionFailure&) {}
+			}
+		}
+		if(!completed) class_key = specialization->second;
+		}
 	const string active_key = class_key + "|" + member;
 	if(!active->insert(active_key).second) return false;
 	CPPGMAstNodePtr declaration = selected_specialization_declaration ?
@@ -879,6 +876,10 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 		return false;
 	}
 	map<string, string> declaration_substitutions = class_substitutions;
+	// Keep values of earlier unqualified constant members available while
+	// replaying later aliases, but do not add them to the substitutions used for
+	// qualified names such as `trait<T>::value`.
+	map<string, string> member_declaration_substitutions = declaration_substitutions;
 	map<string, vector<string> >::const_iterator materialized_arguments =
 		specialization_arguments_.find(LastComponent(class_key));
 	if(materialized_arguments != specialization_arguments_.end())
@@ -888,12 +889,83 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 				"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") != string::npos ||
 				(class_contexts_.find(value) == class_contexts_.end() &&
 					!FindClassDeclaration(value, context))) continue;
-			if(declaration_substitutions.find(value) != declaration_substitutions.end())
-				declaration_substitutions.erase(value);
+			if(member_declaration_substitutions.find(value) !=
+				member_declaration_substitutions.end())
+				member_declaration_substitutions.erase(value);
 		}
 	const string declaration_context = PrefixComponent(class_key).empty() ?
 		context : PrefixComponent(class_key);
 	string fallback_type;
+	// A generated class member can refer to aliases declared earlier in that
+	// same class body (`S2` in `append_integer_sequence<S2, S3>::type`).  The
+	// source declaration's template bindings alone do not provide those local
+	// names, so recover the replayed alias table before returning a dependent
+	// member type to the enclosing alias substitution.
+	for(size_t child_index = 0; child_index < declaration->children.size();
+		++child_index) {
+		CPPGMAstNodePtr child = declaration->children[child_index];
+		while(child && child->kind == "template-declaration" &&
+			child->children.size() > 1) child = child->children[1];
+		if(!child) continue;
+		if(child->kind == "simple-declaration" && !child->children.empty() &&
+			(HasDeclarationSpecifier(child->children[0], "const") ||
+				HasDeclarationSpecifier(child->children[0], "constexpr"))) {
+			const CPPGMAstNodePtr list = ChildOfKindLocal(child, "init-declarator-list");
+			if(list) for(size_t item_index = 0; item_index < list->children.size();
+				++item_index) {
+				const CPPGMAstNodePtr item = list->children[item_index];
+				if(!item || item->children.size() < 2 || !item->children[1] ||
+					item->children[1]->children.empty()) continue;
+				const string name = LastComponent(FirstIdentifierLocal(item->children[0]));
+				if(name.empty()) continue;
+				PA19IntegralValue value;
+				const string member_target = ConstantExpressionSpelling(
+					item->children[1]->children[0]);
+				if(member_target.find("::" + name) == string::npos &&
+					const_cast<PA18TemplateExpander*>(this)->EvaluateIntegralText(
+					member_target, class_key, member_declaration_substitutions, &value) && value.known)
+					member_declaration_substitutions[name] =
+						const_cast<PA18TemplateExpander*>(this)->IntegralValueSpelling(value);
+			}
+		}
+		if(child->kind == "alias-declaration" && !child->value.empty() &&
+			!child->children.empty()) {
+			string target = TypeIdSpelling(child->children[0]);
+			map<string, string> alias_substitutions = member_declaration_substitutions;
+			ProtectMaterializedTemplateBases(target, declaration_context,
+				member_declaration_substitutions, &alias_substitutions);
+			target = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(
+				target, alias_substitutions));
+			try {
+				target = CanonicalSpelling(const_cast<PA18TemplateExpander*>(this)->RewriteText(
+					target, declaration_context, member_declaration_substitutions, 0));
+			} catch(const PA18SubstitutionFailure&) {}
+			if(!target.empty()) member_declaration_substitutions[child->value] = target;
+			continue;
+		}
+		if(child->kind != "simple-declaration" || child->children.empty() ||
+			!HasDeclarationSpecifier(child->children[0], "typedef")) continue;
+		const CPPGMAstNodePtr list = ChildOfKindLocal(child, "init-declarator-list");
+				if(!list) continue;
+		for(size_t item_index = 0; item_index < list->children.size(); ++item_index) {
+			const CPPGMAstNodePtr item = list->children[item_index];
+			if(!item || item->children.empty()) continue;
+			const string alias = FirstIdentifierLocal(item->children[0]);
+			if(alias.empty()) continue;
+			string target = DeclaratorTypeSpelling(NodeTypeSpelling(child->children[0]),
+				item->children[0]);
+			map<string, string> alias_substitutions = member_declaration_substitutions;
+			ProtectMaterializedTemplateBases(target, declaration_context,
+				member_declaration_substitutions, &alias_substitutions);
+			target = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(
+				target, alias_substitutions));
+			try {
+				target = CanonicalSpelling(const_cast<PA18TemplateExpander*>(this)->RewriteText(
+				target, declaration_context, member_declaration_substitutions, 0));
+		} catch(const PA18SubstitutionFailure&) {}
+			if(!target.empty()) member_declaration_substitutions[alias] = target;
+		}
+	}
 	for(size_t i = 0; i < declaration->children.size(); ++i) {
 		const CPPGMAstNodePtr child = declaration->children[i];
 		if(!child) continue;
@@ -901,6 +973,23 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 		while(direct_child && direct_child->kind == "template-declaration" &&
 			direct_child->children.size() > 1)
 			direct_child = direct_child->children[1];
+		if(direct_child && direct_child->kind == "alias-declaration" &&
+			LastComponent(RemoveMarker(direct_child->value)) == member &&
+			!direct_child->children.empty()) {
+				map<string, string> alias_substitutions = declaration_substitutions;
+				ProtectMaterializedTemplateBases(TypeIdSpelling(direct_child->children[0]),
+					context, declaration_substitutions, &alias_substitutions);
+				*result = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(
+					TypeIdSpelling(direct_child->children[0]), alias_substitutions));
+				if(result->find('<') != string::npos)
+					*result = NormalizeTypeArgument(const_cast<PA18TemplateExpander*>(this)->RewriteText(
+						*result, context, declaration_substitutions, 0, true, true, true));
+				const string resolved_alias = ResolveAlias(*result, context,
+					declaration_substitutions);
+				if(!resolved_alias.empty()) *result = resolved_alias;
+			active->erase(active_key);
+			return !result->empty();
+		}
 		const bool generated_concrete_owner =
 			specialization_bases_.find(LastComponent(class_key)) !=
 				specialization_bases_.end() &&
@@ -927,10 +1016,10 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 				continue;
 			}
 				*result = CanonicalSpelling(ReplaceIdentifiers(type, declaration_substitutions));
-				if(result->find("::") != string::npos && result->find('<') != string::npos)
-					*result = NormalizeTypeArgument(const_cast<PA18TemplateExpander*>(this)->RewriteText(
-						*result, context, declaration_substitutions, 0));
-				active->erase(active_key);
+					if(result->find('<') != string::npos)
+						*result = NormalizeTypeArgument(const_cast<PA18TemplateExpander*>(this)->RewriteText(
+							*result, context, declaration_substitutions, 0, true, true, true));
+					active->erase(active_key);
 				return !result->empty();
 			}
 		if(child->kind != "simple-declaration" || child->children.empty()) continue;
@@ -951,11 +1040,20 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 				DeclaratorArraySuffix(init->children[0]).find_first_not_of("[]") != string::npos;
 			if(aliases_only && !typedef_member && !concrete_static_member)
 				continue;
-				*result = CanonicalSpelling(ReplaceIdentifiers(
-					DeclaratorTypeSpelling(base, init->children[0]), declaration_substitutions));
-				if(result->find("::") != string::npos && result->find('<') != string::npos)
+				map<string, string> member_substitutions = declaration_substitutions;
+				if(typedef_member) {
+					const size_t base_open = base.find('<');
+					if(base_open != string::npos) {
+						const string base_name = LastComponent(base.substr(0, base_open));
+						if(base_name == LastComponent(class_key))
+							member_substitutions.erase(base_name);
+					}
+				}
+					*result = CanonicalSpelling(ReplaceIdentifiers(
+						DeclaratorTypeSpelling(base, init->children[0]), member_substitutions));
+				if(typedef_member && result->find('<') != string::npos)
 					*result = NormalizeTypeArgument(const_cast<PA18TemplateExpander*>(this)->RewriteText(
-						*result, context, declaration_substitutions, 0));
+						*result, context, declaration_substitutions, 0, true, true, true));
 				active->erase(active_key);
 				return !result->empty();
 			}
@@ -972,12 +1070,19 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 			const CPPGMAstNodePtr base_specifier = child->children[base_index];
 			const CPPGMAstNodePtr base_name = ChildOfKindLocal(base_specifier, "base-name");
 			if(!base_name) continue;
-			map<string, string> base_name_substitutions = class_substitutions;
-			const size_t raw_base_open = base_name->value.find('<');
-			if(raw_base_open != string::npos)
-				base_name_substitutions.erase(LastComponent(base_name->value.substr(0,
-					raw_base_open)));
-			string base_spelling = NormalizeElaboratedSpelling(
+				map<string, string> base_name_substitutions = class_substitutions;
+				const size_t raw_base_open = base_name->value.find('<');
+				if(raw_base_open != string::npos)
+					base_name_substitutions.erase(LastComponent(base_name->value.substr(0,
+						raw_base_open)));
+				// The inherited base can contain a source template-id nested inside
+				// another type, for example `call<ListSet<Char>(left)>`.  A replay
+				// binding for the already-materialized callable or return class must
+				// not rewrite those source template heads; doing so appends the old
+				// argument list to the generated nominal name (`call_X<ListSet_X>`).
+				ProtectMaterializedTemplateBases(base_name->value, declaration_context,
+					class_substitutions, &base_name_substitutions);
+				string base_spelling = NormalizeElaboratedSpelling(
 				ReplaceIdentifiersPreservingPackSizes(base_name->value, base_name_substitutions),
 				declaration_context);
 				base_spelling = CanonicalSpelling(base_spelling);
@@ -986,11 +1091,11 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 			bool base_is_partial_specialization = false;
 			vector<string> base_arguments;
 			map<string, string> base_substitutions;
-			string base_lookup = base_spelling;
-			if(open != string::npos) {
+				string base_lookup = base_spelling;
+				if(open != string::npos) {
 				string argument_text;
 				size_t close = string::npos;
-				if(!TemplateRange(base_spelling, open, &argument_text, &close)) continue;
+					if(!TemplateRange(base_spelling, open, &argument_text, &close)) continue;
 				// Keep pack operands intact while applying scalar class bindings,
 				// then expand them from the active typed pack collection.  Replacing
 				// `_Tail` first would manufacture `double...`, which is neither a
@@ -1018,7 +1123,7 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 				}
 				if(!TemplateRange(base_spelling, open, &argument_text, &close)) continue;
 				base_lookup = base_spelling.substr(0, open);
-				base_definition = FindDefinition(base_lookup, declaration_context);
+					base_definition = FindDefinition(base_lookup, declaration_context);
 				if(base_definition) {
 					base_arguments = SplitTemplateArguments(argument_text);
 					for(size_t parameter = 0; parameter < base_arguments.size() &&
@@ -1093,7 +1198,7 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 								}
 							}
 							if(!same_arguments) continue;
-							string generated_path = JoinPath(base_definition->owner, generated_name);
+							string generated_path = JoinPath(GeneratedOwner(*base_definition), generated_name);
 							if(class_declarations_.find(generated_path) == class_declarations_.end())
 								generated_path = generated_name;
 							bool requested_nested_class = false;

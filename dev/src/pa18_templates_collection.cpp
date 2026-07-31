@@ -31,6 +31,28 @@ string CollapseRepeatedQualifiedPath(string value)
 	return value;
 }
 
+string CollapseRepeatedTemplateOwnerPath(string value)
+{
+	for(size_t separator = value.find("::"); separator != string::npos;) {
+		size_t left_begin = separator;
+		while(left_begin > 0 && IsIdentifierCharacter(value[left_begin - 1])) --left_begin;
+		const size_t right_begin = separator + 2;
+		size_t right_end = right_begin;
+		while(right_end < value.size() && IsIdentifierCharacter(value[right_end])) ++right_end;
+		const bool repeated_component = right_end == value.size() ||
+			(right_end + 1 < value.size() && value.compare(right_end, 2, "::") == 0);
+		if(left_begin < separator && (right_end < value.size() && value[right_end] == '<' ||
+			repeated_component) &&
+			right_end - right_begin == separator - left_begin &&
+			value.compare(left_begin, separator - left_begin, value,
+				right_begin, right_end - right_begin) == 0) {
+			value.erase(left_begin, separator + 2 - left_begin);
+			separator = value.find("::", left_begin);
+		} else separator = value.find("::", separator + 2);
+	}
+	return value;
+}
+
 void PA18TemplateExpander::EnsureTypeDependency(const string& spelling, const string& context,
 		const string& owner)
 	{
@@ -654,135 +676,6 @@ vector<string> SplitTemplateArguments(const string& raw)
 	return result;
 }
 
-string PreservePackSubstitution(const string& word, const string& replacement,
-	bool pack_operand)
-{
-	// The source operand already owns its ellipsis; avoid turning `I` -> `I1...`
-	// into the malformed `I1......` during dependent alias replay.
-	if(pack_operand && replacement.size() > 3 &&
-		replacement.compare(replacement.size() - 3, 3, "...") == 0)
-		return replacement.substr(0, replacement.size() - 3);
-	return word;
-}
-
-string ReplaceIdentifiersPreservingPackSizes(const string& raw,
-	const map<string, string>& substitutions)
-{
-	// ReplaceIdentifiers must not turn a pack operand into a scalar followed by
-	// an ellipsis (`_Tail...` -> `double...`).  The ellipsis belongs to the
-	// complete operand and is expanded later from typed pack state.  Keep the
-	// ordinary identifier replacement rules, including compact cv spellings,
-	// for every non-pack occurrence.
-	const auto replace_segment = [&](const string& segment) {
-		// The ellipsis applies to the complete preceding expression, not only to
-		// an identifier immediately before it.  Preserve identifiers inside an
-		// expression such as `((void)Pack, true)...` so typed pack replay can
-		// expand each element before scalar substitution runs.
-		vector<pair<size_t, size_t> > pack_spans;
-		for(size_t ellipsis = segment.find("..."); ellipsis != string::npos;
-			ellipsis = segment.find("...", ellipsis + 3)) {
-			if(ellipsis >= 6 && segment.substr(ellipsis - 6, 6) == "sizeof") continue;
-			int angle = 0, parentheses = 0, brackets = 0, braces = 0;
-			size_t begin = ellipsis;
-			while(begin > 0) {
-				const char ch = segment[begin - 1];
-				if(ch == '>') ++angle;
-				else if(ch == '<' && angle > 0) --angle;
-				else if(ch == ')') ++parentheses;
-				else if(ch == '(') {
-					if(parentheses > 0) --parentheses;
-					else if(angle == 0 && brackets == 0 && braces == 0) break;
-				}
-				else if(ch == ']') ++brackets;
-				else if(ch == '[' && brackets > 0) --brackets;
-				else if(ch == '}') ++braces;
-				else if(ch == '{' && braces > 0) --braces;
-				if(ch == ',' && angle == 0 && parentheses == 0 &&
-					brackets == 0 && braces == 0) break;
-				--begin;
-			}
-			if(begin < segment.size() && (segment[begin] == ',' || segment[begin] == '(')) ++begin;
-			if(begin < ellipsis) pack_spans.push_back(make_pair(begin, ellipsis));
-		}
-		string replaced;
-		for(size_t i = 0; i < segment.size();) {
-			if(!IsIdentifierCharacter(segment[i])) {
-				replaced += segment[i++];
-				continue;
-			}
-			size_t end = i + 1;
-			while(end < segment.size() && IsIdentifierCharacter(segment[end])) ++end;
-			const string word = segment.substr(i, end - i);
-			size_t after = end;
-			while(after < segment.size() && isspace(static_cast<unsigned char>(segment[after]))) ++after;
-			bool pack_operand = after + 3 <= segment.size() &&
-				segment.compare(after, 3, "...") == 0;
-			if(!pack_operand) for(size_t span = 0; span < pack_spans.size(); ++span)
-				if(i >= pack_spans[span].first && i < pack_spans[span].second) {
-					pack_operand = true;
-					break;
-				}
-			map<string, string>::const_iterator found = substitutions.find(word);
-			const bool already_qualified = i >= 2 && replaced.size() >= 2 &&
-				replaced.compare(replaced.size() - 2, 2, "::") == 0;
-			if(found != substitutions.end() && !pack_operand && !already_qualified)
-				replaced += found->second;
-			else if(found != substitutions.end())
-				replaced += PreservePackSubstitution(word, found->second, pack_operand);
-			else {
-				bool compact_substitution = false;
-				if(!pack_operand) for(map<string,string>::const_iterator it = substitutions.begin();
-					it != substitutions.end(); ++it) {
-					if(it->first.empty() || word.size() <= it->first.size()) continue;
-					if(word.compare(0, it->first.size(), it->first) == 0) {
-						const string suffix = word.substr(it->first.size());
-						if(suffix == "const" || suffix == "volatile") {
-							replaced += it->second + " " + suffix;
-							compact_substitution = true;
-							break;
-						}
-					}
-					if(word.compare(word.size() - it->first.size(), it->first.size(), it->first) == 0) {
-						const string prefix = word.substr(0, word.size() - it->first.size());
-						if(prefix == "const" || prefix == "volatile") {
-							replaced += prefix + " " + it->second;
-							compact_substitution = true;
-							break;
-						}
-					}
-				}
-				if(!compact_substitution) replaced += word;
-			}
-			i = end;
-		}
-		return replaced;
-	};
-	string result;
-	size_t cursor = 0;
-	for(size_t search = raw.find("sizeof..."); search != string::npos; ) {
-		const size_t open = search + 9;
-		if(open >= raw.size() || raw[open] != '(') {
-			search = raw.find("sizeof...", search + 9);
-			continue;
-		}
-		int depth = 0;
-		size_t close = string::npos;
-		for(size_t position = open; position < raw.size(); ++position) {
-			if(raw[position] == '(') ++depth;
-			else if(raw[position] == ')' && --depth == 0) {
-				close = position;
-				break;
-			}
-		}
-		if(close == string::npos) break;
-		result += replace_segment(raw.substr(cursor, search - cursor));
-		result += raw.substr(search, close - search + 1);
-		cursor = close + 1;
-		search = raw.find("sizeof...", cursor);
-	}
-	result += replace_segment(raw.substr(cursor));
-	return result;
-}
 
 void PA18TemplateExpander::IndexConstantMembers(const CPPGMAstNodePtr& node,
 	const string& owner)
@@ -1252,7 +1145,8 @@ bool PA18TemplateExpander::HasPackBeforeFixed(const TemplateDefinition& definiti
 }
 
 bool PA18TemplateExpander::ResolveGeneratedMemberAlias(const string& class_key,
-	const string& member, const string& context, string* member_type) const
+	const string& member, const string& context, string* member_type,
+	const map<string, string>& substitutions) const
 {
 	map<string, string>::const_iterator generated_base =
 		specialization_bases_.find(LastComponent(class_key));
@@ -1260,6 +1154,48 @@ bool PA18TemplateExpander::ResolveGeneratedMemberAlias(const string& class_key,
 		specialization_arguments_.find(LastComponent(class_key));
 	if(generated_base == specialization_bases_.end() ||
 		generated_arguments == specialization_arguments_.end()) return false;
+	// A nested class-template specialization is registered under its generated
+	// local name, but its registry base retains the source member owner (for
+	// example `call<Fun(A0)>::impl`).  Resolve members of that generated class
+	// through the source class-template definition with the enclosing typed
+	// bindings installed.  Falling back to the generated spelling makes lookup
+	// rediscover the source owner without ever reaching `result_type`.
+	const size_t member_owner_separator = TopLevelScopeSeparator(generated_base->second);
+	if(member_owner_separator != string::npos) {
+		const string generated_outer = PrefixComponent(class_key);
+		map<string, string>::const_iterator outer_base = specialization_bases_.find(
+			LastComponent(generated_outer));
+		map<string, vector<string> >::const_iterator outer_arguments =
+			specialization_arguments_.find(LastComponent(generated_outer));
+		const string source_member_name = LastComponent(generated_base->second);
+		const TemplateDefinition* member_definition = FindDefinition(
+			generated_base->second, context);
+		if(!member_definition) {
+			map<string, vector<string> >::const_iterator indexed =
+				definitions_by_name_.find(source_member_name);
+			if(indexed != definitions_by_name_.end())
+				for(size_t candidate = 0; candidate < indexed->second.size(); ++candidate) {
+					map<string, TemplateDefinition>::const_iterator found = definitions_.find(
+						indexed->second[candidate]);
+					if(found == definitions_.end() || !found->second.class_template ||
+						found->second.qualified_name != generated_base->second) continue;
+					member_definition = &found->second;
+					break;
+				}
+		}
+		if(member_definition && outer_base != specialization_bases_.end() &&
+			outer_arguments != specialization_arguments_.end()) {
+			map<string, string> inherited = substitutions;
+			const_cast<PA18TemplateExpander*>(this)->AddConcreteOwnerSubstitutions(
+				generated_outer, context, &inherited, true);
+			string resolved = const_cast<PA18TemplateExpander*>(this)->TemplateMemberType(
+				*member_definition, generated_arguments->second, member, context, inherited);
+			if(!resolved.empty()) {
+				*member_type = resolved;
+				return true;
+			}
+		}
+	}
 	string source_class = generated_base->second;
 	if(source_class.find('<') == string::npos) {
 		source_class += "<";
@@ -1267,13 +1203,13 @@ bool PA18TemplateExpander::ResolveGeneratedMemberAlias(const string& class_key,
 			source_class += (argument ? "," : "") + generated_arguments->second[argument];
 		source_class += ">";
 	}
-	map<string, string> source_substitutions;
+	map<string, string> source_substitutions = substitutions;
 	set<string> source_active;
 	bool found = FindClassMemberType(source_class, member, source_substitutions,
 		context, member_type, &source_active, true);
 	if(!found && member_type->empty() && !PrefixComponent(class_key).empty()) {
 		const string scoped_source = JoinPath(PrefixComponent(class_key), source_class);
-		source_substitutions.clear();
+		source_substitutions = substitutions;
 		source_active.clear();
 		found = FindClassMemberType(scoped_source, member, source_substitutions,
 			context, member_type, &source_active, true);
@@ -1293,12 +1229,87 @@ bool PA18TemplateExpander::ResolveContextMemberAlias(const string& class_key,
 	return member_type && !member_type->empty();
 }
 
-string PA18TemplateExpander::ResolveAlias(string spelling, const string& context) const
+bool PA18TemplateExpander::ResolveAliasMember(string* spelling, const string& context,
+	const map<string, string>& substitutions) const
+{
+	if(!spelling) return false;
+	const size_t separator = TopLevelScopeSeparator(*spelling);
+	if(separator == string::npos) return false;
+	string class_key = spelling->substr(0, separator);
+	string member = spelling->substr(separator + 2);
+	if(member.compare(0, 8, "template") == 0 &&
+		(member.size() == 8 || !IsIdentifierCharacter(member[8]))) {
+		member.erase(0, 8);
+		while(!member.empty() && isspace(static_cast<unsigned char>(member[0])))
+			member.erase(0, 1);
+	}
+	const size_t member_template_open = member.find('<');
+	if(member_template_open != string::npos &&
+		member.substr(0, member_template_open) == LastComponent(class_key))
+		return false;
+	if(member.find('<') != string::npos) try {
+		bool nested_replaced = false;
+		const string nested_spelling = const_cast<PA18TemplateExpander*>(this)->RewriteText(
+			class_key + "::" + member, context, substitutions, &nested_replaced,
+			false, true);
+		if(nested_replaced && nested_spelling != *spelling) {
+			*spelling = CanonicalSpelling(nested_spelling);
+			return true;
+		}
+	} catch(const PA18SubstitutionFailure&) {}
+	string member_type = MemberAliasType(class_key, member);
+	if(member_type.empty()) {
+		set<string> member_active;
+		FindClassMemberType(class_key, member, substitutions, context,
+			&member_type, &member_active, true);
+	}
+	if(member_type.empty()) ResolveGeneratedMemberAlias(class_key, member, context,
+		&member_type, substitutions);
+	if(member_type.empty()) ResolveContextMemberAlias(class_key, member, context,
+		&member_type);
+	if(member_type.empty()) {
+		const size_t owner_separator = class_key.rfind("::");
+		if(owner_separator != string::npos) {
+			const string owner_key = class_key.substr(0, owner_separator);
+			const string owner_member = class_key.substr(owner_separator + 2);
+			const string owner_type = MemberAliasType(owner_key, owner_member);
+			if(!owner_type.empty()) {
+				*spelling = owner_type + "::" + member;
+				return true;
+			}
+		}
+	}
+	if(member_type.empty()) return false;
+	if(member_type.find("::") == string::npos) {
+		const string resolved_member = ResolveAlias(member_type, context, substitutions);
+		if(!resolved_member.empty()) member_type = resolved_member;
+	}
+	*spelling = CanonicalSpelling(member_type);
+	return true;
+}
+
+string PA18TemplateExpander::ResolveAlias(string spelling, const string& context,
+	const map<string, string>& substitutions) const
 {
 	const bool reference_alias_specialization =
 		reference_alias_specializations_.find(LastComponent(spelling)) !=
 		reference_alias_specializations_.end();
 	spelling = CanonicalSpelling(spelling);
+	ostringstream alias_query_key_stream;
+	alias_query_key_stream << spelling << "|" << context;
+	for(map<string, string>::const_iterator binding = substitutions.begin();
+		binding != substitutions.end(); ++binding)
+		alias_query_key_stream << "|" << binding->first << "=" <<
+			CanonicalSpelling(binding->second);
+	const string alias_query_key = alias_query_key_stream.str();
+	if(!active_alias_resolutions_.insert(alias_query_key).second) return spelling;
+	struct AliasResolutionScope {
+		set<string>* active;
+		string key;
+		AliasResolutionScope(set<string>* value, const string& name)
+			: active(value), key(name) {}
+		~AliasResolutionScope() { active->erase(key); }
+	} alias_resolution_scope(&active_alias_resolutions_, alias_query_key);
 	string cv_prefix;
 	bool resolved_reference_alias = false;
 	if(spelling.compare(0, 6, "const ") == 0) {
@@ -1327,7 +1338,12 @@ string PA18TemplateExpander::ResolveAlias(string spelling, const string& context
 	for(size_t depth = 0; depth < 16; ++depth) {
 		if(!seen.insert(spelling).second) break;
 		map<string, string>::const_iterator direct = type_aliases_.find(spelling);
-		const bool known_class_name = spelling.find("::") == string::npos &&
+		const bool known_generated_specialization =
+			specialization_bases_.find(LastComponent(spelling)) !=
+				specialization_bases_.end() &&
+			specialization_arguments_.find(LastComponent(spelling)) !=
+				specialization_arguments_.end();
+		const bool known_class_name = !known_generated_specialization &&
 			FindClassDeclaration(spelling, context);
 		if(direct == type_aliases_.end()) {
 			for(string current = context; direct == type_aliases_.end(); ) {
@@ -1368,38 +1384,7 @@ string PA18TemplateExpander::ResolveAlias(string spelling, const string& context
 			}
 				spelling = CanonicalSpelling(target); continue;
 		}
-		// Split qualified members at a scope separator outside nested templates.
-		const size_t separator = TopLevelScopeSeparator(spelling);
-		if(separator == string::npos) break;
-		string class_key = spelling.substr(0, separator);
-		const string member = spelling.substr(separator + 2);
-		string member_type = MemberAliasType(class_key, member);
-		if(member_type.empty()) {
-			map<string, string> member_substitutions;
-			set<string> member_active;
-			FindClassMemberType(class_key, member, member_substitutions, context,
-				&member_type, &member_active, true);
-		}
-		if(member_type.empty()) ResolveGeneratedMemberAlias(class_key, member, context, &member_type);
-		if(member_type.empty()) ResolveContextMemberAlias(class_key, member, context, &member_type);
-		if(member_type.empty()) {
-			const size_t owner_separator = class_key.rfind("::");
-			if(owner_separator != string::npos) {
-				const string owner_key = class_key.substr(0, owner_separator);
-				const string owner_member = class_key.substr(owner_separator + 2);
-				const string owner_type = MemberAliasType(owner_key, owner_member);
-				if(!owner_type.empty()) {
-					spelling = owner_type + "::" + member;
-					continue;
-				}
-			}
-		}
-		if(member_type.empty()) break;
-		if(member_type.find("::") == string::npos) {
-			const string resolved_member = ResolveAlias(member_type, context);
-			if(!resolved_member.empty()) member_type = resolved_member;
-		}
-		spelling = CanonicalSpelling(member_type);
+		if(!ResolveAliasMember(&spelling, context, substitutions)) break;
 	}
 	if(resolved_reference_alias && suffix.empty() &&
 		!spelling.empty() && spelling[spelling.size() - 1] == '&') cv_prefix.clear();

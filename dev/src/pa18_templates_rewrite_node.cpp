@@ -13,9 +13,14 @@ CPPGMAstNodePtr PA18TemplateExpander::RewriteRegularNodeValue(
 	bool template_replaced = false;
 	if(PreserveDependentStaticDeclarator(input, context, substitutions, result,
 		promoted_name)) return CPPGMAstNodePtr();
-	const bool type_spelling = input->kind == "decl-specifier" ||
-		input->kind == "type-name" || input->kind == "type-specifier" ||
-		input->kind == "base-name";
+	const size_t marker_colon = input->value.find(':');
+	const string marker = marker_colon == string::npos ? string() :
+		input->value.substr(0, marker_colon);
+	const bool declaration_keyword = input->kind == "decl-specifier" &&
+		marker.compare(0, 3, "KW_") == 0;
+	const bool type_spelling = !declaration_keyword &&
+		(input->kind == "decl-specifier" || input->kind == "type-name" ||
+		input->kind == "type-specifier" || input->kind == "base-name");
 	if(input->kind == "literal" && input->value.size() >= 2 &&
 		input->value[0] == '"' && input->value[input->value.size() - 1] == '"')
 		result->value = input->value;
@@ -92,15 +97,14 @@ CPPGMAstNodePtr PA18TemplateExpander::RewriteRegularNodeValue(
 				result->value = alias->second + "::" + LastComponent(alias->second);
 		}
 	}
-	if(input->kind == "decl-specifier" || input->kind == "type-name" ||
-		input->kind == "type-specifier") {
-		const size_t marker_colon = result->value.find(':');
-		string marker;
-		if(marker_colon != string::npos) {
-			const string prefix = result->value.substr(0, marker_colon);
+	if(type_spelling) {
+		string result_marker;
+		const size_t result_marker_colon = result->value.find(':');
+		if(result_marker_colon != string::npos) {
+			const string prefix = result->value.substr(0, result_marker_colon);
 			if(prefix == "TT_IDENTIFIER" || prefix.compare(0, 3, "KW_") == 0 ||
 				prefix.compare(0, 3, "OP_") == 0)
-				marker = result->value.substr(0, marker_colon + 1);
+				result_marker = result->value.substr(0, result_marker_colon + 1);
 		}
 		const string spelling = RemoveMarker(result->value);
 		string qualified = QualifyTypeArgument(spelling, context);
@@ -113,7 +117,7 @@ CPPGMAstNodePtr PA18TemplateExpander::RewriteRegularNodeValue(
 		if(resolved.find('(') != string::npos && resolved.find(')') != string::npos)
 			resolved = qualified;
 		if(resolved != qualified) qualified = resolved;
-		if(qualified != spelling) result->value = marker + qualified;
+		if(qualified != spelling) result->value = result_marker + qualified;
 		if(input->kind == "decl-specifier" && marker.empty() &&
 			qualified != spelling && result->value.find(':') == string::npos)
 			result->value = "TT_IDENTIFIER:" + qualified;

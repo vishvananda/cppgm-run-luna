@@ -79,7 +79,8 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 		const string& context) const;
 	bool ResolveMaterializedClassOwner(const string& source_base,
 		const vector<string>& requested_arguments, const string& context,
-		string* resolved_owner) const;
+		string* resolved_owner,
+		const map<string, string>& substitutions = map<string, string>()) const;
 	CPPGMAstNodePtr FindClassDeclaration(string raw_class, const string& context) const
 	{
 		raw_class = CanonicalSpelling(raw_class);
@@ -575,6 +576,12 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 	}
 	string ExpandPackCallText(string raw,
 		const map<string, vector<string> >& packs) const;
+	string RewriteTextPackSpelling(string raw,
+		const map<string, string>& substitutions);
+	string RewriteNestedMemberSubstitutions(string raw, const string& context,
+		const map<string, string>& substitutions, bool* template_replaced);
+	string RewriteConcreteMemberSubstitutions(string raw, const string& context,
+		const map<string, string>& substitutions, bool* materialized_member_type);
 	string RewriteText(string raw, const string& context,
 		const map<string, string>& substitutions, bool* template_replaced,
 		bool resolve_alias = true, bool resolve_member = true,
@@ -918,6 +925,9 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 		const map<string, string>& substitutions,
 		map<string, string>* local_substitutions,
 		const CPPGMAstNodePtr& result);
+	void RecordClassReplayConstants(const CPPGMAstNodePtr& child,
+		const string& child_context, const map<string, string>& substitutions,
+		map<string, string>* local_substitutions);
 	bool TransformPackChild(const CPPGMAstNodePtr& input,
 		const CPPGMAstNodePtr& original_child, const string& child_context,
 		const map<string, string>& substitutions,
@@ -1013,6 +1023,8 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 		const string& context, const map<string, string>& substitutions,
 		const CPPGMAstNodePtr& result, const string& promoted_local_class,
 		bool defer_type_only_classes = false);
+	void RestoreTypedefDeclaratorNames(const CPPGMAstNodePtr& input,
+		const CPPGMAstNodePtr& result);
 	void DeduceAutoInitializerType(const CPPGMAstNodePtr& result, const string& context, const map<string, string>& substitutions); void MaterializeConditionalConversions(const CPPGMAstNodePtr& result, const string& context, const map<string, string>& substitutions); bool MaterializeConditionalConversion(const string& actual, const string& expected, const string& context, const map<string, string>& substitutions);
 	bool ConsumeMaterializedStaticAssert(const CPPGMAstNodePtr& input,
 		const CPPGMAstNodePtr& result, const string& context,

@@ -1159,11 +1159,18 @@ bool PA14Lowerer::PrepareGlobalDeclaration(const CPPGMAstNodePtr& node,
       record->initializer->children[0]->kind == "paren-initializer";
     if(enum_function_style_initializer)
       record->object_name = "_Z" + integer_text(static_cast<long long>(name.size())) + name;
-    if(generated_integral_constant || deferred_static_integral_storage ||
-       deferred_static_integral_definition) {
-      if(deferred_static_integral_storage || deferred_static_integral_definition)
-        deferred_static_members_.insert(record->qualified_name);
-      // An out-of-class definition is storage when its class specialization
+	if(generated_integral_constant || deferred_static_integral_storage ||
+	   deferred_static_integral_definition) {
+	  if(deferred_static_integral_storage || deferred_static_integral_definition)
+	    deferred_static_members_.insert(record->qualified_name);
+	  // A replayed out-of-class declaration is itself the concrete definition
+	  // of a static integral member.  Its value may be folded by the expression
+	  // path, but the definition still contributes addressable storage to the
+	  // emitted specialization (for example `bool_<B>::value`).
+	  if(deferred_static_integral_storage && node->template_instantiation &&
+	     record->template_owner && record->template_owner->template_specialization)
+	    EnsureStaticMemberStorage(member_binding);
+	  // An out-of-class definition is storage when its class specialization
       // has a complete object use.  Pointer and typedef-only uses keep the
       // old deferred behavior and do not materialize this dependent member.
       if(!deferred_static_integral_definition) return true;

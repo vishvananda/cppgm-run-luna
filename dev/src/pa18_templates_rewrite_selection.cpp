@@ -16,9 +16,33 @@ const TemplateDefinition* PA18TemplateExpander::SelectClassTemplateDefinition(
 			if(lookup_context != context)
 				return SelectClassTemplateDefinition(primary, arguments, lookup_context);
 		}
-		if(!primary->class_template && !primary->alias_template &&
-			!primary->variable_template) return primary;
-		const auto dependent_argument = [this, &context](const string& raw) {
+	if(!primary->class_template && !primary->alias_template &&
+		!primary->variable_template) return primary;
+	// Establish the fixed-point identity before probing whether an argument is
+	// dependent.  That probe itself performs ordinary class lookup, so delaying
+	// the guard until after it lets a callable-shaped argument re-enter partial
+	// specialization selection indefinitely.
+	vector<string> normalized_arguments;
+	normalized_arguments.reserve(arguments.size());
+	for(size_t argument = 0; argument < arguments.size(); ++argument)
+		normalized_arguments.push_back(NormalizeTypeArgument(RestoreSpecializationSpelling(
+			arguments[argument])));
+	// The lexical replay context is allowed to grow as a nested member is
+	// materialized.  It is not part of the class-template identity; retaining it
+	// here would give the same `is_applyable<T>` query a fresh key at every
+	// replay depth and defeat the fixed-point guard.
+	string selection_family = primary->qualified_name;
+	for(size_t argument = 0; argument < normalized_arguments.size(); ++argument)
+		selection_family += "|" + normalized_arguments[argument];
+	if(!active_class_template_selection_families_.insert(selection_family).second)
+		throw PA18SubstitutionFailure("recursive class template selection");
+	struct SelectionFamilyScope {
+		set<string>* active;
+		string key;
+		SelectionFamilyScope(set<string>* value, const string& name) : active(value), key(name) {}
+		~SelectionFamilyScope() { active->erase(key); }
+	} selection_family_scope(&active_class_template_selection_families_, selection_family);
+	const auto dependent_argument = [this, &context](const string& raw) {
 		const string dependency_spelling = CanonicalSpelling(raw);
 			for(size_t position = 0; position < dependency_spelling.size();) {
 				if(!IsIdentifierCharacter(dependency_spelling[position])) {
@@ -126,30 +150,14 @@ const TemplateDefinition* PA18TemplateExpander::SelectClassTemplateDefinition(
 		return false;
 	};
 		for(size_t argument = 0; argument < arguments.size(); ++argument)
-			if(dependent_argument(arguments[argument])) return primary;
-		vector<string> normalized_arguments;
-		normalized_arguments.reserve(arguments.size());
-		for(size_t argument = 0; argument < arguments.size(); ++argument) {
-			string normalized = NormalizeTypeArgument(RestoreSpecializationSpelling(
-				arguments[argument]));
-			normalized_arguments.push_back(normalized);
-		}
+			if(dependent_argument(arguments[argument])) {
+				return primary;
+			}
 		// A selection may recursively ask for the same semantic family while a
 		// partial specialization is being matched.  That is substitution failure,
 		// not a successful primary-template fallback.  Keep the ordinary selection
 		// key separate so distinct concrete arguments can still be evaluated.
-		string selection_family = primary->qualified_name + "|" + context;
-		for(size_t argument = 0; argument < normalized_arguments.size(); ++argument)
-			selection_family += "|" + normalized_arguments[argument];
-		if(!active_class_template_selection_families_.insert(selection_family).second)
-			throw PA18SubstitutionFailure("recursive class template selection");
-		struct SelectionFamilyScope {
-			set<string>* active;
-			string key;
-			SelectionFamilyScope(set<string>* value, const string& name) : active(value), key(name) {}
-			~SelectionFamilyScope() { active->erase(key); }
-		} selection_family_scope(&active_class_template_selection_families_, selection_family);
-		string selection_key = primary->qualified_name + "|" + context;
+	string selection_key = primary->qualified_name + "|" + context;
 		for(size_t argument = 0; argument < normalized_arguments.size(); ++argument)
 			selection_key += "|" + normalized_arguments[argument];
 		if(!active_class_template_selections_.insert(selection_key).second)
@@ -230,7 +238,9 @@ const TemplateDefinition* PA18TemplateExpander::SelectClassTemplateDefinition(
 				unique_candidates.push_back(candidates[candidate]);
 		}
 		candidates.swap(unique_candidates);
-		if(candidates.empty()) return primary;
+		if(candidates.empty()) {
+			return primary;
+		}
 		vector<string> matching_arguments = arguments;
 		for(size_t argument = 0; argument < matching_arguments.size(); ++argument) {
 			matching_arguments[argument] = NormalizeTypeArgument(
@@ -282,10 +292,12 @@ const TemplateDefinition* PA18TemplateExpander::SelectClassTemplateDefinition(
 			} catch(const PA18SubstitutionFailure&) {
 				matches = false;
 			}
-			if(matches)
-				matched.push_back(candidates[i]);
+		if(matches)
+			matched.push_back(candidates[i]);
 		}
-		if(matched.empty()) return primary;
+		if(matched.empty()) {
+			return primary;
+		}
 		const TemplateDefinition* selected = 0;
 		for(size_t i = 0; i < matched.size(); ++i) {
 			bool dominated = false;
@@ -302,7 +314,7 @@ const TemplateDefinition* PA18TemplateExpander::SelectClassTemplateDefinition(
 					"ambiguous class template partial specialization");
 			selected = matched[i];
 		}
-		if(selected) {
+	if(selected) {
 			return selected;
 		}
 		throw PA18SubstitutionFailure(

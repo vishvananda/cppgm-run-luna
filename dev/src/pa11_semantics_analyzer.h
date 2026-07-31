@@ -566,6 +566,18 @@ public:
 				if (open != string::npos)
 					binding = ResolveBinding(scope, expression->value.substr(0, open));
 			}
+			if (!binding) {
+				// A qualified static member expression has a class type as its
+				// left operand (`specialization::value`).  PA18 may publish that
+				// specialization as a generated typed declaration without adding a
+				// same-spelled value binding to the enclosing scope; resolve the
+				// operand through the semantic type table before reporting an unknown
+				// expression name.
+				try {
+					TypePtr named_type = ResolveType(scope, expression->value);
+					if (named_type) return named_type;
+				} catch (const logic_error&) {}
+			}
 			if (!binding) throw logic_error("unknown expression name");
 			return binding->type;
 		}
@@ -623,10 +635,25 @@ public:
 			if (expression->children.size() > 1 && expression->children[1])
 				arity = expression->children[1]->children.size();
 			if (expression->children[0] && expression->children[0]->kind ==
-				"id-expression" && arity != static_cast<size_t>(-1)) {
-				TypePtr result = ExpressionCallType(expression, scope, arity);
-				if (result) return result;
-			}
+					"id-expression" && arity != static_cast<size_t>(-1)) {
+					TypePtr result = ExpressionCallType(expression, scope, arity);
+					if (result) return result;
+					// A class template-id followed by parentheses is a functional
+					// cast/construction expression.  It has no function binding, but
+					// its expression type is still the generated class.  Preserve that
+					// type so a subsequent overload probe can use conversion functions
+					// (for example `bool_<false>`'s wrapper conversion).
+					Binding* named_type = ResolveBinding(scope,
+						expression->children[0]->value);
+					if(!named_type && expression->children[0]->value.find('<') != string::npos) {
+						const size_t open = expression->children[0]->value.find('<');
+						named_type = ResolveBinding(scope,
+							expression->children[0]->value.substr(0, open));
+					}
+					if(named_type && (named_type->kind == BIND_TYPE ||
+						named_type->kind == BIND_TYPE_ALIAS) && named_type->type &&
+						named_type->type->kind == TYPE_CLASS) return named_type->type;
+				}
 			TypePtr callee = ExpressionType(expression->children[0], scope, arity);
 			return callee && callee->kind == TYPE_FUNCTION ? callee->child : Fundamental("int");
 		}
@@ -1012,7 +1039,7 @@ public:
 				return;
 			throw;
 		}
-			const bool known = value.integral.known || value.floating_known ||
+		const bool known = value.integral.known || value.floating_known ||
 				(value.kind == ConstantValue::CONSTANT_OBJECT && value.object) ||
 				(value.kind == ConstantValue::CONSTANT_POINTER && value.pointer);
 		bool truth = false;
