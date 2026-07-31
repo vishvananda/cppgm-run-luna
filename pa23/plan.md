@@ -3917,7 +3917,10 @@ materialization.  This removes downstream string recovery and keeps overload,
 pack, default, and substitution behavior on the existing semantic path.
 
 The audit preserved the Checkpoint 28 result at **354/396**, with the complete
-current-PA set unchanged at **19 status failures** and **23 LowIR comparisons**.
+current-PA set at **19 status failures** (one timeout in the fixed-point pair)
+and **23 LowIR comparisons**.  The same isolated fixed-point timeout
+reproduces against the pre-audit `919117b` tree, so it is an existing semantic
+frontier rather than an audit regression or a reason to weaken the harness.
 The exact fixture names remain in the Checkpoint 28 result immediately above.
 The concise remaining map and next substantial group are:
 
@@ -3928,7 +3931,8 @@ The concise remaining map and next substantial group are:
   packs, dependent boolean/trailing results, MP11/recursive queries, and
   rvalue-reference conversion ranking.
 - **Fixed-point query stress:** 2 status failures requiring typed query
-  identity and remaining ordinary termination behavior.
+  identity and stable termination behavior; one currently reaches the
+  harness timeout.
 - **Typed value/LowIR materialization:** 23 comparisons covering non-type and
   variable-template values, `sizeof`, explicit type arguments, owner metadata,
   generated bodies, operators, and storage.

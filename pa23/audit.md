@@ -1692,18 +1692,22 @@ the owner/specialization replay, deduction/overload, and LowIR groups.
 - The implicit-member fallback only marks a call as handled after typed
   `InferArgument` and `FindClassMemberType` succeed.  It does not manufacture
   output or turn a failed lookup into success.  The two reentrant static-query
-  fixtures remain ordinary termination failures in the report; no timeout,
-  retry budget, timing acceptance, or substitute execution path was added.
+  fixtures remain ordinary fixed-point failures in the report; one is observed
+  as `EXIT_TIMEOUT` under the current harness, and the same isolated timeout
+  reproduces at the pre-audit `919117b` tree.  No timeout, retry budget, timing
+  acceptance, or substitute execution path was added.
 - The source file audit has no fatal finding and retains the same 13
   repository-level advisory warnings.  No tests, references, harnesses,
   checker rules, generated payloads, hidden implementation fragments, or
   unchecked paths were added or modified.
 - The audit fix leaves the current-PA count at the checkpoint baseline
   (**354/396**) and preserves the earlier assignments (**2100/2100 through
-  PA22**).  The complete current-PA residual is exactly **19 exit-status
-  failures** and **23 LowIR comparisons**; the fresh log contains no timeout.
-  These are the planned semantic work frontier, not an unresolved checkpoint
-  shortcut, ownership, performance, regression, or file-audit blocker.
+  PA22**).  The complete current-PA residual is exactly **19 status failures**
+  (including one timeout in the fixed-point pair) and **23 LowIR comparisons**.
+  Reproducing that timeout at the landed pre-audit tree confirms it is the
+  existing fixed-point semantic frontier, not a checkpoint-level performance
+  regression.  These are not an unresolved checkpoint shortcut, ownership,
+  regression, or file-audit blocker.
 
 ### Changes Made
 
@@ -1731,7 +1735,8 @@ the owner/specialization replay, deduction/overload, and LowIR groups.
   (`n=23; ... make test-report-through-pa22`): **PASS, 2100/2100**.
 - `make test-report ACTIVE_TEST_REPORT_PAS='pa23'`: **354/396**, exit 2 only
   for the 42 checked-in PA23 residual fixtures; the primary log reports
-  exactly **19 status** and **23 LowIR** failures.
+  exactly **19 status** (one timeout in the fixed-point pair) and **23 LowIR**
+  failures.
 - `perl scripts/cppgm_file_audit.pl --stage pa23 --paths dev/src`:
   **PASS**, with 13 non-fatal advisory warnings and no fatal finding.
 - `git diff --check`: **PASS**.
@@ -1747,8 +1752,9 @@ the owner/specialization replay, deduction/overload, and LowIR groups.
   dependent boolean/trailing results, MP11/recursive queries, and
   rvalue-reference conversion selection remain after candidate replay.
 - **Fixed-point query stress — 2 status failures:** both reentrant static
-  query fixtures remain explicit termination coverage and must be solved with
-  stable typed query identity, not timing or fallback acceptance.
+  query fixtures remain explicit termination coverage; one currently reaches
+  the harness timeout, and both must be solved with stable typed query
+  identity, not timing or fallback acceptance.
 - **Typed value and LowIR materialization — 23 comparisons:** static and
   variable-template storage, non-type alias state, `sizeof`, explicit type
   arguments, partial member owners, and generated body/storage metadata still
