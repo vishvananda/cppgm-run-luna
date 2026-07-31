@@ -80,6 +80,34 @@ string MatchPatternTemplateBase(string raw)
 		raw[raw.size() - 1] == '*')) raw.erase(raw.size() - 1);
 	return CanonicalSpelling(raw);
 }
+
+string NormalizeBuiltinScalarSpelling(string raw)
+{
+	raw = CanonicalSpelling(raw);
+	if(raw.find('<') != string::npos || raw.find('>') != string::npos ||
+		raw.find("::") != string::npos) return raw;
+	const pair<const char*, const char*> aliases[] = {
+		{"unsigned long long int", "unsigned long long"},
+		{"long long int", "long long"},
+		{"unsigned long int", "unsigned long"},
+		{"long int", "long"},
+		{"unsigned short int", "unsigned short"},
+		{"short int", "short"},
+		{"unsigned int", "unsigned"},
+		{"signed int", "signed"}
+	};
+	for(size_t alias = 0; alias < sizeof(aliases) / sizeof(aliases[0]); ++alias) {
+		const string from = aliases[alias].first;
+		const string to = aliases[alias].second;
+		size_t at = raw.find(from);
+		while(at != string::npos) {
+			raw.replace(at, from.size(), to);
+			at = raw.find(from, at + to.size());
+		}
+	}
+	return CanonicalSpelling(raw);
+}
+
 }
 
 bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
@@ -158,6 +186,10 @@ int PA18TemplateExpander::MatchTypePatternNormalized(string pattern, string actu
 	}
 	pattern = SeparatePatternCv(pattern);
 	actual = SeparatePatternCv(actual);
+	if(NormalizeBuiltinScalarSpelling(pattern) ==
+		NormalizeBuiltinScalarSpelling(actual)) {
+		return 1;
+	}
 	pattern = CanonicalSpelling(pattern);
 	int result = MatchTypePatternSimpleCases(pattern, actual, parameter_names,
 		inferred, context, class_pattern);

@@ -114,6 +114,25 @@ void MarkStaticGeneratedFunction(const CPPGMAstNodePtr& node)
 		CPPGMAstNodePtr(new CPPGMAstNode("decl-specifier", "KW_STATIC:static")));
 }
 
+bool HasTopLevelIndirection(const string& raw)
+{
+	int angle_depth = 0;
+	for(size_t position = 0; position < raw.size(); ++position) {
+		const char ch = raw[position];
+		if(ch == '<' && IsTemplateAngleOpen(raw, position)) {
+			++angle_depth;
+			continue;
+		}
+		if(ch == '>' && angle_depth > 0 && IsTemplateAngleClose(raw, position)) {
+			--angle_depth;
+			continue;
+		}
+		if(angle_depth == 0 && (ch == '*' || ch == '&' || ch == '[' || ch == ']'))
+			return true;
+	}
+	return false;
+}
+
 } // namespace
 
 void PA18TemplateExpander::AdjustGeneratedFunctionPosition(
@@ -276,6 +295,12 @@ bool PA18TemplateExpander::HasUnavailableGeneratedMemberType(string raw,
 	if(separator == string::npos) return false;
 	const string owner = raw.substr(0, separator);
 	const string member = raw.substr(separator + 2);
+	// Once substitution has made the owner a concrete array, pointer, or
+	// reference spelling, a qualified member lookup cannot be deferred as a
+	// dependent type.  It is a candidate-local substitution failure.  Keep
+	// namespace-qualified names on the ordinary lookup path below.
+	if(HasTopLevelIndirection(owner))
+		return true;
 	// Only a qualified member of a known type can be a dependent member probe.
 	// Namespace-qualified ordinary types such as `regex_constants::enum_value`
 	// must remain on the normal function-template path.
@@ -395,6 +420,37 @@ bool PA18TemplateExpander::GeneratedNodeHasUnavailableMemberType(
 	return false;
 }
 
+bool PA18TemplateExpander::HasUnavailableGeneratedClassMemberType(
+	const CPPGMAstNodePtr& generated, const string& generated_path,
+	const string& generated_owner, const string& local_name,
+	const string& concrete_owner, const string& context,
+	const map<string, string>& substitutions)
+{
+	if(!generated) return false;
+	set<string> probe_paths;
+	probe_paths.insert(generated_path);
+	probe_paths.insert(JoinPath(generated_owner, local_name));
+	if(!concrete_owner.empty()) probe_paths.insert(JoinPath(concrete_owner, local_name));
+	map<string, CPPGMAstNodePtr> previous;
+	for(set<string>::const_iterator path = probe_paths.begin();
+		path != probe_paths.end(); ++path) {
+		if(path->empty()) continue;
+		map<string, CPPGMAstNodePtr>::const_iterator found = class_declarations_.find(*path);
+		if(found != class_declarations_.end()) previous[*path] = found->second;
+		class_declarations_[*path] = generated;
+	}
+	const bool unavailable = GeneratedNodeHasUnavailableMemberType(
+		generated, context, substitutions);
+	for(set<string>::const_iterator path = probe_paths.begin();
+		path != probe_paths.end(); ++path) {
+		if(path->empty()) continue;
+		map<string, CPPGMAstNodePtr>::const_iterator found = previous.find(*path);
+		if(found == previous.end()) class_declarations_.erase(*path);
+		else class_declarations_[*path] = found->second;
+	}
+	return unavailable;
+}
+
 
 void PA18TemplateExpander::RegisterGeneratedTypeEntity(
 	const TemplateDefinition& definition, const CPPGMAstNodePtr& generated,
@@ -446,8 +502,16 @@ void PA18TemplateExpander::RegisterGeneratedTypeEntity(
 			owner != concrete_owners.end(); ++owner)
 			RegisterGeneratedTypeAlias(generated, *owner);
 	}
-	if(!definition.class_template) return;
+	// Make the generated declaration visible while checking its own dependent
+	// members.  This lets a valid alias such as `C<T>::allocator_type` resolve
+	// before the normal registration below, while restoring all prior entries
+	// if the class is discarded as a substitution failure.
 	const string generated_path = JoinPath(definition.owner, local_name);
+	if(definition.class_template && HasUnavailableGeneratedClassMemberType(
+		generated, generated_path, generated_owner, local_name, concrete_owner,
+		context, substitutions))
+		throw PA18SubstitutionFailure("dependent type substitution failed");
+	if(!definition.class_template) return;
 	class_declarations_[generated_path] = generated;
 	RememberClassPath(generated_path);
 	// Generated nested class specializations have concrete array bounds and

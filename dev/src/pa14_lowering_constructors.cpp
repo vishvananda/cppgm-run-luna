@@ -1,10 +1,47 @@
 #include "pa14_lowering.h"
 
+#include <cctype>
 #include <set>
 
 using namespace std;
 
 namespace cppgm_pa14_lowering {
+
+static string CompactConstructorTypeSpelling(const string& raw)
+{
+    string result;
+    for(size_t i = 0; i < raw.size(); ++i)
+      if(!isspace(static_cast<unsigned char>(raw[i]))) result += raw[i];
+    return result;
+}
+
+static string TypedConstructorTypeSpelling(const TypePtr& raw_type)
+{
+    TypePtr type = type_value(raw_type);
+    if(!type) return string();
+    if(type->template_specialization && !type->template_primary.empty()) {
+      string result = type->template_primary + "<";
+      for(size_t argument = 0; argument < type->template_arguments.size(); ++argument) {
+        if(argument != 0) result += ",";
+        result += type->template_arguments[argument];
+      }
+      return result + ">";
+    }
+    return type->name;
+}
+
+static bool ConstructorInitializerNamesType(const string& raw_name,
+                                            const TypePtr& target_type)
+{
+    if(!target_type) return false;
+    const string candidate = CompactConstructorTypeSpelling(raw_name);
+    if(candidate.empty()) return false;
+    const string typed = CompactConstructorTypeSpelling(
+      TypedConstructorTypeSpelling(target_type));
+    if(candidate == typed || candidate == CompactConstructorTypeSpelling(target_type->name))
+      return true;
+    return false;
+}
 
 string PA14Lowerer::EmitTemporaryObjectAddress(const CPPGMAstNodePtr& node,
                                                Scope* scope,
@@ -391,7 +428,8 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
         if(!initializer || initializer->kind != "mem-initializer") continue;
         CPPGMAstNodePtr name_node = ChildOfKind(initializer, "mem-initializer-id");
         bool matches_base = name_node &&
-          (LastComponent(name_node->value) == LastComponent(base->name) ||
+          (ConstructorInitializerNamesType(name_node->value, base) ||
+           LastComponent(name_node->value) == LastComponent(base->name) ||
            name_node->value == base->name);
         if(name_node && !matches_base) {
           Analyzer::PathTarget alias = analyzer_.ResolvePath(scope, LastComponent(name_node->value));
@@ -514,7 +552,8 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
       vector<CPPGMAstNodePtr> arguments = argument_node ? argument_node->children :
         vector<CPPGMAstNodePtr>();
       const bool is_base_initializer = base &&
-        (name == LastComponent(base->name) || name == base->name);
+        ((name_node && ConstructorInitializerNamesType(name_node->value, base)) ||
+         name == LastComponent(base->name) || name == base->name);
       if(owner->polymorphic && !vptr_stored && !delegating &&
          !is_base_initializer && name != LastComponent(owner->name)) {
         EmitVPointerStore(owner, EmitValue(this_node, scope).operand);
@@ -527,7 +566,8 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
         continue;
       }
       TypePtr named_base;
-      if(base && (name == LastComponent(base->name) || name == base->name)) named_base = base;
+      if(base && (is_base_initializer || name == LastComponent(base->name) ||
+                  name == base->name)) named_base = base;
       if(base && !named_base) {
         Analyzer::PathTarget alias = analyzer_.ResolvePath(scope, name);
         TypePtr alias_type = alias.binding ? type_value(alias.binding->type) : TypePtr();

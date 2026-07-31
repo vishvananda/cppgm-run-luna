@@ -637,7 +637,7 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 						one[pack_name] = values[visit];
 					}
 					string expected = RewriteText(pattern, context, one, 0);
-					expected = NormalizeTypeArgument(ReplaceIdentifiers(expected, one));
+					expected = NormalizeTypeArgument(ReplaceIdentifiers(expected, one)); if(HasUnavailableGeneratedMemberType(expected, context, one)) return false;
 					if(!FunctionArgumentViable(expected, actual_types[actual + visit], context))
 						return false;
 				}
@@ -663,13 +663,13 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 						return false;
 					}
 					formed = NormalizeTypeArgument(ReplaceIdentifiers(formed, local));
-					if(formed.empty()) return false;
+					if(formed.empty() || HasUnavailableGeneratedMemberType(formed, default_context, local)) return false;
 					continue;
 				}
 				return false;
 			}
 			string expected = RewriteText(ParameterTypeSpelling(node), context, local, 0);
-			expected = NormalizeTypeArgument(ReplaceIdentifiers(expected, local));
+			expected = NormalizeTypeArgument(ReplaceIdentifiers(expected, local)); if(HasUnavailableGeneratedMemberType(expected, context, local)) return false;
 				if(!FunctionArgumentViable(expected, actual_types[actual], context)) {
 					return false;
 				}

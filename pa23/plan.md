@@ -2905,3 +2905,78 @@ listed above. No tests or reference fixtures were changed.
 The next checkpoint is the bundled constructor/template-template deduction and
 named-parameter SFINAE group, with the adjacent typed-value consumers for
 `sizeof`, boolean/integral members, and variable-template materialization.
+
+## Checkpoint 23 scope — dependent candidate viability
+
+### Remaining Work Map
+
+- **Dependent candidate viability:** concrete invalid member spellings such as
+  `array-type::missing` are surviving template probes instead of becoming
+  candidate-local substitution failures; non-type `enable_if` defaults and
+  constructor-template parameter frames are the adjacent cases.
+- **Template-template parsing and deduction:** qualified template-template
+  constructor parameters still have a parser/deduction gap in the tuple-like
+  default-argument witness.
+- **Owner/value replay:** source-namespace lookup, local qualified replay,
+  boolean/integral/`sizeof` values, variable templates, and declaration
+  materialization remain the larger LowIR group.
+- **Fixed points and special members:** the reentrant queries, explicit/extern
+  declarations, special-member replay, and conversion selection remain after
+  candidate viability is stable.
+
+### Checkpoint Scope
+
+Repair the shared template-candidate viability boundary so that a substituted
+qualified member type is rejected only when its concrete owner is a non-class
+or the named member is unavailable, while unresolved dependent owners and
+ordinary namespace-qualified types remain deferred. Apply the same typed
+substitution frame to non-type `enable_if` defaults and constructor-template
+parameters. Validate the named-parameter SFINAE, unused static-member return,
+constructor const-reference conversion, and constructor-shadow witnesses,
+then rerun the active report, through-PA22 report, and audit.
+
+## Checkpoint 23 result — 2026-07-31
+
+The candidate-viability boundary now keeps substituted facts typed through
+function-argument and default-argument checks. Concrete array/pointer/
+reference owners of qualified member probes fail only in the candidate that
+formed them; unresolved owners and ordinary namespace-qualified names remain
+deferred. Generated class checks temporarily index the generated declaration,
+so valid member aliases resolve before the class is published and invalid
+dependent class members become substitution failures. Static member replay
+also drops an unused overload whose return class has an invalid generated
+base. Constructor replay now recognizes typed template-id base initializers,
+and suppresses only the duplicate primary constructor emitted from a
+member-template base-entry path. Scalar template inference treats equivalent
+fundamental spellings such as `long long` and `long long int` identically.
+
+The checkpoint witnesses pass: named-parameter SFINAE, unused static-member
+return, constructor const-reference conversion, and constructor-parameter
+shadowing (**4/4**). The active PA23 report is **336/396**, up from the
+turn-start **321/396** and the prior checkpoint's **332/396**.
+
+### Remaining Work Map
+
+- **Owner and namespace replay:** qualified function/member lookup, local and
+  anonymous-namespace replay, inherited aliases, and generated owner display
+  names still account for several status and LowIR failures.
+- **Deduction and overload composition:** template-template defaults,
+  explicit packs, reference partial ordering, conversion selection, and
+  defaulted constructor candidates remain the largest status group.
+- **Typed values and materialization:** boolean/integral/`sizeof` values,
+  variable templates, explicit/extern declarations, special members, and
+  generated LowIR storage/order metadata remain comparison residuals.
+- **Fixed points:** the two reentrant static-query cases still need a typed
+  terminating query identity.
+
+### Validation and next checkpoint
+
+- `make test-report ACTIVE_TEST_REPORT_PAS='pa23'`: **336/396**.
+- `make test-report-through-pa22`: **PASS (2100/2100)**.
+- `perl scripts/cppgm_file_audit.pl --stage pa23 --paths dev/src`: **PASS**
+  with 13 repository warnings.
+- `git diff --check`: **PASS**.
+
+The next checkpoint is the template-template/defaulted deduction group,
+bundled with the remaining owner-replay cases that fail during candidate
+selection rather than LowIR materialization.
