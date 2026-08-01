@@ -690,8 +690,14 @@ bool PA18TemplateExpander::MaterializeImplicitMemberCall(
 		result_callee->children.size() >= 2 && result_callee->children[1] &&
 		(result_callee->children[1]->value == "operator()" ||
 		 result_callee->children[1]->value.find("operator()__") == 0);
-	if(result_callee && result_callee->kind == "member-expression" && !operator_target)
+	if(result_callee && result_callee->kind == "member-expression" && !operator_target) {
+		// The call's arguments may contain a converting constructor whose
+		// definition is itself a dependent member template.  Materialize that
+		// conversion while the typed receiver and replay substitutions are still
+		// available; PA14 otherwise reports no viable member overload.
+		MaterializeMemberCallConversions(result, result_callee, context, substitutions);
 		InstantiateMemberCall(result, result_callee, original_member, context, substitutions);
+	}
 	ResolveMemberFunctionArguments(result, context, substitutions);
 	if(result_callee && result_callee->kind == "id-expression" &&
 		result_callee->value.find("::") == string::npos) {

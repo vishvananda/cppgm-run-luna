@@ -891,7 +891,7 @@ void PA18TemplateExpander::InsertGenerated(vector<CPPGMAstNodePtr>* children,
 {
 	if(!children) return;
 	map<string, vector<CPPGMAstNodePtr> >::iterator found = generated_by_owner_.find(owner);
-	if(found == generated_by_owner_.end() || found->second.empty()) return;
+	if(found == generated_by_owner_.end() || found->second.empty()) return; if(owner.empty()) RehomeAnonymousGeneratedLayout(children);
 	if(owner.empty() || class_contexts_.find(owner) == class_contexts_.end()) {
 		set<string> deferred_names;
 		map<string, set<string> > dependencies_by_name;
@@ -972,6 +972,7 @@ void PA18TemplateExpander::InsertGenerated(vector<CPPGMAstNodePtr>* children,
 				if(LastComponent(*candidate) != value) continue;
 				if(matches_owner(*candidate)) return true;
 			}
+			if(HasKnownAnonymousClassPath(value)) return true;
 			return false;
 		};
 		for(size_t argument = 0; argument < arguments->second.size(); ++argument) {
@@ -1123,7 +1124,6 @@ void PA18TemplateExpander::InsertGenerated(vector<CPPGMAstNodePtr>* children,
 		if(i < children->size()) reordered.push_back((*children)[i]);
 	}
 	children->swap(reordered);
-
 	size_t function_position = children->size();
 	for(size_t i = 0; i < children->size(); ++i) {
 		const string& kind = (*children)[i]->kind;

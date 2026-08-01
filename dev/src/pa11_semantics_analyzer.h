@@ -65,6 +65,7 @@ public:
 		set<Scope*>& visited) const
 	{
 		if (!from || !visited.insert(from).second) return 0;
+		if (from->kind == SCOPE_NAMESPACE && from->name == name) return from;
 		map<string, Scope*>::const_iterator child = from->namespace_children.find(name);
 		if (child != from->namespace_children.end()) return child->second;
 		map<string, Scope*>::const_iterator alias = from->namespace_aliases.find(name);

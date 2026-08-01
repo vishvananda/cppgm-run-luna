@@ -86,8 +86,16 @@ size_t Analyzer::TypeSize(const TypePtr& type) const
 			type->owned_scope->owner_type->complete &&
 			type->owned_scope->owner_type->layout_complete)
 			return type->owned_scope->owner_type->object_size;
-		if (!type->complete || !type->layout_complete)
+		if (!type->complete || !type->layout_complete) {
+			// PA18 may intentionally retain only the generated specialization shell
+			// while a type-only replay is waiting for a later member-qualified use.
+			// Such a shell is still a complete nominal object for the staged
+			// compiler's lowering path; use its recorded size when available and the
+			// ordinary empty-class size until the deferred body is replayed.
+			if(type->complete && type->template_specialization && !type->layout_complete)
+				return type->object_size ? type->object_size : 1;
 			throw logic_error("sizeof incomplete class");
+		}
 		return type->object_size;
 	case TYPE_TEMPLATE_PARAMETER:
 	case TYPE_TEMPLATE_TEMPLATE_PARAMETER: return 0;
@@ -1411,6 +1419,18 @@ TypePtr Analyzer::ProcessForwardClass(const CPPGMAstNodePtr& node, Scope* scope)
 	const string raw_name = node->value;
 	const string name = LastComponent(raw_name);
 	if (name.empty()) throw logic_error("anonymous class forward declaration");
+	string template_primary_name = LastComponent(node->template_primary);
+	const size_t template_primary_angle = template_primary_name.find('<');
+	if(template_primary_angle != string::npos)
+		template_primary_name.erase(template_primary_angle);
+	const bool generated_name_matches_primary = !template_primary_name.empty() &&
+		(template_primary_name == name ||
+			(name.size() > template_primary_name.size() &&
+			 name.compare(0, template_primary_name.size(), template_primary_name) == 0 &&
+			 (name[template_primary_name.size()] == '_' ||
+			  name[template_primary_name.size()] == '<')));
+	const bool has_template_metadata = node->template_instantiation &&
+		generated_name_matches_primary;
 	Scope* owner = scope;
 	if (TopLevelScopeSeparator(raw_name) != string::npos)
 	{
@@ -1422,20 +1442,36 @@ TypePtr Analyzer::ProcessForwardClass(const CPPGMAstNodePtr& node, Scope* scope)
 	Binding* existing = owner->local(name);
 	if (existing && existing->kind == BIND_TYPE)
 	{
-		if (existing->type && existing->type->kind == TYPE_CLASS)
+		if (existing->type && existing->type->kind == TYPE_CLASS) {
+			if(has_template_metadata) {
+				existing->type->template_specialization = true;
+				existing->type->template_primary = node->template_primary;
+				existing->type->template_arguments = node->template_arguments;
+			}
 			ApplyClassAttributes(node, existing->type, scope);
+		}
 		return existing->type;
 	}
 	existing = ResolveBinding(scope, name);
 	if (existing && (existing->kind == BIND_TYPE || existing->kind == BIND_TYPE_ALIAS) &&
 		existing->type && existing->type->kind == TYPE_CLASS)
 	{
+		if(has_template_metadata) {
+			existing->type->template_specialization = true;
+			existing->type->template_primary = node->template_primary;
+			existing->type->template_arguments = node->template_arguments;
+		}
 		ApplyClassAttributes(node, existing->type, scope);
 		return existing->type;
 	}
 	TypePtr type(new Type(TYPE_CLASS, name));
 	type->tag = ClassKey(node);
 	type->complete = false;
+	if(has_template_metadata) {
+		type->template_specialization = true;
+		type->template_primary = node->template_primary;
+		type->template_arguments = node->template_arguments;
+	}
 	ApplyClassAttributes(node, type, scope);
 	if (!owner->qualified_prefix.empty()) type->name = owner->qualified_prefix + "::" + name;
 	AddTypeBinding(owner, name, type);

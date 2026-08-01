@@ -1396,7 +1396,11 @@ void PA18TemplateExpander::RegisterGeneratedSpecialization(
 	vector<CPPGMAstNodePtr>& forwards = generated_namespace_forwards_[generated_owner];
 	for(size_t i = 0; i < forwards.size(); ++i)
 		if(forwards[i] && LastComponent(forwards[i]->value) == local_name) return;
-	forwards.push_back(MakeForwardClass(local_name));
+	CPPGMAstNodePtr forward = MakeForwardClass(local_name);
+	forward->template_instantiation = true;
+	forward->template_primary = definition.qualified_name;
+	forward->template_arguments = metadata_args;
+	forwards.push_back(forward);
 }
 
 bool PA18TemplateExpander::ConcreteOwnerMatches(

@@ -812,6 +812,27 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 					}
 				}
 			}
+			int selected_score = -1;
+			const auto ordinary_argument_score = [this, &function_context](
+				const string& parameter, const string& actual) {
+				const string expected = FunctionArgumentObjectType(parameter, function_context);
+				const string received = FunctionArgumentObjectType(actual, function_context);
+				if(expected.empty() || received.empty()) return 0;
+				if(expected == received) return 4;
+				const size_t expected_pointer = expected.rfind('*');
+				const size_t received_pointer = received.rfind('*');
+				if(expected_pointer != string::npos && received_pointer != string::npos) {
+					const string expected_target = CanonicalSpelling(expected.substr(0, expected_pointer));
+					const string received_target = CanonicalSpelling(received.substr(0, received_pointer));
+					if(expected_target == "void") return 1;
+					const string qualified_expected = CanonicalSpelling(QualifyTypeArgument(
+						expected_target, function_context));
+					const string qualified_received = CanonicalSpelling(QualifyTypeArgument(
+						received_target, function_context));
+					if(!qualified_expected.empty() && qualified_expected == qualified_received) return 3;
+				}
+				return 1;
+			};
 			for(map<string, vector<FunctionSignature> >::const_iterator overload =
 				function_overloads_.begin(); overload != function_overloads_.end(); ++overload) {
 				bool matches = overload->first == callee;
@@ -831,6 +852,7 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 					const FunctionSignature& signature = overload->second[candidate];
 					const CPPGMAstNodePtr parameters = signature.parameters;
 					bool ellipsis = false, viable = true;
+					int candidate_score = 0;
 					size_t actual = 0;
 					if(parameters) for(size_t parameter = 0; parameter < parameters->children.size();
 						++parameter) {
@@ -861,6 +883,8 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 						const bool parameter_viable = viable && FunctionArgumentViable(parameter_type,
 							actual_types[actual], function_context);
 						if(!parameter_viable) viable = false;
+						else candidate_score += ordinary_argument_score(parameter_type,
+							actual_types[actual]);
 						++actual;
 						}
 					if(signature.deleted || !viable || actual != actual_types.size() && !ellipsis)
@@ -873,9 +897,11 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 							function_context));
 					} catch(const PA18SubstitutionFailure&) { ordinary_result.clear(); }
 					if(ordinary_result.empty()) continue;
-					if(!selected_any || (selected_ellipsis && !ellipsis)) {
+					if(!selected_any || candidate_score > selected_score ||
+						(candidate_score == selected_score && selected_ellipsis && !ellipsis)) {
 						selected_result = ordinary_result;
 						selected_ellipsis = ellipsis;
+						selected_score = candidate_score;
 						selected_any = true;
 					}
 				}

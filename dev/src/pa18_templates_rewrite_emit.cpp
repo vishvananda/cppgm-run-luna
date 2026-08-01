@@ -657,6 +657,19 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 		((member_owner_definition && member_owner_definition->class_template) ||
 		 class_contexts_.find(member_owner_name) != class_contexts_.end() ||
 		 FindClassDeclaration(member_owner_name, context));
+	// An explicit specialization of an out-of-class member definition uses the
+	// injected class name in its parameter types (`Box` in `Box<bool>::f`).
+	// The member definition is replayed outside the class-template transform, so
+	// bind that injected spelling to the concrete owner before ordinary child
+	// rewriting sees it.
+	if(definition.explicit_specialization && member_definition &&
+		!definition.class_template) {
+		string injected_name = LastComponent(definition.owner);
+		const size_t injected_angle = injected_name.find('<');
+		if(injected_angle != string::npos) injected_name.erase(injected_angle);
+		if(!injected_name.empty() && !requested_owner.empty())
+			substitutions[injected_name] = requested_owner;
+	}
 	const bool ordinary_class_member = member_definition &&
 		member_owner_name.find('<') == string::npos &&
 		FindClassDeclaration(member_owner_name, context) != CPPGMAstNodePtr() &&
@@ -1136,7 +1149,11 @@ string PA18TemplateExpander::MaterializeInstantiation(const TemplateDefinition& 
 			definition.owner : definition.lexical_owner;
 		const string generated_path = JoinPath(definition.owner, local_name);
 		const string lexical_path = JoinPath(generated_owner, local_name);
-		class_declarations_[generated_path] = MakeForwardClass(local_name);
+		CPPGMAstNodePtr forward = MakeForwardClass(local_name);
+		forward->template_instantiation = true;
+		forward->template_primary = definition.qualified_name;
+		forward->template_arguments = metadata_args;
+		class_declarations_[generated_path] = forward;
 		class_declarations_[lexical_path] = class_declarations_[generated_path];
 		RememberClassPath(generated_path);
 		RememberClassPath(lexical_path);
@@ -1148,7 +1165,11 @@ string PA18TemplateExpander::MaterializeInstantiation(const TemplateDefinition& 
 			definition.owner : definition.lexical_owner;
 		const string generated_path = JoinPath(definition.owner, local_name);
 		const string lexical_path = JoinPath(generated_owner, local_name);
-		class_declarations_[generated_path] = MakeForwardClass(local_name);
+		CPPGMAstNodePtr forward = MakeForwardClass(local_name);
+		forward->template_instantiation = true;
+		forward->template_primary = definition.qualified_name;
+		forward->template_arguments = metadata_args;
+		class_declarations_[generated_path] = forward;
 		class_declarations_[lexical_path] = class_declarations_[generated_path];
 		RememberClassPath(generated_path);
 		RememberClassPath(lexical_path);

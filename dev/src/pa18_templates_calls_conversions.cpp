@@ -104,6 +104,57 @@ void PA18TemplateExpander::MaterializeOrdinaryCallConversions(
 	}
 }
 
+void PA18TemplateExpander::MaterializeMemberCallConversions(
+	const CPPGMAstNodePtr& result, const CPPGMAstNodePtr& callee,
+	const string& context, const map<string, string>& substitutions)
+{
+	if(!result || result->children.size() < 2 || !callee ||
+		callee->kind != "member-expression" || callee->children.size() < 2 ||
+		!callee->children[0] || !callee->children[1] || !result->children[1] ||
+		result->children[1]->kind != "argument-list") return;
+	string object_type;
+	if(!InferArgument(callee->children[0], &object_type, substitutions, context)) return;
+	try {
+		object_type = CanonicalSpelling(ResolveAlias(RewriteText(
+			object_type, context, substitutions, 0), context));
+	} catch(const PA18SubstitutionFailure&) {
+		return;
+	}
+	while(object_type.compare(0, 6, "const ") == 0 ||
+		object_type.compare(0, 9, "volatile ") == 0)
+		object_type = CanonicalSpelling(object_type.substr(object_type.find(' ') + 1));
+	if(callee->value == "->" && !object_type.empty() && object_type.back() == '*')
+		object_type = CanonicalSpelling(object_type.substr(0, object_type.size() - 1));
+while(!object_type.empty() && (object_type.back() == '&' || object_type.back() == '*'))
+		object_type = CanonicalSpelling(object_type.substr(0, object_type.size() - 1));
+	const CPPGMAstNodePtr declaration = FindClassDeclaration(object_type, context);
+	if(!declaration) return;
+	const string member_name = LastComponent(callee->children[1]->value);
+	const vector<CPPGMAstNodePtr>& arguments = result->children[1]->children;
+	for(size_t child = 0; child < declaration->children.size(); ++child) {
+		CPPGMAstNodePtr candidate = declaration->children[child];
+		while(candidate && candidate->kind == "template-declaration" &&
+			candidate->children.size() > 1) candidate = candidate->children[1];
+		if(!candidate || (candidate->kind != "function-definition" &&
+			candidate->kind != "special-member-definition" &&
+			candidate->kind != "simple-declaration")) continue;
+		CPPGMAstNodePtr declarator = FunctionDeclarator(candidate);
+		if(!declarator || LastComponent(FirstIdentifierLocal(declarator)) != member_name)
+			continue;
+		const CPPGMAstNodePtr parameters = DescendantOfKind(declarator,
+			"parameter-clause");
+		if(!parameters) continue;
+		size_t argument = 0;
+		for(size_t parameter = 0; parameter < parameters->children.size() &&
+			argument < arguments.size(); ++parameter) {
+			const CPPGMAstNodePtr& parameter_node = parameters->children[parameter];
+			if(!parameter_node || parameter_node->kind != "parameter-declaration") continue;
+			MaterializeOrdinaryConversion(ParameterTypeSpelling(parameter_node),
+				arguments[argument++], context, substitutions);
+		}
+	}
+}
+
 void PA18TemplateExpander::MaterializeOrdinaryInitializerConversions(
 	const CPPGMAstNodePtr& input, const CPPGMAstNodePtr& result,
 	const string& context, const map<string, string>& substitutions)

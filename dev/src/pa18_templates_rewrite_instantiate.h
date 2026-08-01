@@ -220,6 +220,14 @@
 		const vector<string>& parent_args, const string& parent_local_name,
 		bool explicit_instantiation = false)
 	{
+		// An explicit class specialization owns a new member set.  The primary
+		// template's out-of-class member definitions do not belong to that class;
+		// replaying them here leaks primary-only members (for example `value`) into
+		// a specialization that deliberately declares a different member (such as
+		// `bits`).  Its ordinary non-template members are transformed from the
+		// specialization's own source declarations instead.
+		if(parent.partial_specialization && parent.specialization_parameters.empty())
+			return;
 		// A class template can be replayed once in its still-dependent form while
 		// a concrete use is being discovered.  Its out-of-class member definitions
 		// are declarations of the primary, not definitions for a synthetic

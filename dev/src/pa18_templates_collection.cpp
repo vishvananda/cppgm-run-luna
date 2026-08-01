@@ -10,27 +10,6 @@ bool IsDeletedFunctionDeclaration(const CPPGMAstNodePtr& declaration)
 	return deleted && RemoveMarker(deleted->value) == "delete";
 }
 
-string CollapseRepeatedQualifiedPath(string value)
-{
-	bool changed = false;
-	do {
-		changed = false;
-		for(size_t start = 0; !changed && start < value.size(); ++start)
-			for(size_t separator = value.find("::", start);
-				separator != string::npos;
-				separator = value.find("::", separator + 2)) {
-				const size_t prefix_size = separator + 2 - start;
-				if(separator + 2 + prefix_size > value.size() ||
-					value.compare(separator + 2, prefix_size, value, start,
-						prefix_size) != 0) continue;
-				value.erase(separator + 2, prefix_size);
-				changed = true;
-				break;
-			}
-	} while(changed);
-	return value;
-}
-
 void PA18TemplateExpander::EnsureTypeDependency(const string& spelling, const string& context,
 		const string& owner)
 	{
@@ -611,6 +590,7 @@ vector<string> SplitTemplateArguments(const string& raw)
 	string current;
 	int angle = 0;
 	vector<int> angle_parentheses;
+	vector<bool> synthetic_angles;
 	int parentheses = 0, brackets = 0;
 	for(size_t i = 0; i < raw.size(); ++i) {
 		const char ch = raw[i];
@@ -619,6 +599,7 @@ vector<string> SplitTemplateArguments(const string& raw)
 		if(ch == '[') ++brackets;
 		else if(ch == ']' && brackets > 0) --brackets;
 		bool nested_template_open = ch == '<' && IsTemplateAngleOpen(raw, i);
+		bool synthetic_nested_template = false;
 		if(nested_template_open) {
 			// TemplateRange can hand us an argument list whose final `>` was
 			// consumed as the enclosing delimiter.  In a dependent comparison
@@ -636,14 +617,35 @@ vector<string> SplitTemplateArguments(const string& raw)
 				}
 			}
 			nested_template_open = has_close;
+			// A qualified anonymous-namespace type contains the literal
+			// `<unnamed>` marker, which is deliberately not an angle delimiter.
+			// If a surrounding replay has already consumed the nested template's
+			// closing `>`, retain its commas as nested until the next outer comma
+			// and restore that missing delimiter below.
+			if(!nested_template_open && raw.find("<unnamed>", i + 1) != string::npos) {
+				nested_template_open = true;
+				synthetic_nested_template = true;
+			}
 		}
 		if(nested_template_open) {
 			++angle; angle_parentheses.push_back(parentheses);
+			synthetic_angles.push_back(synthetic_nested_template);
 		} else if(ch == '>' && angle > 0 && IsTemplateAngleClose(raw, i)) {
 			const int opener_parentheses = angle_parentheses.empty() ? 0 : angle_parentheses.back();
 			if(parentheses > opener_parentheses) continue;
 			--angle;
 			if(!angle_parentheses.empty()) angle_parentheses.pop_back();
+			if(!synthetic_angles.empty()) synthetic_angles.pop_back();
+		}
+		if(ch == ',' && angle == 1 && parentheses == 0 && brackets == 0 &&
+			!synthetic_angles.empty() && synthetic_angles.back()) {
+			current += '>';
+			--angle;
+			angle_parentheses.pop_back();
+			synthetic_angles.pop_back();
+			result.push_back(CanonicalSpelling(current));
+			current.clear();
+			continue;
 		}
 		if(ch == ',' && angle == 0 && parentheses == 0 && brackets == 0) {
 			result.push_back(CanonicalSpelling(current)); current.clear();

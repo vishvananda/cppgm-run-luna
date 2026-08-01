@@ -4224,3 +4224,87 @@ Take the owner/specialization replay group first, using the 19 status cases as
 the diagnostic boundary and retaining all 10 checkpoint witnesses plus the
 through-PA22 report as regression gates. Then address the remaining LowIR
 owner/materialization comparisons and the two fixed-point timeouts.
+
+## Checkpoint 31 scope — owner and qualified specialization replay
+
+This checkpoint targets the nine remaining status failures whose shared
+boundary is class-template owner identity during collection, partial-class
+selection, or replay of dependent qualified members:
+
+- qualified default non-type lookup and recursive arity specialization order;
+- selected explicit-specialization member bodies;
+- dependent alias helpers and anonymous-namespace partial specializations;
+- current-specialization display-name aliases;
+- local member-call constructor templates; and
+- defaulted nested-class and explicit dependent member-template arguments.
+
+The implementation scope is the common owner/definition lookup and replay
+path, not individual test spellings. Validation covers all nine named status
+fixtures, the ten Checkpoint 30 witnesses, `make test-report-through-pa22`,
+and the PA23 file audit. The next remaining group after this checkpoint is
+dependent result/SFINAE fixed-point behavior, followed by LowIR call and
+materialization identity.
+
+## Checkpoint 31 result — 2026-07-31
+
+The owner and qualified-specialization replay increment is complete. Typed
+generated-class metadata now survives predeclared specialization shells only
+when the generated spelling belongs to the recorded primary; recursive
+`MarkGeneratedNode` traversal can no longer relabel an unrelated owner such as
+`weak_ptr` with `shared_ptr` metadata. Generated names with the primary prefix
+retain their specialization facts for deferred `sizeof` and nested replay.
+Dependent qualified static-owner preservation, injected-name substitution for
+out-of-class member definitions, member-call conversion materialization, and
+anonymous-namespace generated placement are now handled in the shared replay
+paths. Qualified-path splitting and generated placement were moved into
+responsibility-specific source files, and the frontend source set was updated.
+
+Validation:
+
+- focused owner/specialization status witnesses: **9/9 pass**;
+- focused nine-test harness: **8/9**, with only the defaulted-nested-class
+  LowIR comparison remaining;
+- `make test-report ACTIVE_TEST_REPORT_PAS='pa23'`: **371/396**, up from the
+  **354/396** turn-start baseline;
+- `make test-report-through-pa22`: **2100/2100**;
+- `perl scripts/cppgm_file_audit.pl --stage pa23 --paths dev/src`: **pass**
+  with advisory warnings;
+- `git diff --check`: **pass**.
+
+### Remaining Work Map after Checkpoint 31
+
+- **Dependent result/SFINAE and fixed-point queries — 10 status failures:**
+  `general/400-dependent-default-nontype-argument-eval.t` (timeout),
+  `general/400-member-template-result-pack-preserves-nested-function-pointer-owner.t`,
+  `general/500-dependent-function-type-pack-expansion-ctor-init.t`,
+  `general/500-dependent-qualified-member-template-result-bool.t`,
+  `general/500-mp11-append-alias-template-sfinae.t`,
+  `general/500-nontype-alias-reinstantiation-structural-state.t`,
+  `general/500-recursive-qualified-member-template-bool-arg.t`,
+  `general/500-reentrant-static-query-callable-enable-if-cache.t`,
+  `general/500-reentrant-static-query-enable-if-partial.t` (timeout), and
+  `spec/500-conditional-alias-index-sequence-member-template-call.t`.
+- **LowIR owner/call/materialization identity — 15 comparisons:**
+  `general/100-current-specialization-member-body-cast-compare.t`,
+  `general/100-local-qualified-argument-replay.t`,
+  `general/200-adl-explicit-template-id-call.t`,
+  `general/200-function-template-reference-cv-alias-partial-order.t`,
+  `general/200-function-template-template-parameter-deduction.t`,
+  `general/200-member-operator-template-reference-pattern-partial-order.t`,
+  `general/300-current-specialization-constructor-template-canonical-owner.t`,
+  `general/300-dependent-bool-base-trait-type-argument.t`,
+  `general/400-explicit-function-template-type-arg-drops-nontype-overload.t`,
+  `general/400-member-variable-template-leaf-sfinae.t`,
+  `general/400-nonmember-template-compound-assignment-const-lhs.t`,
+  `general/400-out-of-class-partial-member-template-owner-parameter-alias.t`,
+  `spec/100-out-of-class-conversion-operator-definition.t`,
+  `spec/400-defaulted-nested-class-argument-partial-specialization.t`, and
+  `spec/400-defaulted-template-arg-partial-base-completion.t`.
+
+### Next checkpoint group
+
+Take the dependent result/SFINAE and fixed-point group first, starting with the
+two reentrant query cases and the dependent default non-type timeout. Preserve
+the nine owner status witnesses, the 2100/2100 through report, and the file
+audit as regression gates; then address the remaining LowIR owner/call
+materialization comparisons.

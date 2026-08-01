@@ -231,10 +231,14 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 				map<string, string>::const_iterator logical =
 					lexical_namespace_logical_.find(owner);
 				if(logical == lexical_namespace_logical_.end()) continue;
-				const bool visible = context == logical->second ||
-					(context.size() > logical->second.size() &&
-					 context.compare(0, logical->second.size(), logical->second) == 0 &&
-					 context[logical->second.size()] == ':');
+				string visible_owner = logical->second;
+				const size_t anonymous_component = visible_owner.rfind("::<unnamed>");
+				if(anonymous_component != string::npos)
+					visible_owner.erase(anonymous_component);
+				const bool visible = visible_owner.empty() || context == visible_owner ||
+					(context.size() > visible_owner.size() &&
+					 context.compare(0, visible_owner.size(), visible_owner) == 0 &&
+					 context[visible_owner.size()] == ':');
 				if(!visible) continue;
 				if(!anonymous_candidate.empty() && anonymous_candidate != candidate)
 					anonymous_candidate.clear();
@@ -242,8 +246,42 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 			}
 		if(!anonymous_candidate.empty()) spelling = anonymous_candidate;
 	}
+	// The frontend uses `<unnamed>::T` for an anonymous-namespace type when
+	// the surrounding namespace was lost during template replay.  Resolve that
+	// marker against the nearest lexical namespace before the ordinary
+	// qualified-name walk; otherwise the generated class owner is incorrectly
+	// prepended and PA11 sees `Generated::<unnamed>::T`.
+	const string anonymous_marker = "<unnamed>::";
+	if(spelling.compare(0, anonymous_marker.size(), anonymous_marker) == 0) {
+		const string anonymous_name = spelling.substr(anonymous_marker.size());
+		map<string, vector<string> >::const_iterator indexed_anonymous =
+			class_paths_by_name_.find(LastComponent(anonymous_name));
+		if(indexed_anonymous != class_paths_by_name_.end()) {
+			string anonymous_scope;
+			const auto try_anonymous_scope = [&](const string& raw_scope) {
+				if(!anonymous_scope.empty()) return;
+				for(string current = raw_scope; ; ) {
+					const string expected = JoinPath(current, anonymous_marker + anonymous_name);
+					for(size_t path = 0; path < indexed_anonymous->second.size(); ++path)
+						if(indexed_anonymous->second[path] == expected) {
+							anonymous_scope = expected;
+							return;
+						}
+					if(current.empty()) break;
+					const size_t separator = current.rfind("::");
+					if(separator == string::npos) current.clear();
+					else current.erase(separator);
+				}
+			};
+			try_anonymous_scope(context);
+			try_anonymous_scope(template_owner);
+			if(!anonymous_scope.empty()) spelling = anonymous_scope;
+		}
+	}
 	const string promoted_local = PromotedLocalClass(spelling, context);
-	if(!promoted_local.empty()) spelling = promoted_local;
+	if(!promoted_local.empty()) {
+		spelling = promoted_local;
+	}
 	if(spelling.find("::") == string::npos && spelling.find('<') == string::npos) {
 		map<string, string>::const_iterator generated_base =
 			specialization_bases_.find(LastComponent(spelling));
@@ -290,7 +328,7 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 	prefix = "const ";
 	}
 	const size_t template_open = spelling.find('<');
-	if(template_open != string::npos &&
+	if(template_open != string::npos && template_open > 0 &&
 		spelling.substr(0, template_open).find("::") == string::npos) {
 		{
 			const TemplateDefinition* definition = FindDefinition(
@@ -411,9 +449,7 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 		}
 	}
 	if(generated_enclosing_qualified)
-		{
-			return CanonicalSpelling(prefix + spelling + suffix);
-		}
+		return CanonicalSpelling(prefix + spelling + suffix);
 	string current = context;
 	for(;;) {
 		map<string, CPPGMAstNodePtr>::const_iterator class_declaration =

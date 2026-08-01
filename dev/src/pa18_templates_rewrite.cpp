@@ -732,6 +732,7 @@ bool PA18TemplateExpander::PreserveDependentStaticDeclarator(
 	const vector<string> arguments = SplitTemplateArguments(argument_text);
 	bool dependent_owner = false;
 	for(size_t argument = 0; argument < arguments.size() && !dependent_owner; ++argument) {
+		const string source_argument = CanonicalSpelling(arguments[argument]);
 		string value = CanonicalSpelling(NormalizeElaboratedSpelling(arguments[argument], context));
 		const char* const keys[] = {"struct ", "class ", "union ", "enum "};
 		for(size_t key = 0; key < sizeof(keys) / sizeof(keys[0]); ++key) {
@@ -755,6 +756,19 @@ bool PA18TemplateExpander::PreserveDependentStaticDeclarator(
 			type_aliases_.find(value) != type_aliases_.end() ||
 			FindDefinition(value, context) != 0;
 		if(bare && !builtin && !known) dependent_owner = true;
+		// A qualified dependent type is not a bare identifier after the
+		// `typename`/qualification normalization above.  It still has to pass
+		// through ordinary template-id rewriting: preserving the current static
+		// member owner here would turn `tuple_arity<T::tail_type>::value` into a
+		// self-reference before T::tail_type can become its concrete type.
+		if(!dependent_owner && source_argument.find("::") != string::npos)
+			for(map<string, string>::const_iterator substitution = substitutions.begin();
+				substitution != substitutions.end(); ++substitution)
+				if(!substitution->first.empty() && source_argument.find(
+					substitution->first) != string::npos) {
+					dependent_owner = true;
+					break;
+				}
 	}
 	if(!dependent_owner) {
 		// This is a declarator name, not a type-use expression.  A static member
@@ -812,7 +826,7 @@ CPPGMAstNodePtr PA18TemplateExpander::FinishRegularNode(
 				function_parameter_types_[function_context][name] = type;
 			}
 		}
-		map<string, string> local_substitutions = substitutions;
+		map<string, string> local_substitutions = substitutions; if(function_declaration) AddConcreteOwnerSubstitutions(PrefixComponent(function_context), context, &local_substitutions, true);
 		struct TypeOnlyScope { size_t& depth; const size_t saved; TypeOnlyScope(size_t& d, bool active) : depth(d), saved(d) { if(active) ++depth; } ~TypeOnlyScope() { depth = saved; } } type_only_scope(defer_type_only_class_definitions_, defer_type_only_classes);
 		TransformRegularChildren(input, child_context, function_context, substitutions, &local_substitutions, result);
 		RecoverDependentSizeofArrayType(input, result);
