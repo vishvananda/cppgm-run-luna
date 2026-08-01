@@ -570,7 +570,8 @@ bool PA18TemplateExpander::InferCastArgument(const CPPGMAstNodePtr& expression,
 
 bool PA18TemplateExpander::InferArgument(const CPPGMAstNodePtr& expression,
 	string* result, const map<string, string>& substitutions,
-	const string& context, FunctionSignature* function_signature) const
+	const string& context, FunctionSignature* function_signature,
+	bool this_function_argument) const
 	{
 		if(!expression || !result) return false;
 		if(function_signature) *function_signature = FunctionSignature();
@@ -627,7 +628,8 @@ bool PA18TemplateExpander::InferArgument(const CPPGMAstNodePtr& expression,
 						rewritten.erase(generated_open);
 					if(!rewritten.empty()) object_type = rewritten;
 				}
-				*result = CanonicalSpelling(object_type);
+				*result = CanonicalSpelling(object_type +
+					(this_function_argument ? "*" : string()));
 				return !result->empty();
 			}
 			*result = "bool";
@@ -636,7 +638,7 @@ bool PA18TemplateExpander::InferArgument(const CPPGMAstNodePtr& expression,
 		if(expression->kind == "parenthesized-expression" &&
 			!expression->children.empty())
 			return InferArgument(expression->children[0], result, substitutions,
-				context, function_signature);
+				context, function_signature, this_function_argument);
 		if(expression->kind == "member-expression")
 			return InferMemberArgument(expression, result, substitutions, context);
 	if(InferCastArgument(expression, result, substitutions, context)) return true;

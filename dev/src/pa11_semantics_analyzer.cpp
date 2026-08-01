@@ -1284,6 +1284,30 @@ void Analyzer::PredeclareMaterializedNestedClasses(const CPPGMAstNodePtr& node,
 	}
 }
 
+TypePtr Analyzer::ProcessAnonymousClass(const CPPGMAstNodePtr& node, Scope* scope,
+	const string& tag)
+{
+	const string generated = AnonymousTypeName(tag);
+	TypePtr type(new Type(TYPE_CLASS, generated));
+	type->tag = tag;
+	class_types_[node.get()] = type;
+	Scope* class_scope = ClassScope(type, scope, generated);
+	for (size_t i = 0; i < node->children.size(); ++i)
+		if (node->children[i]->kind != "class-key") Process(node->children[i], class_scope);
+	type->class_members.clear();
+	RecordClassMembers(node, type, scope, class_scope);
+	ComputeClassLayout(node, type, class_scope);
+	if (tag == "union")
+		for (size_t i = 0; i < class_scope->bindings.size(); ++i)
+			if (class_scope->bindings[i].kind != BIND_TYPE) {
+				Binding injected = class_scope->bindings[i];
+				injected.injected_member = true;
+				injected.injected_owner = type;
+				scope->add(injected);
+			}
+	return type;
+}
+
 TypePtr Analyzer::ProcessClass(const CPPGMAstNodePtr& node, Scope* scope)
 {
 	map<const CPPGMAstNode*, TypePtr>::const_iterator cached = class_types_.find(node.get());
@@ -1293,28 +1317,7 @@ TypePtr Analyzer::ProcessClass(const CPPGMAstNodePtr& node, Scope* scope)
 	const bool anonymous = name.empty() || name == "<unnamed>";
 	const string tag = ClassKey(node);
 	if (anonymous)
-	{
-		const string generated = AnonymousTypeName(tag);
-		TypePtr type(new Type(TYPE_CLASS, generated));
-		type->tag = tag;
-		class_types_[node.get()] = type;
-		Scope* class_scope = ClassScope(type, scope, generated);
-		for (size_t i = 0; i < node->children.size(); ++i)
-			if (node->children[i]->kind != "class-key") Process(node->children[i], class_scope);
-		type->class_members.clear();
-		RecordClassMembers(node, type, scope, class_scope);
-		ComputeClassLayout(node, type, class_scope);
-		if (tag == "union")
-			for (size_t i = 0; i < class_scope->bindings.size(); ++i)
-				if (class_scope->bindings[i].kind != BIND_TYPE)
-				{
-					Binding injected = class_scope->bindings[i];
-					injected.injected_member = true;
-					injected.injected_owner = type;
-					scope->add(injected);
-				}
-		return type;
-	}
+			return ProcessAnonymousClass(node, scope, tag);
 	const bool qualified_definition = TopLevelScopeSeparator(raw_name) != string::npos;
 	Scope* owner = scope;
 	if (qualified_definition)
@@ -1345,6 +1348,16 @@ TypePtr Analyzer::ProcessClass(const CPPGMAstNodePtr& node, Scope* scope)
 		type->template_primary = node->template_primary;
 		type->template_arguments = node->template_arguments;
 		type->template_empty_pack = node->template_empty_pack;
+		if(!node->template_parameter_packs.empty()) {
+			type->template_parameter_names = node->template_parameter_names;
+			type->template_parameter_packs = node->template_parameter_packs;
+		} else if(type->template_parameter_packs.empty() && !node->template_primary.empty()) {
+			Binding* primary = owner->local(LastComponent(node->template_primary));
+			if(primary && primary->type && primary->type->kind == TYPE_CLASS) {
+				type->template_parameter_names = primary->type->template_parameter_names;
+				type->template_parameter_packs = primary->type->template_parameter_packs;
+			}
+		}
 	}
 	type->dependent_base_lookup = node->dependent_base_lookup;
 	type->complete = true;

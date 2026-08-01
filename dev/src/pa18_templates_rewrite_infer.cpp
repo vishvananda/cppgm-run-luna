@@ -569,7 +569,7 @@ bool PA18TemplateExpander::InferFunctionParameter(
 		const CPPGMAstNodePtr argument = arguments->children[*argument_index];
 		FunctionSignature signature;
 		bool inferred_argument = InferArgument(argument, &type, parameter_substitutions,
-				context, &signature);
+				context, &signature, true);
 		if(inferred_argument && !type.empty()) {
 			string resolved_type = ReplaceIdentifiersPreservingPackSizes(type,
 				parameter_substitutions);

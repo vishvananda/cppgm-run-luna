@@ -894,18 +894,33 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 	const string declaration_context = PrefixComponent(class_key).empty() ?
 		context : PrefixComponent(class_key);
 	string fallback_type;
+	const bool generated_concrete_owner =
+		specialization_bases_.find(LastComponent(class_key)) !=
+			specialization_bases_.end() &&
+		specialization_arguments_.find(LastComponent(class_key)) !=
+			specialization_arguments_.end() && context != class_key;
+	const bool materialized_alias_owner = generated_concrete_owner && active->size() > 1;
 	for(size_t i = 0; i < declaration->children.size(); ++i) {
 		const CPPGMAstNodePtr child = declaration->children[i];
 		if(!child) continue;
 		CPPGMAstNodePtr direct_child = child;
 		while(direct_child && direct_child->kind == "template-declaration" &&
-			direct_child->children.size() > 1)
+			 direct_child->children.size() > 1)
 			direct_child = direct_child->children[1];
-		const bool generated_concrete_owner =
-			specialization_bases_.find(LastComponent(class_key)) !=
-				specialization_bases_.end() &&
-			specialization_arguments_.find(LastComponent(class_key)) !=
-				specialization_arguments_.end() && context != class_key;
+		if(materialized_alias_owner && direct_child &&
+			direct_child->kind == "alias-declaration" &&
+			LastComponent(RemoveMarker(direct_child->value)) == member &&
+			!direct_child->children.empty()) {
+			*result = QualifyNestedMembers(
+				CanonicalSpelling(ReplaceIdentifiers(TypeIdSpelling(direct_child->children[0]),
+					declaration_substitutions)),
+				class_key, declaration);
+			if(result->find("::") != string::npos && result->find('<') != string::npos)
+				*result = NormalizeTypeArgument(const_cast<PA18TemplateExpander*>(this)->RewriteText(
+					*result, context, declaration_substitutions, 0));
+			active->erase(active_key);
+			return !result->empty();
+		}
 		if((!aliases_only || generated_concrete_owner) && direct_child &&
 			(direct_child->kind == "class-specifier" ||
 			direct_child->kind == "class-forward-declaration" ||

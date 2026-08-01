@@ -1015,6 +1015,13 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 	if(!owner_definition || !owner_definition->class_template ||
 		(!nested_template_id && nested_name.empty()) || nested_member.empty()) return false;
 	vector<string> owner_arguments = SplitTemplateArguments(owner_arguments_text);
+	// This path materializes a dependent owner before the ordinary template-id
+	// replay gets a chance to expand nested pack uses.  Expand the complete
+	// argument expression here (`void(decay_t<Args>...)`), otherwise one scalar
+	// owner is registered with the source ellipsis still attached and inherited
+	// aliases acquire a distinct, incorrect specialization.
+	ExpandNestedTemplateArgumentPacks(&owner_arguments, 0);
+	if(owner_arguments.size() == 1 && owner_arguments[0].empty()) return false;
 	for(size_t owner_argument = 0; owner_argument < owner_arguments.size(); ++owner_argument) {
 		const string source_owner_argument = CanonicalSpelling(owner_arguments[owner_argument]);
 		owner_arguments[owner_argument] = NormalizeTypeArgument(RewriteText(
@@ -1147,11 +1154,19 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 			AddConcreteOwnerSubstitutions(owner_local_name, context, &nested_substitutions);
 			nested_substitutions[selected_owner->name] = owner_local_name;
 			vector<string> nested_arguments = SplitTemplateArguments(pure_nested_arguments_text);
-			for(size_t argument = 0; argument < nested_arguments.size(); ++argument) {
-				nested_arguments[argument] = NormalizeTypeArgument(RewriteText(nested_arguments[argument], context, nested_substitutions, 0, false, false));
-				nested_arguments[argument] = NormalizeTypeArgument(ReplaceIdentifiers(nested_arguments[argument], nested_substitutions));
-			}
-			const TemplateDefinition* selected_nested = SelectClassTemplateDefinition(nested_definition, nested_arguments, context);
+				for(size_t argument = 0; argument < nested_arguments.size(); ++argument) {
+					nested_arguments[argument] = NormalizeTypeArgument(RewriteText(nested_arguments[argument], context, nested_substitutions, 0, false, false));
+					nested_arguments[argument] = NormalizeTypeArgument(ReplaceIdentifiers(nested_arguments[argument], nested_substitutions));
+				}
+				// The owner can be concrete while the nested member-template
+				// arguments still belong to the enclosing replay (`Expr`, `State`,
+				// and `Data` here).  Do not register a nominal class from those source
+				// identifiers; the enclosing instantiation will revisit this spelling
+				// after installing the typed bindings.
+				for(size_t argument = 0; argument < nested_arguments.size(); ++argument)
+					if(HasUnresolvedTemplateParameter(nested_arguments[argument], context,
+						nested_substitutions)) return false;
+				const TemplateDefinition* selected_nested = SelectClassTemplateDefinition(nested_definition, nested_arguments, context);
 			if(selected_nested && !selected_nested->partial_specialization) {
 				const string nested_owner = owner_local_name;
 				const string nested_local_name = Instantiate(*selected_nested, nested_arguments, context, false, 0, &nested_substitutions, &nested_owner);

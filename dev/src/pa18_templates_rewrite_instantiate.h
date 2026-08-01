@@ -93,10 +93,6 @@
 				const string spelling = RemoveMarker(name->value);
 				for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter) {
 					const string& wanted = definition.parameters[parameter].name;
-					// An unnamed template parameter carries no dependent-name
-					// information.  In particular, find("") never advances and
-					// would turn this scan into an unbounded loop when PA19
-					// materializes a trait with an unnamed parameter.
 					if(wanted.empty()) continue;
 					for(size_t position = spelling.find(wanted); position != string::npos;
 						position = spelling.find(wanted, position + wanted.size())) {
@@ -132,6 +128,39 @@
 			MarkGeneratedNode(node->children[i], primary, arguments, false,
 				explicit_specialization, false);
 	}
+	void RecordTemplateFunctionAbiPatterns(const TemplateDefinition& definition,
+		const CPPGMAstNodePtr& node)
+	{
+		if(!node || definition.class_template || definition.alias_template ||
+			definition.variable_template || !definition.declaration ||
+			definition.declaration->children.empty()) return;
+		const CPPGMAstNodePtr declarator = FunctionDeclarator(definition.declaration);
+		if(!declarator) return;
+		vector<string> names;
+		vector<bool> packs;
+		for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter) {
+			names.push_back(definition.parameters[parameter].name);
+			packs.push_back(definition.parameters[parameter].pack);
+		}
+		vector<string> patterns;
+		const CPPGMAstNodePtr trailing = ChildOfKindLocal(declarator,
+			"trailing-return-type");
+		if(trailing) patterns.push_back(TypeIdSpelling(ChildOfKindLocal(
+			trailing, "type-id")));
+		else patterns.push_back(NodeTypeSpelling(definition.declaration->children[0]) +
+			ReturnDeclaratorSuffix(declarator));
+		const CPPGMAstNodePtr clause = DescendantOfKind(declarator,
+			"parameter-clause");
+		if(clause) for(size_t parameter = 0; parameter < clause->children.size();
+			++parameter) {
+			const CPPGMAstNodePtr item = clause->children[parameter];
+			if(item && item->kind == "parameter-declaration")
+				patterns.push_back(ParameterTypeSpelling(item));
+		}
+		node->template_function_parameter_names = names;
+		node->template_function_patterns = patterns;
+		node->template_function_parameter_packs = packs;
+	}
 	void RenameGeneratedFunction(const CPPGMAstNodePtr& declaration,
 		const string& name)
 	{
@@ -166,13 +195,19 @@
 			map<string, string>::const_iterator base = specialization_bases_.find(word);
 			map<string, vector<string> >::const_iterator arguments =
 				specialization_arguments_.find(word);
+			size_t materialized_end = end;
 			if(base != specialization_bases_.end() && arguments != specialization_arguments_.end()) {
+				size_t argument_open = end;
+				while(argument_open < raw.size() && isspace(
+					static_cast<unsigned char>(raw[argument_open]))) ++argument_open;
+				if(argument_open < raw.size() && raw[argument_open] == '<') {
+					string ignored_arguments;
+					size_t argument_close = string::npos;
+					if(TemplateRange(raw, argument_open, &ignored_arguments,
+						&argument_close)) materialized_end = argument_close + 1;
+				}
 				string base_spelling = base->second;
 				const string base_namespace = PrefixComponent(base_spelling);
-				// A generated name can be reached through a shortened enclosing
-				// scope (`lib::inner::X_int_`) even though its source owner is
-				// fully qualified.  Replace the overlapping suffix before restoring
-				// the typed specialization spelling.
 				size_t overlap = string::npos;
 				for(size_t begin = 0; begin < base_namespace.size(); ++begin) {
 					if(begin != 0 && base_namespace[begin - 1] != ':') continue;
@@ -191,7 +226,8 @@
 				}
 				result += ">";
 			} else result += word;
-			i = end;
+			i = base != specialization_bases_.end() && arguments !=
+				specialization_arguments_.end() ? materialized_end : end;
 		}
 		return result;
 	}
@@ -223,18 +259,8 @@
 		const vector<string>& parent_args, const string& parent_local_name,
 		bool explicit_instantiation = false)
 	{
-		// An explicit class specialization owns a new member set.  The primary
-		// template's out-of-class member definitions do not belong to that class;
-		// replaying them here leaks primary-only members (for example `value`) into
-		// a specialization that deliberately declares a different member (such as
-		// `bits`).  Its ordinary non-template members are transformed from the
-		// specialization's own source declarations instead.
 		if(parent.partial_specialization && parent.specialization_parameters.empty())
 			return;
-		// A class template can be replayed once in its still-dependent form while
-		// a concrete use is being discovered.  Its out-of-class member definitions
-		// are declarations of the primary, not definitions for a synthetic
-		// `Class_T_` specialization; wait for the concrete replay instead.
 		for(size_t parameter = 0; parameter < parent.parameters.size() &&
 			parameter < parent_args.size(); ++parameter)
 			if(!parent.parameters[parameter].name.empty() &&
@@ -269,11 +295,6 @@
 				member.declaration->source_token_begin != static_cast<size_t>(-1) &&
 				member.declaration->source_token_begin > explicit_instantiation_visibility_)
 				continue;
-			// A member template is not a member of the enclosing specialization
-			// until its own template arguments are known.  Replaying it while the
-			// class is materialized would leave names such as `U` dependent in a
-				// non-template generated function; the member-call path materializes
-				// this entity after deduction instead.
 			if(!member.member_template && member.owner == parent.qualified_name)
 				continue;
 			if(member.member_template) continue;
@@ -284,12 +305,6 @@
 			if(!MemberOwnerPattern(member, parent, parent_args, &owner_substitutions)) continue;
 			map<string, vector<string> > pack_substitutions;
 			map<string, PA19IntegralValue> integral_substitutions;
-			// An out-of-class member of a class specialization can introduce a
-			// pack through a nested owner pattern, such as
-			// `literal<bytes<Bytes...>>::data`.  MemberOwnerPattern records that
-			// typed owner match separately from the enclosing class arguments;
-			// carry it into replay's pack state so the static definition expands
-			// its initializer with the concrete NTTP values.
 			for(size_t parameter = 0; parameter < member.parameters.size(); ++parameter)
 				if(member.parameters[parameter].pack && !member.parameters[parameter].name.empty()) {
 					map<string, string>::const_iterator owner_value = owner_substitutions.find(
@@ -310,12 +325,6 @@
 			for(size_t parameter = 0; parameter < parent.parameters.size(); ++parameter) {
 				const TemplateParameter& parent_parameter = parent.parameters[parameter]; if(parent_parameter.pack) {
 					vector<string>& values = pack_substitutions[parent_parameter.name];
-					// MemberOwnerPattern already records a concrete enclosing pack
-					// under the same name when the out-of-class member owner carries
-					// that pack.  Do not append the enclosing values a second time;
-					// doing so recursively grows `Box<Args...>` into
-					// `Box<int,float,int,float>`.  The parent pack is otherwise the
-					// source of truth for this member replay.
 					if(values.empty()) while(parent_argument < parent_args.size())
 						values.push_back(parent_args[parent_argument++]);
 					else parent_argument = min(parent_args.size(), parent_argument + values.size());
@@ -379,10 +388,6 @@
 						member.declaration->kind == "simple-declaration" &&
 						parent.static_members.find(member_name) != parent.static_members.end();
 					string source_owner = PrefixComponent(identifier->value);
-					// The transformed definition normally already contains the
-					// concrete owner.  If it still carries the primary spelling,
-					// replace that one component while preserving nested owners such
-					// as `::inner::value`.
 					vector<string> components;
 					size_t component_begin = 0;
 					int template_depth = 0;
@@ -436,10 +441,6 @@
 			}
 			MarkGeneratedNode(generated, parent.qualified_name, parent_args,
 				explicit_instantiation);
-				// Out-of-class member definitions are namespace-scope AST entities;
-				// their qualified declarator carries the concrete owner.  Queue the
-				// definition beside that owner so the ordinary top-level semantic pass
-				// sees it after the materialized class shell.
 				(void)generated_static_data;
 				generated_by_owner_[GeneratedOwner(parent)].push_back(generated);
 		}
@@ -975,8 +976,37 @@
 			!definition.alias_template && !definition.variable_template)
 			return definition.name;
 		if(static_member && definition.owner.find("::") == string::npos &&
-			!concrete_owner.empty()) return TypeSuffix(PrefixComponent(definition.qualified_name)) +
-			"__" + LastComponent(definition.name);
+			!concrete_owner.empty()) {
+			string static_name = TypeSuffix(concrete_owner) + "__" +
+				LastComponent(definition.name);
+			const CPPGMAstNodePtr static_clause = DescendantOfKind(
+				FunctionDeclarator(definition.declaration), "parameter-clause");
+			if(static_clause) for(size_t parameter = 0;
+				parameter < static_clause->children.size(); ++parameter)
+				if(static_clause->children[parameter] &&
+					static_clause->children[parameter]->kind == "parameter-declaration")
+					static_name += "__" + TypeSuffix(ParameterTypeSpelling(
+						static_clause->children[parameter]));
+			// Static member overloads share the concrete owner and source name;
+			// retain the registry's typed overload identity instead of making the
+			// second definition collide with the first materialized body.
+			map<string, vector<string> >::const_iterator indexed =
+				definitions_by_name_.find(definition.name);
+			if(indexed != definitions_by_name_.end()) for(size_t overload = 0;
+				overload < indexed->second.size(); ++overload) {
+				map<string, TemplateDefinition>::const_iterator candidate =
+					definitions_.find(indexed->second[overload]);
+				if(candidate != definitions_.end() && &candidate->second == &definition) {
+					if(overload != 0) {
+						ostringstream suffix;
+						suffix << "__ov" << overload;
+						static_name += suffix.str();
+					}
+					break;
+				}
+			}
+			return static_name;
+		}
 		string local_name = definition.name;
 		// Function overloads share the source name and can also deduce the same
 		// template arguments.  Keep the overload identity in the generated AST;
@@ -1097,6 +1127,10 @@
 		const map<string, FunctionSignature>* function_hints = 0,
 		const map<string, vector<string> >* forwarding_pack_hints = 0,
 		bool defer_class_definition = false);
+	void ApplyPartialSpecializationReplay(const TemplateDefinition& definition,
+		const vector<string>& args, const string& context,
+		map<string, string>* substitutions,
+		map<string, vector<string> >* pack_substitutions);
 	void RecoverNestedVectorArgument(const TemplateDefinition& definition,
 		vector<string>* arguments, const string& context) const;
 	string MaterializeExternInstantiation(const TemplateDefinition& definition,

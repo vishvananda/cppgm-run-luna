@@ -164,7 +164,14 @@ bool PA18TemplateExpander::MemberOwnerPattern(const TemplateDefinition& candidat
 			pattern == "float" || pattern == "int" || pattern == "long" ||
 			pattern == "short" || pattern == "signed" || pattern == "unsigned" ||
 			pattern == "void" || pattern == "wchar_t";
-		if(bare_identifier && !builtin) continue;
+		if(bare_identifier && !builtin) {
+			// The spelling can come from a renamed out-of-class owner
+			// parameter, so it is not necessarily present in the selected
+			// class definition's parameter list.  It is nevertheless a typed
+			// positional binding needed while replaying that member body.
+			local[pattern] = actual;
+			continue;
+		}
 		if(!MatchTypePattern(pattern, actual, parameter_names, &local, parent.owner, true)) return false;
 	}
 	if(argument_index != parent_args.size()) return false;
@@ -1461,4 +1468,5 @@ string PA18TemplateExpander::FindConcreteInstantiationOwner(
 		if(same) return materialized_context(candidate);
 	}
 	return string(); }
+
 } // namespace pa18_templates_internal

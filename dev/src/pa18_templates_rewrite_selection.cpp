@@ -242,6 +242,29 @@ const TemplateDefinition* PA18TemplateExpander::SelectClassTemplateDefinition(
 			// detection idiom's substitution boundary.
 			if(argument < primary->parameters.size() &&
 				primary->parameters[argument].template_template) continue;
+			// A direct function type is already a structured template argument.
+			// Resolving its whole spelling as an alias can re-enter the same
+			// partial-specialization query (`call<Fun(Arg)>` -> `Fun(Arg)`),
+			// repeatedly materializing the callable while trying to match it.
+			// Preserve the function boundary; MatchTypePattern resolves the
+			// individual return/parameter components when needed.
+			const bool function_type = SplitDirectFunctionType(
+				matching_arguments[argument], 0, 0, 0) ||
+				SplitFunctionPointerType(matching_arguments[argument], 0, 0);
+			if(function_type) continue;
+			// Likewise, a concrete class template-id is already a nominal type.
+			// ResolveAlias would instantiate that nested class merely to compare it
+			// with a surrounding partial pattern, which is recursive for patterns
+			// such as `when_<call<Fun(Arg)> >`.
+			const size_t argument_open = matching_arguments[argument].find('<');
+			string argument_base;
+			size_t argument_begin = 0;
+			if(argument_open != string::npos && TemplateBase(
+				matching_arguments[argument], argument_open, &argument_begin, &argument_base)) {
+				const TemplateDefinition* argument_definition = FindDefinition(
+					argument_base, context);
+				if(argument_definition && argument_definition->class_template) continue;
+			}
 			const string resolved = NormalizeTypeArgument(ResolveAlias(
 				matching_arguments[argument], context));
 			if(!resolved.empty()) matching_arguments[argument] = resolved;

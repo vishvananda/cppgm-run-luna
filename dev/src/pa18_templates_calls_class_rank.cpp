@@ -87,9 +87,13 @@ void PA18TemplateExpander::RankMemberCandidatesByClassExactness(
 					member_substitutions, context);
 			} catch(const PA18SubstitutionFailure&) {}
 			if(inferred) {
-				if(definition->name.compare(0, 8, "operator") == 0)
-					reference_penalty[definition] += MemberReferenceBindingPenalty(
-						pattern, arguments->children[argument], actual);
+				// Member-template overloads use the same forwarding/reference
+				// distinction as operators.  In particular, `U&` must beat
+				// `U const&` for a non-const lvalue, while the const overload wins
+				// for a const lvalue; leaving this ranking operator-only lets the
+				// first source declaration capture both calls.
+				reference_penalty[definition] += MemberReferenceBindingPenalty(
+					pattern, arguments->children[argument], actual);
 				if(!dependent) try {
 					const string expected = CanonicalSpelling(ResolveAlias(ReplaceIdentifiers(
 						RewriteText(pattern, context, member_substitutions, 0),

@@ -150,6 +150,10 @@ struct Type
 	// Materialized dependent members use this typed frame to rebind base and
 	// conversion-function types without reconstructing source text lookup.
 	vector<string> template_parameter_names;
+	// The corresponding pack flags let ABI lowering preserve a class
+	// specialization's pack boundaries (for example `Signatures...`) when
+	// re-encoding a nested concrete type.
+	vector<bool> template_parameter_packs;
 	bool template_empty_pack;
 	// A materialized specialization may retain constructor-template lookup only
 	// in PA18 typed state.  It is still non-aggregate per the source class.

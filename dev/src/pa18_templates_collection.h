@@ -164,6 +164,8 @@ inline CPPGMAstNodePtr CloneNode(const CPPGMAstNodePtr& node)
 	result->source_token_begin = node->source_token_begin; result->source_token_end = node->source_token_end;
 	result->template_primary = node->template_primary;
 	result->template_arguments = node->template_arguments;
+	result->template_function_parameter_names = node->template_function_parameter_names; result->template_function_patterns = node->template_function_patterns;
+	result->template_function_parameter_packs = node->template_function_parameter_packs; result->template_parameter_names = node->template_parameter_names; result->template_parameter_packs = node->template_parameter_packs;
 	result->template_empty_pack = node->template_empty_pack;
 	for(size_t i = 0; i < node->children.size(); ++i)
 		result->children.push_back(CloneNode(node->children[i]));
@@ -671,7 +673,7 @@ private:
 		const map<string, string>& substitutions,
 		bool explicit_instantiation = false, bool constructor_replay = false,
 		bool address_replay = false);
-	int MemberTemplatePatternScore(const TemplateDefinition* candidate) const; void RestoreMemberTemplateDefaults(const string& member_name, const TemplateDefinition& definition, TemplateDefinition* result) const; bool ContainsSubstitutionIdentifier(const string& text, const map<string, string>& substitutions) const; bool FunctionTemplateCvPointerTie(const TemplateDefinition& lhs, const TemplateDefinition& rhs) const; bool FunctionTemplateMoreSpecialized(const TemplateDefinition& lhs, const TemplateDefinition& rhs, const string& context) const; bool PreserveFunctionLookupOrder(const vector<const TemplateDefinition*>& definitions, const string& context, const map<string, string>& substitutions) const; void SortFunctionTemplateCandidates(vector<const TemplateDefinition*>* candidates, const string& context) const; void RankFunctionTemplateCandidatesForCall(vector<const TemplateDefinition*>* candidates, const CPPGMAstNodePtr& call, const string& context, const map<string, string>& substitutions) const;
+	int MemberTemplatePatternScore(const TemplateDefinition* candidate) const; void RestoreMemberTemplateDefaults(const string& member_name, const TemplateDefinition& definition, TemplateDefinition* result) const; bool ContainsSubstitutionIdentifier(const string& text, const map<string, string>& substitutions) const; bool FunctionTemplateCvPointerTie(const TemplateDefinition& lhs, const TemplateDefinition& rhs) const; bool FunctionTemplateMoreSpecialized(const TemplateDefinition& lhs, const TemplateDefinition& rhs, const string& context) const; bool PreserveFunctionLookupOrder(const vector<const TemplateDefinition*>& definitions, const string& context, const map<string, string>& substitutions) const; void SortFunctionTemplateCandidates(vector<const TemplateDefinition*>* candidates, const string& context) const; void RankFunctionTemplateCandidatesForCall(vector<const TemplateDefinition*>* candidates, const CPPGMAstNodePtr& call, const string& context, const map<string, string>& substitutions, const vector<string>* explicit_prefix = 0) const;
 	void RankMemberCandidatesByClassExactness(vector<const TemplateDefinition*>* candidates, const CPPGMAstNodePtr& call, const map<string, string>& substitutions, const string& context); bool ValidateTemplateDefaults(const TemplateDefinition& definition, const vector<string>& arguments, const string& context, const map<string, string>& substitutions); bool TransformQualifiedMemberTemplateCall(const CPPGMAstNodePtr& input,
 		const CPPGMAstNodePtr& input_callee, const string& context,
 		const map<string, string>& substitutions,
@@ -1077,11 +1079,9 @@ private:
 	bool HasStaticMember(const TemplateDefinition* definition, const string& owner, const string& name) const;
 	void Collect(const CPPGMAstNodePtr& node, const string& context, bool type_reference = false)
 	{
-		if(!node) return; map<const CPPGMAstNode*, size_t>::const_iterator source_order = source_order_.find(node.get()); if(source_order != source_order_.end()) active_source_order_ = source_order->second;
-		const bool elaborated_type_reference = type_reference && node->kind == "class-forward-declaration";
+		if(!node) return; map<const CPPGMAstNode*, size_t>::const_iterator source_order = source_order_.find(node.get()); if(source_order != source_order_.end()) active_source_order_ = source_order->second; const bool elaborated_type_reference = type_reference && node->kind == "class-forward-declaration";
 		if(node->kind == "using-directive") { const CPPGMAstNodePtr target = ChildOfKindLocal(node, "target"); if(target) { string target_name = CanonicalSpelling(RemoveMarker(target->value)); while(!target_name.empty() && target_name[0] == ':') target_name.erase(0, 1); if(!target_name.empty()) { vector<string>& directives = using_namespace_directives_[context]; if(find(directives.begin(), directives.end(), target_name) == directives.end()) directives.push_back(target_name); } } } if(node->kind == "using-declaration") { const CPPGMAstNodePtr target = ChildOfKindLocal(node, "target"); if(target) { const string target_name = RemoveMarker(target->value); if(!target_name.empty() && target_name.find("::") != string::npos) pending_using_declarations_[context].push_back(target_name); } }
-		if(node->kind == "translation-unit") {
-			for(size_t i = 0; i < node->children.size(); ++i) Collect(node->children[i], context);
+		if(node->kind == "translation-unit") { for(size_t i = 0; i < node->children.size(); ++i) Collect(node->children[i], context);
 			return;
 		}
 		if(node->kind == "namespace-definition") {

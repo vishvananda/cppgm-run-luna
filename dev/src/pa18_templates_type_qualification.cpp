@@ -68,6 +68,18 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 	while(spelling.compare(0, 8, "typename") == 0 &&
 		(spelling.size() == 8 || isspace(static_cast<unsigned char>(spelling[8]))))
 		spelling = CanonicalSpelling(spelling.substr(8));
+	// Declaration specifiers are visited through the same type-spelling path as
+	// user types.  They are not class members, so trying `MemberAliasType` on a
+	// generated class for `typedef` (or a storage/function specifier) can
+	// re-enter the class replay indefinitely while materializing a nested `impl`.
+	const char* const declaration_specifiers[] = {
+		"typedef", "static", "extern", "inline", "constexpr", "const",
+		"volatile", "mutable", "register", "thread_local", "friend",
+		"virtual", "explicit"
+	};
+	for(size_t specifier = 0; specifier < sizeof(declaration_specifiers) /
+		sizeof(declaration_specifiers[0]); ++specifier)
+		if(spelling == declaration_specifiers[specifier]) return spelling;
 	const char* const elaborated_keys[] = {"struct", "class", "union"};
 	for(size_t key = 0; key < sizeof(elaborated_keys) / sizeof(elaborated_keys[0]); ++key) {
 		const string prefix_key = elaborated_keys[key];

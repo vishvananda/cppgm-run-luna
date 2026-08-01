@@ -1000,4 +1000,47 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
     }
   }
 
+void PA14Lowerer::DemandConstantObjectConstructors(const TypePtr& raw_type,
+                                                    const CPPGMAstNodePtr& initializer)
+{
+  TypePtr type = type_value(raw_type);
+  if(!type || !initializer) return;
+  CPPGMAstNodePtr expression = initializer;
+  if(expression->kind == "initializer" || expression->kind == "paren-initializer" ||
+     expression->kind == "default-argument" || expression->kind == "initializer-clause")
+    expression = InitializerExpression(expression);
+  if(!expression) return;
+  if(type->kind == TYPE_ARRAY) {
+    if(expression->kind == "braced-init-list")
+      for(size_t i = 0; i < expression->children.size(); ++i)
+        DemandConstantObjectConstructors(type->child, expression->children[i]);
+    return;
+  }
+  if(type->kind != TYPE_CLASS) return;
+  vector<CPPGMAstNodePtr> arguments;
+  if(expression->kind == "braced-init-list") arguments = expression->children;
+  else if(expression->kind == "call-expression" && expression->children.size() > 1) {
+    CPPGMAstNodePtr list = expression->children[1];
+    arguments = list ? list->children : vector<CPPGMAstNodePtr>();
+    if(expression->value == "braced-construction" && arguments.size() == 1 &&
+       arguments[0] && arguments[0]->kind == "braced-init-list")
+      arguments = arguments[0]->children;
+  } else return;
+  const string constructor_name = type->template_specialization &&
+    !type->template_primary.empty() ? LastComponent(type->template_primary) :
+    LastComponent(type->name);
+  vector<Binding*> candidates = MemberBindings(type, LastComponent(type->name));
+  if(candidates.empty() && constructor_name != LastComponent(type->name))
+    candidates = MemberBindings(type, constructor_name);
+  for(size_t i = 0; i < candidates.size(); ++i) {
+    Binding* binding = candidates[i];
+    FunctionRecord* record = RecordForBinding(binding);
+    if(!record || !record->constructor || record->deleted ||
+       !record->source_type || record->source_type->parameters.size() != arguments.size())
+      continue;
+    record->needed = true;
+    return;
+  }
+}
+
 } // namespace cppgm_pa14_lowering

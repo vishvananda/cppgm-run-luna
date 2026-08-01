@@ -15,4 +15,7 @@ CPPGMAstNode::CPPGMAstNode(const string& kind, const string& value)
 	 explicit_typename(false),
 	  source_token_begin(static_cast<size_t>(-1)),
 	  source_token_end(static_cast<size_t>(-1)),
-	  template_primary(), template_arguments(), template_empty_pack(false), children() {}
+	  template_primary(), template_arguments(), template_function_parameter_names(),
+	  template_function_patterns(), template_function_parameter_packs(),
+	  template_parameter_names(), template_parameter_packs(),
+	  template_empty_pack(false), children() {}

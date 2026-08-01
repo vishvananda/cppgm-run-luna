@@ -181,7 +181,12 @@ void PA14Lowerer::EmitLocalStaticInitialization(VariablePlan* variable, Scope* s
     const string init = new_label("local_static_init");
     Terminate("branch " + initialized + ", ^" + ready + ", ^" + init);
     AddBlock(init);
-    EmitInitializer(variable, variable->initializer, scope);
+    if(variable->initializer) EmitInitializer(variable, variable->initializer, scope);
+    else {
+      TypePtr type = type_value(object->type);
+      if(type && type->kind == TYPE_CLASS)
+        (void)EmitObjectConstructor(variable, type, vector<CPPGMAstNodePtr>(), scope);
+    }
     if(!state_->current->terminated) {
       AddInstruction("store i64 1, @" + guard->symbol);
       Terminate("jump ^" + ready);

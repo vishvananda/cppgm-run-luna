@@ -4777,3 +4777,90 @@ The next checkpoint group is the remaining five owner cases, starting with
 the current-specialization constructor ABI and the out-of-class local-static
 materialization pair.  The source audit passes and no deferred-result or
 timeout behavior was changed here.
+
+## Checkpoint 38 scope — deferred result-pack ABI and local-static construction
+
+Complete the nested member-template result-pack path in
+`general/400-member-template-result-pack-preserves-nested-function-pointer-owner.t`:
+carry function-template pack facts and source type patterns through replay,
+preserve class-template pack boundaries in typed class state, form the
+Itanium substitutions for the repeated nested owner, and emit guarded default
+construction for a dynamic local static with no initializer.  Validate the
+focused fixture and the complete current-PA report; the scope covers both
+semantic lowering and the stable local-static identity it consumes.
+
+## Checkpoint 38 result — 2026-08-01
+
+The result-pack checkpoint is complete.  Function-template AST metadata now
+retains parameter names, patterns, and pack flags; materialized class types
+retain class-template pack boundaries; and PA14 uses a stateful nested ABI
+encoder for member-template identities.  The encoder preserves repeated
+`int*`, `error_code`, and concrete owner substitutions rather than falling
+back to raw type spellings.  Local statics whose class type has construction
+effects now receive guard storage and a default constructor call even when the
+source declaration has no initializer.
+
+The focused result-pack fixture passes and the full PA23 report is **386 / 396**,
+up from the turn-start baseline of 383 / 396.  The through-PA22 report remains
+clean.  The ten-fixture remaining work map is now:
+
+- **3 LowIR comparisons:**
+  `spec/100-out-of-class-conversion-operator-definition.t`, where copy
+  initialization lowers an extra conversion call;
+  `spec/400-defaulted-nested-class-argument-partial-specialization.t`, where
+  defaulted nested class arguments change generated declaration identity,
+  parameter storage, and initialization order; and
+  `spec/400-defaulted-template-arg-partial-base-completion.t`, where two
+  generated calls have the opposite declaration order.
+- **5 deferred dependent-result status failures:**
+  `general/500-dependent-function-type-pack-expansion-ctor-init.t` (no viable
+  constructor), `general/500-dependent-qualified-member-template-result-bool.t`
+  and `general/500-recursive-qualified-member-template-bool-arg.t` (compiler
+  crash), `general/500-mp11-append-alias-template-sfinae.t` (dependent type
+  substitution failure), and
+  `general/500-reentrant-static-query-callable-enable-if-cache.t` (unknown
+  dependent type `executor`).
+- **2 fixed-point timeouts:**
+  `general/400-dependent-default-nontype-argument-eval.t` and
+  `general/500-reentrant-static-query-enable-if-partial.t`.
+
+### Checkpoint 39 scope — dependent-result replay cluster
+
+Take the five deferred dependent-result status failures as one behavior group:
+preserve qualified member-template result types and dependent function-type
+pack substitutions across recursive SFINAE and reentrant static-query replay,
+including the constructor/base initialization case.  Validate all five scoped
+fixtures, then rerun the full PA23 report and the through-PA22 report.  The
+three comparison cases and two fixed-point timeout cases remain explicitly
+out of scope unless the shared replay fix resolves one incidentally.
+
+## Checkpoint 39 result — typed replay handoff and ABI metadata boundary — 2026-08-01
+
+The scoped dependent-result cluster was fully diagnosed but is not complete;
+the constructor/base-initialization case now passes from Checkpoint 38, while
+the four remaining status cases still require a shared dependent-result
+replay fix.  This turn completed the safe handoff increment: valid generated
+template identities remain available to PA23 local-static materialization,
+while dependent expression text is not accepted as an ordinary ABI metadata
+spelling.  The fallback preserves the earlier typed path when the full
+dependent-expression ABI encoder is not applicable.
+
+The validated remaining-work map is eight fixtures:
+
+- **3 LowIR comparisons:**
+  `spec/100-out-of-class-conversion-operator-definition.t`,
+  `spec/400-defaulted-nested-class-argument-partial-specialization.t`, and
+  `spec/400-defaulted-template-arg-partial-base-completion.t`.
+- **4 dependent-result status failures:**
+  `general/500-dependent-qualified-member-template-result-bool.t`,
+  `general/500-mp11-append-alias-template-sfinae.t`,
+  `general/500-recursive-qualified-member-template-bool-arg.t`, and
+  `general/500-reentrant-static-query-callable-enable-if-cache.t`.
+- **1 fixed-point timeout:**
+  `general/500-reentrant-static-query-enable-if-partial.t`.
+
+Checkpoint validation is the full PA23 report at **388 / 396**, the required
+through-PA22 report at **2100 / 2100**, and a passing PA23 source audit.  The
+next checkpoint group is the four dependent-result status cases, starting with
+the qualified result metadata boundary and the reentrant cache's concrete
+type replay; the three comparisons and fixed-point timeout remain deferred.

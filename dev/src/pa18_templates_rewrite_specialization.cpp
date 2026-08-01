@@ -859,4 +859,61 @@ bool PA18TemplateExpander::RegisterExplicitFunctionSpecialization(
 	return true;
 }
 
+void PA18TemplateExpander::ApplyPartialSpecializationReplay(
+	const TemplateDefinition& definition, const vector<string>& args,
+	const string& context, map<string, string>* substitutions,
+	map<string, vector<string> >* pack_substitutions)
+{
+	map<string, string> specialized;
+	set<string> partial_parameter_names;
+	for(size_t parameter = 0; parameter < definition.specialization_parameters.size(); ++parameter)
+		if(!definition.specialization_parameters[parameter].empty())
+			partial_parameter_names.insert(definition.specialization_parameters[parameter]);
+	for(size_t parameter = 0; parameter < definition.specialization_parameter_details.size(); ++parameter)
+		if(!definition.specialization_parameter_details[parameter].name.empty())
+			partial_parameter_names.insert(definition.specialization_parameter_details[parameter].name);
+	set<string> partial_member_names;
+	CPPGMAstNodePtr partial_body = definition.declaration;
+	while(partial_body && partial_body->kind == "template-declaration" &&
+		partial_body->children.size() > 1) partial_body = partial_body->children[1];
+	if(partial_body) for(size_t child = 0; child < partial_body->children.size(); ++child) {
+		CPPGMAstNodePtr member = partial_body->children[child];
+		while(member && member->kind == "template-declaration" && member->children.size() > 1)
+			member = member->children[1];
+		string name;
+		if(member && (member->kind == "class-specifier" ||
+			member->kind == "class-forward-declaration" ||
+			member->kind == "enum-specifier" || member->kind == "alias-declaration"))
+			name = LastComponent(member->value);
+		else if(member && member->kind == "simple-declaration") {
+			const CPPGMAstNodePtr list = ChildOfKindLocal(member, "init-declarator-list");
+			if(list && !list->children.empty() && list->children[0] &&
+				!list->children[0]->children.empty())
+				name = LastComponent(FirstIdentifierLocal(list->children[0]->children[0]));
+		}
+		if(!name.empty()) partial_member_names.insert(name);
+	}
+	if(!MatchClassSpecializationPattern(definition, args, &specialized, context))
+		throw PA18SubstitutionFailure("class partial specialization does not match");
+	for(map<string, string>::const_iterator it = specialized.begin(); it != specialized.end(); ++it)
+		(*substitutions)[it->first] = it->second;
+	for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter)
+		if(!definition.parameters[parameter].name.empty() &&
+			partial_member_names.find(definition.parameters[parameter].name) != partial_member_names.end() &&
+			partial_parameter_names.find(definition.parameters[parameter].name) == partial_parameter_names.end())
+			substitutions->erase(definition.parameters[parameter].name);
+	for(size_t pack_index = 0; pack_index < definition.specialization_pack_names.size(); ++pack_index) {
+		const string& pack_name = definition.specialization_pack_names[pack_index];
+		map<string, string>::const_iterator binding = specialized.find(pack_name);
+		vector<string> values;
+		if(binding != specialized.end() && !binding->second.empty())
+			values = SplitTemplateArguments(binding->second);
+		if(!pack_name.empty()) {
+			(*pack_substitutions)[pack_name] = values;
+			if(values.empty()) substitutions->erase(pack_name);
+			else (*substitutions)[pack_name] = values[0];
+		}
+	}
+}
+
 } // namespace pa18_templates_internal

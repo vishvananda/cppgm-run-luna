@@ -168,11 +168,18 @@ bool PA18TemplateExpander::TryMemberCandidate(MemberCallState* state,
 	size_t candidate_index)
 {
 	MemberCallCandidateState candidate(state, state->candidates[candidate_index]);
-	if(!PrepareMemberCandidate(state, candidate_index, &candidate)) return false;
-	if(!PrepareMemberCandidateArguments(&candidate)) return false;
+	if(!PrepareMemberCandidate(state, candidate_index, &candidate)) {
+		return false;
+	}
+	if(!PrepareMemberCandidateArguments(&candidate)) {
+		return false;
+	}
 	BindExpectedMemberConversion(&candidate);
-	if(!DeduceMemberCandidate(&candidate)) return false;
-	return EmitMemberCandidate(&candidate);
+	if(!DeduceMemberCandidate(&candidate)) {
+		return false;
+	}
+	const bool emitted = EmitMemberCandidate(&candidate);
+	return emitted;
 }
 
 bool PA18TemplateExpander::ParseMemberCall(MemberCallState* state)
@@ -470,8 +477,10 @@ bool PA18TemplateExpander::CollectMemberCallCandidates(MemberCallState* state)
 			if(source_open != string::npos) source_owner.erase(source_open);
 			owner_matches = source_owner == qualified_owner ||
 				LastComponent(source_owner) == qualified_owner;
-		} else if(parent) owner_matches = MemberOwnerPattern(definition, *parent,
-			parent_arguments, 0);
+		} else if(parent) {
+			owner_matches = MemberOwnerPattern(definition, *parent,
+				parent_arguments, 0);
+		}
 		else {
 			string source_owner = definition.owner;
 			const size_t source_open = source_owner.find('<');
@@ -528,7 +537,13 @@ bool PA18TemplateExpander::CollectMemberCallCandidates(MemberCallState* state)
 		for(size_t candidate = 0; candidate < candidates.size(); ++candidate) {
 			const string owner = candidates[candidate]->owner;
 			const size_t angle = owner.find('<');
-			if(angle != string::npos && owner.substr(0, angle) == member_scope)
+			// Out-of-class definitions of a partial specialization are owned by
+			// the class template's logical scope (`traits<A,...>`), while the
+			// declarations collected from the selected class shell may retain the
+			// repeated parser scope (`traits::traits<E,...>`).  Both are the same
+			// selected member surface; discard only candidates from another owner.
+			if(angle != string::npos && (owner.substr(0, angle) == member_scope ||
+				owner.substr(0, angle) == parent->qualified_name))
 				specialized_candidates.push_back(candidates[candidate]);
 		}
 		if(!specialized_candidates.empty()) candidates.swap(specialized_candidates);
@@ -648,6 +663,22 @@ bool PA18TemplateExpander::PrepareMemberCandidate(MemberCallState* state,
 			if(body_bindings.find(binding->first) == body_bindings.end())
 				candidate_substitutions.erase(binding++);
 			else ++binding;
+		}
+		// An out-of-class member definition may rename the enclosing class
+		// parameters (`A` in `traits<A,false>::check`) independently of the
+		// selected partial specialization's declaration (`E`).  Recover that
+		// positional owner binding for this candidate only; putting it in the
+		// shared call state would leak one definition's spelling into siblings.
+		if(parent) {
+			map<string, string> owner_substitutions;
+			if(MemberOwnerPattern(definition, *parent, parent_arguments,
+				&owner_substitutions))
+				for(map<string, string>::const_iterator owner_binding =
+					owner_substitutions.begin(); owner_binding != owner_substitutions.end();
+					++owner_binding)
+					if(!owner_binding->second.empty())
+						candidate_substitutions[owner_binding->first] =
+							owner_binding->second;
 		}
 		map<const TemplateDefinition*, string>::const_iterator candidate_owner =
 			inherited_owners.find(&definition);
@@ -1222,6 +1253,15 @@ bool PA18TemplateExpander::EmitMemberCandidate(
 			LastComponent(requested_owner)) != specialization_bases_.end() &&
 			specialization_arguments_.find(LastComponent(requested_owner)) !=
 				specialization_arguments_.end();
+		// Out-of-class static member definitions do not repeat the `static`
+		// specifier.  Carry the selected concrete owner's class fact into the
+		// local definition copies before Instantiate builds its identity; doing
+		// this only in the emitted AST is too late and collapses static overloads.
+		if(!inference_definition.static_member && !requested_owner.empty() &&
+			HasStaticMember(0, requested_owner, LastComponent(definition.name))) {
+			inference_definition.static_member = true;
+			materialization_definition.static_member = true;
+		}
 		const string* requested_owner_pointer = concrete_owner ? &requested_owner : 0;
 		map<string, vector<string> > instantiation_pack_hints = inferred_pack_values;
 			for(map<string, vector<string> >::const_iterator bound = bound_pack_values.begin();
@@ -1300,20 +1340,21 @@ bool PA18TemplateExpander::EmitMemberCandidate(
 			}
 			call->inferred_type = result_type;
 		}
-	const bool static_member = definition.static_member;
+	const bool static_member = inference_definition.static_member;
 		const bool generated_operator = member_name.compare(0, 8, "operator") == 0;
 	const bool ordinary_class_member = !definition.owner.empty() &&
 			definition.owner.find('<') == string::npos &&
 			FindClassDeclaration(definition.owner, context) != CPPGMAstNodePtr() &&
 			!definition.member_template;
-		const string emitted_member_name = definition.member_template ? generated_name : member_name;
-		if(static_member && definition.owner.find("::") == string::npos && concrete_owner) {
+	const string emitted_member_name = definition.member_template ? generated_name : member_name;
+		if(static_member && concrete_owner && !requested_owner.empty()) {
 			call->children[0] = CPPGMAstNodePtr(new CPPGMAstNode("id-expression",
-				definition.owner + "::" + emitted_member_name));
+				requested_owner + "::" + emitted_member_name));
+			callee->children[1]->value = emitted_member_name;
 		} else callee->children[1]->value =
 			(ordinary_class_member && !generated_operator) ? member_name :
-			(concrete_owner && !generated_operator ?
-				(definition.member_template ? generated_name : member_name) : generated_name);
+				(concrete_owner && !generated_operator ?
+					(definition.member_template ? generated_name : member_name) : generated_name);
 		if(!member_qualifier.empty() && concrete_owner && !static_member) {
 			// Preserve a dependent qualified-base call as a qualified generated
 			// function.  Leaving it as `this->operator=...` redispatches through

@@ -150,7 +150,7 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
         }
     }
 	if(direct && !force_indirect) {
-      for(size_t i = 0; i < candidates.size(); ++i) {
+	      for(size_t i = 0; i < candidates.size(); ++i) {
         Binding* binding = candidates[i];
         TypePtr function = function_target_type(binding->type);
         if(!function) continue;

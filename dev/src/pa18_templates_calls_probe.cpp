@@ -1,5 +1,6 @@
 #include "pa18_templates_collection.h"
 #include "pa18_templates_rewrite.h"
+
 using namespace std;
 namespace pa18_templates_internal {
 
@@ -286,7 +287,8 @@ void PA18TemplateExpander::SortFunctionTemplateCandidates(
 
 void PA18TemplateExpander::RankFunctionTemplateCandidatesForCall(
 	vector<const TemplateDefinition*>* candidates, const CPPGMAstNodePtr& call,
-	const string& context, const map<string, string>& substitutions) const
+	const string& context, const map<string, string>& substitutions,
+	const vector<string>* explicit_prefix) const
 {
 	if(!candidates || !call) return;
 	// Partial ordering does not carry the call's value category and top-level cv
@@ -306,7 +308,7 @@ void PA18TemplateExpander::RankFunctionTemplateCandidatesForCall(
 		vector<string> inferred;
 		bool viable = false;
 		try { viable = InferFunctionArguments(*definition, call, &inferred,
-			substitutions, context, 0); }
+			substitutions, context, explicit_prefix); }
 		catch(const PA18SubstitutionFailure&) { viable = false; }
 		call_viable[definition] = viable;
 		if(!viable) { call_score[definition] = 1000000; continue; }
@@ -418,11 +420,11 @@ void PA18TemplateExpander::RankFunctionTemplateCandidatesForCall(
 			if(call_viable[lhs] != call_viable[rhs]) return call_viable[lhs];
 			if(call_conversion_score[lhs] != call_conversion_score[rhs])
 				return call_conversion_score[lhs] < call_conversion_score[rhs];
-			const bool lhs_more = FunctionTemplateMoreSpecialized(*lhs, *rhs, context);
-			const bool rhs_more = FunctionTemplateMoreSpecialized(*rhs, *lhs, context);
 			const bool same_shape = same_reference_shape(lhs, rhs);
 			if(same_shape && call_reference_score[lhs] != call_reference_score[rhs])
 				return call_reference_score[lhs] < call_reference_score[rhs];
+			const bool lhs_more = FunctionTemplateMoreSpecialized(*lhs, *rhs, context);
+			const bool rhs_more = FunctionTemplateMoreSpecialized(*rhs, *lhs, context);
 			if(lhs_more != rhs_more) return lhs_more;
 			if(!same_shape && call_reference_score[lhs] != call_reference_score[rhs])
 				return call_reference_score[lhs] < call_reference_score[rhs];

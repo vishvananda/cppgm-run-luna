@@ -15,7 +15,7 @@ Type::Type(TypeKind type_kind, const string& type_name)
 	  friend_access(), virtual_methods(),
 	polymorphic(false), has_vpointer(false), template_specialization(false),
 	  template_primary(), template_arguments(), template_parameter_names(),
-	  template_empty_pack(false), has_deferred_constructor(false),
+	  template_parameter_packs(), template_empty_pack(false), has_deferred_constructor(false),
 	  materialize_sizeof_address(false) {}
 
 Binding::Binding(BindingKind binding_kind, const string& binding_name,

@@ -112,35 +112,113 @@ ExplicitCallSelection PA18TemplateExpander::SelectExplicitCallDefinition(
 					!explicit_definition->alias_template &&
 					!explicit_definition->variable_template) {
 					vector<const TemplateDefinition*> overloads = FindFunctionDefinitions(base, context);
+					const vector<string> raw_explicit_args = SplitTemplateArguments(argument_text);
+					// An explicit prefix must participate in call ranking when the
+					// overload set differs only by a dependent reference cv-qualifier
+					// (`U&` versus `U const&`).  Non-dependent overloads still use the
+					// established partial-ordering path; feeding their unrelated class
+					// parameter spellings through explicit deduction changes the stable
+					// overload identity of explicit specializations.
+					const auto strip_const = [](string pattern) {
+							for(size_t position = pattern.find("const");
+								position != string::npos; position = pattern.find("const",
+									position)) {
+								const bool left = position == 0 ||
+									!IsIdentifierCharacter(pattern[position - 1]);
+								const size_t end = position + 5;
+								const bool right = end == pattern.size() ||
+									!IsIdentifierCharacter(pattern[end]);
+								if(left && right) pattern.erase(position, 5);
+								else position = end;
+							};
+							return CanonicalSpelling(pattern);
+					};
+					const auto contains_parameter = [](const TemplateDefinition& definition,
+						const string& pattern) {
+						for(size_t parameter = 0; parameter < definition.parameters.size();
+							++parameter) {
+							const string& name = definition.parameters[parameter].name;
+							for(size_t position = pattern.find(name); !name.empty() &&
+								position != string::npos; position = pattern.find(name,
+									position + name.size())) {
+								const bool left = position == 0 ||
+									!IsIdentifierCharacter(pattern[position - 1]);
+								const size_t end = position + name.size();
+								const bool right = end == pattern.size() ||
+									!IsIdentifierCharacter(pattern[end]);
+								if(left && right) return true;
+							}
+						}
+						return false;
+					};
+					bool reference_cv_overload = false;
+					for(size_t left = 0; left < overloads.size() &&
+						!reference_cv_overload; ++left) {
+						if(!overloads[left] || !overloads[left]->declaration) continue;
+						const CPPGMAstNodePtr left_clause = DescendantOfKind(
+							FunctionDeclarator(overloads[left]->declaration), "parameter-clause");
+						if(!left_clause) continue;
+						for(size_t right = left + 1; right < overloads.size() &&
+							!reference_cv_overload; ++right) {
+							if(!overloads[right] || !overloads[right]->declaration) continue;
+							const CPPGMAstNodePtr right_clause = DescendantOfKind(
+								FunctionDeclarator(overloads[right]->declaration), "parameter-clause");
+							if(!right_clause || left_clause->children.size() !=
+								right_clause->children.size()) continue;
+							bool differs = false;
+							bool compatible = true;
+							for(size_t parameter = 0; parameter < left_clause->children.size();
+								++parameter) {
+								const CPPGMAstNodePtr lhs = left_clause->children[parameter];
+								const CPPGMAstNodePtr rhs = right_clause->children[parameter];
+								if(!lhs || !rhs || lhs->kind != "parameter-declaration" ||
+									rhs->kind != "parameter-declaration") {
+									compatible = false; break;
+								}
+								const string lhs_pattern = ParameterTypeSpelling(lhs);
+								const string rhs_pattern = ParameterTypeSpelling(rhs);
+								if(lhs_pattern.find('&') == string::npos ||
+									rhs_pattern.find('&') == string::npos ||
+									!contains_parameter(*overloads[left], lhs_pattern) ||
+									!contains_parameter(*overloads[right], rhs_pattern) ||
+									strip_const(lhs_pattern) != strip_const(rhs_pattern)) {
+									compatible = false; break;
+								}
+								if(CanonicalSpelling(lhs_pattern) != CanonicalSpelling(rhs_pattern))
+									differs = true;
+							}
+							if(compatible && differs) reference_cv_overload = true;
+						}
+					}
+					const vector<string>* ranking_prefix = reference_cv_overload ?
+						&raw_explicit_args : 0;
 					RankFunctionTemplateCandidatesForCall(&overloads, explicit_deduction_input,
-						context, substitutions);
+						context, substitutions, ranking_prefix);
 					if(overloads.size() > 1) {
-						const vector<string> raw_explicit_args = SplitTemplateArguments(argument_text);
 						const TemplateDefinition* selected_overload = 0;
 						for(size_t overload = 0; overload < overloads.size(); ++overload) {
 							vector<string> trial_arguments;
 							const bool valid_explicit = ValidateExplicitFunctionCandidate(*overloads[overload], explicit_deduction_input, context,
 								substitutions, raw_explicit_args, &trial_arguments);
 							if(valid_explicit) {
-								bool prefer = !selected_overload;
-								if(selected_overload) {
-							const bool candidate_more = FunctionTemplateMoreSpecialized(
-								*overloads[overload], *selected_overload, context);
-							const bool selected_more = FunctionTemplateMoreSpecialized(
-								*selected_overload, *overloads[overload], context);
-							if(candidate_more != selected_more) prefer = candidate_more;
-							else {
-								const bool candidate_definition = overloads[overload]->declaration &&
-									overloads[overload]->declaration->kind == "function-definition";
-								const bool selected_definition = selected_overload->declaration &&
-									selected_overload->declaration->kind == "function-definition";
-								prefer = candidate_definition != selected_definition ?
-									candidate_definition : overloads[overload]->parameters.size() >
-									selected_overload->parameters.size();
-							}
-								}
-								if(prefer) {
-									selected_overload = overloads[overload];
+								if(!selected_overload) selected_overload = overloads[overload];
+								if(!reference_cv_overload && selected_overload != overloads[overload]) {
+									bool prefer = false;
+									const bool candidate_more = FunctionTemplateMoreSpecialized(
+										*overloads[overload], *selected_overload, context);
+									const bool selected_more = FunctionTemplateMoreSpecialized(
+										*selected_overload, *overloads[overload], context);
+									if(candidate_more != selected_more) prefer = candidate_more;
+									else {
+										const bool candidate_definition = overloads[overload]->declaration &&
+											overloads[overload]->declaration->kind == "function-definition";
+										const bool selected_definition = selected_overload->declaration &&
+											selected_overload->declaration->kind == "function-definition";
+										prefer = candidate_definition != selected_definition ?
+											candidate_definition : overloads[overload]->parameters.size() >
+											selected_overload->parameters.size();
+									}
+									if(prefer) selected_overload = overloads[overload];
 								}
 							}
 						}

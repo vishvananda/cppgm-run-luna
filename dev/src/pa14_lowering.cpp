@@ -752,8 +752,8 @@ void PA14Lowerer::CollectClassMembers(const CPPGMAstNodePtr& node, Scope* scope)
         if(!item || item->children.empty()) continue;
         const CPPGMAstNodePtr declarator = item->children[0];
         TypePtr member_type = analyzer_.BuildDeclarator(declarator, base, class_scope);
-        const string member_name = declarator_name(declarator);
-        Binding* member_binding = member_name.empty() ? 0 : class_scope->local(member_name);
+		const string member_name = declarator_name(declarator);
+		Binding* member_binding = member_name.empty() ? 0 : class_scope->local(member_name);
         BindClassMember(member_binding, facts.is_static, type_found->second);
         if(!function_type(member_type)) {
           CollectClassStaticMember(child, item, type_found->second, class_scope,

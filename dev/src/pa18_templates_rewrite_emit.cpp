@@ -632,7 +632,8 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 	EnsureTemplateDeclarationDependencies(definition, generated_owner);
 	const bool static_member = definition.static_member;
 	const bool flattened_static_member = static_member &&
-		definition.owner.find("::") == string::npos && !requested_owner.empty();
+		definition.owner.find("::") == string::npos &&
+		definition.owner.find('<') == string::npos && !requested_owner.empty();
 	const bool free_generated_member = definition.friend_declaration;
 	string member_owner_name = definition.owner;
 	// Collection records an unqualified friend in the lexical class context.
@@ -768,6 +769,14 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 	active_static_member_ = previous_static_member;
 	defer_type_only_class_definitions_ = previous_type_only_depth;
 	if(!generated) throw logic_error("unable to instantiate template");
+	if(definition.class_template) {
+		generated->template_parameter_names.clear();
+		generated->template_parameter_packs.clear();
+		for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter) {
+			generated->template_parameter_names.push_back(definition.parameters[parameter].name);
+			generated->template_parameter_packs.push_back(definition.parameters[parameter].pack);
+		}
+	}
 	if(definition.class_template && !definition.parameters.empty() &&
 		definition.parameters.back().pack && args.size() < definition.parameters.size())
 		generated->template_empty_pack = true;
@@ -879,12 +888,16 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 	}
 	if(member_definition)
 		RestoreGeneratedMemberParameterNames(definition, member_owner_definition, generated);
-	if(member_definition && !definition.class_template &&
-		HasStaticMember(member_owner_definition, member_owner_name,
-			LastComponent(definition.name)))
-		MarkStaticGeneratedFunction(generated);
+	if(member_definition && !definition.class_template) {
+		const bool generated_static = HasStaticMember(member_owner_definition,
+			member_owner_name, LastComponent(definition.name)) ||
+			(!requested_owner.empty() && HasStaticMember(0, requested_owner,
+				LastComponent(definition.name)));
+		if(generated_static) MarkStaticGeneratedFunction(generated);
+	}
 	MarkGeneratedNode(generated, definition.qualified_name, metadata_args,
 		explicit_instantiation, definition.explicit_specialization);
+	RecordTemplateFunctionAbiPatterns(definition, generated);
 	if(generated->kind == "simple-declaration") {
 		const CPPGMAstNodePtr identifier = DescendantOfKind(generated, "identifier");
 		if(identifier) identifier->value = local_name;
@@ -1062,6 +1075,7 @@ string PA18TemplateExpander::MaterializeExternInstantiation(
 	const string local_name = definition.name;
 	RenameGeneratedFunction(declaration, local_name);
 	MarkGeneratedNode(declaration, definition.qualified_name, metadata_args);
+	RecordTemplateFunctionAbiPatterns(definition, declaration);
 	declaration->extern_instantiation = true;
 	declaration->template_primary = definition.qualified_name;
 	declaration->template_arguments = metadata_args;
@@ -1448,25 +1462,8 @@ string PA18TemplateExpander::Instantiate(const TemplateDefinition& definition,
 			current->second = hint->second;
 	}
 	if(definition.partial_specialization) {
-		map<string, string> specialized;
-		// A dependent partial-pattern mismatch is substitution failure.  It must
-		// stay inside candidate viability instead of becoming an internal error.
-		if(!MatchClassSpecializationPattern(definition, args, &specialized, context))
-			throw PA18SubstitutionFailure("class partial specialization does not match");
-		for(map<string, string>::const_iterator it = specialized.begin(); it != specialized.end(); ++it)
-			substitutions[it->first] = it->second;
-		for(size_t pack_index = 0; pack_index < definition.specialization_pack_names.size(); ++pack_index) {
-			const string& pack_name = definition.specialization_pack_names[pack_index];
-			map<string, string>::const_iterator binding = specialized.find(pack_name);
-			vector<string> values;
-			if(binding != specialized.end() && !binding->second.empty())
-				values = SplitTemplateArguments(binding->second);
-			if(!pack_name.empty()) {
-				pack_substitutions[pack_name] = values;
-				if(values.empty()) substitutions.erase(pack_name);
-				else substitutions[pack_name] = values[0];
-			}
-		}
+		ApplyPartialSpecializationReplay(definition, args, context,
+			&substitutions, &pack_substitutions);
 	}
 	ostringstream definition_key;
 	definition_key << definition.qualified_name << "@" << definition.declaration.get();

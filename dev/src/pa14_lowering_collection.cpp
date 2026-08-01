@@ -509,19 +509,23 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
         analyzer_.function_scopes_.find(node.get());
       if(function_scope != analyzer_.function_scopes_.end()) {
         string local_static_function_name = qname;
-        if(record->member) {
+        const bool template_function_context = record->template_instantiation ||
+          record->inline_definition;
+        if(template_function_context) {
           const string object_name = TemplateFunctionObjectName(*record);
           if(!object_name.empty())
             local_static_function_name = "function_symbol_" + HexEncode(object_name);
         }
         CollectLocalStatics(ChildOfKind(node, "compound-statement"),
-          function_scope->second, local_static_function_name);
+          function_scope->second, local_static_function_name,
+          template_function_context);
       }
     }
   }
 
 void PA14Lowerer::CollectLocalStatics(const CPPGMAstNodePtr& node, Scope* scope,
-                                      const string& function_name)
+                                      const string& function_name,
+                                      bool template_function_context)
 {
     if(!node) return;
     if(node->kind == "class-specifier") {
@@ -538,7 +542,8 @@ void PA14Lowerer::CollectLocalStatics(const CPPGMAstNodePtr& node, Scope* scope,
         analyzer_.compound_scopes_.find(node.get());
       Scope* child_scope = found == analyzer_.compound_scopes_.end() ? scope : found->second;
       for(size_t i = 0; i < node->children.size(); ++i)
-        CollectLocalStatics(node->children[i], child_scope, function_name);
+        CollectLocalStatics(node->children[i], child_scope, function_name,
+          template_function_context);
       return;
     }
     if(node->kind == "simple-declaration" && !node->children.empty()) {
@@ -570,12 +575,23 @@ void PA14Lowerer::CollectLocalStatics(const CPPGMAstNodePtr& node, Scope* scope,
           record.declaration = false;
           record.internal = true;
           record.local_static = true;
+          record.template_instantiation = template_function_context;
+          record.weak_binding = template_function_context;
           const TypePtr value_type = type_value(type);
           long long constant = 0;
           const bool constant_integral = initializer && value_type &&
             is_integral_type(value_type) &&
             FoldInteger(InitializerExpression(initializer), scope, &constant, 0);
+          const bool object_type = value_type &&
+            (value_type->kind == TYPE_CLASS ||
+             (value_type->kind == TYPE_ARRAY && value_type->child &&
+              type_value(value_type->child) &&
+              type_value(value_type->child)->kind == TYPE_CLASS));
           record.dynamic_initializer = initializer && !constant_integral;
+          if(object_type)
+            record.dynamic_initializer = record.dynamic_initializer ||
+              HasDefaultConstructionEffects(value_type) ||
+              HasUserProvidedConstructor(value_type);
           map<string, GlobalRecord*>::iterator prior = global_by_key_.find(
             global_key(local_name));
           GlobalRecord* stored = 0;
@@ -612,13 +628,19 @@ void PA14Lowerer::CollectLocalStatics(const CPPGMAstNodePtr& node, Scope* scope,
       return;
     }
     for(size_t i = 0; i < node->children.size(); ++i)
-      CollectLocalStatics(node->children[i], scope, function_name);
+      CollectLocalStatics(node->children[i], scope, function_name,
+        template_function_context);
   }
 
 void PA14Lowerer::ClassifySpecialMember(FunctionRecord* record)
 {
     if(!record || !record->member || record->member_template || record->static_member ||
        !record->member_owner || !record->source_type) return;
+    // A constructor template is never the class's copy/move special member,
+    // even when one materialized argument happens to spell the class itself.
+    // Keeping that distinction typed prevents a converting constructor
+    // specialization from changing the aggregate return ABI classification.
+    if(record->member_template_frame) return;
     TypePtr owner = type_value(record->member_owner);
     TypePtr function = function_target_type(record->source_type);
     if(!owner || owner->kind != TYPE_CLASS || !function) return;
@@ -1298,49 +1320,6 @@ void PA14Lowerer::CollectGlobalDeclaration(const CPPGMAstNodePtr& node,
       if(record.dynamic_finalizer) needs_fini_helper_ = true;
     }
     StoreGlobalDeclaration(record, type_value(record.type));
-  }
-
-void PA14Lowerer::DemandConstantObjectConstructors(const TypePtr& raw_type,
-                                                    const CPPGMAstNodePtr& initializer)
-{
-    TypePtr type = type_value(raw_type);
-    if(!type || !initializer) return;
-    CPPGMAstNodePtr expression = initializer;
-    if(expression->kind == "initializer" || expression->kind == "paren-initializer" ||
-       expression->kind == "default-argument" || expression->kind == "initializer-clause")
-      expression = InitializerExpression(expression);
-    if(!expression) return;
-    if(type->kind == TYPE_ARRAY) {
-      if(expression->kind == "braced-init-list")
-        for(size_t i = 0; i < expression->children.size(); ++i)
-          DemandConstantObjectConstructors(type->child, expression->children[i]);
-      return;
-    }
-    if(type->kind != TYPE_CLASS) return;
-    vector<CPPGMAstNodePtr> arguments;
-    if(expression->kind == "braced-init-list") arguments = expression->children;
-    else if(expression->kind == "call-expression" && expression->children.size() > 1) {
-      CPPGMAstNodePtr list = expression->children[1];
-      arguments = list ? list->children : vector<CPPGMAstNodePtr>();
-      if(expression->value == "braced-construction" && arguments.size() == 1 &&
-         arguments[0] && arguments[0]->kind == "braced-init-list")
-        arguments = arguments[0]->children;
-    } else return;
-    const string constructor_name = type->template_specialization &&
-      !type->template_primary.empty() ? LastComponent(type->template_primary) :
-      LastComponent(type->name);
-    vector<Binding*> candidates = MemberBindings(type, LastComponent(type->name));
-    if(candidates.empty() && constructor_name != LastComponent(type->name))
-      candidates = MemberBindings(type, constructor_name);
-    for(size_t i = 0; i < candidates.size(); ++i) {
-      Binding* binding = candidates[i];
-      FunctionRecord* record = RecordForBinding(binding);
-      if(!record || !record->constructor || record->deleted ||
-         !record->source_type || record->source_type->parameters.size() != arguments.size())
-        continue;
-      record->needed = true;
-      return;
-    }
   }
 
 void PA14Lowerer::StoreGlobalDeclaration(GlobalRecord& record,

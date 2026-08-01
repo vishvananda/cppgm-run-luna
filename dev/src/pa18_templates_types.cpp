@@ -119,6 +119,14 @@ string PA18TemplateExpander::FunctionTypeSpelling(const CPPGMAstNodePtr& paramet
 					one[pack_name] = spelling;
 					spelling = ReplaceIdentifiersPreservingPackSizes(
 						ParameterTypeSpelling(item), one);
+					// Each value is one element of the parameter pack.  The
+					// declarator spelling still carries the source expansion marker
+					// (`T...`), but retaining it after substituting one element turns
+					// a function type such as `R(T...)` into `R(U...)` instead of
+					// `R(U)`.  The marker has already been consumed by this loop.
+					if(spelling.size() >= 3 &&
+						spelling.compare(spelling.size() - 3, 3, "...") == 0)
+						spelling.erase(spelling.size() - 3);
 				}
 				if(result->size() > 0 && result->at(result->size() - 1) != '(')
 					*result += ',';
@@ -163,6 +171,11 @@ string PA18TemplateExpander::DeclaratorTypeSpelling(const string& base,
 					one[pack_name] = spelling;
 					spelling = ReplaceIdentifiersPreservingPackSizes(
 						ParameterTypeSpelling(item), one);
+					// The active pack supplies a single declarator here; do not
+					// carry the source pack-expansion marker into that element.
+					if(spelling.size() >= 3 &&
+						spelling.compare(spelling.size() - 3, 3, "...") == 0)
+						spelling.erase(spelling.size() - 3);
 				}
 				if(result->size() > 0 && result->at(result->size() - 1) != '(')
 					*result += ',';

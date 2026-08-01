@@ -414,7 +414,8 @@ void BindClassMember(Binding* binding, bool is_static, const TypePtr& owner) con
 void CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, bool definition);
 
 void CollectLocalStatics(const CPPGMAstNodePtr& node, Scope* scope,
-                         const string& function_name);
+                         const string& function_name,
+                         bool template_function_context = false);
 
   void CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope,
                             bool definition, bool out_of_class_member);
@@ -461,6 +462,8 @@ bool HasStorageSpecifier(const CPPGMAstNodePtr& node, const string& word) const;
 void FinalizeSymbols();
 
 string TemplateFunctionObjectName(const FunctionRecord& function) const;
+
+string RepeatedTemplateFunctionObjectName(const FunctionRecord& function) const;
 
 string TemplateGlobalObjectName(const GlobalRecord& global) const;
 

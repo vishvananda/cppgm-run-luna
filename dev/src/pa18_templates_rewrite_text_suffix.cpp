@@ -90,8 +90,11 @@ string PA18TemplateExpander::RewriteTextMemberSuffix(
 		string lookup_owner = owner;
 		// The generated owner can have been formed by a prior scalar pass over a
 		// nested dependent type (`vector<Property>` becoming `vector<unsigned
-		// long>`).  Recover the source owner from this RewriteText boundary so
-		// member lookup can apply the typed `Property -> Vertex` binding once.
+		// long>`).  Keep the concrete lookup first: it carries the already
+		// materialized pack spelling.  Recover the source owner only when that
+		// lookup cannot resolve the member, so a source `Args...` does not get
+		// reintroduced after the generated owner has been typed.
+		string source_lookup_owner;
 		const size_t source_separator = next_scope_separator(source_spelling, 0);
 		if(source_separator != string::npos) {
 			size_t source_member_begin = source_separator + 2;
@@ -103,11 +106,19 @@ string PA18TemplateExpander::RewriteTextMemberSuffix(
 			if(source_spelling.substr(source_member_begin, source_member_end - source_member_begin) ==
 				member_name) {
 				const string source_owner = source_spelling.substr(0, source_separator);
-				if(source_owner.find('<') != string::npos) lookup_owner = source_owner;
+				if(source_owner.find('<') != string::npos) source_lookup_owner = source_owner;
 			}
 		}
-		const bool found_member = FindClassMemberType(lookup_owner, member_name,
+		bool found_member = FindClassMemberType(lookup_owner, member_name,
 			substitutions, context, &member_type, &member_active, true);
+		if((!found_member || member_type.empty()) && !source_lookup_owner.empty() &&
+			source_lookup_owner != lookup_owner) {
+			member_type.clear();
+			member_active.clear();
+			lookup_owner = source_lookup_owner;
+			found_member = FindClassMemberType(lookup_owner, member_name,
+				substitutions, context, &member_type, &member_active, true);
+		}
 		if(!found_member || member_type.empty()) {
 			separator = next_scope_separator(raw, member_end);
 			continue;

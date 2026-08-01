@@ -135,7 +135,7 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 		string* result);
 	bool InferArgument(const CPPGMAstNodePtr& expression, string* result,
 		const map<string, string>& substitutions, const string& context,
-		FunctionSignature* function_signature = 0) const;
+		FunctionSignature* function_signature = 0, bool this_function_argument = false) const;
 	bool InferCastArgument(const CPPGMAstNodePtr& expression, string* result,
 		const map<string, string>& substitutions, const string& context) const;
 	bool InferMemberArgument(const CPPGMAstNodePtr& expression, string* result,

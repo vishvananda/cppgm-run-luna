@@ -62,6 +62,20 @@ struct CPPGMAstNode
 	std::size_t source_token_end;
 	std::string template_primary;
 	std::vector<std::string> template_arguments;
+	// PA18 carries the source-level function-template parameter names and
+	// return/parameter type patterns through materialization so PA14 can form
+	// stable ABI identities for generated free functions (including local
+	// static storage inside them).
+	std::vector<std::string> template_function_parameter_names;
+	std::vector<std::string> template_function_patterns;
+	// Preserve which function-template parameters are packs.  The source
+	// pattern alone cannot distinguish `T&&` from a pack expansion `T&&...`
+	// when PA14 reconstructs the Itanium function-template ABI name.
+	std::vector<bool> template_function_parameter_packs;
+	// Preserve class-template parameter packs on generated class AST nodes so
+	// the typed class specialization can retain its ABI pack boundaries.
+	std::vector<std::string> template_parameter_names;
+	std::vector<bool> template_parameter_packs;
 	// PA18 records that the materialized specialization elided an empty
 	// trailing template parameter pack.  This is distinct from an ordinary
 	// one-argument class specialization at the ABI boundary.

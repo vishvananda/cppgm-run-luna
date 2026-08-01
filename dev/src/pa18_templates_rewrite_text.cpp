@@ -90,16 +90,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				if(template_replaced) *template_replaced = true;
 			}
 		}
-	raw = RewriteDecltypeText(raw, context, substitutions, template_replaced); if(resolve_member) {
-		const size_t owner_separator = TopLevelScopeSeparator(raw);
-		if(owner_separator != string::npos && owner_separator + 2 < raw.size()) {
-			const string owner = raw.substr(0, owner_separator);
-			const string member = raw.substr(owner_separator + 2);
-			const string resolved_owner = ResolveAlias(owner, context);
-			if(!resolved_owner.empty() && resolved_owner != owner)
-				raw = resolved_owner + "::" + member;
-		}
-	}
+	raw = RewriteDecltypeText(raw, context, substitutions, template_replaced);
 	if(resolve_member) for(map<string, string>::const_iterator current = substitutions.begin();
 		current != substitutions.end(); ++current) {
 		if(current->first.empty() || current->second.find('<') == string::npos) continue;
@@ -129,7 +120,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 		if(base == specialization_bases_.end() || arguments == specialization_arguments_.end()) continue;
 		const TemplateDefinition* definition = FindDefinition(base->second, context);
 		if(!definition || !definition->class_template) continue;
-		const string token = current->first + "::";
+			const string token = current->first + "::";
 		for(size_t at = raw.find(token); at != string::npos; at = raw.find(token, at)) {
 			size_t end = at + token.size();
 		while(end < raw.size() && IsIdentifierCharacter(raw[end])) ++end;
@@ -152,7 +143,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 					nested_class = true;
 					break;
 				}
-					if(nested_class) {
+				if(nested_class) {
 					requested_nested_classes_[definition->qualified_name].insert(member);
 					requested_nested_classes_[LastComponent(definition->qualified_name)].insert(member);
 					InstantiateNestedClass(*definition, arguments->second,
@@ -316,8 +307,22 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 		if(resolve_member && RewriteMemberTemplateAliasApplication(&raw, begin, close,
 			base, context, substitutions, template_replaced, &search)) continue;
 		bool replaced_current_specialization = false;
+		// The generated-name index is keyed by the short nested class name
+		// (`impl`, `type`, ...).  That index is intentionally useful for an
+		// unqualified source template-id, but it is not an owner-aware lookup:
+		// `list_set<T>::impl<...>` and `call<F(A)>::impl<...>` can have the same
+		// short generated spelling.  Once the owner is already a materialized
+		// specialization, let the typed owner branch below resolve its nested
+		// definition instead of replacing it with a sibling owner's declaration.
+		const string generated_owner = PrefixComponent(base);
+		const bool materialized_generated_owner = !generated_owner.empty() &&
+			specialization_bases_.find(LastComponent(generated_owner)) !=
+				specialization_bases_.end() &&
+			specialization_arguments_.find(LastComponent(generated_owner)) !=
+				specialization_arguments_.end();
 		map<string, vector<string> >::const_iterator generated_names =
-			specialization_names_by_base_.find(LastComponent(base));
+			materialized_generated_owner ? specialization_names_by_base_.end() :
+				specialization_names_by_base_.find(LastComponent(base));
 		if(generated_names != specialization_names_by_base_.end())
 		for(size_t generated_index = 0; generated_index < generated_names->second.size();
 			++generated_index) {
@@ -681,12 +686,15 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			}
 		for(size_t i = 0; i < args.size(); ++i) {
 			const string source_argument = args[i]; const bool preserve_elaborated_type_owner = IsElaboratedTypeArgumentSpelling(source_argument);
-			const string substituted_source_argument = CanonicalSpelling(CollapseRepeatedQualifiedPath(CollapseRepeatedQualifier(ReplaceIdentifiersPreservingPackSizes(source_argument, substitutions))));
 			// A self-containing template-id replacement has no finite textual
 			// rewrite.  Drop only that binding for this nested rewrite; all semantic
 			// deduction facts remain in the caller's typed substitution map.
 			const map<string, string>* argument_substitutions = &substitutions;
-			map<string, string> protected_substitutions;
+			map<string, string> protected_substitutions = substitutions;
+			ProtectMaterializedTemplateBases(source_argument, context, substitutions,
+				&protected_substitutions);
+			if(protected_substitutions != substitutions)
+				argument_substitutions = &protected_substitutions;
 			for(map<string, string>::const_iterator substitution = substitutions.begin();
 				substitution != substitutions.end(); ++substitution) {
 				const string& replacement = substitution->second;
@@ -699,6 +707,10 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				}
 				protected_substitutions.erase(substitution->first);
 			}
+			const string substituted_source_argument = CanonicalSpelling(
+				CollapseRepeatedQualifiedPath(CollapseRepeatedQualifier(
+					ReplaceIdentifiersPreservingPackSizes(source_argument,
+						*argument_substitutions))));
 				const string rewrite_source = CanonicalSpelling(CollapseRepeatedQualifiedPath(CollapseRepeatedQualifier(argument_substitutions == &substitutions ? args[i] : substituted_source_argument)));
 					if(i < definition->parameters.size() &&
 						definition->parameters[i].template_template) {

@@ -2,6 +2,7 @@
 
 #include <cctype>
 #include <cstring>
+#include <cstdlib>
 #include <map>
 #include <string>
 #include <vector>
@@ -68,7 +69,7 @@ vector<string> abi_split_arguments(const string& value)
     } else current += ch;
   }
   if(!current.empty() || !result.empty()) result.push_back(abi_trim(current));
-  return result;
+	return result;
 }
 
 vector<string> abi_split_qualified(const string& value)
@@ -157,6 +158,44 @@ bool abi_split_direct_function_type(const string& raw, string* result,
   return true;
 }
 
+bool abi_split_function_pointer_type(const string& raw, bool* reference,
+                                     string* result, vector<string>* parameters)
+{
+  const string value = abi_trim(raw);
+  size_t marker = value.find("(*");
+  bool is_reference = false;
+  if(marker == string::npos) {
+    marker = value.find("(&");
+    is_reference = marker != string::npos;
+  }
+  if(marker == string::npos) return false;
+  const size_t declarator_close = value.find(')', marker + 2);
+  if(declarator_close == string::npos || declarator_close + 1 >= value.size() ||
+     value[declarator_close + 1] != '(') return false;
+  const size_t parameter_open = declarator_close + 1;
+  int depth = 0;
+  size_t parameter_close = string::npos;
+  for(size_t position = parameter_open; position < value.size(); ++position) {
+    if(value[position] == '(') ++depth;
+    else if(value[position] == ')' && --depth == 0) {
+      parameter_close = position;
+      break;
+    }
+  }
+  if(parameter_close == string::npos ||
+     !abi_trim(value.substr(parameter_close + 1)).empty()) return false;
+  const string return_type = abi_trim(value.substr(0, marker));
+  if(return_type.empty()) return false;
+  if(reference) *reference = is_reference;
+  if(result) *result = return_type;
+  if(parameters) {
+    *parameters = abi_split_arguments(value.substr(parameter_open + 1,
+      parameter_close - parameter_open - 1));
+    if(parameters->size() == 1 && (*parameters)[0] == "void") parameters->clear();
+  }
+  return true;
+}
+
 string abi_component(const string& raw)
 {
   string value = abi_remove_tag(raw);
@@ -187,6 +226,21 @@ string abi_type_text(const string& raw)
 {
   string value = abi_trim(raw);
   if(value.empty()) return "v";
+	const string template_marker = "__pa18_abi_template_";
+	if(value.compare(0, template_marker.size(), template_marker) == 0 &&
+		value.size() > template_marker.size() + 2 &&
+		value.compare(value.size() - 2, 2, "__") == 0) {
+		const string digits = value.substr(template_marker.size(),
+			value.size() - template_marker.size() - 2);
+		bool numeric = !digits.empty();
+		for(size_t i = 0; numeric && i < digits.size(); ++i)
+			if(!isdigit(static_cast<unsigned char>(digits[i]))) numeric = false;
+		if(numeric) {
+			const size_t index = static_cast<size_t>(strtoul(digits.c_str(), 0, 10));
+			return index == 0 ? "T_" : "T" + integer_text(
+				static_cast<long long>(index - 1)) + "_";
+		}
+	}
 	// A boolean non-type template argument is encoded as a typed literal in
 	// the Itanium ABI.  PA18 keeps the source spelling (`true`/`false`) in
 	// typed compiler state, so normalize it at the ABI boundary instead of
@@ -195,11 +249,20 @@ string abi_type_text(const string& raw)
 	if(value == "false") return "Lb0E";
 	string function_result;
 	vector<string> function_parameters;
-	if(abi_split_direct_function_type(value, &function_result, &function_parameters)) {
-		string encoded = "F";
+	bool function_reference = false;
+	if(abi_split_function_pointer_type(value, &function_reference,
+		&function_result, &function_parameters)) {
+		string encoded = function_reference ? "R" : "P";
+		encoded += "F" + abi_type_text(function_result);
 		for(size_t parameter = 0; parameter < function_parameters.size(); ++parameter)
 			encoded += abi_type_text(function_parameters[parameter]);
-		return encoded + "E" + abi_type_text(function_result);
+		return encoded + "E";
+	}
+	if(abi_split_direct_function_type(value, &function_result, &function_parameters)) {
+		string encoded = "F" + abi_type_text(function_result);
+		for(size_t parameter = 0; parameter < function_parameters.size(); ++parameter)
+			encoded += abi_type_text(function_parameters[parameter]);
+		return encoded + "E";
 	}
 	// PA19 preserves an enum non-type argument as `EnumType value` so the
 	// source type remains available for specialization names.  In the ABI it
@@ -304,11 +367,34 @@ string abi_type_components(const TypePtr& type)
   if(type->template_specialization && !type->template_primary.empty()) {
     const vector<string> primary = abi_split_qualified(type->template_primary);
     for(size_t i = 0; i + 1 < primary.size(); ++i) components.push_back(abi_component(primary[i]));
-    const string base = primary.empty() ? abi_last_component(qualified) : primary.back();
-    string final = integer_text(static_cast<long long>(base.size())) + base + "I";
-    for(size_t i = 0; i < type->template_arguments.size(); ++i)
-      final += abi_type_text(type->template_arguments[i]);
-    components.push_back(final + "E");
+		const string base = primary.empty() ? abi_last_component(qualified) : primary.back();
+		string final = integer_text(static_cast<long long>(base.size())) + base + "I";
+		if(!type->template_parameter_packs.empty()) {
+			size_t argument = 0;
+			for(size_t parameter = 0; parameter <
+				type->template_parameter_packs.size(); ++parameter) {
+				if(!type->template_parameter_packs[parameter]) {
+					if(argument < type->template_arguments.size())
+						final += abi_type_text(type->template_arguments[argument++]);
+					continue;
+				}
+				const size_t trailing_fixed = type->template_parameter_packs.size() -
+					parameter - 1;
+				const size_t available = type->template_arguments.size() - argument;
+				const size_t count = available > trailing_fixed ?
+					available - trailing_fixed : 0;
+				if(count != 0) {
+					final += "J";
+					for(size_t item = 0; item < count; ++item)
+						final += abi_type_text(type->template_arguments[argument++]);
+					final += "E";
+				}
+			}
+			while(argument < type->template_arguments.size())
+				final += abi_type_text(type->template_arguments[argument++]);
+		} else for(size_t i = 0; i < type->template_arguments.size(); ++i)
+			final += abi_type_text(type->template_arguments[i]);
+		components.push_back(final + "E");
   } else {
     const vector<string> names = abi_split_qualified(qualified);
     for(size_t i = 0; i < names.size(); ++i) components.push_back(abi_component(names[i]));
@@ -343,9 +429,10 @@ string abi_type(const TypePtr& raw)
       abi_type(raw->child);
   case TYPE_FUNCTION: {
     string result = cv + "F";
+    result += abi_type(raw->child);
     for(size_t i = 0; i < raw->parameters.size(); ++i) result += abi_type(raw->parameters[i]);
     if(raw->variadic) result += "z";
-    return result + "E" + abi_type(raw->child);
+    return result + "E";
   }
   case TYPE_MEMBER_POINTER:
     return cv + "M" + abi_type(raw->member_owner) + abi_type(raw->child);
@@ -354,6 +441,294 @@ string abi_type(const TypePtr& raw)
   default: return cv + abi_qualified(raw->name);
   }
 }
+
+bool abi_pattern_mentions_parameter(const string& raw, const string& wanted);
+bool abi_function_has_parameter_pack(const CPPGMAstNodePtr& node);
+
+struct AbiMangleContext
+{
+  vector<string> substitutions;
+
+  string substitution(const string& key) const
+  {
+    for(size_t index = 0; index < substitutions.size(); ++index)
+      if(substitutions[index] == key) {
+        if(index < 10) return "S" + integer_text(static_cast<long long>(index)) + "_";
+        return "S" + string(1, static_cast<char>('A' + index - 10)) + "_";
+      }
+    return string();
+  }
+
+  void remember(const string& key)
+  {
+    if(key.empty() || !substitution(key).empty()) return;
+    substitutions.push_back(key);
+  }
+
+  string encode_text(const string& raw,
+                     const vector<bool>& parameter_packs = vector<bool>())
+  {
+    string value = abi_trim(raw);
+    if(value.empty()) return "v";
+    if(value == "true" || value == "false") return abi_type_text(value);
+    const string existing = substitution("text:" + value);
+    if(!existing.empty()) return existing;
+
+    string function_result;
+    vector<string> function_parameters;
+    bool function_reference = false;
+    if(abi_split_function_pointer_type(value, &function_reference,
+        &function_result, &function_parameters)) {
+      string encoded = function_reference ? "R" : "P";
+      encoded += "F" + encode_text(function_result);
+      for(size_t parameter = 0; parameter < function_parameters.size(); ++parameter)
+        encoded += encode_text(function_parameters[parameter]);
+      encoded += "E";
+      remember("text:" + value);
+      return encoded;
+    }
+    if(abi_split_direct_function_type(value, &function_result, &function_parameters)) {
+      string encoded = "F" + encode_text(function_result);
+      for(size_t parameter = 0; parameter < function_parameters.size(); ++parameter)
+        encoded += encode_text(function_parameters[parameter]);
+      encoded += "E";
+      remember("text:" + value);
+      return encoded;
+    }
+
+    string trailing_cv;
+    for(;;) {
+      if(value.size() > 6 && value.compare(value.size() - 6, 6, " const") == 0) {
+        value.erase(value.size() - 6);
+        trailing_cv = "K" + trailing_cv;
+      } else if(value.size() > 9 &&
+        value.compare(value.size() - 9, 9, " volatile") == 0) {
+        value.erase(value.size() - 9);
+        trailing_cv = "V" + trailing_cv;
+      } else break;
+    }
+    if(!trailing_cv.empty()) return trailing_cv + encode_text(value);
+    if(value[value.size() - 1] == '&') {
+      const bool rvalue = value.size() > 1 && value[value.size() - 2] == '&';
+      value.erase(value.size() - (rvalue ? 2 : 1));
+      const string encoded = string(rvalue ? "O" : "R") + encode_text(value);
+      remember("text:" + abi_trim(raw));
+      return encoded;
+    }
+    if(value[value.size() - 1] == '*') {
+      value.erase(value.size() - 1);
+      const string encoded = "P" + encode_text(value);
+      remember("text:" + abi_trim(raw));
+      return encoded;
+    }
+    if(value.compare(0, 6, "const ") == 0)
+      return "K" + encode_text(value.substr(6));
+    if(value.compare(0, 9, "volatile ") == 0)
+      return "V" + encode_text(value.substr(9));
+    if(!abi_fundamental(value).empty()) return abi_fundamental(value);
+
+    const vector<string> components = abi_split_qualified(abi_remove_tag(value));
+    if(components.size() > 1) {
+      string encoded = "N";
+      for(size_t component = 0; component < components.size(); ++component)
+        encoded += encode_component(components[component], vector<bool>());
+      encoded += "E";
+      remember("text:" + abi_trim(raw));
+      return encoded;
+    }
+    return encode_component(components.empty() ? value : components[0],
+      parameter_packs);
+  }
+
+  string encode_component(const string& raw, const vector<bool>& parameter_packs)
+  {
+    string value = abi_remove_tag(abi_trim(raw));
+    const size_t open = value.find('<');
+    if(open == string::npos) {
+      const string key = "name:" + value;
+      const string existing = substitution(key);
+      if(!existing.empty()) return existing;
+      const string encoded = integer_text(static_cast<long long>(value.size())) + value;
+      remember(key);
+      return encoded;
+    }
+    const size_t close = abi_matching_angle(value, open);
+    if(close == string::npos) return abi_component(value);
+    const string base = abi_trim(value.substr(0, open));
+    const string base_key = "name:" + base;
+    const string existing = substitution(base_key);
+    string encoded = existing.empty() ?
+      integer_text(static_cast<long long>(base.size())) + base : existing;
+    if(existing.empty()) remember(base_key);
+    encoded += "I";
+    const vector<string> arguments = abi_split_arguments(value.substr(open + 1,
+      close - open - 1));
+    encode_arguments(&encoded, arguments, parameter_packs);
+    encoded += "E";
+    remember("text:" + value);
+    return encoded;
+  }
+
+  void encode_arguments(string* output, const vector<string>& arguments,
+                        const vector<bool>& parameter_packs)
+  {
+    size_t argument = 0;
+    if(parameter_packs.empty()) {
+      while(argument < arguments.size()) *output += encode_text(arguments[argument++]);
+      return;
+    }
+    for(size_t parameter = 0; parameter < parameter_packs.size(); ++parameter) {
+      if(!parameter_packs[parameter]) {
+        if(argument < arguments.size()) *output += encode_text(arguments[argument++]);
+        continue;
+      }
+      size_t trailing_fixed = 0;
+      for(size_t later = parameter + 1; later < parameter_packs.size(); ++later)
+        if(!parameter_packs[later]) ++trailing_fixed;
+      const size_t available = arguments.size() - argument;
+      const size_t count = available > trailing_fixed ? available - trailing_fixed : 0;
+      if(count != 0) {
+        *output += "J";
+        for(size_t item = 0; item < count; ++item)
+          *output += encode_text(arguments[argument++]);
+        *output += "E";
+      }
+    }
+    while(argument < arguments.size()) *output += encode_text(arguments[argument++]);
+  }
+
+  string type_key(const TypePtr& type) const
+  {
+    if(!type) return string();
+    string key = "type:" + integer_text(static_cast<long long>(type->kind)) + ":" +
+      type->name + ":" + type->template_primary;
+    if(type->enclosing_type) key += ":<" + type_key(type->enclosing_type) + ">";
+    for(size_t argument = 0; argument < type->template_arguments.size(); ++argument)
+      key += ":" + type->template_arguments[argument];
+    if(type->kind == TYPE_POINTER || type->kind == TYPE_LVALUE_REFERENCE ||
+       type->kind == TYPE_RVALUE_REFERENCE) key += ":<" + type_key(type->child) + ">";
+    return key;
+  }
+
+  string encode_type(const TypePtr& type, bool defer_full = false)
+  {
+    if(!type) return "v";
+    if(type->kind == TYPE_FUNDAMENTAL) return abi_fundamental(type->name);
+    if(type->kind == TYPE_POINTER || type->kind == TYPE_LVALUE_REFERENCE ||
+       type->kind == TYPE_RVALUE_REFERENCE) {
+      const string key = type_key(type);
+      const string existing = substitution(key);
+      if(!existing.empty()) return existing;
+      const string prefix = type->kind == TYPE_POINTER ? "P" :
+        (type->kind == TYPE_LVALUE_REFERENCE ? "R" : "O");
+      const string encoded = prefix + encode_type(type->child);
+      remember(key);
+      return encoded;
+    }
+    if(type->kind == TYPE_FUNCTION) {
+      const string key = type_key(type);
+      const string existing = substitution(key);
+      if(!existing.empty()) return existing;
+      string encoded = "F" + encode_type(type->child);
+      for(size_t parameter = 0; parameter < type->parameters.size(); ++parameter)
+        encoded += encode_type(type->parameters[parameter]);
+      if(type->variadic) encoded += "z";
+      encoded += "E";
+      remember(key);
+      return encoded;
+    }
+    if(type->kind != TYPE_CLASS) return encode_text(type->name);
+    const string base = type->template_primary.empty() ?
+      abi_last_component(type->name) : abi_last_component(type->template_primary);
+    const bool plain_class = !type->enclosing_type &&
+      !type->template_specialization && type->template_arguments.empty();
+    const string key = plain_class ? "name:" + base : type_key(type);
+    const string existing = substitution(key);
+    if(!existing.empty()) return existing;
+    string encoded;
+    if(type->enclosing_type) {
+      const string enclosing_key = type_key(type->enclosing_type);
+      encoded = "N" + encode_type(type->enclosing_type, true);
+      const string name = abi_last_component(type->name);
+      encoded += integer_text(static_cast<long long>(name.size())) + name + "E";
+      remember("name:" + name);
+      remember(key);
+      remember(enclosing_key);
+    } else {
+      encoded = integer_text(static_cast<long long>(base.size())) + base;
+      const string base_key = "name:" + base;
+      if(substitution(base_key).empty()) remember(base_key);
+      if(type->template_specialization || !type->template_arguments.empty()) {
+        encoded += "I";
+        encode_arguments(&encoded, type->template_arguments,
+          type->template_parameter_packs);
+        encoded += "E";
+      }
+		if(!defer_full && !plain_class) remember(key);
+    }
+    return encoded;
+  }
+
+  string encode_function_arguments(const CPPGMAstNodePtr& node,
+                                   const vector<string>& arguments,
+                                   const TypePtr& source)
+  {
+    if(!node || !abi_function_has_parameter_pack(node)) {
+      string result;
+      for(size_t argument = 0; argument < arguments.size(); ++argument)
+        result += encode_text(arguments[argument]);
+      return result;
+    }
+    const vector<string>& names = node->template_function_parameter_names;
+    const vector<bool>& packs = node->template_function_parameter_packs;
+    vector<TypePtr> typed(arguments.size());
+    size_t actual = 0;
+    if(source && node->template_function_patterns.size() == source->parameters.size() + 1)
+      for(size_t parameter = 0; parameter < names.size() && actual < arguments.size();
+          ++parameter) {
+        size_t trailing_fixed = 0;
+        for(size_t later = parameter + 1; later < packs.size(); ++later)
+          if(!packs[later]) ++trailing_fixed;
+        const size_t available = arguments.size() - actual;
+        const size_t count = packs[parameter] ?
+          (available > trailing_fixed ? available - trailing_fixed : 0) : 1;
+        if(!packs[parameter] && parameter == 0 && source->child)
+          typed[actual] = type_value(source->child);
+        else if(packs[parameter]) {
+          size_t matched = 0;
+          for(size_t item = 0; item < source->parameters.size() && matched < count; ++item)
+            if(abi_pattern_mentions_parameter(node->template_function_patterns[item + 1],
+                names[parameter])) typed[actual + matched++] =
+              type_value(source->parameters[item]);
+        }
+        actual += count;
+      }
+    string result;
+    actual = 0;
+    for(size_t parameter = 0; parameter < names.size(); ++parameter) {
+      size_t trailing_fixed = 0;
+      for(size_t later = parameter + 1; later < packs.size(); ++later)
+        if(!packs[later]) ++trailing_fixed;
+      const size_t available = arguments.size() - actual;
+      const size_t count = packs[parameter] ?
+        (available > trailing_fixed ? available - trailing_fixed : 0) : 1;
+      if(packs[parameter]) {
+        result += "J";
+        for(size_t item = 0; item < count; ++item) {
+          result += typed[actual] ? encode_type(typed[actual]) : encode_text(arguments[actual]);
+          ++actual;
+        }
+        result += "E";
+      } else if(actual < arguments.size()) {
+        result += typed[actual] ? encode_type(typed[actual]) : encode_text(arguments[actual]);
+        ++actual;
+      }
+    }
+    while(actual < arguments.size())
+      result += typed[actual] ? encode_type(typed[actual]) : encode_text(arguments[actual++]);
+    return result;
+  }
+};
 
 string abi_terminal(const string& name, const TypePtr& result)
 {
@@ -563,6 +938,156 @@ string abi_function_parameters(const TypePtr& source, const TypePtr& owner = Typ
   return result;
 }
 
+string abi_mark_template_pattern(string raw,
+                                 const vector<string>& parameter_names)
+{
+  for(size_t position = 0; position < raw.size();) {
+    if(!isalpha(static_cast<unsigned char>(raw[position])) &&
+       raw[position] != '_') {
+      ++position;
+      continue;
+    }
+    const size_t begin = position++;
+    while(position < raw.size() &&
+          (isalnum(static_cast<unsigned char>(raw[position])) ||
+           raw[position] == '_')) ++position;
+    const string word = raw.substr(begin, position - begin);
+    size_t parameter = 0;
+    for(; parameter < parameter_names.size(); ++parameter)
+      if(!parameter_names[parameter].empty() &&
+         parameter_names[parameter] == word) break;
+    if(parameter == parameter_names.size()) continue;
+    const string marker = "__pa18_abi_template_" + integer_text(
+      static_cast<long long>(parameter)) + "__";
+    raw.replace(begin, word.size(), marker);
+    position = begin + marker.size();
+  }
+  return raw;
+}
+
+string abi_template_pattern_type(const string& pattern,
+                                 const vector<string>& parameter_names)
+{
+  return abi_type_text(abi_mark_template_pattern(pattern, parameter_names));
+}
+
+bool abi_pattern_mentions_parameter(const string& raw, const string& wanted)
+{
+  if(wanted.empty()) return false;
+  for(size_t position = 0; position < raw.size();) {
+    if(!isalpha(static_cast<unsigned char>(raw[position])) && raw[position] != '_') {
+      ++position;
+      continue;
+    }
+    const size_t begin = position++;
+    while(position < raw.size() &&
+          (isalnum(static_cast<unsigned char>(raw[position])) || raw[position] == '_'))
+      ++position;
+    if(raw.substr(begin, position - begin) == wanted) return true;
+  }
+  return false;
+}
+
+bool abi_function_has_parameter_pack(const CPPGMAstNodePtr& node)
+{
+  if(!node || node->template_function_parameter_names.empty() ||
+     node->template_function_parameter_names.size() !=
+       node->template_function_parameter_packs.size()) return false;
+  for(size_t parameter = 0; parameter <
+      node->template_function_parameter_packs.size(); ++parameter)
+    if(node->template_function_parameter_packs[parameter]) return true;
+  return false;
+}
+
+string abi_function_template_arguments(const CPPGMAstNodePtr& node,
+                                       const vector<string>& arguments,
+                                       const TypePtr& source)
+{
+	if(!node || !abi_function_has_parameter_pack(node)) {
+		string result;
+		for(size_t argument = 0; argument < arguments.size(); ++argument)
+			result += abi_type_text(arguments[argument]);
+		return result;
+	}
+	const vector<string>& names = node->template_function_parameter_names;
+	const vector<bool>& packs = node->template_function_parameter_packs;
+	vector<TypePtr> typed(arguments.size());
+	if(source && node->template_function_patterns.size() == source->parameters.size() + 1) {
+		size_t actual = 0;
+		for(size_t parameter = 0; parameter < names.size() && actual < arguments.size();
+			++parameter) {
+			size_t trailing_fixed = 0;
+			for(size_t later = parameter + 1; later < packs.size(); ++later)
+				if(!packs[later]) ++trailing_fixed;
+			const size_t available = arguments.size() - actual;
+			const size_t count = packs[parameter] ?
+				(available > trailing_fixed ? available - trailing_fixed : 0) : 1;
+			if(!packs[parameter] && parameter == 0 && source->child)
+				typed[actual] = type_value(source->child);
+			else if(packs[parameter]) {
+				size_t matched = 0;
+				for(size_t item = 0; item < source->parameters.size() &&
+					matched < count; ++item) {
+					const string& pattern = node->template_function_patterns[item + 1];
+					if(!abi_pattern_mentions_parameter(pattern, names[parameter])) continue;
+					typed[actual + matched++] = type_value(source->parameters[item]);
+				}
+			}
+			actual += count;
+		}
+	}
+	const auto encode_argument = [&](size_t index) {
+		return (index < typed.size() && typed[index]) ? abi_type(typed[index]) :
+			abi_type_text(arguments[index]);
+	};
+	string result;
+	size_t argument = 0;
+	for(size_t parameter = 0; parameter < names.size(); ++parameter) {
+	if(!packs[parameter]) {
+			if(argument < arguments.size())
+				result += encode_argument(argument++);
+			continue;
+		}
+    size_t trailing_fixed = 0;
+    for(size_t later = parameter + 1; later < packs.size(); ++later)
+      if(!packs[later]) ++trailing_fixed;
+		const size_t available = arguments.size() - argument;
+		const size_t count = available > trailing_fixed ? available - trailing_fixed : 0;
+	result += "J";
+	for(size_t item = 0; item < count; ++item)
+			result += encode_argument(argument++);
+		result += "E";
+	}
+	while(argument < arguments.size())
+		result += encode_argument(argument++);
+	return result;
+}
+
+string abi_function_template_type(const CPPGMAstNodePtr& node,
+                                  const TypePtr& source)
+{
+	if(!node || !abi_function_has_parameter_pack(node) ||
+		node->template_function_patterns.size() !=
+		  source->parameters.size() + 1) return string();
+	const vector<string>& names = node->template_function_parameter_names;
+	const vector<bool>& packs = node->template_function_parameter_packs;
+	const vector<string>& patterns = node->template_function_patterns;
+  string result = abi_template_pattern_type(patterns[0], names);
+  for(size_t parameter = 0; parameter < source->parameters.size(); ++parameter) {
+    bool expansion = false;
+    for(size_t template_parameter = 0; template_parameter < packs.size();
+        ++template_parameter)
+      if(packs[template_parameter] && abi_pattern_mentions_parameter(
+           patterns[parameter + 1], names[template_parameter])) {
+        expansion = true;
+        break;
+      }
+	if(expansion) result += "Dp";
+    result += abi_template_pattern_type(patterns[parameter + 1], names);
+  }
+  return result;
+}
+
 } // namespace
 
 string template_type_mangled_name(const TypePtr& type)
@@ -621,15 +1146,51 @@ string PA14Lowerer::TemplateGlobalObjectName(const GlobalRecord& global) const
   return "_ZN" + owner + integer_text(static_cast<long long>(member.size())) + member + "E";
 }
 
+string PA14Lowerer::RepeatedTemplateFunctionObjectName(const FunctionRecord& function) const
+{
+	if(function.member || function.member_owner || function.template_arguments.empty()) return string();
+	bool repeated = false;
+	for(size_t argument = 0; argument < function.template_arguments.size(); ++argument)
+		for(size_t prior = 0; prior < argument; ++prior)
+			if(function.template_arguments[argument] == function.template_arguments[prior]) repeated = true;
+	const string primary = function.template_primary.empty() && function.node ?
+		function.node->template_primary : function.template_primary;
+	if(!repeated || primary.find("::") != string::npos || !function.node ||
+		function.node->template_function_patterns.empty() ||
+		function.node->template_function_parameter_names.empty()) return string();
+	const vector<string> components = abi_split_qualified(primary);
+	if(components.empty()) return string();
+	string result = "_Z";
+	if(components.size() > 1) result += "N";
+	for(size_t component = 0; component < components.size(); ++component)
+		result += abi_component(components[component]);
+	result += "I";
+	for(size_t argument = 0; argument < function.template_arguments.size(); ++argument)
+		result += abi_type_text(function.template_arguments[argument]);
+	result += "E";
+	for(size_t pattern = 0; pattern < function.node->template_function_patterns.size(); ++pattern)
+		result += abi_template_pattern_type(function.node->template_function_patterns[pattern],
+			function.node->template_function_parameter_names);
+	if(components.size() > 1) result += "E";
+	// Dependent expression patterns need the full ABI expression encoder.  Do
+	// not let their source spelling leak into LowIR object metadata; the
+	// ordinary template path still provides a valid fallback for those cases.
+	for(size_t i = 0; i < result.size(); ++i)
+		if(!isalnum(static_cast<unsigned char>(result[i])) && result[i] != '_') return string();
+	return result;
+}
+
 string PA14Lowerer::TemplateFunctionObjectName(const FunctionRecord& function) const
 {
   if((!function.template_instantiation && !function.inline_definition) ||
      !function.source_type) return string();
   const TypePtr source = function_target_type(function.source_type);
   if(!source || source->kind != TYPE_FUNCTION) return string();
-  const bool nested = function.member || (function.hidden_friend && function.member_owner);
-  string result = "_Z";
-  string terminal;
+	const bool nested = function.member || (function.hidden_friend && function.member_owner);
+	string result = "_Z";
+	const string repeated_name = RepeatedTemplateFunctionObjectName(function);
+	if(!repeated_name.empty()) return repeated_name;
+	string terminal;
   if(function.constructor)
     terminal = function.base_entry ? "C2" : "C1";
   else if(function.destructor)
@@ -645,12 +1206,19 @@ string PA14Lowerer::TemplateFunctionObjectName(const FunctionRecord& function) c
     result += "N";
     if(source->function_const) result += "K";
     if(source->function_volatile) result += "V";
-    string owner = abi_nested_body(function.member_owner);
+    const bool contextual_member_template = function.member_template &&
+      abi_function_has_parameter_pack(function.node);
+    AbiMangleContext abi_context;
+    string owner = contextual_member_template ?
+      abi_context.encode_type(function.member_owner) :
+      abi_nested_body(function.member_owner);
+    if(owner.size() >= 2 && owner[0] == 'N' && owner[owner.size() - 1] == 'E')
+      owner = owner.substr(1, owner.size() - 2);
     // A class template with an empty parameter pack still carries the
     // Itanium ABI pack marker in a nested member-template name.  The typed
     // specialization model has the concrete owner arguments but elides that
     // empty pack; retain the marker for the generated function entity.
-    if(function.member_template && function.member_owner &&
+    if(!contextual_member_template && function.member_template && function.member_owner &&
        function.member_owner->template_specialization &&
        function.member_owner->template_empty_pack) {
       const size_t close = owner.rfind('E');
@@ -660,19 +1228,26 @@ string PA14Lowerer::TemplateFunctionObjectName(const FunctionRecord& function) c
     result += terminal;
     if(function.member_template && !function.template_arguments.empty()) {
       result += "I";
-      for(size_t i = 0; i < function.template_arguments.size(); ++i)
-        result += abi_type_text(function.template_arguments[i]);
+		if(contextual_member_template) result += abi_context.encode_function_arguments(
+			function.node, function.template_arguments, source);
+		else result += abi_function_template_arguments(function.node,
+			function.template_arguments, source);
       result += "E";
-    }
-    result += "E";
-    if(function.member_template && !source->parameters.empty()) {
-      // The concrete argument types are retained for lowering, while the
-      // mangled member-template signature refers to its original template
-      // parameters.
-      result += abi_type(source->child);
-      result += "T_";
-      for(size_t i = 1; i < source->parameters.size(); ++i)
-        result += abi_type(source->parameters[i]);
+	}
+	result += "E";
+	if(function.member_template && !source->parameters.empty()) {
+		// The concrete argument types are retained for lowering, while the
+		// mangled member-template signature refers to its original template
+		// parameters.
+		const string source_template_type = abi_function_template_type(function.node,
+			source);
+		if(!source_template_type.empty()) result += source_template_type;
+		else {
+			result += abi_type(source->child);
+			result += "T_";
+			for(size_t i = 1; i < source->parameters.size(); ++i)
+				result += abi_type(source->parameters[i]);
+		}
     } else {
       if(function.member_template && source->parameters.empty() && source->child &&
          type_value(source->child) && type_value(source->child)->kind == TYPE_CLASS) {
