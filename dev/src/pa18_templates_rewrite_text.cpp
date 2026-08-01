@@ -716,6 +716,21 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				// replay it.
 					if(i < definition->parameters.size() &&
 						!definition->parameters[i].type) {
+						const string active_argument = CanonicalSpelling(args[i]);
+						if(active_argument.find("::") == string::npos &&
+							!active_instantiation_name_.empty()) {
+							const string active_key = JoinPath(active_instantiation_name_,
+								active_argument);
+							map<string, PA19IntegralValue>::const_iterator active_value =
+								constant_values_.find(active_key);
+							if(early_integral_members_.find(active_key) !=
+								early_integral_members_.end() &&
+								active_value != constant_values_.end() &&
+								active_value->second.known) {
+								args[i] = TemplateIntegralValueSpelling(active_value->second);
+								continue;
+							}
+						}
 						const string dependent_expression = CanonicalSpelling(args[i]);
 						const size_t sizeof_pack = dependent_expression.find("sizeof...");
 						if(sizeof_pack != string::npos) {

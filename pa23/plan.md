@@ -4308,3 +4308,61 @@ two reentrant query cases and the dependent default non-type timeout. Preserve
 the nine owner status witnesses, the 2100/2100 through report, and the file
 audit as regression gates; then address the remaining LowIR owner/call
 materialization comparisons.
+
+## Checkpoint 32 scope — dependent result and fixed-point queries
+
+This checkpoint targets the shared query-state boundary behind the remaining
+dependent-result failures. It covers reentrant static-member queries through
+`enable_if` and partial specialization, dependent default non-type argument
+evaluation, and the result-type/identity facts needed when a query is entered
+again while its owning specialization is still being completed. The primary
+witnesses are `general/500-reentrant-static-query-callable-enable-if-cache.t`,
+`general/500-reentrant-static-query-enable-if-partial.t`, and
+`general/400-dependent-default-nontype-argument-eval.t`; bundle any adjacent
+status case that uses the same fixed-point state without broadening into the
+separate LowIR-only group. Preserve the nine owner/specialization status
+witnesses, the 2100/2100 through report, and the file audit as regression
+gates.
+
+## Checkpoint 32 result — dependent integral replay fixed point
+
+Completed the integral fixed-point sub-group of the checkpoint. Typed constant
+recording now accepts cv-qualified integral member declarations, recursive
+integral evaluation detects an active request instead of re-entering the same
+member replay indefinitely, and early member registration is limited to
+class-scope uses that actually feed dependent non-type arguments. The rewrite
+keeps the concrete member value separate from ordinary identifier lookup, so a
+dependent alias is refreshed with the typed value without changing member
+template parameter shadowing.
+
+Validation for this increment:
+
+- the five focused PA23 witnesses pass, including
+  `general/500-nontype-alias-reinstantiation-structural-state.t`;
+- the PA23 report is `372 / 396`, up from the clean-head `371 / 396` and the
+  turn-start `354 / 396`;
+- `make test-report-through-pa22` passes `2100 / 2100`;
+- the PA23 file audit passes.
+
+### Remaining Work Map
+
+- LowIR owner/replay canonicalization remains in the 16 known comparison
+  witnesses: current-specialization body/canonical owner, qualified argument
+  replay, ADL/template deduction, member-operator partial ordering, explicit
+  type-argument overload selection, member-variable/compound-assignment
+  replay, and the related conversion/defaulted-specialization cases.
+- Status-only template materialization remains in five witnesses covering
+  dependent function-type packs, member-template result packs, qualified
+  member-template bool results, the MP11 alias SFINAE path, and recursive
+  qualified member-template bool arguments.
+- The three deeper fixed-point query cases remain: dependent default non-type
+  argument evaluation, and the two reentrant static-query `enable_if` cases.
+  The reentrant cases still need a shared result-type/namespace identity fix;
+  they were intentionally not papered over by the integral replay change.
+
+### Next Checkpoint 33 scope
+
+Target the three remaining fixed-point query cases as one group. Preserve the
+2100/2100 through report, the PA23 file audit, the 372/396 current baseline,
+and the nine existing owner/specialization status witnesses while tracing
+reentrant specialization ownership and dependent default argument state.

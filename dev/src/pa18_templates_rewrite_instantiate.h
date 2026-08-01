@@ -72,7 +72,10 @@
 		const map<string, string>& substitutions,
 		const map<string, vector<string> >& pack_substitutions);
 	void RecordConstantDeclaration(const CPPGMAstNodePtr& node, const string& context,
-		const map<string, string>& substitutions = map<string, string>());
+		const map<string, string>& substitutions = map<string, string>()); void RegisterEarlyIntegralMembers(
+		const TemplateDefinition& definition, const string& context,
+		const map<string, string>& substitutions); bool ContainsSizeOrAlignExpression(
+		const CPPGMAstNodePtr& node);
 	void RecordEnumConstants(const CPPGMAstNodePtr& node, const string& context);
 	bool FunctionParameterCounts(const CPPGMAstNodePtr& parameters,
 		size_t* total, size_t* required) const;

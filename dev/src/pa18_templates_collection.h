@@ -541,7 +541,7 @@ private:
 	map<string, PA19IntegralValue> constant_values_;
 	map<string, vector<PA19IntegralValue> > constant_arrays_; map<string, size_t> constant_type_sizes_, constant_type_alignments_;
 	map<string, PA19IntegralValue> active_integral_substitutions_;
-	set<string> active_function_pointer_substitutions_;
+	set<string> active_function_pointer_substitutions_, active_integral_evaluations_, early_integral_members_;
 	// Source position of the explicit class instantiation currently being
 	// replayed.  Explicit instantiation only sees member definitions that have
 	// appeared before its declaration.
