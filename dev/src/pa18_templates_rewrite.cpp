@@ -575,6 +575,114 @@ void PA18TemplateExpander::RecordUsingDirective(const CPPGMAstNodePtr& original_
 			(*local_substitutions)[visible] = definition->qualified_name;
 	}
 }
+
+namespace {
+
+bool IsBinaryReceiverMember(const CPPGMAstNodePtr& input, size_t child_index,
+	const CPPGMAstNodePtr& original_child)
+{
+	if(!input || input->kind != "member-expression" || child_index != 0 ||
+		!original_child || input->children.size() < 2 || !input->children[1]) return false;
+	CPPGMAstNodePtr receiver = original_child;
+	while(receiver && receiver->kind == "parenthesized-expression" &&
+		receiver->children.size() == 1) receiver = receiver->children[0];
+	return receiver && receiver->kind == "binary-expression";
+}
+
+}
+
+bool PA18TemplateExpander::TransformBinaryReceiverMember(
+	const CPPGMAstNodePtr& input, const CPPGMAstNodePtr& original_child,
+	const string& node_context, const map<string, string>& child_substitutions,
+	const map<string, string>& substitutions, const CPPGMAstNodePtr& result,
+	CPPGMAstNodePtr* child)
+{
+	if(!child) return false;
+	const size_t saved_defer_depth = defer_operator_template_materialization_;
+	++defer_operator_template_materialization_;
+	try {
+		*child = TransformNode(original_child, node_context, child_substitutions);
+	} catch(...) {
+		defer_operator_template_materialization_ = saved_defer_depth;
+		throw;
+	}
+	defer_operator_template_materialization_ = saved_defer_depth;
+	if(!*child) return false;
+	CPPGMAstNodePtr receiver_expression = *child;
+	while(receiver_expression && receiver_expression->kind == "parenthesized-expression" &&
+		receiver_expression->children.size() == 1)
+		receiver_expression = receiver_expression->children[0];
+	bool static_receiver_member = false;
+	string receiver_type;
+	if(receiver_expression && InferArgument(receiver_expression, &receiver_type,
+		substitutions, node_context)) {
+		receiver_type = CanonicalSpelling(ResolveAlias(
+			FunctionArgumentObjectType(receiver_type, node_context), node_context));
+		const string member = LastComponent(RemoveMarker(input->children[1]->value));
+		static_receiver_member = HasStaticMember(0, receiver_type, member);
+		if(!static_receiver_member) {
+			const CPPGMAstNodePtr declaration = FindClassDeclaration(receiver_type, node_context);
+			set<string> direct_static_members;
+			IndexStaticMembers(declaration, direct_static_members);
+			static_receiver_member = direct_static_members.find(member) !=
+				direct_static_members.end();
+		}
+		if(!static_receiver_member) {
+			const size_t open = receiver_type.find('<');
+			const string base = open == string::npos ? receiver_type :
+				receiver_type.substr(0, open);
+			const TemplateDefinition* definition = FindDefinition(base, node_context);
+			vector<string> generated_arguments;
+			map<string, string>::const_iterator generated_base =
+				specialization_bases_.find(LastComponent(receiver_type));
+			map<string, vector<string> >::const_iterator generated_values =
+				specialization_arguments_.find(LastComponent(receiver_type));
+			if(!definition && generated_base != specialization_bases_.end()) {
+				definition = FindDefinition(generated_base->second, node_context);
+				if(generated_values != specialization_arguments_.end())
+					generated_arguments = generated_values->second;
+			}
+			if(definition && definition->class_template) {
+				const TemplateDefinition* selected = definition;
+				if(!generated_arguments.empty()) {
+					const TemplateDefinition* specialized = SelectClassTemplateDefinition(
+						definition, generated_arguments, node_context);
+					if(specialized) selected = specialized;
+				} else if(open != string::npos) {
+					string arguments;
+					size_t close = string::npos;
+					if(TemplateRange(receiver_type, open, &arguments, &close)) {
+						const vector<string> requested = SplitTemplateArguments(arguments);
+						const TemplateDefinition* specialized = SelectClassTemplateDefinition(
+							definition, requested, node_context);
+						if(specialized) selected = specialized;
+					}
+				}
+				set<string> selected_static_members = selected->static_members;
+				IndexStaticMembers(selected->declaration, selected_static_members);
+				static_receiver_member = selected_static_members.find(member) !=
+					selected_static_members.end();
+			}
+		}
+	}
+	if(static_receiver_member && !receiver_type.empty() && receiver_expression &&
+		receiver_expression->children.size() >= 2) {
+		// The operator result is needed only as a type here.  Preserve the operand
+		// evaluation required by the discarded object expression, then spell the
+		// static member directly for the lowerer.
+		result->kind = "id-expression";
+		result->value = receiver_type + "::" + LastComponent(
+			RemoveMarker(input->children[1]->value));
+		result->children.clear();
+		result->children.push_back(receiver_expression->children[0]);
+		result->children.push_back(receiver_expression->children[1]);
+		return true;
+	}
+	if(!static_receiver_member) InstantiateOperatorTemplate(receiver_expression,
+		node_context, substitutions);
+	return false;
+}
+
 void PA18TemplateExpander::TransformRegularChildren(const CPPGMAstNodePtr& input,
 	const string& child_context, const string& function_context,
 	const map<string, string>& substitutions,
@@ -607,7 +715,13 @@ void PA18TemplateExpander::TransformRegularChildren(const CPPGMAstNodePtr& input
 			const bool constructor_using = using_target && using_separator != string::npos && LastComponent(using_owner) == LastComponent(using_target->value);
 			const bool drop_function_using = using_target && IsOrdinaryTemplateUsingTarget(using_target->value, node_context) && class_contexts_.find(node_context) == class_contexts_.end() &&
 				!IsGeneratedMemberTemplateUsingTarget(using_target->value, node_context, local_substitutions ? *local_substitutions : substitutions) && !constructor_using; CPPGMAstNodePtr child;
-				if(input->kind == "using-declaration" && original_child && original_child->kind == "target") {
+			bool canonical_static_member = false;
+			const bool binary_receiver = IsBinaryReceiverMember(input, i, original_child);
+			if(binary_receiver)
+				canonical_static_member = TransformBinaryReceiverMember(input, original_child,
+					node_context, local_substitutions ? *local_substitutions : substitutions,
+					substitutions, result, &child);
+			else if(input->kind == "using-declaration" && original_child && original_child->kind == "target") {
 					child = CloneNode(original_child);
 					const string raw_target = original_child->value;
 				const size_t separator = raw_target.rfind("::"); if(separator != string::npos && raw_target.substr(0, separator) == raw_target.substr(separator + 2)) {
@@ -625,8 +739,7 @@ void PA18TemplateExpander::TransformRegularChildren(const CPPGMAstNodePtr& input
 					PA19IntegralValue bound; const string expression = ConstantExpressionSpelling(child->children[0]);
 					if(EvaluateIntegralText(expression, node_context, *local_substitutions, &bound)) child->children[0] = CPPGMAstNodePtr(new CPPGMAstNode("literal", IntegralValueSpelling(bound)));
 				}
-			if(child && input->kind == "class-specifier" && child->kind == "simple-declaration" && HasReplayContext(substitutions)) RecordConstantDeclaration(child, active_instantiation_name_.empty() ? child_context : active_instantiation_name_, *local_substitutions);
-			if(child && input->kind == "class-specifier" && child->kind == "simple-declaration") RecordConstantArrayDeclaration(child, active_instantiation_name_.empty() ? child_context : active_instantiation_name_, *local_substitutions);
+			if(child && input->kind == "class-specifier" && child->kind == "simple-declaration" && HasReplayContext(substitutions)) RecordConstantDeclaration(child, active_instantiation_name_.empty() ? child_context : active_instantiation_name_, *local_substitutions); if(child && input->kind == "class-specifier" && child->kind == "simple-declaration") RecordConstantArrayDeclaration(child, active_instantiation_name_.empty() ? child_context : active_instantiation_name_, *local_substitutions);
 				if(!child && input->kind == "decl-specifier-seq" && original_child &&
 					(original_child->kind == "class-specifier" ||
 						original_child->kind == "class-forward-declaration")) {
@@ -636,14 +749,8 @@ void PA18TemplateExpander::TransformRegularChildren(const CPPGMAstNodePtr& input
 						result->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
 							"decl-specifier", "TT_IDENTIFIER:" + LastComponent(promoted->second))));
 				}
-				if(child && !drop_function_using) result->children.push_back(child);
-				if(original_child && original_child->kind == "alias-declaration" && !original_child->value.empty() &&
-					!original_child->children.empty())
-				{
-					(*local_substitutions)[original_child->value] = RewriteText(
-						TypeIdSpelling(original_child->children[0]), child_context,
-						*local_substitutions, 0);
-				}
+				if(child && !drop_function_using && !canonical_static_member) result->children.push_back(child);
+				if(original_child && original_child->kind == "alias-declaration" && !original_child->value.empty() && !original_child->children.empty()) (*local_substitutions)[original_child->value] = RewriteText(TypeIdSpelling(original_child->children[0]), child_context, *local_substitutions, 0);
 			if(original_child && original_child->kind == "using-declaration") {
 				const CPPGMAstNodePtr target = ChildOfKindLocal(original_child, "target");
 				if(target && !target->value.empty()) {

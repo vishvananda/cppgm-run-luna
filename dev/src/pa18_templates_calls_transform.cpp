@@ -108,7 +108,9 @@ ExplicitCallSelection PA18TemplateExpander::SelectExplicitCallDefinition(
 			if(TemplateBase(lookup_callee, open, &begin, &base) &&
 						TemplateRange(lookup_callee, open, &argument_text, &close)) {
 						explicit_definition = FindDefinition(base, context);
-				if(explicit_definition && !explicit_definition->class_template) {
+				if(explicit_definition && !explicit_definition->class_template &&
+					!explicit_definition->alias_template &&
+					!explicit_definition->variable_template) {
 					vector<const TemplateDefinition*> overloads = FindFunctionDefinitions(base, context);
 					RankFunctionTemplateCandidatesForCall(&overloads, explicit_deduction_input,
 						context, substitutions);
@@ -147,7 +149,9 @@ ExplicitCallSelection PA18TemplateExpander::SelectExplicitCallDefinition(
 				}
 			}
 
-			if(explicit_definition && !explicit_definition->class_template) {
+			if(explicit_definition && !explicit_definition->class_template &&
+				!explicit_definition->alias_template &&
+				!explicit_definition->variable_template) {
 				state.valid = true;
 				state.definition = explicit_definition;
 				state.deduction_input = explicit_deduction_input;

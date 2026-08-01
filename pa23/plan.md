@@ -4462,3 +4462,101 @@ status cases, the 2100/2100 through report, the 372/396 PA23 baseline, and the
 file audit as regression gates. The status and fixed-point cases are small
 enough to bundle into the subsequent materialization/fixed-point checkpoint
 after the owner identity is stable.
+
+## Checkpoint 34 scope — 2026-08-01 (before implementation)
+
+### Current failure baseline and Remaining Work Map
+
+The required current-PA report is **372/396**.  The complete failure set is
+**24 fixtures**: 16 LowIR comparisons, six ordinary exit-status failures, and
+two timeouts.  The current log groups them as follows:
+
+- **Typed overload identity and call replay (five comparisons):**
+  `general/200-function-template-reference-cv-alias-partial-order.t`,
+  `general/200-member-operator-template-reference-pattern-partial-order.t`,
+  `general/200-function-template-template-parameter-deduction.t`,
+  `general/400-explicit-function-template-type-arg-drops-nontype-overload.t`,
+  and `spec/500-conditional-alias-index-sequence-member-template-call.t`.
+  These select the wrong typed candidate or lose a typed result during replay.
+- **Owner, declaration, and object materialization (seven comparisons):**
+  `general/100-local-qualified-argument-replay.t`,
+  `general/200-adl-explicit-template-id-call.t`,
+  `general/300-current-specialization-constructor-template-canonical-owner.t`,
+  `general/400-out-of-class-partial-member-template-owner-parameter-alias.t`,
+  `spec/100-out-of-class-conversion-operator-definition.t`,
+  `spec/400-defaulted-nested-class-argument-partial-specialization.t`, and
+  `spec/400-defaulted-template-arg-partial-base-completion.t`.
+- **Typed expression/value lowering (four comparisons):**
+  `general/100-current-specialization-member-body-cast-compare.t`,
+  `general/300-dependent-bool-base-trait-type-argument.t`,
+  `general/400-member-variable-template-leaf-sfinae.t`, and
+  `general/400-nonmember-template-compound-assignment-const-lhs.t`.
+- **Deferred status path (six):**
+  `general/400-member-template-result-pack-preserves-nested-function-pointer-owner.t`,
+  `general/500-dependent-function-type-pack-expansion-ctor-init.t`,
+  `general/500-dependent-qualified-member-template-result-bool.t`,
+  `general/500-mp11-append-alias-template-sfinae.t`,
+  `general/500-recursive-qualified-member-template-bool-arg.t`, and
+  `general/500-reentrant-static-query-callable-enable-if-cache.t`.
+- **Fixed-point stress (two timeouts):**
+  `general/400-dependent-default-nontype-argument-eval.t` and
+  `general/500-reentrant-static-query-enable-if-partial.t`; these still need
+  a shared semantic query identity and are not a harness concern.
+
+### Checkpoint Scope
+
+Implement the typed overload-identity and result-materialization increment.
+Preserve reference/cv categories and explicit template-argument kinds while
+ranking function and member-operator templates; retain template-template
+bindings through the generated call; and carry the selected function's typed
+result and owner into LowIR collection instead of reconstructing a neighboring
+overload from emitted spelling.  Validate this scope with the five typed
+overload fixtures, the related owner/materialization comparisons, the
+existing status witnesses, the full PA23 report, the through-PA22 report, and
+the file audit.  The next group is the remaining owner/declaration-order
+comparisons bundled with the six status cases; the two timeout witnesses
+remain fixed-point stress coverage.
+
+## Checkpoint 34 result — 2026-08-01
+
+The typed overload-identity checkpoint is complete. Explicit member-template
+arguments now retain their type, non-type, and template-template kinds during
+candidate preparation; function and member-operator ranking uses the typed
+reference/cv category; packed alias arguments are expanded at the argument
+binding boundary; and a binary operator used as a static-member receiver is
+materialized as a type-only owner while preserving operand provenance. The
+selected operator result and owner metadata are carried into the transformed
+call rather than reconstructed from the emitted spelling.
+
+Checkpoint validation:
+
+- the five scoped typed overload fixtures: **5/5**;
+- `make test-report ACTIVE_TEST_REPORT_PAS='pa23'`: **377/396** (up from
+  **372/396**);
+- `make test-report-through-pa22`: **2100/2100**;
+- `perl scripts/cppgm_file_audit.pl --stage pa23 --paths dev/src`: **pass**;
+- `git diff --check`: **pass**.
+
+### Remaining Work Map after Checkpoint 34
+
+- **Owner/declaration canonicalization — 8 LowIR comparisons:**
+  current-specialization member-body and constructor owners, local qualified
+  argument replay, ADL explicit template-id calls, out-of-class partial-member
+  owners, out-of-class conversion operators, and the two defaulted nested/base
+  partial-specialization cases.
+- **Typed expression/value lowering — 3 LowIR comparisons:** dependent bool
+  base-trait arguments, member-variable-template leaf SFINAE, and const-lhs
+  nonmember compound assignment.
+- **Deferred result materialization — 6 status failures:** member result
+  packs, dependent function-type constructor packs, qualified member-template
+  bool results, MP11 alias SFINAE, recursive qualified bool arguments, and the
+  reentrant callable `enable_if` cache.
+- **Fixed-point query identity — 2 timeouts:** dependent default non-type
+  evaluation and reentrant static-query partial `enable_if`.
+
+### Next checkpoint group
+
+Take the 8 owner/declaration comparisons together with the 3 typed
+expression/value lowering comparisons. After that owner identity is stable,
+bundle the 6 deferred-result status cases; keep the 2 timeout witnesses as a
+separate bounded fixed-point group.

@@ -379,6 +379,21 @@ bool PA18TemplateExpander::IsSubstitutedTypeName(const string& spelling,
 	return false;
 }
 
+namespace {
+
+vector<string> ExpandPackedTemplateArguments(const vector<string>& raw_args)
+{
+	vector<string> expanded;
+	for(size_t raw_index = 0; raw_index < raw_args.size(); ++raw_index) {
+		const vector<string> parts = SplitTemplateArguments(raw_args[raw_index]);
+		if(parts.size() > 1) expanded.insert(expanded.end(), parts.begin(), parts.end());
+		else expanded.push_back(raw_args[raw_index]);
+	}
+	return expanded;
+}
+
+}
+
 void PA18TemplateExpander::ResolveTemplateArguments(const TemplateDefinition& definition,
 	const vector<string>& raw_args, const string& context,
 	vector<string>* args, vector<string>* metadata_args,
@@ -387,7 +402,7 @@ void PA18TemplateExpander::ResolveTemplateArguments(const TemplateDefinition& de
 	map<string, vector<string> >* pack_substitutions,
 	const map<string, vector<string> >* pack_hints)
 {
-	size_t raw_index = 0;
+	const vector<string> source_args = ExpandPackedTemplateArguments(raw_args); size_t raw_index = 0;
 	for(size_t i = 0; i < definition.parameters.size(); ++i) {
 		const TemplateParameter& parameter = definition.parameters[i];
 		if(parameter.pack) {
@@ -395,14 +410,14 @@ void PA18TemplateExpander::ResolveTemplateArguments(const TemplateDefinition& de
 			size_t trailing_fixed = 0;
 			for(size_t later = i + 1; later < definition.parameters.size(); ++later)
 				if(!definition.parameters[later].pack) ++trailing_fixed;
-			const size_t available = raw_args.size() > raw_index ? raw_args.size() - raw_index : 0;
+			const size_t available = source_args.size() > raw_index ? source_args.size() - raw_index : 0;
 			size_t count = available > trailing_fixed ? available - trailing_fixed : 0;
 			if(pack_hints && !parameter.name.empty()) {
 				map<string, vector<string> >::const_iterator hint = pack_hints->find(parameter.name);
 				if(hint != pack_hints->end()) count = hint->second.size();
 			}
 			for(size_t element = 0; element < count; ++element) {
-				string argument = raw_index < raw_args.size() ? raw_args[raw_index++] : string();
+				string argument = raw_index < source_args.size() ? source_args[raw_index++] : string();
 				if(argument.empty() && pack_hints && !parameter.name.empty()) {
 					map<string, vector<string> >::const_iterator hint = pack_hints->find(parameter.name);
 					if(hint != pack_hints->end() && element < hint->second.size()) argument = hint->second[element];
@@ -450,9 +465,8 @@ void PA18TemplateExpander::ResolveTemplateArguments(const TemplateDefinition& de
 			}
 			continue;
 		}
-		string argument, source_type_argument;
-		PA19IntegralValue integral_value; bool from_default = false;
-		if(raw_index < raw_args.size() && !raw_args[raw_index].empty()) source_type_argument = argument = raw_args[raw_index++];
+		string argument, source_type_argument; PA19IntegralValue integral_value; bool from_default = false;
+		if(raw_index < source_args.size() && !source_args[raw_index].empty()) source_type_argument = argument = source_args[raw_index++];
 		else if(!parameter.name.empty()) {
 			map<string, string>::const_iterator substituted = substitutions->find(parameter.name);
 			if(substituted != substitutions->end()) argument = substituted->second;
@@ -504,7 +518,7 @@ void PA18TemplateExpander::ResolveTemplateArguments(const TemplateDefinition& de
 			integral_value, context, *substitutions));
 		if(!parameter.name.empty()) (*substitutions)[parameter.name] = argument;
 	}
-	if(raw_index != raw_args.size()) throw logic_error("too many template arguments");
+	if(raw_index != source_args.size()) throw logic_error("too many template arguments");
 }
 
 } // namespace pa18_templates_internal

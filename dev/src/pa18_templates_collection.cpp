@@ -905,6 +905,12 @@ void PA18TemplateExpander::IndexStaticMembers(const CPPGMAstNodePtr& node,
 			}
 			continue;
 		}
+		if(declaration->kind == "function-definition" && !declaration->children.empty() &&
+			HasDeclarationSpecifier(declaration->children[0], "static")) {
+			const string name = LastComponent(DeclarationName(declaration));
+			if(!name.empty()) members.insert(name);
+			continue;
+		}
 		if(declaration->kind != "simple-declaration" ||
 			declaration->children.empty() ||
 			(!HasDeclarationSpecifier(declaration->children[0], "static") &&

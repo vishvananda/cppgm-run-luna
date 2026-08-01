@@ -75,7 +75,8 @@ CPPGMAstNodePtr PA18TemplateExpander::ReplayAliasTemplateDeclaration(
 				at = raw.find(token, at + expanded.size());
 			}
 		}
-		return ReplaceIdentifiersPreservingPackSizes(raw, substitutions);
+		return RewriteActivePackSizes(ReplaceIdentifiersPreservingPackSizes(raw,
+			substitutions));
 	};
 	const function<void(const CPPGMAstNodePtr&)> rewrite_alias =
 		[&](const CPPGMAstNodePtr& node) {

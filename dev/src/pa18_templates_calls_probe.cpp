@@ -3,6 +3,32 @@
 using namespace std;
 namespace pa18_templates_internal {
 
+namespace {
+
+bool FunctionArgumentHasTopLevelConst(const string& spelling)
+{
+	int angle_depth = 0;
+	for(size_t position = 0; position < spelling.size();) {
+		if(spelling[position] == '<' && IsTemplateAngleOpen(spelling, position)) {
+			++angle_depth; ++position; continue;
+		}
+		if(spelling[position] == '>' && angle_depth > 0 &&
+			IsTemplateAngleClose(spelling, position)) {
+			--angle_depth; ++position; continue;
+		}
+		if(angle_depth == 0 && IsIdentifierCharacter(spelling[position])) {
+			const size_t begin = position++;
+			while(position < spelling.size() && IsIdentifierCharacter(spelling[position])) ++position;
+			if(spelling.substr(begin, position - begin) == "const") return true;
+			continue;
+		}
+		++position;
+	}
+	return false;
+}
+
+}
+
 bool PA18TemplateExpander::ContainsSubstitutionIdentifier(
 	const string& text, const map<string, string>& substitutions) const
 {
@@ -340,30 +366,10 @@ void PA18TemplateExpander::RankFunctionTemplateCandidatesForCall(
 						expected_object != actual_object)
 						conversion_score += HasClassConversion(expected_object, actual_object, context) ? 1 : 4;
 				} catch(const PA18SubstitutionFailure&) {}
-				const bool actual_const = CanonicalSpelling(actual).compare(0, 6, "const ") == 0;
+				const bool actual_const = FunctionArgumentHasTopLevelConst(actual);
 				const bool reference = !pattern.empty() && pattern[pattern.size() - 1] == '&' &&
 					(pattern.size() < 2 || pattern[pattern.size() - 2] != '&');
-				const auto has_top_level_const = [this](const string& spelling) {
-					int angle_depth = 0;
-					for(size_t position = 0; position < spelling.size();) {
-						if(spelling[position] == '<' && IsTemplateAngleOpen(spelling, position)) {
-							++angle_depth; ++position; continue;
-						}
-						if(spelling[position] == '>' && angle_depth > 0 &&
-							IsTemplateAngleClose(spelling, position)) {
-							--angle_depth; ++position; continue;
-						}
-						if(angle_depth == 0 && IsIdentifierCharacter(spelling[position])) {
-							size_t end = position + 1;
-							while(end < spelling.size() && IsIdentifierCharacter(spelling[end])) ++end;
-							if(spelling.substr(position, end - position) == "const") return true;
-							position = end; continue;
-						}
-						++position;
-					}
-					return false;
-				};
-				const bool const_reference = reference && has_top_level_const(pattern);
+				const bool const_reference = reference && FunctionArgumentHasTopLevelConst(pattern);
 				if(reference && const_reference != actual_const) ++reference_score;
 				++argument_index;
 			}

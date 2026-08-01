@@ -708,6 +708,7 @@ bool PA14Lowerer::EmitObjectTransferAt(const TypePtr& raw_target,
       if((source_local && (implicit_return_move ||
            (source_local->parameter && !materialized_empty_template_reference))) ||
          (source->kind == "binary-expression" && PA12Operator(source->value) == ",") ||
+         (source->kind == "call-expression") ||
          static_member_reference)
         (void)EmitAddress(source, scope);
       return true;

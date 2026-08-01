@@ -768,6 +768,52 @@ bool PA18TemplateExpander::PrepareMemberCandidateArguments(
 		map<string, FunctionSignature>& inferred_function_values = candidate->inferred_function_values;
 		vector<string>& explicit_arguments = candidate->explicit_arguments;
 		explicit_arguments = candidate->owner->explicit_member_arguments;
+		// Explicit member-template arguments carry a source-level kind.  Check
+		// that kind before ordinary deduction so a type argument cannot keep a
+		// non-type overload viable (or vice versa).
+		const auto explicit_argument_matches = [this, &context,
+			&candidate_substitutions](const TemplateParameter& parameter,
+			const string& raw) {
+			try {
+				if(parameter.template_template) {
+					string normalized;
+					return CompatibleTemplateTemplateArgument(parameter, raw, context,
+						candidate_substitutions, &normalized);
+				}
+				if(parameter.type) {
+					string type = NormalizeTypeArgument(RewriteText(raw, context,
+						candidate_substitutions, 0));
+					if(type.empty()) return false;
+					return IsKnownTypeSpelling(type, context) ||
+						HasUnresolvedTemplateParameter(type, context, candidate_substitutions) ||
+						SplitFunctionPointerType(type, 0, 0) ||
+						SplitDirectFunctionType(type, 0, 0, 0);
+				}
+				PA19IntegralValue value;
+				ResolveIntegralArgument(parameter, raw, context,
+					candidate_substitutions, &value);
+				return true;
+			} catch(const logic_error&) {
+				return false;
+			}
+		};
+		size_t explicit_index = 0;
+		for(size_t parameter = 0; parameter < definition.parameters.size() &&
+			explicit_index < explicit_arguments.size(); ++parameter) {
+			const TemplateParameter& detail = definition.parameters[parameter];
+			size_t count = detail.pack ? explicit_arguments.size() - explicit_index :
+				static_cast<size_t>(1);
+			if(detail.pack) {
+				size_t trailing_fixed = 0;
+				for(size_t later = parameter + 1; later < definition.parameters.size(); ++later)
+					if(!definition.parameters[later].pack) ++trailing_fixed;
+				if(count > trailing_fixed) count -= trailing_fixed;
+				else count = 0;
+			}
+			for(size_t value = 0; value < count && explicit_index < explicit_arguments.size(); ++value)
+				if(!explicit_argument_matches(detail, explicit_arguments[explicit_index++]))
+					return false;
+		}
 		for(size_t argument = 0; argument < explicit_arguments.size(); ++argument) {
 			explicit_arguments[argument] = NormalizeTypeArgument(RewriteText(
 				explicit_arguments[argument], context, candidate_substitutions, 0));
@@ -1183,10 +1229,63 @@ bool PA18TemplateExpander::EmitMemberCandidate(
 				// The enclosing class binding is more specific than a same-named
 				// pack inferred from the member call's arguments.
 				instantiation_pack_hints[bound->first] = bound->second;
-		vector<string> raw_instantiation_arguments = BuildInstantiationRawArguments(
-			inference_definition, instantiation_member_arguments, inferred_pack_values,
-			bound_pack_values);
-		string& generated_name = candidate->generated_name;
+	vector<string> raw_instantiation_arguments = BuildInstantiationRawArguments(
+		inference_definition, instantiation_member_arguments, inferred_pack_values,
+		bound_pack_values);
+	string& generated_name = candidate->generated_name;
+	if(defer_operator_template_materialization_ != 0) {
+		try {
+			call->template_primary = definition.qualified_name;
+			call->template_arguments = instantiation_member_arguments;
+			map<string, string> result_substitutions = candidate_substitutions;
+			for(size_t parameter = 0; parameter < definition.parameters.size() &&
+				parameter < member_arguments.size(); ++parameter)
+				if(!definition.parameters[parameter].name.empty())
+					result_substitutions[definition.parameters[parameter].name] =
+						member_arguments[parameter];
+			if(inference_definition.declaration &&
+				!inference_definition.declaration->children.empty()) {
+				string result_type = NodeTypeSpelling(
+					inference_definition.declaration->children[0]);
+				result_type += ReturnDeclaratorSuffix(FunctionDeclarator(
+					inference_definition.declaration));
+				call->inferred_type = NormalizeTypeArgument(ReplaceIdentifiers(
+					result_type, result_substitutions));
+				string result_object = call->inferred_type;
+				while(result_object.compare(0, 6, "const ") == 0)
+					result_object = NormalizeTypeArgument(result_object.substr(6));
+				while(!result_object.empty() && (result_object[result_object.size() - 1] == '&' ||
+					result_object[result_object.size() - 1] == '*'))
+					result_object = NormalizeTypeArgument(result_object.substr(0,
+						result_object.size() - 1));
+				const size_t result_open = result_object.find('<');
+				if(result_open != string::npos) {
+					string result_arguments;
+					size_t result_close = string::npos;
+					string result_base;
+					size_t result_begin = 0;
+					if(TemplateBase(result_object, result_open, &result_begin, &result_base) &&
+						TemplateRange(result_object, result_open, &result_arguments, &result_close)) {
+						const TemplateDefinition* result_definition = FindDefinition(result_base, context);
+						if(result_definition && result_definition->class_template) {
+							const vector<string> requested = SplitTemplateArguments(result_arguments);
+							const TemplateDefinition* selected_result = SelectClassTemplateDefinition(
+								result_definition, requested, context);
+							if(!selected_result) selected_result = result_definition;
+							const string local_result = Instantiate(*selected_result, requested, context);
+							call->inferred_type = selected_result->owner.empty() ? local_result :
+								JoinPath(selected_result->owner, local_result);
+						}
+					}
+				}
+			}
+			return !call->inferred_type.empty();
+		} catch(const PA18SubstitutionFailure&) {
+			return false;
+		} catch(const logic_error&) {
+			return false;
+		}
+	}
 	const ConcreteOwnerContext previous_concrete_owner = active_concrete_owner_;
 		if(requested_owner_pointer) SetActiveConcreteOwner(requested_owner, context);
 	try {

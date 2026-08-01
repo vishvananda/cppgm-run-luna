@@ -595,7 +595,9 @@ private:
 	map<string, set<string> > requested_nested_classes_;
 	set<string> materialized_nested_classes_, materialized_member_definitions_, deferred_class_instantiations_;
 	map<string, string> deferred_class_keys_;
-	size_t defer_type_only_class_definitions_ = 0; size_t active_template_declaration_depth_ = 0; set<string> active_template_member_types_;
+	size_t defer_type_only_class_definitions_ = 0;
+	size_t defer_operator_template_materialization_ = 0;
+	size_t active_template_declaration_depth_ = 0; set<string> active_template_member_types_;
 	mutable set<string> active_member_type_lookups_,
 		active_alias_resolutions_,
 		active_function_results_,
