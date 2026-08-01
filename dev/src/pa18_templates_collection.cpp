@@ -4,6 +4,17 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
+bool IsTemplateQualifiedIdentifier(const string& raw, size_t identifier_begin)
+{
+	size_t qualifier_end = identifier_begin;
+	while(qualifier_end > 0 &&
+		isspace(static_cast<unsigned char>(raw[qualifier_end - 1]))) --qualifier_end;
+	if(qualifier_end < 8 || raw.compare(qualifier_end - 8, 8, "template") != 0)
+		return false;
+	return qualifier_end == 8 ||
+		!IsIdentifierCharacter(raw[qualifier_end - 9]);
+}
+
 bool IsDeletedFunctionDeclaration(const CPPGMAstNodePtr& declaration)
 {
 	const CPPGMAstNodePtr deleted = DescendantOfKind(declaration, "special-initializer");
@@ -726,8 +737,7 @@ string ReplaceIdentifiersPreservingPackSizes(const string& raw,
 				}
 			map<string, string>::const_iterator found = substitutions.find(word);
 			const bool already_qualified = i >= 2 && replaced.size() >= 2 && replaced.compare(replaced.size() - 2, 2, "::") == 0;
-			size_t qualifier_end = i; while(qualifier_end > 0 && isspace(static_cast<unsigned char>(segment[qualifier_end - 1]))) --qualifier_end;
-			const bool dependent_template_member = qualifier_end >= 8 && segment.compare(qualifier_end - 8, 8, "template") == 0 && (qualifier_end == 8 || !IsIdentifierCharacter(segment[qualifier_end - 9]));
+			const bool dependent_template_member = IsTemplateQualifiedIdentifier(segment, i);
 			if(found != substitutions.end() && !pack_operand && !already_qualified && !dependent_template_member)
 				replaced += found->second;
 			else if(found != substitutions.end())

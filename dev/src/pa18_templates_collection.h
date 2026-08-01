@@ -10,11 +10,13 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include "pa18_templates_replay_state.h"
 using namespace std; namespace pa18_templates_internal {
 class PA18SubstitutionFailure : public logic_error { public: explicit PA18SubstitutionFailure(const string& message) : logic_error(message) {} };
 inline bool IsIdentifierCharacter(char ch) {
 	return isalnum(static_cast<unsigned char>(ch)) || ch == '_';
 }
+bool IsTemplateQualifiedIdentifier(const string& raw, size_t identifier_begin);
 inline string Trim(const string& raw)
 {
 	size_t begin = 0;
@@ -263,8 +265,7 @@ inline string ReplaceIdentifiers(const string& raw, const map<string, string>& s
 			while(end < raw.size() && IsIdentifierCharacter(raw[end])) ++end;
 			const string word = raw.substr(i, end - i); map<string, string>::const_iterator found = substitutions.find(word);
 			const bool already_qualified = i >= 2 && result.size() >= 2 && result.compare(result.size() - 2, 2, "::") == 0;
-			size_t qualifier_end = i; while(qualifier_end > 0 && isspace(static_cast<unsigned char>(raw[qualifier_end - 1]))) --qualifier_end;
-			const bool dependent_template_member = qualifier_end >= 8 && raw.compare(qualifier_end - 8, 8, "template") == 0 && (qualifier_end == 8 || !IsIdentifierCharacter(raw[qualifier_end - 9]));
+			const bool dependent_template_member = IsTemplateQualifiedIdentifier(raw, i);
 			if(found != substitutions.end() && !already_qualified && !dependent_template_member) result += found->second;
 			else if(found != substitutions.end()) result += word;
 			else {
@@ -468,13 +469,6 @@ struct ClassSpecializationIdentity
 		return arguments < other.arguments;
 	}
 };
-struct ConcreteOwnerContext
-{
-	string name;
-	const TemplateDefinition* definition;
-	vector<string> arguments;
-	ConcreteOwnerContext() : name(), definition(0), arguments() {}
-};
 struct FunctionSignature
 {
 	CPPGMAstNodePtr result_specifiers;
@@ -541,7 +535,8 @@ private:
 	map<string, PA19IntegralValue> constant_values_;
 	map<string, vector<PA19IntegralValue> > constant_arrays_; map<string, size_t> constant_type_sizes_, constant_type_alignments_;
 	map<string, PA19IntegralValue> active_integral_substitutions_;
-	set<string> active_function_pointer_substitutions_, active_integral_evaluations_, early_integral_members_;
+	set<string> active_function_pointer_substitutions_, early_integral_members_;
+	set<IntegralEvaluationKey> active_integral_evaluations_;
 	// Source position of the explicit class instantiation currently being
 	// replayed.  Explicit instantiation only sees member definitions that have
 	// appeared before its declaration.
@@ -598,7 +593,9 @@ private:
 	set<string> extern_instantiation_keys_;
 	map<string, CPPGMAstNodePtr> extern_instantiation_declarations_;
 	map<string, set<string> > requested_nested_classes_;
-	set<string> materialized_nested_classes_, materialized_member_definitions_, deferred_class_instantiations_; size_t defer_type_only_class_definitions_ = 0; size_t active_template_declaration_depth_ = 0; set<string> active_template_member_types_;
+	set<string> materialized_nested_classes_, materialized_member_definitions_, deferred_class_instantiations_;
+	map<string, string> deferred_class_keys_;
+	size_t defer_type_only_class_definitions_ = 0; size_t active_template_declaration_depth_ = 0; set<string> active_template_member_types_;
 	mutable set<string> active_member_type_lookups_,
 		active_alias_resolutions_,
 		active_function_results_,

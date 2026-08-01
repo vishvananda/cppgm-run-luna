@@ -829,6 +829,7 @@ CPPGMAstNodePtr PA18TemplateExpander::FinishRegularNode(
 		map<string, string> local_substitutions = substitutions; if(function_declaration) AddConcreteOwnerSubstitutions(PrefixComponent(function_context), context, &local_substitutions, true);
 		struct TypeOnlyScope { size_t& depth; const size_t saved; TypeOnlyScope(size_t& d, bool active) : depth(d), saved(d) { if(active) ++depth; } ~TypeOnlyScope() { depth = saved; } } type_only_scope(defer_type_only_class_definitions_, defer_type_only_classes);
 		TransformRegularChildren(input, child_context, function_context, substitutions, &local_substitutions, result);
+		if(input->kind == "simple-declaration" && !defer_type_only_classes) PromoteDeferredClassDeclarations(result, child_context);
 		RecoverDependentSizeofArrayType(input, result);
 		if(input->kind == "function-definition") MaterializeReturnConversions(input, result, context, function_context, local_substitutions);
 		if(input->kind == "class-specifier" || input->kind == "class-forward-declaration") {
@@ -866,9 +867,7 @@ CPPGMAstNodePtr PA18TemplateExpander::FinishRegularNode(
 			MaterializeInitializerConstructor(input, result, context, substitutions);
 			MaterializeOrdinaryInitializerConversions(input, result, context, substitutions);
 		}
-		if(input->kind == "simple-declaration")
-			DeduceAutoInitializerType(result, context, substitutions);
-		if(input->kind == "simple-declaration") ReifyReferenceType(result);
+		if(input->kind == "simple-declaration") { DeduceAutoInitializerType(result, context, substitutions); ReifyReferenceType(result); }
 		if(input->kind == "conditional-expression")
 			MaterializeConditionalConversions(result, context, substitutions);
 		if(input->kind == "binary-expression" || input->kind == "assignment-expression") { InstantiateOperatorTemplate(result, context, substitutions); RewriteOperatorFunctionArgument(result, context, substitutions); }
@@ -1028,5 +1027,7 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformRegularNode(
 	CPPGMAstNodePtr rewritten = RewriteRegularNodeValue(
 		input, context, substitutions, result, &promoted_local_class);
 	if(rewritten) return rewritten;
-	const bool defer_type_only_classes = input->kind == "alias-declaration" || (input->kind == "simple-declaration" && !input->children.empty() && SpellNode(input->children[0]).find("typedef") != string::npos);
+	const bool defer_type_only_classes = input->kind == "alias-declaration" ||
+		(input->kind == "simple-declaration" && !input->children.empty() &&
+		 HasDeclarationSpecifier(input->children[0], "typedef"));
 	return FinishRegularNode(input, context, substitutions, result, promoted_local_class, defer_type_only_classes); } } // namespace pa18_templates_internal

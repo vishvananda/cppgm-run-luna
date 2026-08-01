@@ -1768,3 +1768,114 @@ candidate replay status fixtures and both fixed-point stress fixtures as
 regressions.  The next checkpoint should carry typed owner, non-type value,
 selected overload, and materialized function identity through lowering, then
 rerun the PA23 report, the exact through-PA22 command, and the file audit.
+
+## Checkpoint 33 audit — 2026-08-01
+
+### Scope Reviewed
+
+- The latest Checkpoint 33 result and Checkpoint 34 scope in
+  [pa23/plan.md](plan.md), including the 372/396 baseline and the intended
+  dependent-template-qualifier replay boundary.
+- The recent checkpoint commits `5b1d26b`, `3949446`, `cccecd5`, and
+  `6630c22`, their changed PA18/PA11 sources, and the current implementation
+  diff.
+- [pa23/README.md](README.md), [TESTING_AND_REFERENCES.md](../TESTING_AND_REFERENCES.md),
+  the through-PA22 report, the PA23 file audit, and the authoritative primary
+  log at `/home/vishvananda/work/.ralph/luna-gpt-5.6-luna-ultra/last-test.log`.
+
+### Findings
+
+- The checkpoint remains on the required compiler path: parsed AST, semantic
+  collection and lookup, typed template substitution/replay, PA14 lowering,
+  and LowIR emission.  There is no skipped phase, dummy output, embedded
+  payload, interpreter/VM/trampoline substitute, reference-binary or host
+  compiler invocation, source/test-specific acceptance gate, or unchecked
+  output path.
+- The dependent-`template` qualifier change is a bounded lexical operation
+  used during identifier substitution.  It preserves the identifier for the
+  existing typed lookup/replay path and does not reparse emitted LowIR or
+  manufacture a successful result.
+- A checkpoint-level shortcut was present in the preceding owner replay: PA11
+  `TypeSize` returned a recorded size (or `1`) for a complete-but-unlaid-out
+  generated specialization shell.  That made an incomplete class succeed
+  through `sizeof`.  The fallback is removed.  Valid storage-demand cases now
+  promote the recorded deferred specialization through its typed primary and
+  arguments before PA11 layout; typedefs, aliases, pointers, references, and
+  template arguments remain deferred, so this is not broad eager materialization.
+- CP32 early integral-member registration had avoidable string-wide sibling
+  scans, copied and then walked the entire constant-value map to clean up
+  temporary entries, and leaked its member set across nested replay.  It now
+  builds one structural class-scope identifier index, removes only entries it
+  inserted, and scopes the set across replay.  The active integral recursion
+  guard is a structured expression/context/owner key, preventing one active
+  specialization from suppressing another.
+- The deferred-specialization cache cleanup uses a direct generated-name to
+  cache-key index rather than an ownership-blind full-map search.  Replay-state
+  restoration uses swaps, avoiding a hot-path set copy.  No repeated full-suite
+  walk, timing/retry timeout workaround, catch-all success path, or downstream
+  recovery from emitted text was added.
+- The audit fixes themselves initially crossed the file and function limits;
+  the final change keeps the replay state in a responsibility-named header,
+  moves deferred promotion beside materialization, and leaves
+  `FinishRegularNode` within the 120-line limit.  The file audit has no fatal
+  finding.  No tests, `.ref` files, harnesses, checker rules, or unchecked
+  implementation fragments were changed.
+- The complete current-PA result is unchanged from the checkpoint baseline at
+  372/396, while the required earlier assignments remain 2100/2100.  The 24
+  reported PA23 cases are the exact next owner/replay, materialization, and
+  fixed-point work boundary; none was hidden or converted into acceptance.
+
+### Changes Made
+
+- Removed the incomplete-layout success fallback from
+  `dev/src/pa11_semantics_analyzer.cpp`.
+- Added demand-driven deferred-class promotion and direct deferred cache-key
+  tracking in `dev/src/pa18_templates_rewrite.cpp`,
+  `dev/src/pa18_templates_rewrite_emit.cpp`, and the corresponding headers.
+- Replaced duplicate dependent-template qualifier logic with one shared helper
+  in `dev/src/pa18_templates_collection.cpp` and its header declaration.
+- Reworked early integral-member indexing in
+  `dev/src/pa18_templates_rewrite_integral.cpp`; added owner-aware integral
+  evaluation identity and replay-state scoping in
+  `dev/src/pa18_templates_rewrite_instantiate.cpp`.
+- Split the typed replay state into
+  `dev/src/pa18_templates_replay_state.h` to keep source/header ownership
+  within the file-audit limits.  No new compiler phase or alternate output
+  path was introduced.
+
+### Validation
+
+- `make build`: **pass**.
+- Required prior-through command (`n=23; ... make test-report-through-pa22`):
+  **pass, 2100/2100**.
+- `make test-report ACTIVE_TEST_REPORT_PAS='pa23'`: **372/396**, exit 2 only
+  for the complete checked-in PA23 residual set: 16 LowIR comparisons, six
+  ordinary status failures, and two timeout failures.
+- `perl scripts/cppgm_file_audit.pl --stage pa23 --paths dev/src`: **pass**
+  with 12 non-fatal advisory warnings and no fatal finding.
+- `git diff --check`: **pass**.
+- Current PA remains at the 372/396 checkpoint baseline, and earlier PAs pass
+  through PA22; the implementation is ready for the planned Checkpoint 34
+  owner/replay group.
+
+### Refreshed Remaining Work Map
+
+- **LowIR owner/replay — 16:** current-specialization body/canonical owner,
+  qualified argument replay, ADL and template deduction, member-operator
+  partial ordering, explicit type-argument overload selection,
+  member-variable/compound-assignment replay, out-of-class owner aliases,
+  conversion, and defaulted specialization cases (the exact fixture list is
+  recorded in the matching plan section).
+- **Status/materialization — 6 ordinary failures:** member-template result
+  packs, dependent function-type packs, qualified bool results, MP11 alias
+  SFINAE, recursive qualified bool arguments, and the reentrant callable query.
+- **Fixed-point/termination — 2 timeouts:** dependent default non-type
+  evaluation and reentrant static-query partial selection.
+
+### Next Substantial Checkpoint Group
+
+Checkpoint 34 is the 16-case LowIR owner/replay group, beginning with shared
+qualified-member/template-id canonicalization. The six status cases and two
+fixed-point cases are retained as regression gates and will be bundled into
+the next larger materialization/fixed-point checkpoint once owner identity is
+stable.

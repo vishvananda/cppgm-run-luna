@@ -4405,3 +4405,60 @@ qualified-member/template-id canonicalization path. Preserve the 2100/2100
 through report, the 372/396 PA23 baseline, and the file audit; do not broaden
 the change into the three unresolved fixed-point cases until the replay
 identity is stable.
+
+## Checkpoint 33 audit result — 2026-08-01
+
+The checkpoint audit removed the incomplete-layout `sizeof` success fallback,
+made deferred class promotion demand-driven for real by-value declarations,
+and replaced the integral replay's broad text/map scans with structural indexing
+and scoped typed state.  The recursion guard now includes the active replay
+owner, and the replay-state save uses swaps rather than copying the temporary
+member set.  The shared dependent-`template` qualifier rule remains bounded to
+identifier substitution; no broad member rewrite was reintroduced.
+
+Validation after the audit fixes:
+
+- `make test-report ACTIVE_TEST_REPORT_PAS='pa23'`: **372/396**, equal to the
+  checkpoint baseline;
+- required through command: **2100/2100 through PA22**;
+- `perl scripts/cppgm_file_audit.pl --stage pa23 --paths dev/src`: **pass**
+  with advisory warnings only;
+- `make build` and `git diff --check`: **pass**.
+
+### Remaining Work Map after the Checkpoint 33 Audit
+
+- **LowIR owner/replay comparisons — 16:**
+  `general/100-current-specialization-member-body-cast-compare.t`,
+  `general/100-local-qualified-argument-replay.t`,
+  `general/200-adl-explicit-template-id-call.t`,
+  `general/200-function-template-reference-cv-alias-partial-order.t`,
+  `general/200-function-template-template-parameter-deduction.t`,
+  `general/200-member-operator-template-reference-pattern-partial-order.t`,
+  `general/300-current-specialization-constructor-template-canonical-owner.t`,
+  `general/300-dependent-bool-base-trait-type-argument.t`,
+  `general/400-explicit-function-template-type-arg-drops-nontype-overload.t`,
+  `general/400-member-variable-template-leaf-sfinae.t`,
+  `general/400-nonmember-template-compound-assignment-const-lhs.t`,
+  `general/400-out-of-class-partial-member-template-owner-parameter-alias.t`,
+  `spec/100-out-of-class-conversion-operator-definition.t`,
+  `spec/400-defaulted-nested-class-argument-partial-specialization.t`,
+  `spec/400-defaulted-template-arg-partial-base-completion.t`, and
+  `spec/500-conditional-alias-index-sequence-member-template-call.t`.
+- **Status failures — 8:**
+  `general/400-dependent-default-nontype-argument-eval.t` (timeout),
+  `general/400-member-template-result-pack-preserves-nested-function-pointer-owner.t`,
+  `general/500-dependent-function-type-pack-expansion-ctor-init.t`,
+  `general/500-dependent-qualified-member-template-result-bool.t`,
+  `general/500-mp11-append-alias-template-sfinae.t`,
+  `general/500-recursive-qualified-member-template-bool-arg.t`,
+  `general/500-reentrant-static-query-callable-enable-if-cache.t`, and
+  `general/500-reentrant-static-query-enable-if-partial.t` (timeout).
+
+### Next Substantial Checkpoint Group
+
+Proceed with Checkpoint 34: the 16 LowIR owner/replay comparisons, beginning
+with shared qualified-member/template-id canonicalization. Keep all eight
+status cases, the 2100/2100 through report, the 372/396 PA23 baseline, and the
+file audit as regression gates. The status and fixed-point cases are small
+enough to bundle into the subsequent materialization/fixed-point checkpoint
+after the owner identity is stable.

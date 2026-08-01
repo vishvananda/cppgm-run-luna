@@ -1090,8 +1090,10 @@ string PA18TemplateExpander::MaterializeInstantiation(const TemplateDefinition& 
 		!defer_class_definition && deferred_class_instantiations_.find(key) !=
 			deferred_class_instantiations_.end() &&
 		!HasDeferredTypeMember(definition, context, substitutions, pack_substitutions)) {
+		const string deferred_name = cached->second;
 		specializations_.erase(cached);
 		deferred_class_instantiations_.erase(key);
+		deferred_class_keys_.erase(deferred_name);
 	} else if(cached != specializations_.end()) {
 		map<string, CPPGMAstNodePtr>::const_iterator extern_declaration =
 			extern_instantiation_declarations_.find(key);
@@ -1155,6 +1157,7 @@ string PA18TemplateExpander::MaterializeInstantiation(const TemplateDefinition& 
 		forward->template_arguments = metadata_args;
 		class_declarations_[generated_path] = forward;
 		class_declarations_[lexical_path] = class_declarations_[generated_path];
+		deferred_class_keys_[local_name] = key;
 		RememberClassPath(generated_path);
 		RememberClassPath(lexical_path);
 		deferred_class_instantiations_.insert(key);
@@ -1171,6 +1174,7 @@ string PA18TemplateExpander::MaterializeInstantiation(const TemplateDefinition& 
 		forward->template_arguments = metadata_args;
 		class_declarations_[generated_path] = forward;
 		class_declarations_[lexical_path] = class_declarations_[generated_path];
+		deferred_class_keys_[local_name] = key;
 		RememberClassPath(generated_path);
 		RememberClassPath(lexical_path);
 		deferred_class_instantiations_.insert(key);
@@ -1196,6 +1200,60 @@ string PA18TemplateExpander::MaterializeInstantiation(const TemplateDefinition& 
 			specializations_.erase(cached_result);
 		throw;
 	}
+}
+
+void PA18TemplateExpander::PromoteDeferredClassDeclarations(
+	const CPPGMAstNodePtr& result, const string& context)
+{
+	if(!result || result->children.empty() || !result->children[0] ||
+		HasDeclarationSpecifier(result->children[0], "typedef")) return;
+	const CPPGMAstNodePtr list = ChildOfKindLocal(result, "init-declarator-list");
+	for(size_t item = 0; list && item < list->children.size(); ++item) {
+		const CPPGMAstNodePtr declaration = list->children[item];
+		const CPPGMAstNodePtr declarator = declaration && !declaration->children.empty() ?
+			declaration->children[0] : CPPGMAstNodePtr();
+		if(declarator) PromoteDeferredClassUse(DeclaratorTypeSpelling(
+			NodeTypeSpelling(result->children[0]), declarator), context);
+	}
+}
+
+bool PA18TemplateExpander::PromoteDeferredClass(const string& local_name,
+	const string& context)
+{
+	map<string, string>::iterator deferred = deferred_class_keys_.find(
+		LastComponent(local_name));
+	if(deferred == deferred_class_keys_.end()) return false;
+	const string key = deferred->second;
+	map<string, string>::const_iterator base = specialization_bases_.find(
+		deferred->first);
+	map<string, vector<string> >::const_iterator arguments =
+		specialization_arguments_.find(deferred->first);
+	if(base == specialization_bases_.end() || arguments == specialization_arguments_.end())
+		throw logic_error("deferred class replay lost specialization identity");
+	const TemplateDefinition* definition = FindDefinition(base->second, context);
+	if(!definition) definition = FindDefinition(LastComponent(base->second), context);
+	if(!definition || !definition->class_template)
+		throw logic_error("deferred class replay lost template definition");
+	deferred_class_keys_.erase(deferred);
+	deferred_class_instantiations_.erase(key);
+	map<string, string>::iterator cached = specializations_.find(key);
+	if(cached != specializations_.end()) specializations_.erase(cached);
+	const string materialized = Instantiate(*definition, arguments->second, context);
+	if(materialized.empty()) throw logic_error("deferred class replay produced no type");
+	return true;
+}
+
+bool PA18TemplateExpander::PromoteDeferredClassUse(const string& raw,
+	const string& context)
+{
+	string candidate = CanonicalSpelling(RemoveMarker(raw));
+	while(candidate.compare(0, 6, "const ") == 0)
+		candidate = CanonicalSpelling(candidate.substr(6));
+	while(candidate.compare(0, 9, "volatile ") == 0)
+		candidate = CanonicalSpelling(candidate.substr(9));
+	if(candidate.empty() || candidate.find_first_of("*&[]") != string::npos ||
+		candidate.find('<') != string::npos) return false;
+	return PromoteDeferredClass(LastComponent(candidate), context);
 }
 
 void PA18TemplateExpander::RecoverNestedVectorArgument(

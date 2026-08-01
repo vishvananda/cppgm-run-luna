@@ -1018,6 +1018,8 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 		const string& context, const map<string, string>& substitutions,
 		const CPPGMAstNodePtr& result, const string& promoted_local_class,
 		bool defer_type_only_classes = false);
+	void PromoteDeferredClassDeclarations(const CPPGMAstNodePtr& result,
+		const string& context);
 	void DeduceAutoInitializerType(const CPPGMAstNodePtr& result, const string& context, const map<string, string>& substitutions); void MaterializeConditionalConversions(const CPPGMAstNodePtr& result, const string& context, const map<string, string>& substitutions); bool MaterializeConditionalConversion(const string& actual, const string& expected, const string& context, const map<string, string>& substitutions);
 	bool ConsumeMaterializedStaticAssert(const CPPGMAstNodePtr& input,
 		const CPPGMAstNodePtr& result, const string& context,

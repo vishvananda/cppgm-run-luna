@@ -6,10 +6,9 @@ using namespace std;
 namespace pa18_templates_internal {
 
 namespace {
-size_t IdentifierTokenCount(const string& text, const string& identifier)
+void CollectIdentifierTokens(const string& text, set<string>* names)
 {
-	if(identifier.empty()) return 0;
-	size_t count = 0;
+	if(!names) return;
 	for(size_t at = 0; at < text.size();) {
 		if(!IsIdentifierCharacter(text[at])) {
 			++at;
@@ -17,23 +16,50 @@ size_t IdentifierTokenCount(const string& text, const string& identifier)
 		}
 		const size_t begin = at;
 		while(at < text.size() && IsIdentifierCharacter(text[at])) ++at;
-		if(at - begin == identifier.size() &&
-			text.compare(begin, identifier.size(), identifier) == 0) ++count;
+		names->insert(text.substr(begin, at - begin));
 	}
-	return count;
 }
-bool HasClassScopeMemberUse(const CPPGMAstNodePtr& class_node, size_t declaration_index,
-	const string& name)
+
+void CollectClassScopeIdentifierNames(const CPPGMAstNodePtr& node,
+	set<string>* names)
 {
-	if(!class_node) return false;
-	for(size_t sibling = 0; sibling < class_node->children.size(); ++sibling) {
-		if(sibling == declaration_index) continue;
-		const CPPGMAstNodePtr& node = class_node->children[sibling];
-		if(!node || node->kind == "function-definition" ||
-			node->kind == "special-member-definition" ||
-			node->kind == "special-member-declaration") continue;
-		if(IdentifierTokenCount(SpellNode(node), name) != 0) return true;
+	if(!node || !names) return;
+	const bool spelling_node = node->kind == "identifier" ||
+		node->kind == "id-expression" || node->kind == "type-name" ||
+		node->kind == "decl-specifier" || node->kind == "type-specifier" ||
+		node->kind == "base-name" || node->kind == "decltype-specifier" ||
+		node->kind == "template-id";
+	if(spelling_node) CollectIdentifierTokens(RemoveMarker(node->value), names);
+	for(size_t argument = 0; argument < node->template_arguments.size(); ++argument)
+		CollectIdentifierTokens(RemoveMarker(node->template_arguments[argument]), names);
+	for(size_t child = 0; child < node->children.size(); ++child)
+		CollectClassScopeIdentifierNames(node->children[child], names);
+}
+
+void IndexClassScopeIdentifierUses(const CPPGMAstNodePtr& class_node,
+	map<string, set<size_t> >* uses)
+{
+	if(!class_node || !uses) return;
+	for(size_t child = 0; child < class_node->children.size(); ++child) {
+		const CPPGMAstNodePtr& declaration = class_node->children[child];
+		if(!declaration || declaration->kind == "function-definition" ||
+			declaration->kind == "special-member-definition" ||
+			declaration->kind == "special-member-declaration") continue;
+		set<string> names;
+		CollectClassScopeIdentifierNames(declaration, &names);
+		for(set<string>::const_iterator name = names.begin(); name != names.end(); ++name)
+			(*uses)[*name].insert(child);
 	}
+}
+
+bool HasOtherClassScopeUse(const map<string, set<size_t> >& uses,
+	size_t declaration_index, const string& name)
+{
+	map<string, set<size_t> >::const_iterator found = uses.find(name);
+	if(found == uses.end()) return false;
+	for(set<size_t>::const_iterator declaration = found->second.begin();
+		declaration != found->second.end(); ++declaration)
+		if(*declaration != declaration_index) return true;
 	return false;
 }
 }
@@ -58,6 +84,9 @@ void PA18TemplateExpander::RegisterEarlyIntegralMembers(
 	if(!definition.class_template || !definition.declaration ||
 		(definition.declaration->kind != "class-specifier" &&
 			definition.declaration->kind != "class-forward-declaration")) return;
+	map<string, set<size_t> > class_scope_identifier_uses;
+	IndexClassScopeIdentifierUses(definition.declaration,
+		&class_scope_identifier_uses);
 	bool has_replayed_member_use = false;
 	for(size_t child = 0; child < definition.declaration->children.size() &&
 		!has_replayed_member_use; ++child) {
@@ -71,21 +100,31 @@ void PA18TemplateExpander::RegisterEarlyIntegralMembers(
 			if(!declarator || declarator->children.empty()) continue;
 			const string name = FirstIdentifierLocal(declarator->children[0]);
 			if(!HasDeclarationSpecifier(declaration->children[0], "const")) continue;
-			if(HasClassScopeMemberUse(definition.declaration, child, name)) {
+			if(HasOtherClassScopeUse(class_scope_identifier_uses, child, name)) {
 				has_replayed_member_use = true;
 				break;
 			}
 		}
 	}
 	if(!has_replayed_member_use) return;
-	set<string> previous_unqualified_constants;
-	for(map<string, PA19IntegralValue>::const_iterator value = constant_values_.begin();
-		value != constant_values_.end(); ++value)
-		if(value->first.find("::") == string::npos)
-			previous_unqualified_constants.insert(value->first);
+	set<string> temporary_unqualified_constants;
 	for(size_t child = 0; child < definition.declaration->children.size(); ++child) {
 		const CPPGMAstNodePtr declaration = definition.declaration->children[child];
 		if(!declaration || declaration->kind != "simple-declaration") continue;
+		const bool constant_declaration = !declaration->children.empty() &&
+			(HasDeclarationSpecifier(declaration->children[0], "const") ||
+				HasDeclarationSpecifier(declaration->children[0], "constexpr"));
+		if(constant_declaration) {
+			const CPPGMAstNodePtr list = ChildOfKindLocal(declaration,
+				"init-declarator-list");
+			if(list) for(size_t item = 0; item < list->children.size(); ++item) {
+				const CPPGMAstNodePtr declarator = list->children[item];
+				if(!declarator || declarator->children.empty()) continue;
+				const string name = FirstIdentifierLocal(declarator->children[0]);
+				if(!name.empty() && constant_values_.find(name) == constant_values_.end())
+					temporary_unqualified_constants.insert(name);
+			}
+		}
 		RecordConstantDeclaration(declaration, context, substitutions);
 		const CPPGMAstNodePtr list = ChildOfKindLocal(declaration,
 			"init-declarator-list");
@@ -98,19 +137,14 @@ void PA18TemplateExpander::RegisterEarlyIntegralMembers(
 			const string owner = active_instantiation_name_.empty() ? context :
 				active_instantiation_name_;
 			const string qualified = JoinPath(owner, name);
-			if(HasClassScopeMemberUse(definition.declaration, child, name) &&
+			if(HasOtherClassScopeUse(class_scope_identifier_uses, child, name) &&
 				constant_values_.find(qualified) != constant_values_.end())
 				early_integral_members_.insert(qualified);
 		}
 	}
-	for(map<string, PA19IntegralValue>::iterator value = constant_values_.begin();
-		value != constant_values_.end(); ) {
-		if(value->first.find("::") == string::npos &&
-			previous_unqualified_constants.find(value->first) ==
-				previous_unqualified_constants.end())
-			constant_values_.erase(value++);
-		else ++value;
-	}
+	for(set<string>::const_iterator name = temporary_unqualified_constants.begin();
+		name != temporary_unqualified_constants.end(); ++name)
+		constant_values_.erase(*name);
 }
 
 void PA18TemplateExpander::RecordConstantDeclaration(

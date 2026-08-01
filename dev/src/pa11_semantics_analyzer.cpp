@@ -86,16 +86,8 @@ size_t Analyzer::TypeSize(const TypePtr& type) const
 			type->owned_scope->owner_type->complete &&
 			type->owned_scope->owner_type->layout_complete)
 			return type->owned_scope->owner_type->object_size;
-		if (!type->complete || !type->layout_complete) {
-			// PA18 may intentionally retain only the generated specialization shell
-			// while a type-only replay is waiting for a later member-qualified use.
-			// Such a shell is still a complete nominal object for the staged
-			// compiler's lowering path; use its recorded size when available and the
-			// ordinary empty-class size until the deferred body is replayed.
-			if(type->complete && type->template_specialization && !type->layout_complete)
-				return type->object_size ? type->object_size : 1;
+		if (!type->complete || !type->layout_complete)
 			throw logic_error("sizeof incomplete class");
-		}
 		return type->object_size;
 	case TYPE_TEMPLATE_PARAMETER:
 	case TYPE_TEMPLATE_TEMPLATE_PARAMETER: return 0;

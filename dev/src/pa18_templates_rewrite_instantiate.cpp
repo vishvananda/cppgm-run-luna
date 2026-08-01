@@ -17,6 +17,8 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformInstantiatedNode(
 	const map<string, FunctionSignature> previous_functions = active_function_substitutions_;
 	const set<string> previous_function_pointer_parameters =
 		active_function_pointer_substitutions_;
+	set<string> previous_early_integral_members;
+	previous_early_integral_members.swap(early_integral_members_);
 	active_integral_substitutions_ = integral_substitutions;
 	active_function_substitutions_ = function_substitutions;
 	active_function_pointer_substitutions_.clear();
@@ -70,6 +72,7 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformInstantiatedNode(
 		active_pack_identifier_substitutions_ = previous_pack_identifiers; active_function_pack_substitutions_ = previous_function_packs;
 		active_function_substitutions_ = previous_functions;
 		active_function_pointer_substitutions_ = previous_function_pointer_parameters;
+		early_integral_members_.swap(previous_early_integral_members);
 		return result;
 	} catch(...) {
 		active_integral_substitutions_ = previous;
@@ -77,6 +80,7 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformInstantiatedNode(
 		active_pack_identifier_substitutions_ = previous_pack_identifiers; active_function_pack_substitutions_ = previous_function_packs;
 		active_function_substitutions_ = previous_functions;
 		active_function_pointer_substitutions_ = previous_function_pointer_parameters;
+		early_integral_members_.swap(previous_early_integral_members);
 		throw;
 	}
 }
@@ -1030,12 +1034,14 @@ bool PA18TemplateExpander::EvaluateIntegralText(string raw, const string& contex
 		return false;
 	}
 	NormalizeIntegralText(&raw, substitutions);
-	const string evaluation_key = CanonicalSpelling(raw) + "@" + context;
+	const IntegralEvaluationKey evaluation_key(CanonicalSpelling(raw), context,
+		active_instantiation_name_);
 	if(!active_integral_evaluations_.insert(evaluation_key).second) return false;
 	struct IntegralEvaluationScope {
-		set<string>* active;
-		string key;
-		IntegralEvaluationScope(set<string>* value, const string& name)
+		set<IntegralEvaluationKey>* active;
+		IntegralEvaluationKey key;
+		IntegralEvaluationScope(set<IntegralEvaluationKey>* value,
+			const IntegralEvaluationKey& name)
 			: active(value), key(name) {}
 		~IntegralEvaluationScope() { active->erase(key); }
 	} evaluation_scope(&active_integral_evaluations_, evaluation_key);

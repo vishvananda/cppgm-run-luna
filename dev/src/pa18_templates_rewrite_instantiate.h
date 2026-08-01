@@ -1122,6 +1122,8 @@
 			const vector<string>& args, const string& cached, const string& context,
 			bool explicit_instantiation,
 			const map<string, vector<string> >& pack_substitutions);
+	bool PromoteDeferredClass(const string& local_name, const string& context);
+	bool PromoteDeferredClassUse(const string& raw, const string& context);
 	void RegisterGeneratedSpecialization(const TemplateDefinition& definition,
 		const vector<string>& metadata_args, const string& local_name);
 	void AddConcreteOwnerSubstitutions(const string& concrete_owner, const string& context,
