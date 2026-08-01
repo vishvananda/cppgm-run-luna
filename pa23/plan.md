@@ -4560,3 +4560,45 @@ Take the 8 owner/declaration comparisons together with the 3 typed
 expression/value lowering comparisons. After that owner identity is stable,
 bundle the 6 deferred-result status cases; keep the 2 timeout witnesses as a
 separate bounded fixed-point group.
+
+## Checkpoint 34 audit result — 2026-08-01
+
+The checkpoint audit found and fixed a deferred operator type-only probe that
+reconstructed a return type from raw declaration spelling and eagerly
+instantiated a result class. It now consumes the selected candidate's shared
+`FunctionResultType` path. The audit also made static binary-receiver
+canonicalization stop its child walk after installing typed owner metadata,
+and centralized the AST lvalue fact used by deduction and member-operator
+ranking. Operand provenance needed by PA14 lowering remains attached to the
+canonical receiver node.
+
+Validation after the audit fixes:
+
+- `make test-report ACTIVE_TEST_REPORT_PAS='pa23'`: **377/396**, with the
+  complete 19-fixture residual set and two timeouts;
+- required through-PA22 report: **2100/2100**;
+- `perl scripts/cppgm_file_audit.pl --stage pa23 --paths dev/src`: **pass**
+  with 12 advisory warnings;
+- `make build`, the five scoped fixtures, and `git diff --check`: **pass**.
+
+### Remaining Work Map after the Checkpoint 34 Audit
+
+- **8 owner/declaration LowIR comparisons:** current-specialization body and
+  constructor owners, local qualified replay, ADL explicit template-id,
+  out-of-class partial-member and conversion owners, and the two defaulted
+  nested/base partial-specialization cases.
+- **3 typed expression/value LowIR comparisons:** dependent bool base-trait,
+  member-variable-template leaf SFINAE, and const-lhs nonmember compound
+  assignment.
+- **6 deferred-result status failures:** member result packs, dependent
+  function-type packs, qualified bool results, MP11 alias SFINAE, recursive
+  qualified bool arguments, and the reentrant callable `enable_if` cache.
+- **2 fixed-point timeouts:** dependent default non-type evaluation and
+  reentrant static-query partial `enable_if`.
+
+### Next Substantial Checkpoint Group after the Audit
+
+Bundle the 8 owner/declaration cases with the 3 typed expression/value cases.
+Then bundle the 6 deferred-result status cases, while keeping both timeout
+fixtures as a separate fixed-point group and preserving the 2100/2100,
+377/396, and file-audit gates.

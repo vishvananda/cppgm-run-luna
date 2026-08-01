@@ -5,22 +5,6 @@ namespace pa18_templates_internal {
 
 namespace {
 
-bool MemberArgumentIsLvalue(const CPPGMAstNodePtr& expression)
-{
-	if(!expression) return false;
-	if(expression->kind == "id-expression" || expression->kind == "member-expression" ||
-		expression->kind == "subscript-expression" || expression->kind == "keyword-literal")
-		return true;
-	if(expression->kind == "parenthesized-expression" && !expression->children.empty())
-		return MemberArgumentIsLvalue(expression->children[0]);
-	if(expression->kind == "unary-expression" && !expression->children.empty())
-		return RemoveMarker(expression->value) == "*";
-	if(expression->kind == "binary-expression" && expression->children.size() >= 2 &&
-		RemoveMarker(expression->value) == ",")
-		return MemberArgumentIsLvalue(expression->children[1]);
-	return false;
-}
-
 bool MemberPatternHasTopLevelConst(const string& raw)
 {
 	int angle_depth = 0;
@@ -53,7 +37,7 @@ int MemberReferenceBindingPenalty(const string& pattern,
 	const bool rvalue_reference = normalized.size() >= 2 &&
 		normalized.compare(normalized.size() - 2, 2, "&&") == 0;
 	if(!lvalue_reference && !rvalue_reference) return 0;
-	const bool lvalue = MemberArgumentIsLvalue(argument);
+	const bool lvalue = IsLvalueTemplateArgument(argument);
 	const bool actual_const = MemberPatternHasTopLevelConst(CanonicalSpelling(actual));
 	if(rvalue_reference) return lvalue ? 2 : 0;
 	if(!lvalue) return 0;

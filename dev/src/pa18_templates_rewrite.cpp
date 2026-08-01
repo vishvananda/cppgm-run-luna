@@ -667,9 +667,9 @@ bool PA18TemplateExpander::TransformBinaryReceiverMember(
 	}
 	if(static_receiver_member && !receiver_type.empty() && receiver_expression &&
 		receiver_expression->children.size() >= 2) {
-		// The operator result is needed only as a type here.  Preserve the operand
-		// evaluation required by the discarded object expression, then spell the
-		// static member directly for the lowerer.
+		// Preserve the receiver operands in the typed lowering node so PA14 can
+		// retain their object-use and lifetime effects while resolving the static
+		// member through the selected result type.
 		result->kind = "id-expression";
 		result->value = receiver_type + "::" + LastComponent(
 			RemoveMarker(input->children[1]->value));
@@ -717,11 +717,12 @@ void PA18TemplateExpander::TransformRegularChildren(const CPPGMAstNodePtr& input
 				!IsGeneratedMemberTemplateUsingTarget(using_target->value, node_context, local_substitutions ? *local_substitutions : substitutions) && !constructor_using; CPPGMAstNodePtr child;
 			bool canonical_static_member = false;
 			const bool binary_receiver = IsBinaryReceiverMember(input, i, original_child);
-			if(binary_receiver)
+			if(binary_receiver) {
 				canonical_static_member = TransformBinaryReceiverMember(input, original_child,
 					node_context, local_substitutions ? *local_substitutions : substitutions,
 					substitutions, result, &child);
-			else if(input->kind == "using-declaration" && original_child && original_child->kind == "target") {
+				if(canonical_static_member) break;
+			} else if(input->kind == "using-declaration" && original_child && original_child->kind == "target") {
 					child = CloneNode(original_child);
 					const string raw_target = original_child->value;
 				const size_t separator = raw_target.rfind("::"); if(separator != string::npos && raw_target.substr(0, separator) == raw_target.substr(separator + 2)) {

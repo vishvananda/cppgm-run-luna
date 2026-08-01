@@ -60,6 +60,20 @@ bool ReferenceParameterPattern(const string& pattern)
 		pattern.find("(&") != string::npos || pattern.find("(& ") != string::npos;
 }
 
+bool ConstReferenceParameterPattern(const string& pattern)
+{
+	for(size_t position = pattern.find("const"); position != string::npos;
+		position = pattern.find("const", position + 5)) {
+		const bool left = position == 0 || !IsIdentifierCharacter(pattern[position - 1]);
+		const size_t end = position + 5;
+		const bool right = end == pattern.size() || !IsIdentifierCharacter(pattern[end]);
+		if(left && right) return true;
+	}
+	return false;
+}
+
+} // namespace
+
 bool IsLvalueTemplateArgument(const CPPGMAstNodePtr& expression)
 {
 	if(!expression) return false;
@@ -80,20 +94,6 @@ bool IsLvalueTemplateArgument(const CPPGMAstNodePtr& expression)
 			IsLvalueTemplateArgument(expression->children[2]);
 	return false;
 }
-
-bool ConstReferenceParameterPattern(const string& pattern)
-{
-	for(size_t position = pattern.find("const"); position != string::npos;
-		position = pattern.find("const", position + 5)) {
-		const bool left = position == 0 || !IsIdentifierCharacter(pattern[position - 1]);
-		const size_t end = position + 5;
-		const bool right = end == pattern.size() || !IsIdentifierCharacter(pattern[end]);
-		if(left && right) return true;
-	}
-	return false;
-}
-
-} // namespace
 
 bool PA18TemplateExpander::MergeInferredFunctionArgument(
 	const TemplateDefinition& definition, const string& pattern, const string& type,

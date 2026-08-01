@@ -401,6 +401,7 @@ inline bool IsTemplateAngleClose(const string& raw, size_t position)
 	return true;
 }
 vector<string> SplitTemplateArguments(const string& raw);
+bool IsLvalueTemplateArgument(const CPPGMAstNodePtr& expression);
 struct TemplateParameter
 {
 	string name;

@@ -1879,3 +1879,108 @@ qualified-member/template-id canonicalization. The six status cases and two
 fixed-point cases are retained as regression gates and will be bundled into
 the next larger materialization/fixed-point checkpoint once owner identity is
 stable.
+
+## Checkpoint 34 audit — 2026-08-01
+
+### Scope Reviewed
+
+- The latest Checkpoint 34 scope and result in [pa23/plan.md](plan.md), the
+  PA23 contract in [pa23/README.md](README.md), and
+  [TESTING_AND_REFERENCES.md](../TESTING_AND_REFERENCES.md).
+- Recent commits `75e741a` and `3f06b6a`, the checkpoint's PA18 source diff,
+  and the shared typed replay, candidate-ranking, and PA14 lowering paths.
+- The five scoped overload fixtures, the full current-PA report, the required
+  through-PA22 report, the file audit, and
+  `/home/vishvananda/work/.ralph/luna-gpt-5.6-luna-ultra/last-test.log`.
+
+### Findings
+
+- The checkpoint stays on the normal parser, semantic collection, typed
+  deduction/substitution and replay, PA14 lowering, and LowIR emission path.
+  There is no skipped phase, dummy or embedded output, interpreter/VM/
+  trampoline substitute, reference-binary or host-compiler invocation,
+  source/test-specific acceptance gate, or unchecked output path.
+- A real checkpoint-level shortcut existed in the deferred operator probe:
+  it rebuilt a return type from declaration spelling, parsed that spelling as
+  a class template, and eagerly called `Instantiate` merely to discover a
+  type-only result. That duplicated semantic ownership, could re-enter
+  template replay, and recovered a selected result downstream from raw text.
+  The probe now uses the selected candidate's shared typed
+  `FunctionResultType` path and does not materialize a result class.
+- The new static-member receiver rewrite needed an explicit child-loop stop
+  after canonicalizing the binary receiver. Without it, the next source child
+  could be appended after the canonical node. The fix preserves the
+  transformed receiver operands as typed lowering provenance—required by the
+  PA14 object-use/lifetime path—while preventing unrelated child recovery.
+- Candidate ranking now shares the AST lvalue classifier between deduction
+  and member-operator reference ranking. Template-parameter kind remains the
+  owner of explicit type, non-type, and template-template facts; no new
+  stringly fact or emitted-text reparsing was added.
+- The ranking and explicit-kind checks are bounded per candidate and argument.
+  They do not add repeated full-suite walks, broad registry scans, excessive
+  copying, retry/timing logic, or a timeout workaround. The two timeout
+  fixtures remain genuine fixed-point semantic failures.
+- The file audit has no fatal finding and retains its 12 advisory warnings.
+  No tests, references, harnesses, checker rules, embedded payloads, hidden
+  implementation fragments, or weakened checks were changed.
+
+### Changes Made
+
+- Replaced the deferred `EmitMemberCandidate` raw return-spelling and eager
+  class-instantiation branch with `FunctionResultType` in
+  `dev/src/pa18_templates_calls_member.cpp`.
+- Made binary-receiver canonicalization stop the regular child walk after it
+  has installed the selected typed static owner, while retaining the
+  transformed operand provenance in `dev/src/pa18_templates_rewrite.cpp`.
+- Moved `IsLvalueTemplateArgument` into the shared PA18 template namespace and
+  reused it from `dev/src/pa18_templates_calls_class_rank.cpp`, with its
+  declaration in `dev/src/pa18_templates_collection.h`.
+- Refreshed the plan and this audit only; no tests or `.ref` files were
+  modified.
+
+### Validation
+
+- `make build`: **PASS**.
+- Scoped Checkpoint 34 overload fixtures: **5/5 PASS**.
+- `make test-report ACTIVE_TEST_REPORT_PAS='pa23'`: **377/396**; exit 2 is
+  only the complete checked-in PA23 residual set, with 19 failures and the
+  same two timeout failures as the checkpoint baseline.
+- Required prior-through command (`n=23; ... make
+  test-report-through-pa22`): **PASS, 2100/2100**.
+- `perl scripts/cppgm_file_audit.pl --stage pa23 --paths dev/src`:
+  **PASS**, with 12 non-fatal advisory warnings and no fatal finding.
+- `git diff --check`: **PASS**. The current-PA result is at or above the
+  turn-start baseline and earlier PAs remain clean.
+
+### Remaining Work Map
+
+- **Owner/declaration canonicalization — 8 LowIR comparisons:**
+  `general/100-current-specialization-member-body-cast-compare.t`,
+  `general/100-local-qualified-argument-replay.t`,
+  `general/200-adl-explicit-template-id-call.t`,
+  `general/300-current-specialization-constructor-template-canonical-owner.t`,
+  `general/400-out-of-class-partial-member-template-owner-parameter-alias.t`,
+  `spec/100-out-of-class-conversion-operator-definition.t`,
+  `spec/400-defaulted-nested-class-argument-partial-specialization.t`, and
+  `spec/400-defaulted-template-arg-partial-base-completion.t`.
+- **Typed expression/value lowering — 3 LowIR comparisons:**
+  `general/300-dependent-bool-base-trait-type-argument.t`,
+  `general/400-member-variable-template-leaf-sfinae.t`, and
+  `general/400-nonmember-template-compound-assignment-const-lhs.t`.
+- **Deferred result materialization — 6 status failures:**
+  `general/400-member-template-result-pack-preserves-nested-function-pointer-owner.t`,
+  `general/500-dependent-function-type-pack-expansion-ctor-init.t`,
+  `general/500-dependent-qualified-member-template-result-bool.t`,
+  `general/500-mp11-append-alias-template-sfinae.t`,
+  `general/500-recursive-qualified-member-template-bool-arg.t`, and
+  `general/500-reentrant-static-query-callable-enable-if-cache.t`.
+- **Fixed-point query identity — 2 timeouts:**
+  `general/400-dependent-default-nontype-argument-eval.t` and
+  `general/500-reentrant-static-query-enable-if-partial.t`.
+
+### Next Substantial Checkpoint Group
+
+Bundle the 8 owner/declaration comparisons with the 3 typed expression/value
+comparisons. Once owner identity is stable, take the 6 deferred-result status
+cases together; keep the 2 fixed-point timeout witnesses as a separate
+bounded semantic group and retain all 19 fixtures as regression gates.

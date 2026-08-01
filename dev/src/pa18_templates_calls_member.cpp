@@ -1237,48 +1237,8 @@ bool PA18TemplateExpander::EmitMemberCandidate(
 		try {
 			call->template_primary = definition.qualified_name;
 			call->template_arguments = instantiation_member_arguments;
-			map<string, string> result_substitutions = candidate_substitutions;
-			for(size_t parameter = 0; parameter < definition.parameters.size() &&
-				parameter < member_arguments.size(); ++parameter)
-				if(!definition.parameters[parameter].name.empty())
-					result_substitutions[definition.parameters[parameter].name] =
-						member_arguments[parameter];
-			if(inference_definition.declaration &&
-				!inference_definition.declaration->children.empty()) {
-				string result_type = NodeTypeSpelling(
-					inference_definition.declaration->children[0]);
-				result_type += ReturnDeclaratorSuffix(FunctionDeclarator(
-					inference_definition.declaration));
-				call->inferred_type = NormalizeTypeArgument(ReplaceIdentifiers(
-					result_type, result_substitutions));
-				string result_object = call->inferred_type;
-				while(result_object.compare(0, 6, "const ") == 0)
-					result_object = NormalizeTypeArgument(result_object.substr(6));
-				while(!result_object.empty() && (result_object[result_object.size() - 1] == '&' ||
-					result_object[result_object.size() - 1] == '*'))
-					result_object = NormalizeTypeArgument(result_object.substr(0,
-						result_object.size() - 1));
-				const size_t result_open = result_object.find('<');
-				if(result_open != string::npos) {
-					string result_arguments;
-					size_t result_close = string::npos;
-					string result_base;
-					size_t result_begin = 0;
-					if(TemplateBase(result_object, result_open, &result_begin, &result_base) &&
-						TemplateRange(result_object, result_open, &result_arguments, &result_close)) {
-						const TemplateDefinition* result_definition = FindDefinition(result_base, context);
-						if(result_definition && result_definition->class_template) {
-							const vector<string> requested = SplitTemplateArguments(result_arguments);
-							const TemplateDefinition* selected_result = SelectClassTemplateDefinition(
-								result_definition, requested, context);
-							if(!selected_result) selected_result = result_definition;
-							const string local_result = Instantiate(*selected_result, requested, context);
-							call->inferred_type = selected_result->owner.empty() ? local_result :
-								JoinPath(selected_result->owner, local_result);
-						}
-					}
-				}
-			}
+			call->inferred_type = FunctionResultType(inference_definition,
+				instantiation_member_arguments, context, &candidate_substitutions);
 			return !call->inferred_type.empty();
 		} catch(const PA18SubstitutionFailure&) {
 			return false;
