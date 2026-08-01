@@ -286,9 +286,12 @@ string PA14Lowerer::EmitReferenceArgument(const CPPGMAstNodePtr& node, Scope* sc
         FunctionRecord* function = choice.binding ? RecordForBinding(choice.binding) : 0;
         template_context = template_context || (function && function->template_instantiation);
       }
-		const bool operator_result = node && node->kind == "binary-expression";
-      const string slot = new_special_slot(template_context || operator_result ? "arg" : "tmpobj",
-        low_type(source_type));
+      const bool operator_result = node && node->kind == "binary-expression";
+      const bool member_call_result = node && node->kind == "call-expression" &&
+        node->children.size() > 0 && node->children[0] &&
+        node->children[0]->kind == "member-expression";
+      const string slot = new_special_slot(template_context || operator_result ||
+        member_call_result ? "arg" : "tmpobj", low_type(source_type));
       const string address = new_temp();
       AddInstruction(address + " = addr $" + slot);
       Value value = EmitValue(node, scope);

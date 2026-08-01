@@ -4733,3 +4733,47 @@ and local-static materialization cases.
 This is the completed turn scope.  The next implementation group is the
 seven owner/declaration comparisons; no deferred-result or timeout behavior
 was changed in this checkpoint.
+
+## Checkpoint 37 scope — owner frontier and reference temporary materialization
+
+Take the two owner/declaration cases whose observed differences are limited
+to argument-boundary storage and emission-frontier order:
+
+- `general/200-adl-explicit-template-id-call.t`: a class prvalue returned by
+  a member call and bound to a const reference must use typed argument
+  storage, not a generic temporary-object slot.
+- `general/100-local-qualified-argument-replay.t`: nested member-template
+  demand must be emitted before free helpers demanded by the nested body, so
+  the LowIR order follows the typed owner/declaration frontier.
+
+The remaining owner cases require separate ABI or generated-body analysis;
+the six deferred-result status failures and two fixed-point timeouts remain
+out of scope for this checkpoint.
+
+## Checkpoint 37 result — 2026-08-01
+
+The two-case owner frontier checkpoint is complete.  Reference-bound class
+prvalues from member calls now use `arg` storage at the reference argument
+boundary.  After nested root operations, the lowering closes the newly
+demanded member frontier before emitting free helper functions.  Both scoped
+fixtures pass, and the full PA23 report improved to **383 / 396** while the
+through-PA22 report remains **2100 / 2100**.
+
+The remaining work map is now **13 fixtures**:
+
+- **5 owner/declaration comparisons:**
+  `general/300-current-specialization-constructor-template-canonical-owner.t`,
+  `general/400-out-of-class-partial-member-template-owner-parameter-alias.t`,
+  `spec/100-out-of-class-conversion-operator-definition.t`,
+  `spec/400-defaulted-nested-class-argument-partial-specialization.t`, and
+  `spec/400-defaulted-template-arg-partial-base-completion.t`.
+- **6 deferred-result status failures:** the member result-pack,
+  dependent function-type-pack, qualified bool-result, MP11 alias-SFINAE,
+  recursive qualified-bool, and reentrant callable-cache fixtures.
+- **2 fixed-point timeouts:** dependent default non-type evaluation and
+  reentrant static-query partial `enable_if`.
+
+The next checkpoint group is the remaining five owner cases, starting with
+the current-specialization constructor ABI and the out-of-class local-static
+materialization pair.  The source audit passes and no deferred-result or
+timeout behavior was changed here.

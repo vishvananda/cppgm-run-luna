@@ -488,6 +488,11 @@ void PA14Lowerer::Lower(ostream& out)
     MarkHiddenFriendDependencies();
     EmitInitialFunctionRoots(entries);
     EmitNestedRootOperations(entries);
+    // Nested member bodies can demand a static member-template replay while
+    // establishing their own root.  Close that member frontier before free
+    // helpers from those bodies are emitted, preserving typed declaration
+    // ownership and its source-order boundary.
+    EmitMemberPass(entries);
     EmitOrdinaryAndHiddenRoots(entries);
     EmitNeededOrdinary(entries);
     EmitMemberPass(entries);
