@@ -725,9 +725,10 @@ string ReplaceIdentifiersPreservingPackSizes(const string& raw,
 					break;
 				}
 			map<string, string>::const_iterator found = substitutions.find(word);
-			const bool already_qualified = i >= 2 && replaced.size() >= 2 &&
-				replaced.compare(replaced.size() - 2, 2, "::") == 0;
-			if(found != substitutions.end() && !pack_operand && !already_qualified)
+			const bool already_qualified = i >= 2 && replaced.size() >= 2 && replaced.compare(replaced.size() - 2, 2, "::") == 0;
+			size_t qualifier_end = i; while(qualifier_end > 0 && isspace(static_cast<unsigned char>(segment[qualifier_end - 1]))) --qualifier_end;
+			const bool dependent_template_member = qualifier_end >= 8 && segment.compare(qualifier_end - 8, 8, "template") == 0 && (qualifier_end == 8 || !IsIdentifierCharacter(segment[qualifier_end - 9]));
+			if(found != substitutions.end() && !pack_operand && !already_qualified && !dependent_template_member)
 				replaced += found->second;
 			else if(found != substitutions.end())
 				replaced += PreservePackSubstitution(word, found->second, pack_operand);

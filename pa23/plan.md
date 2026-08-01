@@ -4366,3 +4366,42 @@ Target the three remaining fixed-point query cases as one group. Preserve the
 2100/2100 through report, the PA23 file audit, the 372/396 current baseline,
 and the nine existing owner/specialization status witnesses while tracing
 reentrant specialization ownership and dependent default argument state.
+
+## Checkpoint 33 result — dependent template-qualifier replay
+
+Completed the bounded replay sub-group that was safe to land this turn.
+Identifier substitution now preserves the name immediately following a
+dependent `template` qualifier, including the pack-size-preserving replay
+path. This keeps the qualified member spelling intact while later typed
+template facts select the member; ordinary already-qualified names remain
+protected by the existing qualification check. The broad member-rewrite
+experiment was discarded after it regressed earlier assignments.
+
+Validation:
+
+- `make test-report ACTIVE_TEST_REPORT_PAS='pa23'`: **372/396**;
+- `make test-report-through-pa22`: **2100/2100**;
+- `perl scripts/cppgm_file_audit.pl --stage pa23 --paths dev/src`: **pass**;
+- `git diff --check`: **pass**.
+
+### Remaining Work Map after Checkpoint 33
+
+- **LowIR owner/replay canonicalization — 16 comparisons:** current
+  specialization body/canonical owner, qualified argument replay,
+  ADL/template deduction, member-operator partial ordering, explicit type
+  argument overload selection, member-variable/compound-assignment replay,
+  out-of-class owner aliases, and defaulted/conversion specialization cases.
+- **Status-only template materialization — 5 cases:** dependent function-type
+  packs, member-template result packs, qualified member-template bool results,
+  MP11 alias SFINAE, and recursive qualified member-template bool arguments.
+- **Deeper fixed-point queries — 3 cases:** dependent default non-type
+  argument evaluation and the two reentrant static-query `enable_if` cases;
+  these still need shared result-type and specialization-identity state.
+
+### Next checkpoint 34 scope
+
+Take the 16-case LowIR owner/replay group next, starting with the shared
+qualified-member/template-id canonicalization path. Preserve the 2100/2100
+through report, the 372/396 PA23 baseline, and the file audit; do not broaden
+the change into the three unresolved fixed-point cases until the replay
+identity is stable.

@@ -261,11 +261,11 @@ inline string ReplaceIdentifiers(const string& raw, const map<string, string>& s
 		if(IsIdentifierCharacter(raw[i])) {
 			size_t end = i + 1;
 			while(end < raw.size() && IsIdentifierCharacter(raw[end])) ++end;
-			const string word = raw.substr(i, end - i);
-			map<string, string>::const_iterator found = substitutions.find(word);
-			const bool already_qualified = i >= 2 && result.size() >= 2 &&
-				result.compare(result.size() - 2, 2, "::") == 0;
-			if(found != substitutions.end() && !already_qualified) result += found->second;
+			const string word = raw.substr(i, end - i); map<string, string>::const_iterator found = substitutions.find(word);
+			const bool already_qualified = i >= 2 && result.size() >= 2 && result.compare(result.size() - 2, 2, "::") == 0;
+			size_t qualifier_end = i; while(qualifier_end > 0 && isspace(static_cast<unsigned char>(raw[qualifier_end - 1]))) --qualifier_end;
+			const bool dependent_template_member = qualifier_end >= 8 && raw.compare(qualifier_end - 8, 8, "template") == 0 && (qualifier_end == 8 || !IsIdentifierCharacter(raw[qualifier_end - 9]));
+			if(found != substitutions.end() && !already_qualified && !dependent_template_member) result += found->second;
 			else if(found != substitutions.end()) result += word;
 			else {
 				bool compact_substitution = false;
