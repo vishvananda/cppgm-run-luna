@@ -16,8 +16,10 @@ CPPGMAstNodePtr PA18TemplateExpander::RewriteRegularNodeValue(
 	const bool type_spelling = input->kind == "decl-specifier" ||
 		input->kind == "type-name" || input->kind == "type-specifier" ||
 		input->kind == "base-name";
-	if(input->kind == "literal" && input->value.size() >= 2 &&
-		input->value[0] == '"' && input->value[input->value.size() - 1] == '"')
+	// Literal spelling is already tokenized.  Running it through the type/text
+	// canonicalizer would erase significant whitespace inside a character
+	// literal, turning `' '` into `''` before LowIR sees it.
+	if(input->kind == "literal")
 		result->value = input->value;
 	else result->value = RewriteText(input->value, context, substitutions, &template_replaced,
 		!type_spelling, true,

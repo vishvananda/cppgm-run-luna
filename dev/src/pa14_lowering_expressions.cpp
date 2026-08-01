@@ -785,7 +785,7 @@ PA14Lowerer::Value PA14Lowerer::EmitBinary(const CPPGMAstNodePtr& node, Scope* s
     else if(op == "|") binary = "or";
     else if(op == "^") binary = "xor";
     else if(op == "<<") binary = "shl";
-    else if(op == ">>") binary = "shr";
+    else if(op == ">>") binary = common && is_unsigned_type(common) ? "ushr" : "shr";
     else throw logic_error("unsupported binary operator");
     Value result;
     result.type = result_type;
@@ -831,8 +831,19 @@ PA14Lowerer::Value PA14Lowerer::EmitConditionalValue(const CPPGMAstNodePtr& node
                               const TypePtr& expected)
 {
     ExprInfo info = Infer(node, scope, expected);
+    // The conditional expression has its own common type.  `expected` is the
+    // conversion target at the surrounding initialization/call boundary; it
+    // must not change the type of the temporary that represents `?:` itself.
+    // In particular, `value_type ? 1 : 0` remains int when assigned to an
+    // unsigned value_type, and the later conversion is emitted at the store.
     TypePtr type = expression_value_type(info);
-    if(expected) type = type_value(expected);
+    const TypePtr expected_value = type_value(expected);
+    // The semantic bool result is represented as a bool in the surrounding
+    // branch/value boundary.  Keep that established normalization, while
+    // leaving integral conditional arms at their own common type.
+    if(expected_value && expected_value->kind == TYPE_FUNDAMENTAL &&
+       expected_value->name == "bool")
+      type = expected_value;
     // The condition of ?: is a value context.  Logical operators therefore
     // materialize their short-circuit result before selecting the arm; direct
     // statement conditions use EmitCondition and keep the branch-only form.

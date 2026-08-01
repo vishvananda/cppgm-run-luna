@@ -419,8 +419,10 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 					const string condition = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(
 						enable_if_parts[0], local));
 					PA19IntegralValue enabled;
-					if(!condition.empty() && const_cast<PA18TemplateExpander*>(this)->EvaluateIntegralText(
-						condition, context, local, &enabled) && enabled.known && PA19Raw(enabled) == 0)
+					const bool condition_known = !condition.empty() &&
+						const_cast<PA18TemplateExpander*>(this)->EvaluateIntegralText(
+							condition, context, local, &enabled);
+					if(condition_known && enabled.known && PA19Raw(enabled) == 0)
 						return false;
 				}
 			}
@@ -457,6 +459,26 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 					IsIdentifierCharacter(pattern[member_begin])) ++member_begin;
 				if(member_begin == member_end) continue;
 				const string member = pattern.substr(member_end, member_begin - member_end);
+				bool variable_template_member = false;
+				map<string, vector<string> >::const_iterator member_definitions =
+					definitions_by_name_.find(member);
+				if(member_definitions != definitions_by_name_.end())
+					for(size_t candidate_index = 0;
+						candidate_index < member_definitions->second.size(); ++candidate_index) {
+						map<string, TemplateDefinition>::const_iterator candidate = definitions_.find(
+							member_definitions->second[candidate_index]);
+						if(candidate != definitions_.end() && candidate->second.variable_template &&
+							candidate->second.member_template) {
+							variable_template_member = true;
+							break;
+						}
+					}
+				// A member variable template is an integral-expression substitution
+				// point, not a class-member type.  Its viability is checked by the
+				// enclosing enable_if expression; asking the type lookup here would
+				// reject a valid `Property::template value<T>` before that expression
+				// can be evaluated.
+				if(variable_template_member) continue;
 				string member_type;
 				set<string> active_members;
 				if(!FindClassMemberType(binding->second, member, local, context,

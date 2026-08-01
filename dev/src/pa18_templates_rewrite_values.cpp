@@ -85,6 +85,86 @@ bool PA18TemplateExpander::EvaluateVariableTemplateValue(
 	const map<string, string>& substitutions, PA19IntegralValue* result)
 {
 	if(!result) return false;
+	// A member variable-template-id has a qualified owner before its final
+	// template argument list (`Owner::template value<T>`).  The ordinary
+	// TemplateBase path sees only `value` and cannot select the enclosing
+	// member definition, so resolve that owner explicitly while the typed
+	// specialization identity is still available.
+	size_t leading_not = 0;
+	while(leading_not < raw.size() && raw[leading_not] == '!') ++leading_not;
+	const string value_expression = raw.substr(leading_not);
+	const size_t qualified_separator = value_expression.rfind("::");
+	if(qualified_separator != string::npos && qualified_separator + 2 < value_expression.size()) {
+		string owner = CanonicalSpelling(value_expression.substr(0, qualified_separator));
+		string member = CanonicalSpelling(value_expression.substr(qualified_separator + 2));
+		if(member.compare(0, 9, "template ") == 0)
+			member = CanonicalSpelling(member.substr(9));
+		const size_t member_open = member.find('<');
+		string member_base;
+		string member_arguments_text;
+		size_t member_begin = 0, member_close = string::npos;
+		if(member_open != string::npos && TemplateBase(member, member_open, &member_begin,
+			&member_base) && TemplateRange(member, member_open, &member_arguments_text,
+			&member_close) && member_close + 1 == member.size()) {
+			string owner_base = owner;
+			const size_t owner_open = owner_base.find('<');
+			if(owner_open != string::npos) owner_base.erase(owner_open);
+			map<string, string>::const_iterator generated_owner = specialization_bases_.find(
+				LastComponent(owner_base));
+			if(generated_owner != specialization_bases_.end()) owner_base = generated_owner->second;
+			const TemplateDefinition* member_definition = 0;
+			map<string, vector<string> >::const_iterator indexed = definitions_by_name_.find(member_base);
+			if(indexed != definitions_by_name_.end()) for(size_t i = 0;
+				i < indexed->second.size(); ++i) {
+				map<string, TemplateDefinition>::const_iterator candidate = definitions_.find(
+					indexed->second[i]);
+				if(candidate == definitions_.end() || !candidate->second.variable_template ||
+					!candidate->second.member_template) continue;
+				string candidate_owner = candidate->second.owner;
+				const size_t candidate_open = candidate_owner.find('<');
+				if(candidate_open != string::npos) candidate_owner.erase(candidate_open);
+				if(LastComponent(candidate_owner) == LastComponent(owner_base) ||
+					LastComponent(candidate_owner) == LastComponent(owner)) {
+					member_definition = &candidate->second;
+					break;
+				}
+			}
+			if(member_definition) {
+				vector<string> arguments;
+				const vector<string> source_arguments = SplitTemplateArguments(member_arguments_text);
+				for(size_t i = 0; i < source_arguments.size(); ++i) {
+					string argument = CanonicalSpelling(RemoveMarker(RewriteText(
+						source_arguments[i], context, substitutions, 0)));
+					arguments.push_back(CanonicalSpelling(ReplaceIdentifiers(argument, substitutions)));
+				}
+				if(arguments.size() == member_definition->parameters.size()) {
+					map<string, string> member_substitutions = substitutions;
+					try {
+						const string requested_owner = owner;
+						const string local_name = Instantiate(*member_definition, arguments, context,
+							false, 0, &member_substitutions, &requested_owner);
+						const string owner_prefix = JoinPath(owner, local_name);
+						map<string, PA19IntegralValue>::const_iterator value = constant_values_.find(owner_prefix);
+						if(value == constant_values_.end()) value = constant_values_.find(local_name);
+						if(value != constant_values_.end() && value->second.known) {
+							*result = leading_not % 2 ? PA19IntegralValue::Signed(
+								!PA19Raw(value->second), "bool", 1) : value->second;
+							return true;
+						}
+						for(map<string, PA19IntegralValue>::const_iterator it = constant_values_.begin();
+							it != constant_values_.end(); ++it)
+							if(it->first.size() >= local_name.size() &&
+								it->first.compare(it->first.size() - local_name.size(), local_name.size(), local_name) == 0 &&
+								it->second.known) {
+								*result = leading_not % 2 ? PA19IntegralValue::Signed(
+									!PA19Raw(it->second), "bool", 1) : it->second;
+								return true;
+							}
+					} catch(const PA18SubstitutionFailure&) {} catch(const logic_error&) {}
+				}
+			}
+		}
+	}
 	const size_t open = raw.find('<');
 	if(open == string::npos || raw.empty() || raw[raw.size() - 1] != '>') return false;
 	string base;

@@ -4602,3 +4602,134 @@ Bundle the 8 owner/declaration cases with the 3 typed expression/value cases.
 Then bundle the 6 deferred-result status cases, while keeping both timeout
 fixtures as a separate fixed-point group and preserving the 2100/2100,
 377/396, and file-audit gates.
+
+## Checkpoint 35 scope — 2026-08-01 (before implementation)
+
+### Current PA23 failure inventory and Remaining Work Map
+
+The live required report is **377/396**.  The complete current-PA failure set
+is **19 fixtures**: 11 LowIR comparisons, 6 ordinary exit-status failures,
+and 2 timeouts.  The complete set is grouped by shared compiler behavior:
+
+- **Typed expression/value lowering (4 comparisons):**
+  `general/100-current-specialization-member-body-cast-compare.t` has a
+  conditional result and right shift whose declared signedness is lost;
+  `general/300-dependent-bool-base-trait-type-argument.t` emits unused
+  generated constructors while replaying a dependent bool trait base;
+  `general/400-member-variable-template-leaf-sfinae.t` materializes the
+  primary value instead of the viable member-variable-template
+  specialization; and
+  `general/400-nonmember-template-compound-assignment-const-lhs.t` loses the
+  typed character argument while lowering the const-lvalue operator call.
+- **Owner/declaration/materialization identity (7 comparisons):**
+  `general/100-local-qualified-argument-replay.t`,
+  `general/200-adl-explicit-template-id-call.t`,
+  `general/300-current-specialization-constructor-template-canonical-owner.t`,
+  `general/400-out-of-class-partial-member-template-owner-parameter-alias.t`,
+  `spec/100-out-of-class-conversion-operator-definition.t`,
+  `spec/400-defaulted-nested-class-argument-partial-specialization.t`, and
+  `spec/400-defaulted-template-arg-partial-base-completion.t` retain the
+  selected semantics but lose typed owner, declaration-order, object, or
+  generated-body identity during LowIR collection.
+- **Deferred result/member replay (6 status failures):**
+  `general/400-member-template-result-pack-preserves-nested-function-pointer-owner.t`,
+  `general/500-dependent-function-type-pack-expansion-ctor-init.t`,
+  `general/500-dependent-qualified-member-template-result-bool.t`,
+  `general/500-mp11-append-alias-template-sfinae.t`,
+  `general/500-recursive-qualified-member-template-bool-arg.t`, and
+  `general/500-reentrant-static-query-callable-enable-if-cache.t` still fail
+  before successful LowIR materialization because dependent result, alias,
+  pack, or cached-query state is not replayed as one typed candidate.
+- **Fixed-point query identity (2 timeouts):**
+  `general/400-dependent-default-nontype-argument-eval.t` and
+  `general/500-reentrant-static-query-enable-if-partial.t` still re-enter
+  dependent specialization selection without a stable typed query identity.
+
+### Checkpoint Scope
+
+Complete the typed expression/value lowering group as one semantic increment:
+
+1. Keep the declared scalar type and signed shift operation for conditional
+   expressions in instantiated member bodies, rather than adopting the
+   destination object's type during lowering.
+2. Preserve dependent bool trait/base arguments through specialization replay
+   and suppress unneeded generated constructor/member bodies when the selected
+   type is only a type argument.
+3. Select and evaluate a viable member-variable-template specialization in
+   the same typed value path used by its enclosing SFINAE trait.
+4. Preserve a character literal's typed value through a const-lvalue
+   nonmember compound-assignment call and its temporary reference slot.
+
+Validate all four scoped fixtures, then rerun the full PA23 report, the
+through-PA22 report, and the PA23 file audit.  The next checkpoint will take
+the seven owner/declaration comparisons, followed by the six deferred-result
+status cases; both timeout fixtures remain fixed-point regressions.
+## Checkpoint 35 result — 2026-08-01
+
+The typed expression/value checkpoint is complete.  The implementation now
+preserves character-literal spelling through template replay, keeps the
+natural conditional-expression type when lowering into a destination, uses
+the common unsigned type for right shifts, and evaluates qualified member
+variable-template values before class-partial-specialization matching.  The
+last change also prevents dependent member variable templates from being
+mistaken for member types during the substitution check.  The four scoped
+fixtures pass:
+
+- `general/100-current-specialization-member-body-cast-compare.t`
+- `general/400-member-variable-template-leaf-sfinae.t`
+- `general/400-nonmember-template-compound-assignment-const-lhs.t`
+- `general/300-dependent-bool-base-trait-type-argument.t`
+
+The full current-PA report was **380 / 396** before the final dependent-base
+materialization adjustment.  The remaining work map at that point was:
+
+- Owner/declaration replay comparisons: local qualified argument replay,
+  ADL explicit template-id calls, current-specialization constructor owner,
+  out-of-class partial member-template owner aliases, out-of-class conversion
+  operators, and the two defaulted nested/base partial-specialization cases.
+- Deferred member/function-template replay: one nested function-pointer pack
+  status failure, dependent function-type pack constructor initialization,
+  dependent qualified member-template result values, MP11 append alias SFINAE,
+  recursive qualified member-template bool arguments, and the reentrant static
+  query callable cache.
+- Fixed-point query evaluation: dependent default non-type evaluation and the
+  reentrant static-query partial both still time out.
+
+## Checkpoint 36 result — dependent base materialization
+
+The first owner/materialization subcase is complete.  During constructor
+replay for `general/300-dependent-bool-base-trait-type-argument.t`, a request
+for a base ABI entry was also marking the primary template constructor as
+needed.  That produced unrelated generated constructors and changed the
+LowIR object graph.  The base-entry path now materializes only the requested
+entry, while the complete-object path retains its normal constructor demand.
+The fixture passes, and the full PA23 report is **381 / 396**, improving the
+turn-start baseline of 377 / 396 by four tests overall.
+
+The remaining comparison portion is now seven owner/declaration cases:
+
+- `general/100-local-qualified-argument-replay.t`
+- `general/200-adl-explicit-template-id-call.t`
+- `general/300-current-specialization-constructor-template-canonical-owner.t`
+- `general/400-out-of-class-partial-member-template-owner-parameter-alias.t`
+- `spec/100-out-of-class-conversion-operator-definition.t`
+- `spec/400-defaulted-nested-class-argument-partial-specialization.t`
+- `spec/400-defaulted-template-arg-partial-base-completion.t`
+
+The six deferred-result status failures and two fixed-point timeouts are
+unchanged.  The next checkpoint is the seven-case owner/declaration group;
+the smallest initial diagnostic subgroup is the two cases whose differences
+are limited to function or temporary naming, followed by the generated-body
+and local-static materialization cases.
+
+### Checkpoint validation
+
+- Scoped typed/value fixtures: **4 / 4**.
+- Required through-PA22 report: **2100 / 2100**.
+- Full PA23 report: **381 / 396** (15 remaining: 7 comparisons, 6 status
+  failures, and 2 timeouts).
+- PA23 source audit: passed with the repository's existing warnings.
+
+This is the completed turn scope.  The next implementation group is the
+seven owner/declaration comparisons; no deferred-result or timeout behavior
+was changed in this checkpoint.

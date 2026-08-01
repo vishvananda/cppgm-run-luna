@@ -280,9 +280,14 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
       return true;
     }
     if(record && base_entry) {
+      // A template specialization with a direct base can be entered solely
+      // through that base ABI entry.  Keep the complete-object entry demand
+      // for ordinary/defaultable bases, but do not create it while replaying
+      // an implicit direct-base chain.
       if(raw_arguments.empty() && IsEmptyBaseStorage(object_type) &&
          !object_type->polymorphic && !record->member_template &&
-         HasUserProvidedConstructor(object_type))
+         HasUserProvidedConstructor(object_type) &&
+         (!record->template_instantiation || !object_type->direct_base))
         record->needed = true;
       const TypePtr first_parameter = record->source_type && !record->source_type->parameters.empty() ? record->source_type->parameters[0] : TypePtr();
       const bool inherited_constructor_wrapper = state_ && state_->record &&
@@ -294,6 +299,9 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
          (!raw_arguments.empty() || out_of_class_template_constructor) &&
          (record->value_special_member || !type_is_reference(first_parameter) ||
           raw_arguments.size() > 1) && !inherited_constructor_wrapper &&
+         // An explicit constructor invoked only as a base does not require a
+         // separate complete-object replay entry.
+         !record->explicit_constructor &&
           // A member-template replay already has a typed base-entry call;
           // retaining the primary C1 entry here creates an unused duplicate.
           !replayed_member_template)

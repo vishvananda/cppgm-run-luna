@@ -316,11 +316,13 @@ string canonical_literal(const string& raw, TypePtr* type_out,
     return raw;
   }
   if(raw[prefix] == '\'') {
-    bool okay = false;
-    const long long value = parse_integer_literal(raw.substr(prefix), &okay);
-    if(type_out) *type_out = Fundamental(prefix == 1 && raw[0] == 'u' ? "char16_t" :
-      prefix == 1 && raw[0] == 'U' ? "char32_t" :
-      prefix == 1 && raw[0] == 'L' ? "wchar_t" : "char");
+    PA19IntegralValue decoded;
+    const bool okay = PA19DecodeCharacter(raw, &decoded);
+    const long long value = okay ? PA19Signed(decoded) : 0;
+    if(type_out) *type_out = Fundamental(okay ? decoded.type.name :
+      (prefix == 1 && raw[0] == 'u' ? "char16_t" :
+       prefix == 1 && raw[0] == 'U' ? "char32_t" :
+       prefix == 1 && raw[0] == 'L' ? "wchar_t" : "char"));
     if(constant) *constant = value;
     if(known) *known = okay;
     return integer_text(value);
