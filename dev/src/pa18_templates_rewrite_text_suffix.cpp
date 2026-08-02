@@ -13,6 +13,32 @@ string PA18TemplateExpander::RewriteTextMemberSuffix(
 	map<string, string> final_substitutions = substitutions;
 	ProtectMaterializedSubstitutions(source_spelling, raw, context, substitutions,
 		materialized_member_type, &final_substitutions);
+	// A dependent replay can carry an empty binding for a name that is also
+	// used as a concrete class-template head (`next<call<...>>`).  Replacing
+	// that head before member-suffix handling turns the nested template-id into
+	// an invalid `<...>` argument.  Preserve real class templates while leaving
+	// actual template parameters subject to their typed bindings.
+	for(size_t token_at = 0; token_at < source_spelling.size();) {
+		if(!IsIdentifierCharacter(source_spelling[token_at])) {
+			++token_at;
+			continue;
+		}
+		const size_t token_begin = token_at;
+		while(token_at < source_spelling.size() &&
+			IsIdentifierCharacter(source_spelling[token_at])) ++token_at;
+		const string token = source_spelling.substr(token_begin, token_at - token_begin);
+		map<string, string>::const_iterator binding = substitutions.find(token);
+		if(binding == substitutions.end() || !binding->second.empty() ||
+			template_parameter_names_.find(token) != template_parameter_names_.end()) continue;
+		size_t after_token = token_at;
+		while(after_token < source_spelling.size() && isspace(
+			static_cast<unsigned char>(source_spelling[after_token]))) ++after_token;
+		if(after_token < source_spelling.size() && source_spelling[after_token] == '<') {
+			const TemplateDefinition* source_definition = FindDefinition(token, context);
+			if(source_definition && source_definition->class_template)
+				final_substitutions.erase(token);
+		}
+	}
 	raw = ReplaceIdentifiersPreservingPackSizes(raw, final_substitutions);
 	// A concrete generated owner can appear without its source template-id after
 	// an earlier member substitution (`list2<...>::child0` -> `expr_X::member`).

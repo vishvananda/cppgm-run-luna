@@ -18,8 +18,29 @@ void PA18TemplateExpander::RecordTypedefSubstitutions(
 		if(alias_name.empty()) continue;
 		const string raw_type = DeclaratorTypeSpelling(
 			NodeTypeSpelling(original_child->children[0]), item->children[0]);
+		bool defer_type_only = raw_type.find('(') != string::npos;
+		for(size_t template_open = raw_type.find('<');
+			template_open != string::npos && !defer_type_only;
+			template_open = raw_type.find('<', template_open + 1)) {
+			string template_base;
+			size_t template_begin = 0;
+			if(!TemplateBase(raw_type, template_open, &template_begin, &template_base)) continue;
+			const TemplateDefinition* definition = FindDefinition(template_base, child_context);
+			if(!definition || !definition->class_template) continue;
+			for(size_t node = 0; node < definition->dependent_member_type_nodes.size() &&
+				!defer_type_only; ++node) {
+				const string dependent = CanonicalSpelling(RemoveMarker(
+					definition->dependent_member_type_nodes[node]->value));
+				if(dependent.find(definition->name) == string::npos ||
+					dependent.find_first_of("+-*/%()[]&|!") == string::npos) continue;
+				defer_type_only = true;
+			}
+		}
+		// Function types and self-recursive non-type expressions are type-only
+		// replay boundaries.  Other typedefs must still materialize their class
+		// definitions so dependent aliases such as allocator rebind can resolve.
 		const string rewritten_type = RewriteText(raw_type, child_context,
-			*local_substitutions, 0);
+			*local_substitutions, 0, true, true, defer_type_only);
 		if(raw_type.empty() || rewritten_type.empty()) continue;
 		string materialized_type = rewritten_type;
 		// Preserve evaluated bounds when a local typedef is used through a type-id.

@@ -227,6 +227,7 @@ void PA18TemplateExpander::EnsureForwardClass(const string& spelling,
 
 bool LooksLikeRelationalLessThan(const string& raw, size_t position)
 {
+	if(position >= raw.size()) return false;
 	int enclosing_parentheses = 0;
 	for(size_t i = 0; i < position; ++i) {
 		if(raw[i] == '(') ++enclosing_parentheses;

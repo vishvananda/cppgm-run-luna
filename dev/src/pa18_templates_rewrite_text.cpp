@@ -1,6 +1,5 @@
 #include "pa18_templates_collection.h"
 #include "pa18_templates_rewrite.h"
-
 using namespace std;
 namespace pa18_templates_internal {
 namespace {
@@ -311,11 +310,10 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			base, context, substitutions, template_replaced, &search)) continue;
 		if(RewriteOwnerBoundNestedSpecialization(&raw, begin, close, base,
 			current_arguments, context, substitutions, template_replaced, &search)) continue;
-		if(RewriteUnqualifiedGeneratedSpecialization(&raw, begin, close, base,
-			current_arguments, context, substitutions, template_replaced, &search)) continue;
+		const unsigned deferred_facts = DeferredTemplateFacts(FindDefinition(base, context), current_arguments, defer_class_definition);
+		if(!(deferred_facts & 1u) && !(deferred_facts & 2u) && !(deferred_facts & 4u) && RewriteUnqualifiedGeneratedSpecialization(&raw, begin, close, base, current_arguments, context, substitutions, template_replaced, &search)) continue;
 		if(RewriteQualifiedGeneratedNestedSpecialization(&raw, begin, close, base,
 			current_arguments, context, substitutions, template_replaced, &search)) continue;
-
 		map<string, string>::const_iterator current_substitution =
 			substitutions.find(base);
 		string current_name = current_substitution == substitutions.end() ? string() :
@@ -1011,10 +1009,13 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 							ResolveAlias(source_argument, context).back() == '&')
 						args[i] = source_argument;
 					}
-				if(deferred_pack_argument) { search = close + 1;
-					continue;
-				}
-				const size_t supplied_template_arguments = args.size();
+			if(deferred_pack_argument) { search = close + 1;
+				continue;
+			}
+			if(RewriteDeferredTemplate(&raw, begin, close, base, lookup_base, args,
+				raw_template_args, context, substitutions, definition->class_template,
+				deferred_facts, defer_class_definition, template_replaced, &search)) continue;
+			const size_t supplied_template_arguments = args.size();
 				bool default_substitution_failure = false;
 				if(args.size() < definition->parameters.size()) {
 				map<string, string> default_substitutions = substitutions;
