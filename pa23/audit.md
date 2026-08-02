@@ -1984,3 +1984,113 @@ Bundle the 8 owner/declaration comparisons with the 3 typed expression/value
 comparisons. Once owner identity is stable, take the 6 deferred-result status
 cases together; keep the 2 fixed-point timeout witnesses as a separate
 bounded semantic group and retain all 19 fixtures as regression gates.
+
+## Checkpoint 45 audit — 2026-08-02
+
+### Scope Reviewed
+
+- The latest `Checkpoint 44 scope` and `Checkpoint 45 result` in
+  [pa23/plan.md](plan.md), the assignment contract in
+  [pa23/README.md](README.md), and the repository rules in
+  [TESTING_AND_REFERENCES.md](../TESTING_AND_REFERENCES.md).
+- Recent checkpoint commits `369a2db`, `682e113`, `96f41aa`, `1e8408`, and
+  `82d3695`, plus the current PA18 collection, replay-state, selection,
+  instantiation, member, emission, and text-suffix changes under `dev/src`.
+- The complete seven-case status scope and three LowIR comparisons from the
+  latest plan, the focused source-base/nested-owner witnesses, the full
+  current-PA report, the required through-PA22 report, the file audit, and
+  `/home/vishvananda/work/.ralph/luna-gpt-5.6-luna-ultra/last-test.log`.
+
+### Findings
+
+- The checkpoint remains on the required compiler pipeline: parser and AST
+  collection, typed semantic lookup/deduction/substitution and replay, PA14
+  lowering, and LowIR emission.  There is no skipped phase, dummy or embedded
+  output, interpreter/VM/trampoline substitute, reference-binary or host
+  compiler invocation, source/test-specific acceptance gate, or unchecked
+  output path.
+- Source-base and nested-owner completion is bounded to a typed nested class
+  template with no own template parameters and only the member/expressions
+  needed for lookup.  The typedef guard prevents construction of a typedef or
+  a recursive nominal chain, direct function-type arguments stay out of class
+  template selection, and templated nested arguments are not eagerly
+  materialized as a general fallback.
+- The audit found and removed a stringly recursive-selection fallback.  A
+  recursive selection now raises the typed
+  `PA18RecursiveClassTemplateSelection` substitution failure from replay state;
+  `FindClassDeclaration` no longer catches an error message and silently
+  returns the primary declaration.  This keeps recursion failure in semantic
+  selection rather than turning it into a success path.
+- The audit found avoidable registry work in the changed replay paths.  Alias
+  suffix recovery now uses `type_aliases_by_name_` and the canonical alias
+  registry; generated declaration-suffix detection uses
+  `class_paths_by_name_`; and concrete-owner resolution uses that same index
+  instead of scanning every class context for each candidate.  Successful
+  materialized owners are retained in locals, removing duplicate index
+  lookups.  These changes preserve typed ownership and avoid quadratic
+  registry/context walks and hot-path recomputation.
+- No LowIR text is reparsed to recover semantic facts.  Source spelling is
+  used only for bounded name/range location; ownership, specialization bases,
+  aliases, parameter kinds, and substitution failures remain represented by
+  typed registries and state.  No timeout cap, retry, sleep, or timeout-only
+  acceptance workaround was added; the one current timeout remains a genuine
+  reentrant semantic failure in the next implementation map.
+- The file audit passes with the same 12 non-fatal advisory warnings and no
+  fatal size, hidden-fragment, or unchecked-path finding.  No tests, `.ref`
+  files, harnesses, checker rules, or reference outputs were changed.
+- The audit turn began at 388 / 396 and ended at 388 / 396.  The earlier
+  assignments remain clean at 2100 / 2100 through PA22, so the checkpoint is
+  regression-safe and ready for the next eight-fixture group.
+
+### Changes Made
+
+- Moved substitution-failure ownership into
+  `dev/src/pa18_templates_replay_state.h`, added the typed recursive-selection
+  failure, and removed the message-based catch/fallback from
+  `dev/src/pa18_templates_rewrite.h` and
+  `dev/src/pa18_templates_rewrite_selection.cpp`.
+- Replaced full alias-registry and class-declaration scans with existing
+  name/path indexes in `dev/src/pa18_templates_rewrite_text_suffix.cpp`,
+  `dev/src/pa18_templates_rewrite_members.cpp`, and
+  `dev/src/pa18_templates_rewrite_emit.cpp`.
+- Indexed concrete-owner materialization and removed duplicate successful
+  lookups in `dev/src/pa18_templates_rewrite_instantiate.cpp`.
+- Refreshed this audit and the concise plan map only; no test or reference
+  fixture was modified.
+
+### Validation
+
+- `make build` — **PASS**.
+- `make test-report ACTIVE_TEST_REPORT_PAS='pa23'` — **388 / 396**; the
+  complete residual set is five status failures, one timeout, and three LowIR
+  comparisons, with no new failure.
+- Required prior-through command (`n=23; ... make
+  test-report-through-pa22`) — **PASS, 2100 / 2100**.
+- `perl scripts/cppgm_file_audit.pl --stage pa23 --paths dev/src` — **PASS**,
+  with 12 advisory warnings and no fatal finding.
+- `git diff --check` — **PASS**.  The largest changed-path files remain within
+  the file-audit limits, including `pa18_templates_rewrite_instantiate.cpp`
+  at 1496 lines.
+
+### Remaining Work Map
+
+- **Qualified dependent-result replay — 2 status failures:**
+  `general/500-dependent-qualified-member-template-result-bool.t` and
+  `general/500-recursive-qualified-member-template-bool-arg.t`.
+- **Alias-template SFINAE — 1 status failure:**
+  `general/500-mp11-append-alias-template-sfinae.t`.
+- **Reentrant static-query selection/cache — 2 cases:**
+  `general/500-reentrant-static-query-callable-enable-if-cache.t` and
+  `general/500-reentrant-static-query-enable-if-partial.t` (timeout).
+- **LowIR owner/declaration comparisons — 3 cases:**
+  `spec/100-out-of-class-conversion-operator-definition.t`,
+  `spec/400-defaulted-nested-class-argument-partial-specialization.t`, and
+  `spec/400-defaulted-template-arg-partial-base-completion.t`.
+
+### Next Substantial Checkpoint Group
+
+Bundle these five status cases and three LowIR comparisons as one eight-fixture
+checkpoint group.  Begin with the shared typed result/query identity boundary
+in the two qualified-result cases, then validate the declaration-owner
+emission comparisons; keep the timeout as a regression gate and do not add a
+timing-based acceptance path.

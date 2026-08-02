@@ -12,7 +12,6 @@
 #include <utility>
 #include "pa18_templates_replay_state.h"
 using namespace std; namespace pa18_templates_internal {
-class PA18SubstitutionFailure : public logic_error { public: explicit PA18SubstitutionFailure(const string& message) : logic_error(message) {} };
 inline bool IsIdentifierCharacter(char ch) {
 	return isalnum(static_cast<unsigned char>(ch)) || ch == '_';
 }

@@ -1442,24 +1442,20 @@ string PA18TemplateExpander::FindConcreteInstantiationOwner(
 	const auto materialized_context = [&](const string& candidate) {
 		if(candidate.empty()) return string();
 		if(class_contexts_.find(candidate) != class_contexts_.end()) return candidate;
-		for(set<string>::const_iterator it = class_contexts_.begin();
-			it != class_contexts_.end(); ++it) {
-		if(LastComponent(*it) != LastComponent(candidate)) continue; const string prefix = PrefixComponent(*it);
+		map<string, vector<string> >::const_iterator indexed = class_paths_by_name_.find(LastComponent(candidate));
+		if(indexed == class_paths_by_name_.end()) return string();
 		map<string, string>::const_iterator generated_base = specialization_bases_.find(LastComponent(candidate));
 		const string generated_source_namespace = generated_base == specialization_bases_.end() ? string() : PrefixComponent(generated_base->second.substr(0, generated_base->second.find('<')));
-		if(prefix == source_namespace || prefix == context_namespace || (!generated_source_namespace.empty() && prefix == generated_source_namespace))
-				return *it;
+		for(size_t i = 0; i < indexed->second.size(); ++i) {
+			const string& materialized = indexed->second[i]; const string prefix = PrefixComponent(materialized);
+			if(prefix == source_namespace || prefix == context_namespace || (!generated_source_namespace.empty() && prefix == generated_source_namespace)) return materialized;
 		}
 		return string(); };
 	string concrete_owner;
 	const string source_owner_name = LastComponent(definition.owner);
 	for(map<string, string>::const_iterator substitution = substitutions.begin();
 		substitution != substitutions.end(); ++substitution)
-		if(substitution->first == source_owner_name &&
-			!materialized_context(substitution->second).empty()) {
-			concrete_owner = materialized_context(substitution->second);
-			break;
-		}
+		if(substitution->first == source_owner_name) { const string materialized = materialized_context(substitution->second); if(!materialized.empty()) { concrete_owner = materialized; break; } }
 	if(!concrete_owner.empty()) return concrete_owner;
 	if(ConcreteOwnerMatches(definition, requested_owner)) {
 		concrete_owner = materialized_context(requested_owner);
@@ -1482,8 +1478,9 @@ string PA18TemplateExpander::FindConcreteInstantiationOwner(
 			specialization_arguments_.find(candidate);
 		if(base == specialization_bases_.end() || arguments == specialization_arguments_.end() ||
 			LastComponent(base->second) != LastComponent(owner_base) ||
-			arguments->second.size() != owner_arguments.size() ||
-			materialized_context(candidate).empty()) continue;
+			arguments->second.size() != owner_arguments.size()) continue;
+		const string materialized = materialized_context(candidate);
+		if(materialized.empty()) continue;
 		bool same = true;
 		for(size_t argument = 0; argument < owner_arguments.size(); ++argument) {
 			const string expected = NormalizeTypeArgument(ResolveAlias(
@@ -1493,7 +1490,7 @@ string PA18TemplateExpander::FindConcreteInstantiationOwner(
 				break;
 			}
 		}
-		if(same) return materialized_context(candidate);
+		if(same) return materialized;
 	}
 	return string(); }
 

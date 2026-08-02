@@ -5030,7 +5030,39 @@ Remaining Work Map (8 fixtures):
   `spec/400-defaulted-template-arg-partial-base-completion.t` still differ in
   declaration/owner emission metadata.
 
-Next checkpoint: take the five dependent-result/reentrant status cases as the
-next shared typed replay group, beginning with the two qualified result/bool
-fixtures; keep the three LowIR comparisons as a separate declaration-emission
-group.
+The checkpoint audit below refreshes the next group after validation.
+
+## Checkpoint 45 audit result — 2026-08-02
+
+The checkpoint audit preserved the full current-PA result at **388 / 396**:
+the pre-audit Checkpoint 45 increment was **386 / 396**, and the turn-start
+report was already **388 / 396**.  The audit fixes removed broad class-context
+and alias-registry scans, eliminated duplicate owner-index lookups, and made
+recursive class-template selection failure typed; they did not change the
+checked-in failure set or introduce a timeout path.  Required validation is
+the full PA23 report, the through-PA22 report at **2100 / 2100**, and a
+passing PA23 file audit with warnings only.
+
+Remaining Work Map (8 fixtures):
+
+- **Qualified dependent-result replay — 2 status failures:**
+  `general/500-dependent-qualified-member-template-result-bool.t` and
+  `general/500-recursive-qualified-member-template-bool-arg.t`.
+- **Alias-template SFINAE — 1 status failure:**
+  `general/500-mp11-append-alias-template-sfinae.t`.
+- **Reentrant static-query selection/cache — 2 cases:**
+  `general/500-reentrant-static-query-callable-enable-if-cache.t` and
+  `general/500-reentrant-static-query-enable-if-partial.t` (timeout).
+- **LowIR owner/declaration comparisons — 3 cases:**
+  `spec/100-out-of-class-conversion-operator-definition.t`,
+  `spec/400-defaulted-nested-class-argument-partial-specialization.t`, and
+  `spec/400-defaulted-template-arg-partial-base-completion.t`.
+
+### Next Substantial Checkpoint Group
+
+Bundle the five dependent-result/reentrant status cases with the three
+owner/declaration LowIR comparisons into one eight-fixture checkpoint group.
+Start with the shared typed result/query identity boundary exposed by the two
+qualified-result cases, then validate declaration-owner emission against the
+three comparisons; retain the timeout as a termination regression gate rather
+than adding any timing-based acceptance path.

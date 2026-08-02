@@ -174,7 +174,7 @@ const TemplateDefinition* PA18TemplateExpander::SelectClassTemplateDefinition(
 		for(size_t argument = 0; argument < normalized_arguments.size(); ++argument)
 			selection_family += "|" + normalized_arguments[argument];
 		if(!active_class_template_selection_families_.insert(selection_family).second)
-			throw PA18SubstitutionFailure("recursive class template selection");
+			throw PA18RecursiveClassTemplateSelection();
 		struct SelectionFamilyScope {
 			set<string>* active;
 			string key;

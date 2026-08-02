@@ -387,8 +387,7 @@ bool PA18TemplateExpander::HasUnavailableGeneratedMemberType(string raw,
 		class_declarations_.find(raw) != class_declarations_.end()) {
 		return false;
 	}
-	const string generated_suffix = "::" + raw;
-	for(map<string, CPPGMAstNodePtr>::const_iterator declaration = class_declarations_.begin(); declaration != class_declarations_.end(); ++declaration) if(declaration->first.size() > raw.size() && declaration->first.compare(declaration->first.size() - raw.size(), raw.size(), raw) == 0 && declaration->first.compare(declaration->first.size() - generated_suffix.size(), generated_suffix.size(), generated_suffix) == 0) return false;
+	if(HasIndexedClassDeclarationSuffix(raw)) return false;
 	const string nested_entity = JoinPath(owner, member);
 	if(class_contexts_.find(nested_entity) != class_contexts_.end() ||
 		class_declarations_.find(nested_entity) != class_declarations_.end()) {

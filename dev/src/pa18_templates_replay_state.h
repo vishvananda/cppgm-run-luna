@@ -1,10 +1,25 @@
 #pragma once
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace pa18_templates_internal {
 
 struct TemplateDefinition;
+
+class PA18SubstitutionFailure : public std::logic_error
+{
+public:
+	explicit PA18SubstitutionFailure(const std::string& message) :
+		std::logic_error(message) {}
+};
+
+class PA18RecursiveClassTemplateSelection : public PA18SubstitutionFailure
+{
+public:
+	PA18RecursiveClassTemplateSelection() :
+		PA18SubstitutionFailure("recursive class template selection") {}
+};
 
 struct ConcreteOwnerContext
 {

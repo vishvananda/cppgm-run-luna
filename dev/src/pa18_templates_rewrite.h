@@ -97,8 +97,8 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 				const string argument_text = raw_class.substr(template_open + 1,
 					raw_class.size() - template_open - 2);
 				const vector<string> arguments = SplitTemplateArguments(argument_text);
-			const TemplateDefinition* selected = 0;
-			try { selected = SelectClassTemplateDefinition(template_definition, arguments, context); } catch(const PA18SubstitutionFailure& failure) { if(string(failure.what()) != "recursive class template selection") throw; selected = template_definition; }
+			const TemplateDefinition* selected = SelectClassTemplateDefinition(
+				template_definition, arguments, context);
 			return selected ? selected->declaration : template_definition->declaration; }
 		}
 		map<string, string>::const_iterator specialization = specialization_bases_.find(
@@ -129,7 +129,7 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 	}
 	bool FindClassMemberType(const string& raw_class, const string& member,
 		const map<string, string>& substitutions, const string& context,
-		string* result, set<string>* active, bool aliases_only = false) const;
+		string* result, set<string>* active, bool aliases_only = false) const; bool HasIndexedClassDeclarationSuffix(const string& raw) const;
 	bool FindVariableTemplateMemberType(const string& raw_class, const string& member,
 		const map<string, string>& substitutions, const string& context,
 		string* result);

@@ -269,6 +269,19 @@ bool PA18TemplateExpander::RewriteResolvedTemplateMember(string* raw, size_t beg
 	return true;
 }
 
+bool PA18TemplateExpander::HasIndexedClassDeclarationSuffix(const string& raw) const
+{
+	const string suffix = "::" + raw;
+	const map<string, vector<string> >::const_iterator indexed =
+		class_paths_by_name_.find(LastComponent(raw));
+	if(indexed == class_paths_by_name_.end()) return false;
+	for(size_t path = 0; path < indexed->second.size(); ++path)
+		if(indexed->second[path].size() > suffix.size() &&
+			indexed->second[path].compare(indexed->second[path].size() - suffix.size(),
+				suffix.size(), suffix) == 0) return true;
+	return false;
+}
+
 bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const string& member,
 	const map<string, string>& substitutions, const string& context,
 	string* result, set<string>* active, bool aliases_only) const

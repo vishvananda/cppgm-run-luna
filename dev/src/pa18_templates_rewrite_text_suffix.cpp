@@ -94,20 +94,33 @@ string PA18TemplateExpander::RewriteTextMemberSuffix(
 		// (`drop_front_3_::apply_...`), so recover that exact typed alias by suffix
 		// before falling back to the source family, whose target still contains the
 		// local dependent name `next`.
-		bool indexed_owner_alias = false;
 		const string indexed_alias_key = owner + "::" + member_name;
 		const string indexed_alias_suffix = "::" + indexed_alias_key;
-		for(map<string, string>::const_iterator indexed = type_aliases_.begin();
-			indexed != type_aliases_.end(); ++indexed) {
-			const bool exact = indexed->first == indexed_alias_key;
-			const bool suffix = indexed->first.size() > indexed_alias_suffix.size() &&
-				indexed->first.compare(indexed->first.size() - indexed_alias_suffix.size(),
-					indexed_alias_suffix.size(), indexed_alias_suffix) == 0;
-			if(!exact && !suffix) continue;
-			member_type = CanonicalSpelling(ReplaceIdentifiers(indexed->second, substitutions));
-			indexed_owner_alias = !member_type.empty();
-			if(indexed_owner_alias) break;
+		string indexed_alias;
+		const map<string, vector<string> >::const_iterator aliases =
+			type_aliases_by_name_.find(member_name);
+		if(aliases != type_aliases_by_name_.end()) {
+			for(size_t candidate = 0; candidate < aliases->second.size(); ++candidate)
+				if(aliases->second[candidate] == indexed_alias_key) {
+					indexed_alias = indexed_alias_key;
+					break;
+				}
+			if(indexed_alias.empty()) for(size_t candidate = 0;
+				candidate < aliases->second.size(); ++candidate) {
+				const string& path = aliases->second[candidate];
+				if(path.size() <= indexed_alias_suffix.size() ||
+					path.compare(path.size() - indexed_alias_suffix.size(),
+						indexed_alias_suffix.size(), indexed_alias_suffix) != 0) continue;
+				if(indexed_alias.empty() || path < indexed_alias) indexed_alias = path;
+			}
 		}
+		if(!indexed_alias.empty()) {
+			const map<string, string>::const_iterator indexed = type_aliases_.find(indexed_alias);
+			if(indexed != type_aliases_.end())
+				member_type = CanonicalSpelling(ReplaceIdentifiers(indexed->second,
+					substitutions));
+		}
+		const bool indexed_owner_alias = !member_type.empty();
 		// The generated owner can have been formed by a prior scalar pass over a
 		// nested dependent type (`vector<Property>` becoming `vector<unsigned
 		// long>`).  Keep the concrete lookup first: it carries the already
