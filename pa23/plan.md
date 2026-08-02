@@ -5066,3 +5066,92 @@ Start with the shared typed result/query identity boundary exposed by the two
 qualified-result cases, then validate declaration-owner emission against the
 three comparisons; retain the timeout as a termination regression gate rather
 than adding any timing-based acceptance path.
+
+## Checkpoint 46 scope — 2026-08-02 (before implementation)
+
+### Current failure baseline and Remaining Work Map
+
+The current required PA23 report is **388/396**; PA1 through PA22 pass.  The
+complete eight-fixture failure set is grouped by shared behavior:
+
+- **Qualified dependent-result replay (2 status failures):**
+  `general/500-dependent-qualified-member-template-result-bool.t` and
+  `general/500-recursive-qualified-member-template-bool-arg.t` lose the
+  concrete nested owner/result type while recursively replaying a member
+  template.
+- **Candidate-local alias-template SFINAE (1 status failure):**
+  `general/500-mp11-append-alias-template-sfinae.t` promotes an invalid
+  dependent alias substitution instead of discarding the candidate.
+- **Reentrant static-query identity/cache (2 cases):**
+  `general/500-reentrant-static-query-callable-enable-if-cache.t` fails while
+  reusing a dependent result query, and
+  `general/500-reentrant-static-query-enable-if-partial.t` still times out
+  during recursive partial-specialization selection.
+- **Owner/declaration LowIR materialization (3 comparisons):**
+  `spec/100-out-of-class-conversion-operator-definition.t` emits an extra
+  conversion call, `spec/400-defaulted-nested-class-argument-partial-specialization.t`
+  disagrees on defaulted argument storage, generated body demand, and emitted
+  declaration identity, and
+  `spec/400-defaulted-template-arg-partial-base-completion.t` reverses two
+  generated call identities.
+
+### Checkpoint Scope
+
+Complete the shared typed replay boundary for all eight remaining fixtures:
+carry the concrete owner and result type through nested member-template
+replay, keep alias-template substitution candidate-local, and give recursive
+static-query/partial-selection requests a stable semantic identity with a
+typed unresolved/failure state.  Then preserve that identity through LowIR
+owner/declaration materialization so conversion copy-initialization and
+defaulted nested-class/base completion select the existing generated
+declarations and call order.  No timeout-based acceptance or fixture-specific
+special case is in scope.
+
+Validation for this checkpoint is the eight named fixtures, the complete
+`make test-report ACTIVE_TEST_REPORT_PAS='pa23'` report, the required
+through-PA22 report, the PA23 source file audit, and a clean committed
+worktree.  If an implementation boundary leaves a comparison-only case
+independent, record it explicitly in the result rather than weakening the
+semantic replay behavior.
+
+## Checkpoint 46 result — 2026-08-02
+
+The completed increment was narrowed to the candidate-local alias-template
+SFINAE group and its shared class-partial-ordering boundary.
+`ClassPartialMoreSpecialized` now distinguishes a concrete class-template
+head from a template-template head, while recognizing the repeated
+template-template-head shape used when the constrained candidate must outrank
+an unconstrained type candidate.  Unrelated structured-vs-bare comparisons
+retain the existing fallback ordering, avoiding a global ranking change.
+
+The focused MP11 alias fixture and the template-template ordering fixture both
+pass.  The complete PA23 report is **389/396**: the MP11 failure is fixed, and
+the member-variable-template and source-namespace-base fixtures that had
+appeared as timeout regressions under the broader ordering experiment pass
+again.  PA1 through PA22 remain passing.
+
+### Remaining Work Map
+
+- **Qualified dependent-result replay (2 status failures):**
+  `general/500-dependent-qualified-member-template-result-bool.t` and
+  `general/500-recursive-qualified-member-template-bool-arg.t` still lose a
+  concrete nested owner/result type during recursive member-template replay.
+- **Reentrant static-query identity/cache (2 cases):**
+  `general/500-reentrant-static-query-callable-enable-if-cache.t` still fails
+  to reuse the dependent result query, and
+  `general/500-reentrant-static-query-enable-if-partial.t` still times out
+  during recursive partial-specialization selection.
+- **Owner/declaration LowIR materialization (3 comparisons):**
+  `spec/100-out-of-class-conversion-operator-definition.t`,
+  `spec/400-defaulted-nested-class-argument-partial-specialization.t`, and
+  `spec/400-defaulted-template-arg-partial-base-completion.t` still differ
+  only in generated LowIR materialization/call identity.
+
+### Next checkpoint group
+
+Take the two qualified dependent-result failures first.  Trace the typed owner
+and result facts through `MatchClassSpecializationPattern`, nested member
+template replay, and the declaration lookup that consumes the result.  Keep
+the reentrant-query timeout as a termination gate for that boundary, then
+validate both qualified fixtures and the full report before touching the
+comparison-only LowIR cases.
