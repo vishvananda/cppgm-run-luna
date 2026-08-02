@@ -123,6 +123,17 @@ string PA18TemplateExpander::RewriteTextMemberSuffix(
 			separator = next_scope_separator(raw, member_end);
 			continue;
 		}
+		map<string, string>::const_iterator generated_owner_base = specialization_bases_.find(
+			LastComponent(owner_key));
+		if(generated_owner_base != specialization_bases_.end()) {
+			string source_owner = generated_owner_base->second;
+			const size_t source_angle = source_owner.find('<');
+			if(source_angle != string::npos) source_owner.erase(source_angle);
+			if(member_type.compare(0, source_owner.size(), source_owner) == 0 &&
+				member_type.size() > source_owner.size() &&
+				member_type[source_owner.size()] == ':')
+				member_type = owner_key + member_type.substr(source_owner.size());
+		}
 		size_t replacement_member_end = member_end;
 		if(member_end < raw.size() && raw[member_end] == '<') {
 			string trailing_arguments;
@@ -175,7 +186,20 @@ string PA18TemplateExpander::RewriteTextMemberSuffix(
 	if(preserved_static_member) return raw;
 	if(!resolve_alias || raw.find("::") == string::npos) return raw;
 	if(constant_values_.find(raw) != constant_values_.end()) return raw;
-	return ResolveAlias(raw, context);
+	const string resolved = ResolveAlias(raw, context);
+	const string raw_owner = PrefixComponent(raw);
+	map<string, string>::const_iterator generated_base = specialization_bases_.find(
+		LastComponent(raw_owner));
+	if(generated_base != specialization_bases_.end() && !raw_owner.empty()) {
+		string source_owner = generated_base->second;
+		const size_t source_angle = source_owner.find('<');
+		if(source_angle != string::npos) source_owner.erase(source_angle);
+		if(resolved.compare(0, source_owner.size(), source_owner) == 0 &&
+			resolved.size() > source_owner.size() &&
+			resolved[source_owner.size()] == ':')
+			return raw_owner + resolved.substr(source_owner.size());
+	}
+	return resolved;
 }
 
 } // namespace pa18_templates_internal

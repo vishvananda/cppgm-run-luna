@@ -1325,7 +1325,9 @@ TypePtr Analyzer::ProcessClass(const CPPGMAstNodePtr& node, Scope* scope)
 		const size_t separator = TopLevelScopeSeparator(raw_name);
 		PathTarget prefix = ResolvePath(scope, raw_name.substr(0, separator));
 		owner = prefix.binding ? ScopeForType(prefix.binding->type) : prefix.scope;
-		if (!owner) throw logic_error("unknown class owner");
+		if (!owner) {
+			throw logic_error("unknown class owner");
+		}
 	}
 	TypePtr type;
 	Binding* existing = owner->local(name);
@@ -1411,8 +1413,14 @@ TypePtr Analyzer::ProcessClass(const CPPGMAstNodePtr& node, Scope* scope)
 	// element for the single-inheritance consumers retained from earlier PAs.
 	type->class_members.clear();
 	RecordClassMembers(node, type, owner, class_scope);
+	const bool dependent_template_definition = scope &&
+		scope->kind == SCOPE_TEMPLATE_PARAMETERS;
 	if (node->template_instantiation && !LayoutDependenciesReady(type))
 		pending_class_layouts_.push_back(PendingClassLayout(node, type, class_scope));
+	else if (dependent_template_definition && !LayoutDependenciesReady(type))
+		// A source template may legally name a dependent/incomplete base; its
+		// object layout is formed only for a concrete specialization.
+		type->layout_complete = false;
 	else
 		ComputeClassLayout(node, type, class_scope);
 	class_types_[node.get()] = type;

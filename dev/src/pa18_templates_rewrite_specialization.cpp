@@ -656,7 +656,8 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 				if(expected_type.integral) normalized_value = PA19Convert(normalized_value,
 					expected_type);
 				pattern = TemplateIntegralValueSpelling(normalized_value);
-			} else if(parser.Evaluate(actual, &normalized_value)) {
+			}
+			if(parser.Evaluate(actual, &normalized_value)) {
 				if(expected_type.integral) normalized_value = PA19Convert(normalized_value,
 					expected_type);
 				actual = TemplateIntegralValueSpelling(normalized_value);

@@ -146,6 +146,86 @@ string PA18TemplateExpander::FunctionResultType(const TemplateDefinition& defini
 		result = NodeTypeSpelling(definition.declaration->children[0]);
 		result += ReturnDeclaratorSuffix(declarator);
 	}
+	// Alias templates in a function return type are part of immediate
+	// substitution.  In particular, a pack-expanded detector such as
+	// `first_t<true_type, enable_if_t<Bn::value>...>` must discard the overload
+	// when any concrete pack element makes its enable_if condition false.  The
+	// ordinary alias rewriter intentionally leaves that type spelling available
+	// for dependent replay, so validate the now-concrete conditions at the
+	// function-result SFINAE boundary before selecting the overload.
+	const auto return_constraint_disabled = [&](const string& source) {
+		for(size_t at = 0; at < source.size();) {
+			const size_t found = source.find("enable_if", at);
+			if(found == string::npos) break;
+			const bool word_start = found == 0 || !IsIdentifierCharacter(source[found - 1]);
+			const size_t name_end = found +
+				(source.compare(found, 11, "enable_if_t") == 0 ||
+				 source.compare(found, 11, "enable_if_c") == 0 ? 11 : 9);
+			const bool word_end = name_end == source.size() ||
+				!IsIdentifierCharacter(source[name_end]);
+			if(!word_start || !word_end) {
+				at = name_end;
+				continue;
+			}
+			size_t open = name_end;
+			while(open < source.size() && isspace(static_cast<unsigned char>(source[open]))) ++open;
+			string arguments_text;
+			size_t close = string::npos;
+			if(open >= source.size() || source[open] != '<' ||
+				!TemplateRange(source, open, &arguments_text, &close)) {
+				at = name_end;
+				continue;
+			}
+			const vector<string> arguments = SplitTemplateArguments(arguments_text);
+			if(!arguments.empty()) {
+				const string condition = arguments[0];
+				if(condition.find("enable_if") != string::npos ||
+					condition.find('<') != string::npos) {
+									at = name_end;
+									continue;
+								}
+								bool inspected_pack = false;
+								const map<string, vector<string> > active_packs =
+									active_pack_substitutions_;
+								for(map<string, vector<string> >::const_iterator pack =
+									active_packs.begin(); pack != active_packs.end(); ++pack) {
+					if(pack->first.empty() || condition.find(pack->first) == string::npos) continue;
+					inspected_pack = true;
+					for(size_t value = 0; value < pack->second.size(); ++value) {
+						map<string, string> one = local;
+						one[pack->first] = pack->second[value];
+						PA19IntegralValue enabled;
+						bool evaluated = false;
+						try {
+							evaluated = EvaluateIntegralText(condition, result_context, one, &enabled);
+						} catch(const PA18SubstitutionFailure&) {
+						} catch(const logic_error&) {
+						}
+						if(evaluated &&
+							enabled.known && PA19Raw(enabled) == 0) return true;
+					}
+				}
+				if(!inspected_pack && !HasUnresolvedTemplateParameter(condition,
+					result_context, local)) {
+					PA19IntegralValue enabled;
+					bool evaluated = false;
+					try {
+						evaluated = EvaluateIntegralText(condition, result_context, local, &enabled);
+					} catch(const PA18SubstitutionFailure&) {
+					} catch(const logic_error&) {
+					}
+					if(evaluated &&
+						enabled.known && PA19Raw(enabled) == 0) return true;
+				}
+			}
+			at = close + 1;
+		}
+		return false;
+	};
+	if(return_constraint_disabled(result)) {
+		active_pack_substitutions_ = previous_packs;
+		return string();
+	}
 	if(validate_immediate_return && ImmediateReturnConstraintDisabled(
 		definition, result_context, local)) {
 		active_pack_substitutions_ = previous_packs;
@@ -314,9 +394,19 @@ bool PA18TemplateExpander::InferFunctionTypeArguments(const TemplateDefinition& 
 		}
 		map<string, string>::const_iterator found = inferred.find(definition.parameters[i].name);
 		if(found != inferred.end()) result->push_back(found->second);
-		else if(!definition.parameters[i].default_type.empty())
-			result->push_back(RewriteText(definition.parameters[i].default_type,
-				context, inferred, 0));
+		else if(!definition.parameters[i].default_type.empty()) {
+			// A dependent default belongs to function-template deduction.  Its
+			// target may itself be an alias whose member `type` is unavailable;
+			// that is a failed candidate, not a hard error in the surrounding
+			// expression (the usual detection-idiom/SFINAE boundary).
+			try {
+				result->push_back(RewriteText(definition.parameters[i].default_type,
+					context, inferred, 0));
+			} catch(const PA18SubstitutionFailure&) {
+				result->clear();
+				return false;
+			}
+		}
 		else return false;
 	}
 	(void)substitutions;

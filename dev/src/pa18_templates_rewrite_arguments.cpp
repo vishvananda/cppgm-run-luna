@@ -394,6 +394,15 @@ vector<string> ExpandPackedTemplateArguments(const vector<string>& raw_args)
 
 }
 
+string PA18TemplateExpander::RewriteMaterializedTemplateArgument(const string& argument,
+	const string& context, const map<string, string>& substitutions) const
+{
+	if(PreservesMaterializedTypeName(argument, substitutions, context)) return argument;
+	map<string, string> protected_substitutions = substitutions;
+	ProtectMaterializedTemplateBases(argument, context, substitutions, &protected_substitutions);
+	return NormalizeTypeArgument(ReplaceIdentifiers(argument, protected_substitutions));
+}
+
 void PA18TemplateExpander::ResolveTemplateArguments(const TemplateDefinition& definition,
 	const vector<string>& raw_args, const string& context,
 	vector<string>* args, vector<string>* metadata_args,
@@ -431,8 +440,7 @@ void PA18TemplateExpander::ResolveTemplateArguments(const TemplateDefinition& de
 				} else if(parameter.type) {
 					argument = RewriteText(argument, context, *substitutions, 0);
 					argument = NormalizeTypeArgument(argument);
-					if(!PreservesMaterializedTypeName(argument, *substitutions, context))
-						argument = NormalizeTypeArgument(ReplaceIdentifiers(argument, *substitutions));
+					argument = RewriteMaterializedTemplateArgument(argument, context, *substitutions);
 					const string function_pointer_alias = FunctionPointerAliasSpelling(argument, context);
 					argument = ResolveAlias(argument, context);
 					if(!PreservesMaterializedTypeName(argument, *substitutions, context))
@@ -483,17 +491,16 @@ void PA18TemplateExpander::ResolveTemplateArguments(const TemplateDefinition& de
 				*substitutions, &normalized))
 				throw logic_error("template-template argument does not match");
 			argument = normalized;
-		} else if(parameter.type) {
-			argument = ExpandPackCallText(argument, *pack_substitutions);
-			if(!preserve_source_type)
-				argument = RewriteText(argument, context, *substitutions, 0);
-			argument = NormalizeTypeArgument(argument);
-			if(!PreservesMaterializedTypeName(argument, *substitutions, context))
-				argument = NormalizeTypeArgument(ReplaceIdentifiers(argument, *substitutions));
+			} else if(parameter.type) {
+				argument = ExpandPackCallText(argument, *pack_substitutions);
+				if(!preserve_source_type)
+					argument = RewriteText(argument, context, *substitutions, 0);
+				argument = NormalizeTypeArgument(argument);
+				argument = RewriteMaterializedTemplateArgument(argument, context, *substitutions);
 			string function_pointer_alias = FunctionPointerAliasSpelling(source_type_argument, context); if(function_pointer_alias.empty()) function_pointer_alias = FunctionPointerAliasSpelling(argument, context);
 			argument = ResolveAlias(argument, context);
-			if(!preserve_source_type && !PreservesMaterializedTypeName(argument, *substitutions, context))
-				argument = RewriteText(argument, context, *substitutions, 0);
+				if(!preserve_source_type && !PreservesMaterializedTypeName(argument, *substitutions, context))
+					argument = RewriteText(argument, context, *substitutions, 0);
 			argument = NormalizeTypeArgument(argument);
 			if(!function_pointer_alias.empty()) argument = function_pointer_alias;
 			argument = QualifyTypeArgument(argument, context, definition.owner);

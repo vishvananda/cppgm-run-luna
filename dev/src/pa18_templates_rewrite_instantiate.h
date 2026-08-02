@@ -1152,6 +1152,10 @@
 			map<string, FunctionSignature>(),
 		bool defer_class_definition = false,
 		size_t explicit_argument_count = static_cast<size_t>(-1));
+	void RebindGeneratedOwnerTypes(const TemplateDefinition& definition,
+		const string& concrete_owner, const CPPGMAstNodePtr& generated) const;
+	string ReuseMaterializedClassInstantiation(const TemplateDefinition& definition,
+		const vector<string>& metadata_args, const string& key);
 	void ReplayCachedInstantiation(const TemplateDefinition& definition,
 			const vector<string>& args, const string& cached, const string& context,
 			bool explicit_instantiation,

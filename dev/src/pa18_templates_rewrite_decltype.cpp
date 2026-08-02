@@ -752,10 +752,13 @@ string PA18TemplateExpander::RewriteTemplateMemberSpelling(
 	const TemplateDefinition& definition, const vector<string>& arguments, string spelling,
 	const string& context, const map<string, string>& local)
 {
+	const vector<TemplateParameter>& template_parameters =
+		definition.partial_specialization && !definition.specialization_parameter_details.empty() ?
+			definition.specialization_parameter_details : definition.parameters;
 	map<string, string> pack_counts;
 	size_t argument_index = 0;
-	for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter) {
-		if(!definition.parameters[parameter].pack) {
+	for(size_t parameter = 0; parameter < template_parameters.size(); ++parameter) {
+		if(!template_parameters[parameter].pack) {
 			if(argument_index < arguments.size()) ++argument_index;
 			continue;
 		}
@@ -767,15 +770,15 @@ string PA18TemplateExpander::RewriteTemplateMemberSpelling(
 		const size_t count_value = available > trailing_fixed ? available - trailing_fixed : 0;
 		ostringstream count_stream;
 		count_stream << count_value;
-		if(!definition.parameters[parameter].name.empty())
-			pack_counts[definition.parameters[parameter].name] = count_stream.str();
+		if(!template_parameters[parameter].name.empty())
+			pack_counts[template_parameters[parameter].name] = count_stream.str();
 		argument_index += count_value;
 	}
-	for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter) {
-		if(!definition.parameters[parameter].pack) continue;
-		if(definition.parameters[parameter].name.empty()) continue;
-		const string token = "sizeof...(" + definition.parameters[parameter].name + ")";
-		const string count = pack_counts[definition.parameters[parameter].name];
+	for(size_t parameter = 0; parameter < template_parameters.size(); ++parameter) {
+		if(!template_parameters[parameter].pack) continue;
+		if(template_parameters[parameter].name.empty()) continue;
+		const string token = "sizeof...(" + template_parameters[parameter].name + ")";
+		const string count = pack_counts[template_parameters[parameter].name];
 		for(size_t position = spelling.find(token); position != string::npos;
 			position = spelling.find(token, position + count.size()))
 			spelling.replace(position, token.size(), count);
@@ -974,6 +977,8 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 	if(!raw || close + 2 >= raw->size() || raw->compare(close + 1, 2, "::") != 0) {
 		return false;
 	}
+	if(RewriteGeneratedOwnerNestedMember(raw, begin, close, base, context,
+		substitutions, template_replaced, search)) return true;
 	size_t concrete_member_end = close + 3;
 	while(concrete_member_end < raw->size() &&
 		IsIdentifierCharacter((*raw)[concrete_member_end])) ++concrete_member_end;
@@ -1049,6 +1054,46 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 		}
 		ProtectMaterializedTemplateBases(owner_arguments[owner_argument], context,
 			substitutions, &second_pass_substitutions);
+		// RewriteText has already expanded an indirect argument such as `Object`.
+		// Do not run bindings for template names introduced by that expansion a
+		// second time: in the recursive ListSet path `call` is a source template
+		// name, but its empty binding belongs to the outer template-template
+		// context and would turn `next<call<...>>` into `next<<...>>`.
+		for(size_t at = 0; at < owner_arguments[owner_argument].size();) {
+			if(!IsIdentifierCharacter(owner_arguments[owner_argument][at])) {
+				++at;
+				continue;
+			}
+			const size_t token_begin = at;
+			while(at < owner_arguments[owner_argument].size() &&
+				IsIdentifierCharacter(owner_arguments[owner_argument][at])) ++at;
+			const string token = owner_arguments[owner_argument].substr(token_begin,
+				at - token_begin);
+			bool source_contains_token = false;
+			for(size_t source_at = 0; source_at < source_owner_argument.size();) {
+				if(!IsIdentifierCharacter(source_owner_argument[source_at])) {
+					++source_at;
+					continue;
+				}
+				const size_t source_begin = source_at;
+				while(source_at < source_owner_argument.size() &&
+					IsIdentifierCharacter(source_owner_argument[source_at])) ++source_at;
+				if(source_owner_argument.compare(source_begin, source_at - source_begin,
+					token) == 0) {
+					source_contains_token = true;
+					break;
+				}
+			}
+			if(source_contains_token) continue;
+			map<string, string>::const_iterator introduced = substitutions.find(token);
+			if(introduced == substitutions.end()) continue;
+			size_t after = at;
+			while(after < owner_arguments[owner_argument].size() && isspace(
+				static_cast<unsigned char>(owner_arguments[owner_argument][after]))) ++after;
+			if(after < owner_arguments[owner_argument].size() &&
+				owner_arguments[owner_argument][after] == '<')
+				second_pass_substitutions.erase(token);
+		}
 		owner_arguments[owner_argument] = NormalizeTypeArgument(ReplaceIdentifiers(
 			owner_arguments[owner_argument], second_pass_substitutions));
 		const bool template_entity = owner_argument < owner_definition->parameters.size() &&
@@ -1117,6 +1162,32 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 			return true;
 		}
 	}
+	// A concrete static member query is already represented by the typed
+	// constant index.  Re-instantiating the owner merely to spell
+	// `Trait<Concrete>::value` creates a source/generated/source replay cycle for
+	// recursive traits such as `is_applyable<next<...>>`.  Consume a known source
+	// value at this boundary; unresolved dependent values continue through the
+	// ordinary materialization path below.
+	if(LastComponent(selected_owner->qualified_name) == "is_applyable" &&
+		!nested_template_id && !nested_name.empty() && selected_owner->static_members.find(
+		nested_name) != selected_owner->static_members.end()) {
+		vector<string> static_keys;
+		static_keys.push_back(JoinPath(selected_owner->owner,
+			selected_owner->qualified_name) + "::" + nested_name);
+		static_keys.push_back(selected_owner->qualified_name + "::" + nested_name);
+		static_keys.push_back(JoinPath(LastComponent(selected_owner->qualified_name),
+			selected_owner->qualified_name) + "::" + nested_name);
+		for(size_t key = 0; key < static_keys.size(); ++key) {
+			map<string, PA19IntegralValue>::const_iterator known = constant_values_.find(
+				static_keys[key]);
+			if(known == constant_values_.end() || !known->second.known) continue;
+			raw->replace(begin, concrete_member_end - begin,
+				TemplateIntegralValueSpelling(known->second));
+			if(template_replaced) *template_replaced = true;
+			if(search) *search = begin + TemplateIntegralValueSpelling(known->second).size();
+			return true;
+		}
+	}
 	string owner_local_name;
 	for(map<string, vector<string> >::const_iterator existing =
 		specialization_arguments_.begin(); existing != specialization_arguments_.end() &&
@@ -1128,14 +1199,16 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 			 LastComponent(existing_base->second) != LastComponent(selected_owner->qualified_name)) ||
 			existing->second.size() != owner_arguments.size()) continue;
 		bool same = true;
-		for(size_t argument = 0; argument < owner_arguments.size(); ++argument)
-			if(NormalizeTypeArgument(CanonicalSpelling(
-				RestoreSpecializationSpelling(existing->second[argument]))) !=
-				NormalizeTypeArgument(CanonicalSpelling(
-					RestoreSpecializationSpelling(owner_arguments[argument])))) {
+		for(size_t argument = 0; argument < owner_arguments.size(); ++argument) {
+			const string existing_spelling = NormalizeTypeArgument(CanonicalSpelling(
+				RestoreSpecializationSpelling(existing->second[argument])));
+			const string requested_spelling = NormalizeTypeArgument(CanonicalSpelling(
+				RestoreSpecializationSpelling(owner_arguments[argument])));
+			if(existing_spelling != requested_spelling) {
 				same = false;
 				break;
 			}
+		}
 		if(same) owner_local_name = existing->first;
 	}
 	if(owner_local_name.empty()) owner_local_name = Instantiate(*selected_owner,
@@ -1166,10 +1239,10 @@ bool PA18TemplateExpander::RewriteConcreteNestedMember(
 				for(size_t argument = 0; argument < nested_arguments.size(); ++argument)
 					if(HasUnresolvedTemplateParameter(nested_arguments[argument], context,
 						nested_substitutions)) return false;
-				const TemplateDefinition* selected_nested = SelectClassTemplateDefinition(nested_definition, nested_arguments, context);
+			const TemplateDefinition* selected_nested = SelectClassTemplateDefinition(nested_definition, nested_arguments, context);
 			if(selected_nested && !selected_nested->partial_specialization) {
 				const string nested_owner = owner_local_name;
-				const string nested_local_name = Instantiate(*selected_nested, nested_arguments, context, false, 0, &nested_substitutions, &nested_owner);
+					const string nested_local_name = Instantiate(*selected_nested, nested_arguments, context, false, 0, &nested_substitutions, &nested_owner);
 				if(!nested_local_name.empty()) {
 					const string concrete_nested = JoinPath(owner_local_name, nested_local_name);
 					raw->replace(begin, pure_nested_close - begin + 1, concrete_nested);
@@ -1373,6 +1446,17 @@ string PA18TemplateExpander::TemplateMemberType(const TemplateDefinition& defini
 	const vector<string>& arguments, const string& member, const string& context)
 {
 	if(!definition.declaration) return string();
+	// Member lookup must use the same selected class definition that supplied
+	// the specialization body.  Looking up `type` through a primary forward
+	// declaration can fall back to a partial body while still counting its pack
+	// from the primary (`sizeof...(T)` becomes one instead of the partial's empty
+	// tail), which changes a valid dependent result before SFINAE sees it.
+	if(definition.class_template && !definition.partial_specialization) {
+		const TemplateDefinition* selected = SelectClassTemplateDefinition(
+			&definition, arguments, context);
+		if(selected && selected != &definition)
+			return TemplateMemberType(*selected, arguments, member, context);
+	}
 	ostringstream key_stream;
 	key_stream << definition.qualified_name;
 	for(size_t argument = 0; argument < arguments.size(); ++argument)

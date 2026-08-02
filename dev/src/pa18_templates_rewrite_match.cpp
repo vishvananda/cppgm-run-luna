@@ -212,7 +212,15 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 		}
 		return false;
 	};
-	const bool dependent_actual = has_dependent_identifier(actual);
+	// A materialized specialization is already the canonical nominal spelling
+	// for matching.  Expanding it back through ResolveAlias can replay its source
+	// template while a member lookup is selecting that same specialization (the
+	// recursive `is_applyable<next<...>>` path); keep the typed generated identity
+	// and let MatchClassTemplateBasePattern inspect its registered base instead.
+	const bool generated_actual = specialization_bases_.find(LastComponent(actual)) !=
+		specialization_bases_.end() && specialization_arguments_.find(
+		LastComponent(actual)) != specialization_arguments_.end();
+	const bool dependent_actual = generated_actual || has_dependent_identifier(actual);
 	actual = NormalizeTypeArgument(CollapseRepeatedQualifier(dependent_actual ? actual :
 		ResolveAlias(actual, context)));
 	return MatchTypePatternNormalized(pattern, actual, parameter_names, inferred,

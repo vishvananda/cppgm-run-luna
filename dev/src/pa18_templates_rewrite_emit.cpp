@@ -682,6 +682,8 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 		((member_definition && ConcreteOwnerMatches(definition, requested_owner)) ||
 		 (definition.alias_template && ConcreteOwnerMatches(definition, requested_owner)) ?
 		 requested_owner : string());
+	if(!concrete_owner.empty())
+		concrete_owner = CollapseRepeatedQualifiedPath(CollapseRepeatedQualifier(concrete_owner));
 	if(free_generated_member) concrete_owner.clear();
 	// A hidden friend is emitted at namespace scope, but its return type still
 	// names the current specialization of the declaring class.  The call-site
@@ -754,6 +756,8 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 		generated = TransformInstantiatedNode(definition, transform_context,
 			substitutions, integral_substitutions, pack_substitutions,
 			function_substitutions);
+		RebindGeneratedOwnerTypes(definition, concrete_owner, generated);
+
 	} catch(const PA18SubstitutionFailure& failure) {
 		active_instantiation_name_ = previous_instantiation_name;
 		active_static_member_ = previous_static_member;
@@ -1152,7 +1156,15 @@ string PA18TemplateExpander::MaterializeInstantiation(const TemplateDefinition& 
 	const string local_name = GeneratedSpecializationName(definition, args,
 		metadata_args, substitutions, context, concrete_owner,
 		explicit_instantiation);
+	const string reused = ReuseMaterializedClassInstantiation(definition, metadata_args, key);
+	if(!reused.empty()) return reused;
+
 	RegisterGeneratedSpecialization(definition, metadata_args, local_name);
+	if(definition.class_template && !concrete_owner.empty()) {
+		const string owner_key = JoinPath(concrete_owner, local_name);
+		specialization_bases_by_owner_[owner_key] = definition.qualified_name;
+		specialization_arguments_by_owner_[owner_key] = metadata_args;
+	}
 	if(definition.class_template && explicit_argument_count != static_cast<size_t>(-1))
 		specialization_explicit_argument_counts_[local_name] = explicit_argument_count;
 	if(definition.class_template) substitutions[definition.name] = local_name;

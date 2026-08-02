@@ -114,6 +114,20 @@ CPPGMAstNodePtr PA18TemplateExpander::RewriteRegularNodeValue(
 				defer_type_only_class_definitions_ != 0);
 		if(resolved.find('(') != string::npos && resolved.find(')') != string::npos)
 			resolved = qualified;
+		if(type_spelling) {
+			const string generated_owner = PrefixComponent(spelling);
+			map<string, string>::const_iterator generated_base = specialization_bases_.find(
+				LastComponent(generated_owner));
+			if(generated_base != specialization_bases_.end() && !generated_owner.empty()) {
+				string source_owner = generated_base->second;
+				const size_t source_angle = source_owner.find('<');
+				if(source_angle != string::npos) source_owner.erase(source_angle);
+				if(resolved.compare(0, source_owner.size(), source_owner) == 0 &&
+					resolved.size() > source_owner.size() &&
+					resolved[source_owner.size()] == ':')
+					resolved = generated_owner + resolved.substr(source_owner.size());
+			}
+		}
 		if(resolved != qualified) qualified = resolved;
 		if(qualified != spelling) result->value = marker + qualified;
 		if(input->kind == "decl-specifier" && marker.empty() &&

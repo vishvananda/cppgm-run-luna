@@ -37,6 +37,14 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformInstantiatedNode(
 	active_pack_substitutions_ = previous_packs;
 	// An unnamed pack is an arity constraint; its empty key must not reach replay.
 	active_pack_substitutions_.erase("");
+	// A specialization's pack parameters shadow an enclosing replay pack with
+	// the same source spelling.  This matters when a primary pack selects a
+	// partial specialization: `T...` in the selected body may be empty even
+	// though the primary's `T...` supplied the specialization argument list.
+	for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter)
+		if(definition.parameters[parameter].pack &&
+			!definition.parameters[parameter].name.empty())
+			active_pack_substitutions_.erase(definition.parameters[parameter].name);
 	for(map<string, vector<string> >::const_iterator pack = pack_substitutions.begin();
 		pack != pack_substitutions.end(); ++pack)
 		if(!pack->first.empty()) active_pack_substitutions_[pack->first] = pack->second;
@@ -1041,6 +1049,14 @@ bool PA18TemplateExpander::EvaluateIntegralText(string raw, const string& contex
 		return false;
 	}
 	NormalizeIntegralText(&raw, substitutions);
+	// Resolve typed inherited values before installing the recursion guard.
+	if(raw.find("::value") != string::npos) {
+		PA19IntegralValue inherited;
+		if(EvaluateInheritedIntegralValue(raw, context, substitutions, &inherited)) {
+			*result = inherited;
+			return result->known;
+		}
+	}
 	const IntegralEvaluationKey evaluation_key(CanonicalSpelling(raw), context,
 		active_instantiation_name_);
 	if(!active_integral_evaluations_.insert(evaluation_key).second) return false;
@@ -1066,6 +1082,18 @@ bool PA18TemplateExpander::EvaluateIntegralText(string raw, const string& contex
 	const bool special_value = EvaluateIntegralTextSpecialForms(raw, context, substitutions, result);
 	if(special_value) {
 		return true;
+	}
+	// A materialized trait often inherits its `value` member from a generated
+	// integral_constant (for example `similar_impl<...> : true_type`).  The
+	// expression parser can treat the unresolved qualified member as a known
+	// zero before the typed inherited-base lookup gets a chance to inspect that
+	// class.  Consult the generated inheritance fact first for qualified values.
+	if(raw.find("::value") != string::npos) {
+		PA19IntegralValue inherited;
+		if(EvaluateInheritedIntegralValue(raw, context, substitutions, &inherited)) {
+			*result = inherited;
+			return result->known;
+		}
 	}
 	const bool known_value = EvaluateIntegralTextKnownValues(raw, context, substitutions, result);
 	if(known_value) {

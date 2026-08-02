@@ -18,8 +18,24 @@ const TemplateDefinition* PA18TemplateExpander::SelectClassTemplateDefinition(
 		}
 		if(!primary->class_template && !primary->alias_template &&
 			!primary->variable_template) return primary;
-		const auto dependent_argument = [this, &context](const string& raw) {
+		const map<string, string> no_substitutions;
+		const auto dependent_argument = [this, &context, &no_substitutions](const string& raw) {
 		const string dependency_spelling = CanonicalSpelling(raw);
+		const size_t qualified_value_separator = dependency_spelling.rfind("::");
+		if(qualified_value_separator != string::npos &&
+			dependency_spelling.substr(qualified_value_separator + 2) == "value") {
+			const string qualified_owner = dependency_spelling.substr(0,
+				qualified_value_separator);
+			if(specialization_bases_.find(LastComponent(qualified_owner)) !=
+				specialization_bases_.end()) {
+				PA19IntegralValue known_value;
+				try {
+					if(const_cast<PA18TemplateExpander*>(this)->EvaluateIntegralText(
+						dependency_spelling, context, no_substitutions, &known_value) &&
+						known_value.known) return false;
+				} catch(const logic_error&) {}
+			}
+		}
 			for(size_t position = 0; position < dependency_spelling.size();) {
 				if(!IsIdentifierCharacter(dependency_spelling[position])) {
 					++position;
@@ -98,7 +114,23 @@ const TemplateDefinition* PA18TemplateExpander::SelectClassTemplateDefinition(
 									if(declares_member(node->children[child])) return true;
 								return false;
 							};
-						known_qualified_member = declares_member(owner_declaration);
+							known_qualified_member = declares_member(owner_declaration);
+						}
+						// A generated trait specialization may inherit `value` rather
+						// than declare it directly.  Its typed constant is still known;
+						// do not classify that member expression as dependent and bypass
+						// non-type partial-specialization ordering.
+						if(!known_qualified_member && word == "value" &&
+							specialization_bases_.find(LastComponent(canonical_owner)) !=
+								specialization_bases_.end()) {
+							PA19IntegralValue inherited;
+							try {
+								known_qualified_member = const_cast<PA18TemplateExpander*>(this)->
+									EvaluateIntegralText(canonical_owner + "::value", context,
+										no_substitutions, &inherited) && inherited.known;
+							} catch(const logic_error&) {
+								known_qualified_member = false;
+							}
 						}
 					}
 				}
@@ -325,9 +357,7 @@ const TemplateDefinition* PA18TemplateExpander::SelectClassTemplateDefinition(
 					"ambiguous class template partial specialization");
 			selected = matched[i];
 		}
-		if(selected) {
-			return selected;
-		}
+		if(selected) return selected;
 		throw PA18SubstitutionFailure(
 			"cyclic class template partial specialization ordering");
 	}

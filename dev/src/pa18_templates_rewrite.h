@@ -584,17 +584,17 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 		const map<string, string>& substitutions, bool* template_replaced,
 		bool resolve_alias = true, bool resolve_member = true,
 		bool defer_class_definition = false);
+	void StripStaleGeneratedArguments(string* text) const; void RebindGeneratedOwnerMembers(string* raw, const string& context, const map<string, string>& substitutions, bool* template_replaced);
+	bool RewriteOwnerBoundNestedSpecialization(string* raw, size_t begin, size_t close, const string& base, const vector<string>& current_arguments, const string& context, const map<string, string>& substitutions, bool* template_replaced, size_t* search); bool RewriteUnqualifiedGeneratedSpecialization(string* raw, size_t begin, size_t close, const string& base, const vector<string>& current_arguments, const string& context, const map<string, string>& substitutions, bool* template_replaced, size_t* search);
+	bool RewriteQualifiedGeneratedNestedSpecialization(string* raw, size_t begin, size_t close, const string& base, const vector<string>& current_arguments, const string& context, const map<string, string>& substitutions, bool* template_replaced, size_t* search); bool MatchQualifiedGeneratedOwner(const string& nested_owner_source, const vector<string>& owner_arguments, const string& selected_owner_name, const string& owner_primary_source, const string& context) const;
 	string RewriteTextMemberSuffix(string raw, const string& source_spelling, const string& context, const map<string, string>& substitutions, bool* template_replaced, bool materialized_member_type, bool preserved_static_member, bool resolve_alias, bool resolve_member);
 	bool RewriteConcreteNestedMember(string* raw, size_t begin, size_t close, const string& base, const string& context, const map<string, string>& substitutions, bool* template_replaced, size_t* search);
+	bool RewriteGeneratedOwnerNestedMember(string* raw, size_t begin, size_t close, const string& base, const string& context, const map<string, string>& substitutions, bool* template_replaced, size_t* search);
 	const TemplateDefinition* SelectFunctionTemplateOverload(const string& raw, const string& lookup_base, const vector<string>& explicit_arguments, const string& context, const map<string, string>& substitutions, const vector<const TemplateDefinition*>& overloads);
 	void ProtectMaterializedSubstitutions(const string& source_spelling, const string& raw, const string& context, const map<string, string>& substitutions, bool materialized_member_type, map<string, string>* final_substitutions) const;
-	void ProtectMaterializedTemplateBases(const string& raw, const string& context,
-		const map<string, string>& substitutions,
-		map<string, string>* protected_substitutions) const;
-	bool RewriteResolvedTemplateMember(string* raw, size_t begin, size_t close,
-		const string& context, const map<string, string>& substitutions,
-		const TemplateDefinition* definition, const vector<string>& args,
-		bool* template_replaced, size_t* search);
+	void ProtectMaterializedTemplateBases(const string& raw, const string& context, const map<string, string>& substitutions, map<string, string>* protected_substitutions) const;
+	string RewriteMaterializedTemplateArgument(const string& argument, const string& context, const map<string, string>& substitutions) const;
+	bool RewriteResolvedTemplateMember(string* raw, size_t begin, size_t close, const string& context, const map<string, string>& substitutions, const TemplateDefinition* definition, const vector<string>& args, bool* template_replaced, size_t* search);
 	void ResolveFunctionArguments(const CPPGMAstNodePtr& result,
 		const FunctionSignature* signature, const string& context,
 		const map<string, string>* substitutions = 0);

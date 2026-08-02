@@ -581,9 +581,8 @@ private:
 	map<string, vector<string> > function_signatures_by_name_;
 	map<string, vector<FunctionSignature> > function_overloads_; set<const CPPGMAstNode*> template_function_signatures_; map<string, string> specialization_bases_;
 	map<string, vector<string> > specialization_arguments_;
-	// Keep the use-site arity alongside the fully default-expanded specialization
-	// arguments.  Function-template deduction must not bind a trailing pack to
-	// class-template defaults that the caller did not write.
+	/* Owner-bound identity for replaying qualified nested member templates. */ map<string, string> specialization_bases_by_owner_; map<string, vector<string> > specialization_arguments_by_owner_;
+	// Use-site arity prevents deduction from binding a pack to class defaults.
 	map<string, size_t> specialization_explicit_argument_counts_;
 	map<string, vector<string> > specialization_names_by_base_; map<string, set<string> > specialization_name_sets_by_base_;
 	set<ClassSpecializationIdentity> instantiated_class_specializations_; set<const CPPGMAstNode*> explicit_class_specializations_seen_;
@@ -601,9 +600,8 @@ private:
 	size_t defer_type_only_class_definitions_ = 0;
 	size_t defer_operator_template_materialization_ = 0;
 	size_t active_template_declaration_depth_ = 0; set<string> active_template_member_types_;
-	mutable set<string> active_member_type_lookups_,
-		active_alias_resolutions_,
-		active_function_results_,
+	mutable set<string> active_member_type_lookups_, active_static_member_lookups_,
+		active_alias_resolutions_, active_function_results_,
 		active_class_template_selections_, active_class_template_selection_families_,
 		active_class_template_selection_probes_,
 		active_class_specialization_matches_;
@@ -1077,6 +1075,8 @@ private:
 	void IndexConstantMembers(const CPPGMAstNodePtr& node, const string& owner); void IndexStaticMembers(const CPPGMAstNodePtr& node, set<string>& members) const; void IndexDependentMemberTypeNodes(const CPPGMAstNodePtr& node, vector<CPPGMAstNodePtr>& nodes, vector<CPPGMAstNodePtr>& type_nodes) const; void IndexImplicitNestedClassNames(const CPPGMAstNodePtr& node, vector<string>& names) const; void IndexDeclarationTypeDependencies(const CPPGMAstNodePtr& node, const string& context, vector<TemplateTypeDependency>& dependencies) const; void IndexUsingDirectiveDefinition(const TemplateDefinition& definition);
 	void RememberClassPath(const string& path);
 	bool HasStaticMember(const TemplateDefinition* definition, const string& owner, const string& name) const;
+	bool HasInheritedStaticMember(const string& owner, const string& name, set<string>* active) const;
+	bool RecoverGeneratedStaticOwner(string* current, const string& name) const;
 	void Collect(const CPPGMAstNodePtr& node, const string& context, bool type_reference = false)
 	{
 		if(!node) return; map<const CPPGMAstNode*, size_t>::const_iterator source_order = source_order_.find(node.get()); if(source_order != source_order_.end()) active_source_order_ = source_order->second; const bool elaborated_type_reference = type_reference && node->kind == "class-forward-declaration";

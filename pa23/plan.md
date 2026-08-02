@@ -4864,3 +4864,112 @@ through-PA22 report at **2100 / 2100**, and a passing PA23 source audit.  The
 next checkpoint group is the four dependent-result status cases, starting with
 the qualified result metadata boundary and the reentrant cache's concrete
 type replay; the three comparisons and fixed-point timeout remain deferred.
+
+## Checkpoint 40 scope — complete generated owners for dependent nested results
+
+Remaining Work Map before this increment: three LowIR comparisons
+(`spec/100-out-of-class-conversion-operator-definition.t`,
+`spec/400-defaulted-nested-class-argument-partial-specialization.t`, and
+`spec/400-defaulted-template-arg-partial-base-completion.t`), four dependent
+result status failures (`general/500-dependent-qualified-member-template-result-bool.t`,
+`general/500-mp11-append-alias-template-sfinae.t`,
+`general/500-recursive-qualified-member-template-bool-arg.t`, and
+`general/500-reentrant-static-query-callable-enable-if-cache.t`), and one
+reentrant static-query timeout
+(`general/500-reentrant-static-query-enable-if-partial.t`).
+
+This checkpoint covers the shared generated-owner behavior exposed by the two
+qualified-result reducers: when a nested class specialization is materialized
+under a concrete generated owner that currently has only a forward shell, the
+owner must become a complete typed class shell before PA11 predeclaration.
+The shell must retain its specialization metadata and admit the queued nested
+class declarations, while preserving ordinary forward-only behavior for owners
+with no generated members.  Validate both focused qualified-result fixtures,
+the full PA23 report, through-PA22, and the file audit.  The MP11/reentrant
+status cases, three comparisons, and timeout remain in the next map unless
+this owner handoff fixes them incidentally.
+
+## Checkpoint 41 result — concrete owner rebinding and return-type SFINAE — 2026-08-02
+
+The remaining-work map for this increment was thirteen fixtures: seven
+dependent/status failures
+(`general/100-inherited-using-alias-out-of-class-specialization-member.t`,
+`general/200-template-template-head-partial-specialization-ordering.t`,
+`general/400-function-type-tail-pack-recursive-specialization.t`,
+`general/500-dependent-qualified-member-template-result-bool.t`,
+`general/500-recursive-qualified-member-template-bool-arg.t`,
+`general/500-reentrant-static-query-callable-enable-if-cache.t`, and
+`spec/400-explicit-type-arg-dependent-qualified-member-template-id.t`), one
+reentrant static-query timeout
+(`general/500-reentrant-static-query-enable-if-partial.t`), and five LowIR
+comparisons (`general/100-static-member-on-explicit-specialization.t`,
+`spec/100-out-of-class-conversion-operator-definition.t`,
+`spec/100-static-member-explicit-specialization-char16.t`,
+`spec/400-defaulted-nested-class-argument-partial-specialization.t`, and
+`spec/400-defaulted-template-arg-partial-base-completion.t`).
+
+This checkpoint completed two shared behaviors.  Materialized member
+declarations now rebind source-qualified dependent return/member types from a
+duplicated primary owner to the concrete generated owner before PA11 analysis;
+the named-parameter SFINAE fixture passes.  Function-result selection now
+evaluates concrete `enable_if` predicates nested in alias-template return types
+per active pack element, while leaving nested/template-shaped predicates to the
+ordinary replay path; both detector LowIR fixtures pass and the async dependent
+return-SFINAE fixture remains passing.  The full PA23 report is **383 / 396**,
+up from the turn-start **377 / 396**.
+
+The next checkpoint group is the remaining qualified/dependent-result cluster:
+the inherited using-alias and explicit-type qualified-member cases together
+with the dependent result-bool, recursive result-bool, and reentrant cache
+status failures.  The five LowIR comparisons and the reentrant timeout remain
+deferred unless the shared member-result fix resolves one incidentally.
+
+## Checkpoint 42 result — typed replay consolidation and regression-safe owner handoff — 2026-08-02
+
+This checkpoint covered the shared typed replay increment: generated nested
+owners and member-template arguments now retain their source owner/argument
+identity through replay; class/function pack facts and local-static ABI demand
+remain typed; and concrete alias-template `enable_if` return conditions are
+checked at the function-result SFINAE boundary.  The owner handoff was narrowed
+to avoid speculative nested forward shells, preserving ordinary earlier-PA
+lookup and static-member ABI behavior.  The increment also covers the focused
+nested-class, alias-pack, friend-access, and function-assignment regressions.
+
+Validation: the focused earlier-PA regression set passes; required
+through-PA22 is **2100 / 2100**; current PA23 is **386 / 396**, up from the
+turn-start **377 / 396**.  The source diff is free of debug instrumentation.
+
+Remaining Work Map (10 fixtures):
+
+- **7 dependent/reentrant status cases:**
+  `general/400-dependent-nontype-member-template-owner.t`,
+  `general/400-function-type-tail-pack-recursive-specialization.t`,
+  `general/500-dependent-qualified-member-template-result-bool.t`,
+  `general/500-mp11-append-alias-template-sfinae.t`,
+  `general/500-recursive-qualified-member-template-bool-arg.t`,
+  `general/500-reentrant-static-query-callable-enable-if-cache.t`, and
+  `general/500-reentrant-static-query-enable-if-partial.t` (timeout).
+- **3 LowIR owner/declaration comparisons:**
+  `spec/100-out-of-class-conversion-operator-definition.t`,
+  `spec/400-defaulted-nested-class-argument-partial-specialization.t`, and
+  `spec/400-defaulted-template-arg-partial-base-completion.t`.
+
+Next checkpoint: take the seven dependent/reentrant cases as one replay group,
+starting with the qualified member-result and `executor` cache failures; keep
+the three ABI/declaration comparisons as a separate validation group.
+
+## Checkpoint 43 result — audit-safe replay module split — 2026-08-01
+
+The typed replay increment was split into responsibility-named source modules
+for static-owner recovery, generated-owner nested replay, generated-owner
+emission, and text-owner matching.  This keeps the same semantic behavior while
+bringing the PA23 source audit below its size/function limits; the split also
+restored the explicit-argument arity fact as live typed state after compilation
+caught an over-compressed declaration.
+
+Validation: `make test-report ACTIVE_TEST_REPORT_PAS='pa23'` remains **386 / 396**;
+the required through-PA22 report is **2100 / 2100**; and the PA23 file audit
+passes with warnings only.  Remaining work is unchanged: seven dependent or
+reentrant status cases (including one timeout) and three LowIR owner/declaration
+comparisons.  The next checkpoint is the seven-case replay group, beginning with
+qualified member-result and reentrant cache behavior.
