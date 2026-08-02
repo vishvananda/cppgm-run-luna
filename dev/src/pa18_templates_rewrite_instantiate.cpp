@@ -1444,13 +1444,13 @@ string PA18TemplateExpander::FindConcreteInstantiationOwner(
 		if(class_contexts_.find(candidate) != class_contexts_.end()) return candidate;
 		for(set<string>::const_iterator it = class_contexts_.begin();
 			it != class_contexts_.end(); ++it) {
-			if(LastComponent(*it) != LastComponent(candidate)) continue;
-			const string prefix = PrefixComponent(*it);
-			if(prefix == source_namespace || prefix == context_namespace)
+		if(LastComponent(*it) != LastComponent(candidate)) continue; const string prefix = PrefixComponent(*it);
+		map<string, string>::const_iterator generated_base = specialization_bases_.find(LastComponent(candidate));
+		const string generated_source_namespace = generated_base == specialization_bases_.end() ? string() : PrefixComponent(generated_base->second.substr(0, generated_base->second.find('<')));
+		if(prefix == source_namespace || prefix == context_namespace || (!generated_source_namespace.empty() && prefix == generated_source_namespace))
 				return *it;
 		}
-		return string();
-	};
+		return string(); };
 	string concrete_owner;
 	const string source_owner_name = LastComponent(definition.owner);
 	for(map<string, string>::const_iterator substitution = substitutions.begin();

@@ -88,6 +88,26 @@ string PA18TemplateExpander::RewriteTextMemberSuffix(
 		set<string> member_active;
 		const string member_name = raw.substr(member_begin, member_end - member_begin);
 		string lookup_owner = owner;
+		// The generated nested class records its concrete typedef under the full
+		// materialized owner (`tuples::detail::drop_front_3_::apply_...`).  The
+		// rewritten source can legitimately use the namespace-relative spelling
+		// (`drop_front_3_::apply_...`), so recover that exact typed alias by suffix
+		// before falling back to the source family, whose target still contains the
+		// local dependent name `next`.
+		bool indexed_owner_alias = false;
+		const string indexed_alias_key = owner + "::" + member_name;
+		const string indexed_alias_suffix = "::" + indexed_alias_key;
+		for(map<string, string>::const_iterator indexed = type_aliases_.begin();
+			indexed != type_aliases_.end(); ++indexed) {
+			const bool exact = indexed->first == indexed_alias_key;
+			const bool suffix = indexed->first.size() > indexed_alias_suffix.size() &&
+				indexed->first.compare(indexed->first.size() - indexed_alias_suffix.size(),
+					indexed_alias_suffix.size(), indexed_alias_suffix) == 0;
+			if(!exact && !suffix) continue;
+			member_type = CanonicalSpelling(ReplaceIdentifiers(indexed->second, substitutions));
+			indexed_owner_alias = !member_type.empty();
+			if(indexed_owner_alias) break;
+		}
 		// The generated owner can have been formed by a prior scalar pass over a
 		// nested dependent type (`vector<Property>` becoming `vector<unsigned
 		// long>`).  Keep the concrete lookup first: it carries the already
@@ -109,15 +129,15 @@ string PA18TemplateExpander::RewriteTextMemberSuffix(
 				if(source_owner.find('<') != string::npos) source_lookup_owner = source_owner;
 			}
 		}
-		bool found_member = FindClassMemberType(lookup_owner, member_name,
+		bool found_member = indexed_owner_alias || FindClassMemberType(lookup_owner, member_name,
 			substitutions, context, &member_type, &member_active, true);
 		if((!found_member || member_type.empty()) && !source_lookup_owner.empty() &&
 			source_lookup_owner != lookup_owner) {
 			member_type.clear();
 			member_active.clear();
-			lookup_owner = source_lookup_owner;
-			found_member = FindClassMemberType(lookup_owner, member_name,
-				substitutions, context, &member_type, &member_active, true);
+				lookup_owner = source_lookup_owner;
+				found_member = FindClassMemberType(lookup_owner, member_name,
+					substitutions, context, &member_type, &member_active, true);
 		}
 		if(!found_member || member_type.empty()) {
 			separator = next_scope_separator(raw, member_end);
@@ -150,6 +170,19 @@ string PA18TemplateExpander::RewriteTextMemberSuffix(
 					trailing_arguments + ">";
 				replacement_member_end = trailing_close + 1;
 			}
+		}
+		// FindClassMemberType may already return the complete dependent alias
+		// chain for the direct member (`apply<Tuple>::type::tail_type`).  If the
+		// source spelling also carries that same suffix, replacing only the first
+		// component would duplicate it on every replay pass and grow an invalid
+		// `::tail_type::tail_type...` chain.  Consume the suffix that is already
+		// present in the typed member result.
+		if(replacement_member_end == member_end && member_end < raw.size()) {
+			const string trailing = raw.substr(member_end);
+			if(trailing.size() < member_type.size() &&
+				member_type.compare(member_type.size() - trailing.size(),
+					trailing.size(), trailing) == 0)
+				replacement_member_end = raw.size();
 		}
 		const bool static_member_expression = HasStaticMember(0, owner_key, member_name) ||
 			HasStaticMember(0, owner, member_name) ||

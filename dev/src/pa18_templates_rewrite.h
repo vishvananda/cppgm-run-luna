@@ -86,6 +86,7 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 		while(!raw_class.empty() && (raw_class[raw_class.size() - 1] == '&' ||
 			raw_class[raw_class.size() - 1] == '*')) raw_class.erase(raw_class.size() - 1);
 		raw_class = CanonicalSpelling(raw_class);
+		if(SplitDirectFunctionType(raw_class, 0, 0, 0)) return CPPGMAstNodePtr();
 		map<string, CPPGMAstNodePtr>::const_iterator concrete = class_declarations_.find(raw_class);
 		if(concrete != class_declarations_.end()) return concrete->second;
 		const size_t template_open = raw_class.find('<');
@@ -96,10 +97,9 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 				const string argument_text = raw_class.substr(template_open + 1,
 					raw_class.size() - template_open - 2);
 				const vector<string> arguments = SplitTemplateArguments(argument_text);
-				const TemplateDefinition* selected = SelectClassTemplateDefinition(
-					template_definition, arguments, context);
-				return selected ? selected->declaration : template_definition->declaration;
-			}
+			const TemplateDefinition* selected = 0;
+			try { selected = SelectClassTemplateDefinition(template_definition, arguments, context); } catch(const PA18SubstitutionFailure& failure) { if(string(failure.what()) != "recursive class template selection") throw; selected = template_definition; }
+			return selected ? selected->declaration : template_definition->declaration; }
 		}
 		map<string, string>::const_iterator specialization = specialization_bases_.find(
 			LastComponent(raw_class));

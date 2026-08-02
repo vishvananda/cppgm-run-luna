@@ -354,6 +354,7 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 			for(size_t argument = 0; argument < requested_arguments.size(); ++argument)
 				requested_arguments[argument] = CollapseRepeatedQualifiedPath(CollapseRepeatedQualifier(
 					NormalizeTypeArgument(RestoreSpecializationSpelling(requested_arguments[argument]))));
+			const string source_class_key = class_key;
 			map<string, set<string> >::const_iterator generated_names =
 				specialization_name_sets_by_base_.find(LastComponent(source_template_base));
 			if(generated_names != specialization_name_sets_by_base_.end()) {
@@ -415,6 +416,34 @@ bool PA18TemplateExpander::FindClassMemberType(const string& raw_class, const st
 					const TemplateDefinition* selected_source = SelectClassTemplateDefinition(
 						source_definition, requested_arguments, context);
 					if(selected_source) source_definition = selected_source;
+					size_t nested_begin = source_template_close + 3;
+					if(source_template_close + 2 < source_class_key.size() &&
+						source_class_key.compare(source_template_close + 1, 2, "::") == 0) {
+						if(source_class_key.compare(nested_begin, 9, "template ") == 0)
+							nested_begin += 9;
+						size_t nested_end = nested_begin;
+						while(nested_end < source_class_key.size() &&
+							IsIdentifierCharacter(source_class_key[nested_end])) ++nested_end;
+						if(nested_end > nested_begin && (nested_end == source_class_key.size() ||
+							source_class_key[nested_end] != '<')) try {
+							const string nested_name = source_class_key.substr(nested_begin,
+								nested_end - nested_begin);
+							const TemplateDefinition* nested_definition = FindNestedDefinition(
+								*source_definition, nested_name);
+							if(nested_definition && nested_definition->class_template &&
+								nested_definition->parameters.empty()) {
+								const string parent_local_name = const_cast<PA18TemplateExpander*>(this)->Instantiate(
+									*source_definition, requested_arguments, context, false, 0,
+									&substitutions);
+								const_cast<PA18TemplateExpander*>(this)->InstantiateNestedClass(
+									*source_definition, requested_arguments, parent_local_name,
+									nested_name, context);
+								const string nested_path = JoinPath(parent_local_name, nested_name);
+								if(class_declarations_.find(nested_path) != class_declarations_.end())
+									class_key = nested_path + source_class_key.substr(nested_end);
+							}
+						} catch(const PA18SubstitutionFailure&) {}
+					}
 				string source_member_type;
 				if(source_definition->declaration) for(size_t child_index = 0;
 					child_index < source_definition->declaration->children.size(); ++child_index) {

@@ -361,6 +361,7 @@ bool PA18TemplateExpander::HasUnavailableGeneratedMemberType(string raw,
 	if(separator == string::npos) return false;
 	const string owner = raw.substr(0, separator);
 	const string member = raw.substr(separator + 2);
+	const size_t first_scope = raw.find("::"); if(first_scope != string::npos && first_scope < separator) { const string resolved_prefix = ResolveAlias(raw.substr(0, first_scope), context); if(!resolved_prefix.empty() && resolved_prefix != raw.substr(0, first_scope)) return false; }
 	// Once substitution has made the owner a concrete array, pointer, or
 	// reference spelling, a qualified member lookup cannot be deferred as a
 	// dependent type.  It is a candidate-local substitution failure.  Keep
@@ -386,6 +387,8 @@ bool PA18TemplateExpander::HasUnavailableGeneratedMemberType(string raw,
 		class_declarations_.find(raw) != class_declarations_.end()) {
 		return false;
 	}
+	const string generated_suffix = "::" + raw;
+	for(map<string, CPPGMAstNodePtr>::const_iterator declaration = class_declarations_.begin(); declaration != class_declarations_.end(); ++declaration) if(declaration->first.size() > raw.size() && declaration->first.compare(declaration->first.size() - raw.size(), raw.size(), raw) == 0 && declaration->first.compare(declaration->first.size() - generated_suffix.size(), generated_suffix.size(), generated_suffix) == 0) return false;
 	const string nested_entity = JoinPath(owner, member);
 	if(class_contexts_.find(nested_entity) != class_contexts_.end() ||
 		class_declarations_.find(nested_entity) != class_declarations_.end()) {
@@ -503,8 +506,7 @@ bool PA18TemplateExpander::HasUnavailableGeneratedClassMemberType(
 	if(!concrete_owner.empty()) probe_paths.insert(JoinPath(concrete_owner, local_name));
 	ScopedClassDeclarationIndex generated_scope(class_declarations_,
 		probe_paths, generated);
-	return GeneratedNodeHasUnavailableMemberType(generated, context,
-		substitutions);
+	return GeneratedNodeHasUnavailableMemberType(generated, context, substitutions);
 }
 
 
@@ -563,10 +565,10 @@ void PA18TemplateExpander::RegisterGeneratedTypeEntity(
 	// before the normal registration below, while restoring all prior entries
 	// if the class is discarded as a substitution failure.
 	const string generated_path = JoinPath(definition.owner, local_name);
-	if(definition.class_template && HasUnavailableGeneratedClassMemberType(
-		generated, generated_path, generated_owner, local_name, concrete_owner,
-		context, substitutions))
-		throw PA18SubstitutionFailure("dependent type substitution failed");
+	const bool unavailable_generated_member = definition.class_template &&
+		HasUnavailableGeneratedClassMemberType(generated, generated_path, generated_owner,
+			local_name, concrete_owner, context, substitutions);
+	if(unavailable_generated_member) throw PA18SubstitutionFailure("dependent type substitution failed");
 	if(!definition.class_template) return;
 	class_declarations_[generated_path] = generated;
 	RememberClassPath(generated_path);
@@ -990,8 +992,7 @@ string PA18TemplateExpander::EmitInstantiation(const TemplateDefinition& definit
 		const string context_parent = PrefixComponent(context);
 		if(!context_parent.empty() && LastComponent(context) == LastComponent(context_parent))
 			before_context = context_parent;
-		if(before_context != context)
-			generated_by_owner_[generated_owner].push_back(generated);
+		if(before_context != context) generated_by_owner_[(definition.class_template && !concrete_owner.empty() && class_contexts_.find(concrete_owner) != class_contexts_.end()) ? concrete_owner : generated_owner].push_back(generated);
 		else
 			generated_before_class_[before_context].push_back(generated);
 	}

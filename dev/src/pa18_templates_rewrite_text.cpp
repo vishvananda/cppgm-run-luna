@@ -662,8 +662,28 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			// the token `Object` lets an enclosing `ListSet -> generated-call`
 			// binding rewrite the already-concrete nested argument into
 			// `call_ListSet...<int>`.
+			for(size_t token_at = 0; token_at < source_argument.size();) {
+				if(!IsIdentifierCharacter(source_argument[token_at])) {
+					++token_at;
+					continue;
+				}
+				const size_t token_begin = token_at;
+				while(token_at < source_argument.size() &&
+					IsIdentifierCharacter(source_argument[token_at])) ++token_at;
+				const string token = source_argument.substr(token_begin,
+					token_at - token_begin);
+				map<string, string>::const_iterator empty_binding = substitutions.find(token);
+				if(empty_binding == substitutions.end() || !empty_binding->second.empty()) continue;
+				size_t after_token = token_at;
+				while(after_token < source_argument.size() && isspace(
+					static_cast<unsigned char>(source_argument[after_token]))) ++after_token;
+				if(after_token < source_argument.size() && source_argument[after_token] == '<')
+					protected_substitutions.erase(token);
+			}
+			ProtectMaterializedTemplateBases(source_argument, context, substitutions,
+				&protected_substitutions);
 			const string preliminary_argument = ReplaceIdentifiersPreservingPackSizes(
-				source_argument, substitutions);
+				source_argument, protected_substitutions);
 			ProtectMaterializedTemplateBases(preliminary_argument, context, substitutions,
 				&protected_substitutions);
 			if(protected_substitutions != substitutions)

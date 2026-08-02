@@ -145,6 +145,11 @@ void PA18TemplateExpander::MaterializeInitializerConstructor(
 		transformed_item->children[1] : CPPGMAstNodePtr();
 	if(original_initializer && !transformed_initializer) return;
 	if(input->children.empty()) return;
+	// A typedef only names a type; it does not perform construction.  In
+	// particular, recursively materializing `typedef int_<N + 1> next` while
+	// replaying `int_<N>` walks an unbounded chain of nominal class bodies.
+	if(!original_initializer && HasDeclarationSpecifier(input->children[0], "typedef"))
+		return;
 	const CPPGMAstNodePtr declarator = original_item->children[0];
 	string target = DeclaratorTypeSpelling(NodeTypeSpelling(input->children[0]),
 		declarator);

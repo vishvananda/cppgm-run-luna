@@ -4973,3 +4973,64 @@ passes with warnings only.  Remaining work is unchanged: seven dependent or
 reentrant status cases (including one timeout) and three LowIR owner/declaration
 comparisons.  The next checkpoint is the seven-case replay group, beginning with
 qualified member-result and reentrant cache behavior.
+
+## Checkpoint 44 scope — dependent/reentrant failure map — 2026-08-02
+
+The refreshed current-PA report confirms **386 / 396**.  The complete remaining
+status set is grouped as follows: (1) nested dependent type/value replay in
+`400-dependent-nontype-member-template-owner.t` and
+`400-function-type-tail-pack-recursive-specialization.t`; (2) qualified member
+template result/bool replay in `500-dependent-qualified-member-template-result-bool.t`
+and `500-recursive-qualified-member-template-bool-arg.t`; (3) alias-template
+SFINAE in `500-mp11-append-alias-template-sfinae.t`; and (4) reentrant static
+query selection/cache behavior in the two `500-reentrant-static-query-*.t`
+fixtures, one of which times out.  The three remaining LowIR comparisons are
+tracked separately in the preceding map.
+
+This checkpoint scope covers all seven status cases as one shared typed-replay
+increment, prioritizing qualified member-result materialization and reentrant
+static-query cache invalidation, then validating the dependent nested type/value
+and alias-SFINAE cases for incidental closure.  Required validation is the full
+PA23 report, through-PA22, and the PA23 file audit.
+
+## Checkpoint 45 result — source-base and nested-owner replay — 2026-08-02
+
+This checkpoint completed the source-base replay portion of the scope. Typed
+member suffix lookup now preserves a materialized source owner through nested
+qualified aliases, generated owner routing retains the concrete owner for
+queued members, and recursive template arguments protect their source base
+before scalar substitution. Direct function-type template arguments are kept
+out of class-template selection, and non-template out-of-class nested classes
+are completed without eagerly materializing templated nested arguments. The
+focused dependent nontype, tail-pack, inherited-member, allocator-rebind, and
+nested static-value witnesses pass; the PA18 nested-class completion witness
+also remains passing.
+
+Validation: `make test-report ACTIVE_TEST_REPORT_PAS='pa23'` is **388 / 396**,
+up from the checkpoint baseline **386 / 396**; `make test-report-through-pa22`
+passes **2100 / 2100**; and `perl scripts/cppgm_file_audit.pl --stage pa23
+--paths dev/src` passes with warnings only.
+
+Remaining Work Map (8 fixtures):
+
+- **Qualified dependent-result replay (2 status failures):**
+  `general/500-dependent-qualified-member-template-result-bool.t` and
+  `general/500-recursive-qualified-member-template-bool-arg.t` still lose the
+  generated nested owner/result type during recursive member-template replay.
+- **Alias-template SFINAE (1 status failure):**
+  `general/500-mp11-append-alias-template-sfinae.t` still fails to preserve
+  the candidate-local dependent substitution boundary.
+- **Reentrant static-query selection/cache (2 cases):**
+  `general/500-reentrant-static-query-callable-enable-if-cache.t` fails its
+  dependent result query and
+  `general/500-reentrant-static-query-enable-if-partial.t` remains a timeout.
+- **LowIR owner/declaration comparisons (3 cases):**
+  `spec/100-out-of-class-conversion-operator-definition.t`,
+  `spec/400-defaulted-nested-class-argument-partial-specialization.t`, and
+  `spec/400-defaulted-template-arg-partial-base-completion.t` still differ in
+  declaration/owner emission metadata.
+
+Next checkpoint: take the five dependent-result/reentrant status cases as the
+next shared typed replay group, beginning with the two qualified result/bool
+fixtures; keep the three LowIR comparisons as a separate declaration-emission
+group.
