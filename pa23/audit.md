@@ -2094,3 +2094,101 @@ checkpoint group.  Begin with the shared typed result/query identity boundary
 in the two qualified-result cases, then validate the declaration-owner
 emission comparisons; keep the timeout as a regression gate and do not add a
 timing-based acceptance path.
+
+## Checkpoint 46 audit — 2026-08-02
+
+### Scope Reviewed
+
+- The latest Checkpoint 46 scope and result in [pa23/plan.md](plan.md), the
+  PA23 contract in [pa23/README.md](README.md), and the repository test and
+  reference rules in [TESTING_AND_REFERENCES.md](../TESTING_AND_REFERENCES.md).
+- The latest implementation commit `59c93fb` (`Fix PA23 template partial
+  ordering`), its preceding audit checkpoint `508a32f`, and the changed
+  `dev/src/pa18_templates_rewrite.cpp` partial-ordering path, together with
+  its typed `TemplateDefinition` and class-specialization selection callers.
+- The complete current-PA report and primary log at
+  `/home/vishvananda/work/.ralph/luna-gpt-5.6-luna-ultra/last-test.log`, the
+  focused template-template ordering and deduction witnesses, the required
+  through-PA22 report, and the PA23 source file audit.
+
+### Findings
+
+- The checkpoint remains on the normal parser/AST collection, typed template
+  selection and substitution, replay, PA14 lowering, and LowIR emission path.
+  No compiler phase was skipped; there is no dummy or embedded output,
+  interpreter/VM/trampoline substitute, reference-binary or host-compiler
+  invocation, source/test-specific acceptance gate, or unchecked output path.
+- The new concrete-vs-template-template ordering branch had a real semantic
+  defect: its final `return lhs_template_head == 0` also declared every
+  no-template-headed pattern more specialized than a concrete class-template
+  head.  Unrelated shapes such as a pointer pattern versus a class-template
+  pattern must be decided by the existing structural matcher, not by that
+  category heuristic.
+- The new head classification also canonicalized and rescanned pattern and
+  parameter data separately for each pairwise partial-order comparison.  That
+  was avoidable hot-path recomputation.  Template-parameter kind remains
+  sourced from typed `TemplateParameter` metadata; pattern spelling is used
+  only once per comparator to locate the structural head and repeated shape.
+- No emitted LowIR text is reparsed for semantic facts.  The checkpoint does
+  not add a fallback-success path, timeout cap/retry, sleep, or timeout-only
+  acceptance rule.  The reentrant static-query timeout remains a genuine
+  semantic termination failure in the refreshed work map.
+- The file audit reports the same 12 non-fatal repository advisories and no
+  fatal size, hidden-fragment, weakened-check, or unchecked-path finding.  No
+  test, `.ref` file, harness, checker rule, or reference output was changed.
+
+### Changes Made
+
+- Replaced the integer template-head classification and duplicate rescans in
+  `dev/src/pa18_templates_rewrite.cpp` with a local enum and one
+  `TemplateHeadShape` summary built from typed template-parameter details and
+  one canonical pattern walk.
+- Restricted the immediate ordering rule to the two sound relations:
+  concrete class-template head over template-template head, and the existing
+  repeated template-template shape over an unconstrained head.  Concrete
+  versus unrelated no-head patterns now falls through to structural partial
+  ordering instead of accepting a heuristic result.
+- Refreshed the checkpoint plan and this audit only; no test or reference
+  fixture was modified.
+
+### Validation
+
+- `make build` — **PASS**.
+- Focused witnesses — **5/5 PASS**: the template-template partial-ordering
+  case, its function-template deduction companion, and three earlier PA23
+  regression witnesses.
+- `make test-report ACTIVE_TEST_REPORT_PAS='pa23'` — **389/396**.  The
+  result equals the audit-turn baseline and the complete residual set is
+  three status failures, one genuine timeout, and three LowIR comparisons.
+- Required prior-through command (`n=23; ... make
+  test-report-through-pa22`) — **PASS, 2100/2100**.
+- `perl scripts/cppgm_file_audit.pl --stage pa23 --paths dev/src` —
+  **PASS**, with the unchanged 12 advisory warnings and no fatal finding.
+- `git diff --check` — **PASS**.  The current-PA result stayed at the
+  turn-start baseline while earlier assignments remained clean.
+
+### Remaining Work Map
+
+- **Qualified dependent-result replay — 2 status failures:**
+  `general/500-dependent-qualified-member-template-result-bool.t` and
+  `general/500-recursive-qualified-member-template-bool-arg.t` still lose the
+  concrete nested owner/result type during recursive member-template replay.
+- **Reentrant static-query identity/cache — 2 cases:**
+  `general/500-reentrant-static-query-callable-enable-if-cache.t` still fails
+  to reuse the dependent result query, and
+  `general/500-reentrant-static-query-enable-if-partial.t` remains a timeout
+  during recursive partial-specialization selection.
+- **Owner/declaration LowIR materialization — 3 comparisons:**
+  `spec/100-out-of-class-conversion-operator-definition.t`,
+  `spec/400-defaulted-nested-class-argument-partial-specialization.t`, and
+  `spec/400-defaulted-template-arg-partial-base-completion.t` still differ
+  in generated declaration/owner materialization and call identity.
+
+### Next Substantial Checkpoint Group
+
+Bundle all seven remaining fixtures into one final PA23 integration group:
+first trace the four qualified-result/reentrant cases through the typed
+owner/result and semantic-query identity boundary, then validate and close the
+three owner/declaration LowIR comparisons against that same identity.  Keep
+the timeout as a termination regression gate; do not add a timing-based,
+fixture-specific, or emitted-text acceptance path.

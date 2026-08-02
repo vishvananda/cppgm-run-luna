@@ -213,63 +213,61 @@ bool PA18TemplateExpander::SplitDirectFunctionType(const string& raw,
 			if(lhs_reference_cv && (lhs_reference_cv | rhs_reference_cv) == lhs_reference_cv) return true;
 			if(rhs_reference_cv && (lhs_reference_cv | rhs_reference_cv) == rhs_reference_cv) return false;
 		}
-		const auto template_head_kind = [](const TemplateDefinition& definition) {
-			if(definition.specialization_pattern.empty()) return 0;
-			const string pattern = CanonicalSpelling(definition.specialization_pattern[0]);
-			const size_t open = pattern.find('<');
-			if(open == string::npos) return 0;
-			const string name = pattern.substr(0, open);
-			for(size_t parameter = 0; parameter < definition.specialization_parameters.size() &&
-				parameter < definition.specialization_parameter_details.size(); ++parameter)
-				if(definition.specialization_parameters[parameter] == name &&
-					definition.specialization_parameter_details[parameter].template_template)
-					return 1;
-			return 2;
+		enum TemplateHeadKind {
+			no_template_head,
+			template_template_head,
+			concrete_template_head
 		};
-		const int lhs_template_head = template_head_kind(lhs);
-		const int rhs_template_head = template_head_kind(rhs);
-		if(lhs_template_head != rhs_template_head) {
-			const auto repeated_template_head_shape = [](const TemplateDefinition& definition) {
-				string repeated_head;
-				size_t occurrences = 0;
-				for(size_t pattern = 0; pattern < definition.specialization_pattern.size();
-					++pattern) {
-					const string spelling = CanonicalSpelling(
-						definition.specialization_pattern[pattern]);
-					const size_t open = spelling.find('<');
-					if(open == string::npos) continue;
-					const string name = spelling.substr(0, open);
-					bool template_parameter = false;
-					for(size_t parameter = 0; parameter <
-						definition.specialization_parameters.size() &&
-						parameter < definition.specialization_parameter_details.size();
-						++parameter)
-						if(definition.specialization_parameters[parameter] == name &&
-							definition.specialization_parameter_details[parameter].template_template) {
-							template_parameter = true;
-							break;
-						}
-					if(!template_parameter) continue;
-					if(repeated_head.empty()) repeated_head = name;
-					if(repeated_head == name) ++occurrences;
+		struct TemplateHeadShape {
+			TemplateHeadKind kind;
+			bool repeated;
+			TemplateHeadShape() : kind(no_template_head), repeated(false) {}
+		};
+		const auto template_head_shape = [](const TemplateDefinition& definition) {
+			TemplateHeadShape shape;
+			set<string> template_template_names;
+			for(size_t parameter = 0; parameter < definition.specialization_parameter_details.size();
+				++parameter)
+				if(definition.specialization_parameter_details[parameter].template_template)
+					template_template_names.insert(
+						definition.specialization_parameter_details[parameter].name);
+			string repeated_head;
+			size_t occurrences = 0;
+			for(size_t pattern_index = 0;
+				pattern_index < definition.specialization_pattern.size(); ++pattern_index) {
+				const string pattern = CanonicalSpelling(
+					definition.specialization_pattern[pattern_index]);
+				const size_t open = pattern.find('<');
+				if(open == string::npos) continue;
+				const string name = pattern.substr(0, open);
+				if(template_template_names.find(name) == template_template_names.end()) {
+					if(pattern_index == 0) shape.kind = concrete_template_head;
+					continue;
 				}
-				return occurrences > 1;
-			};
-			const bool lhs_repeated_template_head = repeated_template_head_shape(lhs);
-			const bool rhs_repeated_template_head = repeated_template_head_shape(rhs);
+				if(pattern_index == 0) shape.kind = template_template_head;
+				if(repeated_head.empty()) repeated_head = name;
+				if(repeated_head == name) ++occurrences;
+			}
+			shape.repeated = occurrences > 1;
+			return shape;
+		};
+		const TemplateHeadShape lhs_template_head = template_head_shape(lhs);
+		const TemplateHeadShape rhs_template_head = template_head_shape(rhs);
+		if(lhs_template_head.kind != rhs_template_head.kind) {
 			// A concrete class-template head is narrower than a template-template
 			// head.  The template-template-vs-unconstrained ordering is otherwise
 			// intentionally kept at its historical fallback; repeated heads are
 			// the shape where the specialized candidate constrains every argument.
-			if(lhs_template_head == 2 || rhs_template_head == 2) {
-				if(lhs_template_head == 2 && rhs_template_head == 1) return true;
-				if(lhs_template_head == 1 && rhs_template_head == 2) return false;
-			}
-			if(lhs_template_head == 1 && rhs_template_head == 0 &&
-				lhs_repeated_template_head && !rhs_repeated_template_head) return true;
-			if(lhs_template_head == 0 && rhs_template_head == 1 &&
-				rhs_repeated_template_head && !lhs_repeated_template_head) return false;
-			return lhs_template_head == 0;
+			if(lhs_template_head.kind == concrete_template_head &&
+				rhs_template_head.kind == template_template_head) return true;
+			if(lhs_template_head.kind == template_template_head &&
+				rhs_template_head.kind == concrete_template_head) return false;
+			if(lhs_template_head.kind == template_template_head &&
+				rhs_template_head.kind == no_template_head)
+				return lhs_template_head.repeated;
+			if(lhs_template_head.kind == no_template_head &&
+				rhs_template_head.kind == template_template_head)
+				return !rhs_template_head.repeated;
 		}
 	const auto template_head_arity = [&](const TemplateDefinition& definition,
 			size_t* fixed, bool* trailing_pack) {

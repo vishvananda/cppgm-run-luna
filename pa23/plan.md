@@ -5155,3 +5155,40 @@ template replay, and the declaration lookup that consumes the result.  Keep
 the reentrant-query timeout as a termination gate for that boundary, then
 validate both qualified fixtures and the full report before touching the
 comparison-only LowIR cases.
+
+## Checkpoint 46 audit result — 2026-08-02
+
+The audit fixed a real partial-ordering boundary defect in the completed
+candidate-local SFINAE increment.  The new concrete/template-template head
+classification no longer treats every no-head pattern as more specialized
+than a concrete class-template head; unrelated shapes now reach the existing
+structural ordering logic.  The head kind and repeated-head fact are derived
+once per comparator from typed template-parameter metadata and one pattern
+walk, removing the new duplicate canonicalization and parameter rescans.
+
+Validation after the audit fix is **389/396** for the full PA23 report,
+unchanged from the audit-turn baseline, **2100/2100** through PA22, and a
+passing PA23 file audit with the same 12 advisory warnings.  The focused
+ordering/deduction and regression witnesses pass, and no timeout workaround,
+output fallback, test-specific gate, or reference/test change was introduced.
+
+### Refreshed Remaining Work Map
+
+- **Qualified dependent-result replay — 2 status failures:**
+  `general/500-dependent-qualified-member-template-result-bool.t` and
+  `general/500-recursive-qualified-member-template-bool-arg.t`.
+- **Reentrant static-query identity/cache — 2 cases:**
+  `general/500-reentrant-static-query-callable-enable-if-cache.t` and
+  `general/500-reentrant-static-query-enable-if-partial.t` (timeout).
+- **Owner/declaration LowIR materialization — 3 comparisons:**
+  `spec/100-out-of-class-conversion-operator-definition.t`,
+  `spec/400-defaulted-nested-class-argument-partial-specialization.t`, and
+  `spec/400-defaulted-template-arg-partial-base-completion.t`.
+
+### Next Substantial Checkpoint Group after the Audit
+
+Bundle all seven remaining fixtures into the next PA23 integration group.
+Start with the four typed dependent-result/reentrant-query cases, then close
+the three owner/declaration LowIR comparisons using the same owner identity.
+Retain the reentrant timeout as a termination gate and keep all acceptance on
+the normal typed semantic and LowIR pipelines.
