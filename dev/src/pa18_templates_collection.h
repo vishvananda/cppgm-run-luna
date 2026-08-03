@@ -483,6 +483,7 @@ struct ExplicitCallSelection; struct MemberCallState; struct MemberCallCandidate
 public:
 	vector<CPPGMAstNodePtr> Run(const vector<CPPGMAstNodePtr>& input);
 private:
+	struct DeferredTemplateSummary { bool recursive_dependent_source; bool function_type_argument; bool dependent_nontype_expression; DeferredTemplateSummary() : recursive_dependent_source(false), function_type_argument(false), dependent_nontype_expression(false) {} bool requires_deferred_replay() const { return recursive_dependent_source || function_type_argument; } };
 	string StripTemplateArgumentsForValidation(const string& raw) const;
 	bool ValidationHasNoexcept(const CPPGMAstNodePtr& node) const;
 	void CollectValidationNames(const CPPGMAstNodePtr& node, set<string>& names) const;

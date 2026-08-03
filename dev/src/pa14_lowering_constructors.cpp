@@ -8,24 +8,38 @@ using namespace std;
 namespace cppgm_pa14_lowering {
 
 bool PA14Lowerer::TryElideEmptyClassConversion(
-  VariablePlan* variable, const TypePtr& target, const TypePtr& source,
+  const TypePtr& target, const TypePtr& source,
   const CPPGMAstNodePtr& expression, Scope* scope)
 {
-  if(!variable || !expression || expression->kind != "id-expression" ||
+  if(!expression || expression->kind != "id-expression" ||
      !target || !source || !IsEmptyBaseStorage(target) ||
      !IsTrivialValueStorage(target) || !IsEmptyBaseStorage(source) ||
-     !IsTrivialValueStorage(source)) return false;
+     !IsTrivialValueStorage(source) || type_value(source)->is_volatile) return false;
   Binding* conversion = FindConversionOperator(source, target, true);
   if(!conversion) return false;
   FunctionRecord* record = RecordForBinding(conversion);
-  if(record) {
-    record->needed = true;
-    FunctionRecord* base_entry = BaseEntryFor(record);
-    if(base_entry) base_entry->needed = true;
-  }
-  (void)EmitAddress(CPPGMAstNodePtr(new CPPGMAstNode(
-    "id-expression", variable->source_name)), scope);
-  variable->elided_empty_conversion = true;
+  if(!record || record->deleted || record->indirect_result || !record->node)
+    return false;
+  TypePtr conversion_type = function_target_type(record->type);
+  if(!conversion_type || !conversion_type->child ||
+     !PA12SameType(type_value(conversion_type->child), type_value(target), true))
+    return false;
+  CPPGMAstNodePtr body = ChildOfKind(record->node, "compound-statement");
+  if(!body || body->children.size() != 1 || !body->children[0] ||
+     body->children[0]->kind != "return-statement" ||
+     body->children[0]->children.size() != 1) return false;
+  CPPGMAstNodePtr returned = body->children[0]->children[0];
+  if(!returned || returned->kind != "call-expression" ||
+     returned->children.empty()) return false;
+  CPPGMAstNodePtr arguments = returned->children.size() > 1 ?
+    returned->children[1] : CPPGMAstNodePtr();
+  if(arguments && !arguments->children.empty()) return false;
+  TypePtr constructed = ConstructorObjectType(returned->children[0], scope);
+  if(!constructed || !PA12SameType(type_value(constructed), type_value(target), true) ||
+     HasDefaultInitializationEffects(target) || HasDestructor(target)) return false;
+  record->needed = true;
+  FunctionRecord* base_entry = BaseEntryFor(record);
+  if(base_entry) base_entry->needed = true;
   return true;
 }
 

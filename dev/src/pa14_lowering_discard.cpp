@@ -96,10 +96,6 @@ void PA14Lowerer::EmitDiscard(const CPPGMAstNodePtr& node, Scope* scope)
     TypePtr value_type = expression_value_type(info);
     if(info.category == "lvalue" && value_type &&
        (value_type->kind == TYPE_CLASS || value_type->kind == TYPE_ARRAY)) {
-      if(node->kind == "id-expression") {
-        VariablePlan* local = LocalForName(node->value);
-        if(local && local->elided_empty_conversion) return;
-      }
       (void)EmitAddress(node, scope);
       return;
     }

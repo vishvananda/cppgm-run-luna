@@ -612,7 +612,7 @@ void PA14Lowerer::EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr&
             destination = EmitAddress(CPPGMAstNodePtr(new CPPGMAstNode(
               "id-expression", variable->source_name)), scope);
           }
-          if(TryElideEmptyClassConversion(variable, aggregate_type, source_type, expression, scope)) return;
+          if(TryElideEmptyClassConversion(aggregate_type, source_type, expression, scope)) return;
           if(!variable->parameter && expression->kind == "conditional-expression" &&
              PA12SameType(source_type, aggregate_type, true) &&
              FindValueMember(aggregate_type, false, false) &&

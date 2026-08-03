@@ -5339,3 +5339,35 @@ replay as one semantic termination group, validating the two reentrant fixtures
 first and then the recursive fixture without changing ordinary partial,
 sizeof, alias-SFINAE, or explicit-pack replay.  The two owner/declaration
 LowIR comparisons remain the following group.
+
+## Checkpoint 50 audit result — 2026-08-03
+
+The checkpoint audit removed two checkpoint-level shortcuts: deferred replay
+facts are now carried in a typed summary with general class-template-head
+preservation, and empty-class conversion elision no longer uses a downstream
+variable-name flag or synthesized address.  Conversion elision is limited to
+an inert, recorded value-initialized result; other conversions use normal
+object transfer.  No timeout workaround, output fallback, test-specific gate,
+or unchecked source path was added.
+
+Validation: `make test-report ACTIVE_TEST_REPORT_PAS='pa23'` remains **391/396**,
+equal to the audit-turn baseline; PA1 through PA22 remain **2100/2100**; and
+the PA23 file audit passes with warnings only.
+
+### Remaining Work Map after Checkpoint 50 Audit
+
+- **Qualified-result and reentrant query termination (3 status cases):**
+  `general/500-recursive-qualified-member-template-bool-arg.t`,
+  `general/500-reentrant-static-query-callable-enable-if-cache.t`, and
+  `general/500-reentrant-static-query-enable-if-partial.t` (timeout).
+- **Generated owner/declaration LowIR materialization (2 comparisons):**
+  `spec/400-defaulted-nested-class-argument-partial-specialization.t` and
+  `spec/400-defaulted-template-arg-partial-base-completion.t`.
+
+### Next Substantial Checkpoint Group after the Audit
+
+Bundle all five remaining fixtures.  Start with the typed owner/query
+termination boundary shared by the three status cases, then use that stable
+identity to close the two generated owner/declaration comparisons.  Retain
+the timeout as a semantic termination gate and keep acceptance on the normal
+typed semantic and LowIR pipelines.

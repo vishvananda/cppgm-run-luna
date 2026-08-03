@@ -2192,3 +2192,105 @@ owner/result and semantic-query identity boundary, then validate and close the
 three owner/declaration LowIR comparisons against that same identity.  Keep
 the timeout as a termination regression gate; do not add a timing-based,
 fixture-specific, or emitted-text acceptance path.
+
+## Checkpoint 50 audit — 2026-08-03
+
+### Scope Reviewed
+
+- The latest Checkpoint 49 scope and Checkpoint 50 result in
+  [pa23/plan.md](plan.md), the PA23 contract in [README.md](README.md), and
+  the repository testing/reference rules in
+  [TESTING_AND_REFERENCES.md](../TESTING_AND_REFERENCES.md).
+- Recent checkpoint commits `59c93fb`, `1e0fbdc`, `db09114`, and `19a84f2`,
+  including the deferred-template replay files, the PA14 empty-class
+  conversion lowering files, and `dev/frontend_source_sets.mk`.
+- The complete PA23 report and primary log at
+  `/home/vishvananda/work/.ralph/luna-gpt-5.6-luna-ultra/last-test.log`, the
+  conversion witness, the remaining qualified/reentrant witnesses, the two
+  remaining LowIR comparisons, the PA14 object-initialization contract, and
+  the through-PA22 regression suite.
+
+### Findings
+
+- The checkpoint remains on the normal preprocessing, parsing, typed template
+  collection/replay, semantic selection, PA14 lowering, and LowIR emission
+  pipeline.  No compiler phase is skipped; there is no dummy or embedded
+  output, interpreter/VM/trampoline substitute, reference-binary or host
+  compiler invocation, source/test-specific acceptance gate, or unchecked
+  output path.
+- The deferred replay increment had two architectural shortcuts.  It encoded
+  replay facts as an untyped integer bitmask and preserved nested class
+  template heads only when the enclosing template happened to be named
+  `call` or `next`.  That was stringly semantic state and a source-name
+  acceptance path, not a general template rule.
+- The empty-class conversion increment used a variable-plan flag and a
+  synthesized target `id-expression` to emit an address during initialization
+  so a later discarded use could suppress its own address.  This duplicated
+  ownership of the discarded expression and made output depend on pass order.
+  It also treated a missing lowering record as successful elision.
+- No timeout cap, retry, sleep, fallback-success path, emitted-text reparsing,
+  or broad registry/full-suite walk was added.  The reentrant timeout remains
+  an ordinary semantic termination failure in the complete current-PA map,
+  not an acceptance workaround.  Deferred replay now performs only bounded
+  scans of the current template spelling and typed definition metadata.
+- The file-audit path is unchanged and remains authoritative.  There is no
+  source moved behind an unchecked path, weakened checker, hidden implementation
+  fragment, or test/reference modification.
+
+### Changes Made
+
+- Replaced the deferred replay integer flags with the typed
+  `DeferredTemplateSummary`, threaded that summary through `RewriteText`, and
+  generalized empty-binding protection to every recognized class-template
+  head.  The `call`/`next` name checks were removed.  When the through-PA22
+  run exposed an over-broad restoration of the PA20 `enabled()` expression,
+  the rewrite was narrowed to restore source spelling only when a class head
+  was actually preserved.
+- Restricted empty-class conversion elision to a recorded, direct-result
+  conversion whose body is exactly an inert value-initialized target
+  construction.  Volatile sources, deleted/indirect/missing records, and
+  non-inert bodies use the ordinary object-transfer path.
+- Removed `VariablePlan::elided_empty_conversion`, its synthesized address, and
+  the downstream discard-side name lookup.  The normal discard lowering now
+  owns its own lvalue address operation.
+- No tests, `.ref` files, harnesses, checker rules, or reference binaries were
+  changed.  The audit and checkpoint result below are the only documentation
+  updates.
+
+### Validation
+
+- `make build` — **PASS**.
+- The focused conversion witness — **PASS**.  The three remaining semantic
+  termination cases and two LowIR comparisons reproduce the checkpoint
+  failure set without a new failure.
+- `make test-report ACTIVE_TEST_REPORT_PAS='pa23'` — **391/396**.  This is at
+  the turn-start baseline; the complete residual set is two status mismatches,
+  one genuine timeout, and two LowIR comparisons.
+- Required prior-through command (`n=23; if [ "$n" -le 1 ]; then echo
+  '===== ALL TESTS PASSED SUCCESSFULLY! (0/0) ====='; else make
+  test-report-through-pa$((n - 1)); fi`) — **PASS**, 2100/2100 through PA22.
+- `perl scripts/cppgm_file_audit.pl --stage pa23 --paths dev/src` — **PASS**,
+  with advisory warnings only and no fatal size, hidden-fragment, or
+  unchecked-path finding.
+- `git diff --check` — **PASS**.  Current-PA progress stayed at or above the
+  391/396 checkpoint baseline while all earlier assignments remained clean.
+
+### Remaining Work Map
+
+- **Qualified-result and reentrant query termination — 3 status cases:**
+  `general/500-recursive-qualified-member-template-bool-arg.t`,
+  `general/500-reentrant-static-query-callable-enable-if-cache.t`, and
+  `general/500-reentrant-static-query-enable-if-partial.t` (timeout) still
+  need one stable typed owner/query fixed point.
+- **Generated owner/declaration LowIR materialization — 2 comparisons:**
+  `spec/400-defaulted-nested-class-argument-partial-specialization.t` and
+  `spec/400-defaulted-template-arg-partial-base-completion.t` still differ in
+  generated declaration demand or call identity.
+
+### Next Substantial Checkpoint Group
+
+Bundle all five remaining fixtures.  Resolve the three qualified-result and
+reentrant-query cases through one typed owner/query identity and termination
+boundary, then close the two generated owner/declaration comparisons against
+that same identity.  Keep the timeout as a semantic termination gate; do not
+add timing-based, fixture-specific, or emitted-text acceptance behavior.
