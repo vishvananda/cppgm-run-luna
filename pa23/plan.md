@@ -5273,3 +5273,69 @@ type partial specialization without materializing the same callable owner
 again.  Use the recursive qualified-result fixture as the termination gate,
 then carry the same stable query identity into the two reentrant static-query
 fixtures.  The three LowIR comparisons remain after this semantic group.
+
+## Checkpoint 49 scope — typed pack replay and current failure refresh — 2026-08-02
+
+### Remaining Work Map
+
+The full current-PA report is now **392/396** (up from the 389/396 turn-start
+baseline), with PA1 through PA22 still clean.  The complete remaining set is
+grouped as follows:
+
+- **Recursive qualified-result replay (1 status failure):**
+  `general/500-recursive-qualified-member-template-bool-arg.t` still loses a
+  generated nested owner while replaying a function-type partial
+  specialization.
+- **Owner/declaration LowIR materialization (3 comparisons):**
+  `spec/100-out-of-class-conversion-operator-definition.t`,
+  `spec/400-defaulted-nested-class-argument-partial-specialization.t`, and
+  `spec/400-defaulted-template-arg-partial-base-completion.t` still disagree
+  on generated declaration demand, object initialization, or call identity.
+
+The two reentrant static-query fixtures and the explicit-pack type fixture now
+pass.
+
+### Checkpoint Scope
+
+Complete the generic typed pack replay boundary for explicit function
+template-ids inside pack expansions: retain the current pack element when its
+source spelling collides with a local typedef, while leaving ordinary alias
+and non-type argument rewriting unchanged.  Validate the explicit-pack
+witness and the full PA23 report, then use the recursive qualified-result
+fixture as the next semantic termination gate.  The three LowIR comparisons
+remain the following group.
+
+## Checkpoint 50 result — empty-class conversion transfer demand — 2026-08-02
+
+### Result
+
+The typed object-initialization path now recognizes a named lvalue conversion
+between empty, trivial class values, retains the selected conversion definition
+and nested constructor demand, and avoids materializing an empty return object.
+The variable plan records that boundary so a later discarded use does not add a
+spurious address-only evaluation.  The helper lives with constructor lowering;
+the control module remains within the PA23 file-audit limit.
+
+Validation: the focused out-of-class conversion fixture passes; the current PA
+report is **391/396** (up from the 389/396 turn-start baseline), PA1 through
+PA22 pass **2100/2100**, and the PA23 file audit passes with warnings only.
+
+### Remaining Work Map
+
+- **Reentrant and recursive qualified-result replay (3 status failures):**
+  `general/500-recursive-qualified-member-template-bool-arg.t` fails during
+  recursive replay, `general/500-reentrant-static-query-callable-enable-if-cache.t`
+  exits unsuccessfully, and `general/500-reentrant-static-query-enable-if-partial.t`
+  times out.
+- **Generated owner/declaration LowIR (2 comparisons):**
+  `spec/400-defaulted-nested-class-argument-partial-specialization.t` and
+  `spec/400-defaulted-template-arg-partial-base-completion.t` still disagree
+  on generated declaration demand or call identity.
+
+### Next Checkpoint Scope
+
+Bound the reentrant static-query cache identity and recursive qualified-result
+replay as one semantic termination group, validating the two reentrant fixtures
+first and then the recursive fixture without changing ordinary partial,
+sizeof, alias-SFINAE, or explicit-pack replay.  The two owner/declaration
+LowIR comparisons remain the following group.

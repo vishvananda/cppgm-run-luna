@@ -660,6 +660,7 @@ PA14Lowerer::VariablePlan* PA14Lowerer::AddVariablePlan(const string& name, cons
     plan.parameter = false;
     plan.parameter_address = false;
     plan.slot_declared = false;
+    plan.elided_empty_conversion = false;
     plan.parameter_operand.clear();
     if(declarator) state_->plans[declarator.get()] = &plan;
     if(state_->environments.empty()) state_->environments.push_back(map<string, VariablePlan*>());

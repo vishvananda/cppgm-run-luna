@@ -197,6 +197,7 @@ class PA14Lowerer
     bool parameter;
     bool parameter_address;
     bool slot_declared;
+    bool elided_empty_conversion;
     string parameter_operand;
   };
 
@@ -637,6 +638,12 @@ bool EmitObjectTransferAt(const TypePtr& target, const string& destination,
                           const CPPGMAstNodePtr& source, Scope* scope,
                           bool allow_explicit = true,
                           bool implicit_return_move = false);
+
+bool TryElideEmptyClassConversion(VariablePlan* variable,
+                                  const TypePtr& target,
+                                  const TypePtr& source,
+                                  const CPPGMAstNodePtr& expression,
+                                  Scope* scope);
 
 bool EmitValueSpecialMemberBody(FunctionRecord& function, Scope* scope);
 

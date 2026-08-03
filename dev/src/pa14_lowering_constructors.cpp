@@ -7,6 +7,28 @@ using namespace std;
 
 namespace cppgm_pa14_lowering {
 
+bool PA14Lowerer::TryElideEmptyClassConversion(
+  VariablePlan* variable, const TypePtr& target, const TypePtr& source,
+  const CPPGMAstNodePtr& expression, Scope* scope)
+{
+  if(!variable || !expression || expression->kind != "id-expression" ||
+     !target || !source || !IsEmptyBaseStorage(target) ||
+     !IsTrivialValueStorage(target) || !IsEmptyBaseStorage(source) ||
+     !IsTrivialValueStorage(source)) return false;
+  Binding* conversion = FindConversionOperator(source, target, true);
+  if(!conversion) return false;
+  FunctionRecord* record = RecordForBinding(conversion);
+  if(record) {
+    record->needed = true;
+    FunctionRecord* base_entry = BaseEntryFor(record);
+    if(base_entry) base_entry->needed = true;
+  }
+  (void)EmitAddress(CPPGMAstNodePtr(new CPPGMAstNode(
+    "id-expression", variable->source_name)), scope);
+  variable->elided_empty_conversion = true;
+  return true;
+}
+
 static string CompactConstructorTypeSpelling(const string& raw)
 {
     string result;

@@ -20,6 +20,7 @@ void PA14Lowerer::EmitGlobalInitializer(GlobalRecord& global, Scope* scope)
     plan.type = type;
     plan.initializer = global.initializer;
     plan.global = &global;
+    plan.elided_empty_conversion = false;
 
     if(type_is_reference(type)) {
       if(!expression) return;
