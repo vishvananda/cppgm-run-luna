@@ -270,7 +270,7 @@ PA14Lowerer::FunctionRecord* PA14Lowerer::EnsurePureVirtual(const VirtualMethodI
   for (size_t i = 0; i < functions_.size(); ++i) {
     FunctionRecord& existing = functions_[i];
     if (!existing.builtin || existing.qualified_name != "__cxa_pure_virtual") continue;
-    existing.needed = true;
+    MarkFunctionNeeded(&existing);
     return &existing;
   }
   functions_.push_back(FunctionRecord());
@@ -282,7 +282,7 @@ PA14Lowerer::FunctionRecord* PA14Lowerer::EnsurePureVirtual(const VirtualMethodI
   record->qualified_name = "__cxa_pure_virtual";
   record->symbol = "__cxa_pure_virtual";
   record->builtin = true;
-  record->needed = true;
+  MarkFunctionNeeded(record);
   record->effects = "readnone";
   record->unwind_no = true;
   record->noreturn = true;
@@ -343,13 +343,13 @@ PA14Lowerer::FunctionRecord* PA14Lowerer::EnsureVirtualDestructor(const TypePtr&
       complete->node = special;
     }
   }
-  complete->needed = true;
+  MarkFunctionNeeded(complete);
   if (deleting) {
     const string qname = complete->qualified_name + "__deleting_entry";
     const string key = function_key(qname, complete->source_type);
     map<string, FunctionRecord*>::const_iterator found = function_by_key_.find(key);
     if (found != function_by_key_.end()) {
-      found->second->needed = true;
+      MarkFunctionNeeded(found->second);
       return found->second;
     }
     functions_.push_back(FunctionRecord());
@@ -366,7 +366,7 @@ PA14Lowerer::FunctionRecord* PA14Lowerer::EnsureVirtualDestructor(const TypePtr&
     entry->member = true;
     entry->destructor = true;
     entry->deleting_entry = true;
-    entry->needed = true;
+    MarkFunctionNeeded(entry);
     entry->unwind_no = complete->unwind_no;
     entry->special_initializer = complete->special_initializer;
     entry->template_instantiation = complete->template_instantiation;
@@ -396,7 +396,7 @@ PA14Lowerer::FunctionRecord* PA14Lowerer::EnsureVirtualDestructor(const TypePtr&
       entry->definition = true;
       entry->member = true;
       entry->destructor = true;
-      entry->needed = true;
+      MarkFunctionNeeded(entry);
       entry->unwind_no = complete->unwind_no;
       entry->base_entry = true;
       entry->base_entry_for = complete->qualified_name;
@@ -415,7 +415,7 @@ PA14Lowerer::FunctionRecord* PA14Lowerer::VirtualFunctionRecord(const TypePtr& r
   FunctionRecord* record = slot.binding ? RecordForBinding(slot.binding) : 0;
   if (!record && slot.owner)
     record = FindFunction(TypeQualifiedName(slot.owner) + "::" + slot.name, slot.function);
-  if (record) record->needed = true;
+  if (record) MarkFunctionNeeded(record);
   return record;
 }
 
@@ -479,7 +479,7 @@ void PA14Lowerer::PreparePolymorphicModel()
       FunctionRecord* record = RecordForBinding(constructors[i]);
       if (record && record->constructor && !record->static_member) {
         if (!record->implicit_constructor && constructors[i]->access == "protected")
-          record->needed = true;
+          MarkFunctionNeeded(record);
         EnsureConstructorBaseEntry(record);
         break;
       }
@@ -497,7 +497,7 @@ void PA14Lowerer::PreparePolymorphicModel()
         EnsureVirtualDestructor(type, method, true);
       } else {
         FunctionRecord* record = VirtualFunctionRecord(type, method);
-        if (record) record->needed = true;
+        if (record) MarkFunctionNeeded(record);
       }
     }
   }
@@ -537,7 +537,7 @@ void PA14Lowerer::PreparePolymorphicModel()
       functions_[i]);
     for (size_t j = 0; j < needed_before.size() && j < functions_.size(); ++j)
       functions_[j].needed = needed_before[j];
-    if (has_virtual_call) functions_[i].needed = true;
+    if (has_virtual_call) MarkFunctionNeeded(&functions_[i]);
   }
 }
 
@@ -643,7 +643,7 @@ void PA14Lowerer::EmitPolymorphicGlobals(vector<string>& entries)
       if (!function) {
         table << "  ptr addr @__cxa_pure_virtual\n";
       } else {
-        function->needed = true;
+        MarkFunctionNeeded(function);
         table << "  ptr addr @" << function->symbol << "\n";
       }
     }

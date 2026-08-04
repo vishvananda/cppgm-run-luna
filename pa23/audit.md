@@ -2294,3 +2294,102 @@ reentrant-query cases through one typed owner/query identity and termination
 boundary, then close the two generated owner/declaration comparisons against
 that same identity.  Keep the timeout as a semantic termination gate; do not
 add timing-based, fixture-specific, or emitted-text acceptance behavior.
+
+## Final PA23 stage audit — 2026-08-04
+
+### Audit Plan
+
+- Re-read the PA23 contract in [README.md](README.md), the testing and
+  reference rules in [TESTING_AND_REFERENCES.md](../TESTING_AND_REFERENCES.md),
+  the complete checkpoint history in [plan.md](plan.md), and the recorded
+  checkpoint audits above.
+- Review the final checkpoint commit `7aec483` (`Complete PA23 constructor
+  materialization`) together with the preceding replay, partial-ordering,
+  deferred-replay, and lowering audits (`c069e8a`, `a50744c`, `19a84f2`,
+  `db09114`, `59c93fb`, and `1e0fbdc`).
+- Trace the integrated source path from analyzer/template collection and typed
+  replay through PA14 constructor/object lowering, demand closure, and LowIR
+  emission. Check semantic ownership, reachability, lifecycle ordering,
+  deferred-instantiation timing, output/action order, performance, and
+  forbidden shortcut paths.
+- Recheck the two final generated-owner/defaulted-argument fixtures, the three
+  replay/termination witnesses that preceded them, all earlier assignment
+  gates through PA22, the PA23 file audit, and repository diff/cleanliness
+  state.
+
+### Findings
+
+- PA23 is complete on the intended pipeline. PA18-PA22 typed declarations,
+  template arguments, deduction bindings, substitution results, generated
+  owners, and deferred replay records feed the existing analyzer and PA14
+  lowering path; the final checkpoint does not add a separate template-only
+  emitter or a textual LowIR repair pass.
+- The final checkpoint correctly separates semantic constructor demand from
+  runtime initialization. `GlobalRecord::demand_constant_constructors` and
+  `DemandConstantObjectConstructors` preserve the typed constructor closure
+  for zero-storage constant/elided objects, while normal nontrivial objects
+  still use `EmitGlobalInitializer` and `EmitConstructorAt` to emit actions.
+  `HasElidedTemplateInitialization` is restricted to materialized template
+  classes with empty/trivial storage and inert forwarding construction, so
+  ordinary constructors, incomplete classes, destructors, and non-forwarding
+  references retain their normal behavior.
+- The checkpoint's demand-order lifecycle fix is now complete across the
+  collection, polymorphic, and lowering paths. Positive reachability edges
+  use `MarkFunctionNeeded`, which owns the `needed` bit and first-demand order;
+  `MemberEmissionOrder` can therefore apply stable lifecycle ordering without
+  relying on whichever subsystem happened to set a raw flag. The remaining
+  direct `needed = false` writes are scoped snapshot restoration for
+  polymorphic demand discovery, not new ownership edges.
+- The audit found and fixed one state-preservation gap: when a global
+  declaration and its later definition share a key, the new deferred
+  constructor-closure bit must be merged into the existing `GlobalRecord`.
+  `StoreGlobalDeclaration` now preserves that bit with the other merged
+  declaration state, preventing order-dependent loss of generated lifecycle
+  demand.
+- No reference binary, host compiler, shell-out, timeout acceptance, embedded
+  output, test-name gate, source-fragment fallback, or fixture/reference edit
+  is present. The final cleanup only changes typed reachability bookkeeping in
+  `dev/src/pa14_lowering_collection.cpp` and
+  `dev/src/pa17_lowering_polymorphic.cpp`; no new source file or unchecked
+  source path was introduced.
+- The file audit has no fatal finding. Its 12 warnings are the established
+  shared header/catch-all-division advisories and one pre-existing duplicate
+  helper block; the final PA23 changes introduce no new file-audit warning,
+  oversized path, hidden implementation fragment, or weakened checker.
+- Demand marking is constant-time per edge, nested constant-object discovery
+  is scoped to flagged initializers, and member/function emission remains a
+  demand-driven fixed point. The final implementation does not add a full
+  registry walk, repeated AST serialization, or retry/timing mechanism to make
+  tests terminate.
+
+### Changes Made
+
+- Centralized every positive PA14/PA17 function-demand edge that was still
+  writing `needed` directly through `MarkFunctionNeeded`, including explicit
+  and out-of-class definitions, materialized special members, generated base
+  entries, static-member replay, virtual functions, and virtual destructor
+  entries.
+- Merged `demand_constant_constructors` when `StoreGlobalDeclaration` folds a
+  later declaration/definition into an existing global record.
+- Preserved all existing tests, reference fixtures, harnesses, checker rules,
+  and stage handouts. The source changes are a cohesive audit cleanup of the
+  final lowering checkpoint; the documentation changes record the completed
+  stage review and architecture handoff.
+
+### Validation
+
+- `make build` — **PASS**.
+- Final-checkpoint focused witnesses — **5/5 PASS**:
+  `spec/400-defaulted-nested-class-argument-partial-specialization.t`,
+  `spec/400-defaulted-template-arg-partial-base-completion.t`,
+  `general/500-recursive-qualified-member-template-bool-arg.t`,
+  `general/500-reentrant-static-query-callable-enable-if-cache.t`, and
+  `general/500-reentrant-static-query-enable-if-partial.t`.
+- `make test-report-through-pa23` — **PASS**, `2496 / 2496` tests and
+  `23 / 23` stages.
+- `perl scripts/cppgm_file_audit.pl --stage pa23 --paths dev/src` — **PASS**,
+  with the 12 advisory warnings described above and no fatal finding.
+- `git diff --check` — **PASS**.
+- No test or `.ref` file changed. The final commit and `git status --short` —
+  **PASS**; the worktree is clean and the stage has no remaining PA23 work
+  map.

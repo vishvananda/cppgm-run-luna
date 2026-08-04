@@ -410,7 +410,8 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
 	if((node->explicit_specialization &&
 		(node->kind == "function-definition" ||
 		 node->kind == "special-member-definition")) ||
-		node->explicit_instantiation || node->extern_instantiation) record->needed = true;
+		node->explicit_instantiation || node->extern_instantiation)
+	  MarkFunctionNeeded(record);
 	record->weak_binding = record->template_instantiation && !record->extern_template &&
 		!record->explicit_specialization;
 	record->inline_definition = record->inline_definition || HasInline(node) || facts.is_constexpr;
@@ -424,7 +425,7 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
 	// specialization retain their typed definition.
 	if(out_of_class_definition && !record->member_template &&
 		(!record->template_instantiation || concrete_specialized_definition))
-		record->needed = true;
+		MarkFunctionNeeded(record);
 	if(node->template_instantiation || node->extern_instantiation) {
 		record->template_primary = node->template_primary;
 		record->template_arguments = node->template_arguments;
@@ -451,7 +452,7 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
 				const FunctionRecord& materialized = functions_[prior];
 				if(!materialized.member_template || materialized.member_owner != member_owner ||
 					LastComponent(materialized.template_primary) != ordinary_member_name) continue;
-				record->needed = true;
+				MarkFunctionNeeded(record);
 				break;
 			}
 		}
@@ -503,7 +504,7 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
     ClassifySpecialMember(record);
     if(definition && facts.is_constexpr && record->member && record->static_member &&
        raw_name.find("::") != string::npos)
-      record->needed = true;
+      MarkFunctionNeeded(record);
     if(definition && !hidden_friend) {
       map<const CPPGMAstNode*, Scope*>::const_iterator function_scope =
         analyzer_.function_scopes_.find(node.get());
@@ -813,7 +814,7 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
 		record->template_instantiation && owner->template_specialization &&
 		record->source_type && record->source_type->parameters.empty()) {
 		if(materialized_member_object_uses_.find(owner.get()) !=
-			materialized_member_object_uses_.end()) record->needed = true;
+			materialized_member_object_uses_.end()) MarkFunctionNeeded(record);
 	}
 	if(record->defaulted && record->value_special_member)
       record->unwind_no = record->unwind_no || IsTrivialValueStorage(owner);
@@ -824,7 +825,7 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
 		  (!node->template_instantiation ||
 			   complete_template_object_uses_.find(owner.get()) !=
 				complete_template_object_uses_.end())) || concrete_specialized_definition)) {
-		record->needed = true;
+		MarkFunctionNeeded(record);
 	}
 	const bool constructor_record = record->constructor;
 	if(constructor_record &&
@@ -834,7 +835,7 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
       EnsureConstructorBaseEntry(record);
       if(out_of_class_definition) {
         FunctionRecord* base_entry = BaseEntryFor(record);
-        if(base_entry) base_entry->needed = true;
+        if(base_entry) MarkFunctionNeeded(base_entry);
       }
     }
     const TypePtr destructor_owner = type_value(record->member_owner);
@@ -855,7 +856,7 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
       base_entry.static_member = record->static_member;
       base_entry.destructor = true;
       base_entry.unwind_no = record->unwind_no;
-      base_entry.needed = true;
+      MarkFunctionNeeded(&base_entry);
       base_entry.base_entry = true;
       base_entry.base_entry_for = record->qualified_name;
       base_entry.special_initializer = record->special_initializer;
@@ -1357,6 +1358,8 @@ void PA14Lowerer::StoreGlobalDeclaration(GlobalRecord& record,
       prior->thread_local_storage = prior->thread_local_storage || record.thread_local_storage;
       prior->dynamic_initializer = prior->dynamic_initializer || record.dynamic_initializer;
       prior->dynamic_finalizer = prior->dynamic_finalizer || record.dynamic_finalizer;
+      prior->demand_constant_constructors =
+        prior->demand_constant_constructors || record.demand_constant_constructors;
       stored = prior;
     }
     if(stored && stored->thread_local_storage && stored->dynamic_initializer)
@@ -1425,7 +1428,7 @@ void PA14Lowerer::CollectClassStaticMember(const CPPGMAstNodePtr& child,
             FirstIdentifier(functions_[function].node->children[1]) : string();
           if(mentions(record.initializer, source_name) ||
              (!generated_name.empty() && mentions(record.initializer, generated_name)))
-            functions_[function].needed = true;
+            MarkFunctionNeeded(&functions_[function]);
         }
     }
     record.internal = false;

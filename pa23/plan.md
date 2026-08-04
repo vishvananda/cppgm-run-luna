@@ -5484,3 +5484,62 @@ warnings only.
 Run the final diff and repository cleanliness checks, commit this cohesive
 PA23 lowering increment, and leave the worktree clean for the full-stage
 handoff.
+
+## Architecture Review — final PA23 stage audit — 2026-08-04
+
+The completed stage preserves the compiler's staged architecture:
+
+- Translation units are still analyzed into the shared PA10 AST and typed
+  semantic scopes before template collection/replay. PA18-PA22 typed
+  definitions, argument bindings, partial-specialization results, generated
+  owners, and deferred records remain the source of truth for PA23 behavior.
+- `PA14Lowerer::PrepareLoweringProgram` collects and finalizes symbols only
+  after analysis and replay have established the class/function/global records.
+  `EmitInitialFunctionRoots`, `EmitMemberPass`, `EmitNeededOrdinary`, and the
+  final entry pass close demand frontiers over those records rather than
+  interpreting emitted LowIR text.
+- Constructor and object semantics remain in the ordinary PA14 lowering
+  family. `DemandConstantObjectConstructors` records closure demand for
+  constant/elided objects without manufacturing runtime actions;
+  `EmitGlobalInitializer`, `EmitObjectConstructor`, `EmitConstructorAt`, and
+  destructor lowering retain ownership of observable lifetime instructions.
+- `MarkFunctionNeeded` is the single positive reachability boundary for the
+  final demand-driven passes. It records first-demand order on the owning
+  `FunctionRecord`, while `GlobalRecord` merges deferred constructor demand
+  across redeclarations. Base entries and generated member records therefore
+  remain attached to their typed owner and are emitted through the same
+  lifecycle fixed point.
+- The final nested-owner ordering is a presentation/order policy over already
+  selected typed records. It does not change specialization selection,
+  substitution failure, overload ranking, or the order of instructions inside
+  a generated body. LowIR declaration order remains canonicalized as allowed
+  by the PA23 contract, while action order remains produced by the normal
+  lowering routines.
+- The final cleanup is performance-safe: demand marking is O(1), constructor
+  closure walking is limited to flagged initializers, and no reference/host
+  compiler or timing fallback participates in compilation. The PA23 file
+  audit remains within its fatal limits; its existing shared-division warnings
+  are recorded in the final audit and are not new unchecked implementation
+  paths.
+
+## Final Architecture Review
+
+The stage is ready for the PA24 handoff. The full integration surface now
+composes dependent names, deduction and partial ordering, packs, aliases,
+template-template parameters, SFINAE, deferred instantiation, explicit and
+extern specialization replay, generated owners, constructors, static members,
+and ordinary LowIR lowering without a PA23-only output path. The final
+generated-owner/defaulted-argument checkpoint is covered by the two spec
+fixtures, and the preceding recursive/reentrant replay boundary remains
+covered by its three termination witnesses.
+
+The final audit found no semantic shortcut or ownership leak requiring a new
+architecture layer. The only implementation cleanup was to route remaining
+positive demand edges through the typed reachability helper and to preserve
+deferred constructor demand when global declarations merge. Earlier
+assignments are preserved by the clean through-PA23 report, and the exact
+stage/file-audit evidence is recorded in `pa23/audit.md`.
+
+Final architecture conclusion: PA23 is complete, regression-safe through PA23,
+file-audit clean apart from the established non-fatal advisories, and ready to
+leave the worktree clean for the next assignment.
