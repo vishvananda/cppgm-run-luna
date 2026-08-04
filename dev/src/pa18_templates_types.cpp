@@ -5,7 +5,8 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
-string PA18TemplateExpander::MemberAliasType(const string& class_key, const string& member) const
+string PA18TemplateExpander::MemberAliasType(const string& class_key, const string& member,
+	bool allow_nested_class) const
 {
 	const string owner_key = CanonicalSpelling(RemoveMarker(class_key));
 	const string member_name = CanonicalSpelling(RemoveMarker(member));
@@ -50,12 +51,21 @@ string PA18TemplateExpander::MemberAliasType(const string& class_key, const stri
 			}
 		}
 	}
+	// The aliases-only fallback below also sees generated nested class members.
+	// A nested class and a type alias cannot share a member name, so an indexed
+	// concrete declaration is authoritative evidence that this lookup is a type
+	// member, not an alias suitable for replacing a bare identifier.
+	if(!allow_nested_class && class_declarations_.find(JoinPath(owner_key, member_name)) !=
+		class_declarations_.end()) return string();
 	map<string, string> substitutions;
 	set<string> active;
 	string inherited;
 	if(FindClassMemberType(owner_key, member_name, substitutions, PrefixComponent(owner_key),
-		&inherited, &active, true))
+		&inherited, &active, true)) {
+		if(!allow_nested_class && CanonicalSpelling(inherited) == CanonicalSpelling(JoinPath(owner_key,
+			member_name))) return string();
 		return QualifyNestedMembers(inherited, owner_key, declaration);
+	}
 	return string();
 }
 string PA18TemplateExpander::QualifyNestedMembers(string spelling, const string& class_key,

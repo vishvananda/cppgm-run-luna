@@ -541,9 +541,26 @@ bool PA14Lowerer::EmitObjectTransferAt(const TypePtr& raw_target,
 {
     TypePtr target = type_value(raw_target);
     if(!target || target->kind != TYPE_CLASS || !source) return false;
+    CPPGMAstNodePtr lambda_source = source;
+    while(lambda_source && lambda_source->kind == "parenthesized-expression" &&
+          lambda_source->children.size() == 1 && lambda_source->children[0])
+      lambda_source = lambda_source->children[0];
+    if(lambda_source && lambda_source->kind == "lambda-expression") {
+      const TypePtr closure = LambdaClosureType(lambda_source);
+      if(closure && PA12SameType(closure, target, true))
+        {
+          InitializeLambdaClosureAt(closure, destination, lambda_source, scope);
+        return true;
+        }
+    }
     if(source->kind == "braced-init-list") {
       const vector<CPPGMAstNodePtr> arguments = source->children;
-      const bool allow_aggregate = EnsureAggregateConstructor(target) != 0;
+      // List-initialization may omit the tail of an aggregate.  Let the
+      // constructor path append those defaulted members even when an implicit
+      // default entry was already collected for the complete class; a later
+      // empty-list probe must not turn aggregate initialization into a
+      // separate default-constructor call.
+      const bool allow_aggregate = true;
       return EmitConstructorAt(target, destination, arguments, scope,
         allow_explicit, false, allow_aggregate);
     }
@@ -630,7 +647,12 @@ bool PA14Lowerer::EmitObjectTransferAt(const TypePtr& raw_target,
         return true;
       }
     }
-    ExprInfo source_info = Infer(source, scope);
+    ExprInfo source_info;
+    if(lambda_source && lambda_source->kind == "lambda-expression" &&
+       LambdaClosureType(lambda_source))
+      source_info = Infer(lambda_source, scope, LambdaClosureType(lambda_source));
+    else
+      source_info = Infer(source, scope);
     TypePtr source_type = expression_value_type(source_info);
     if(!source_type || source_type->kind != TYPE_CLASS) {
       vector<CPPGMAstNodePtr> arguments;
@@ -1458,7 +1480,6 @@ void PA14Lowerer::EmitLiveDestructors(Scope* scope)
       }
     }
   }
-
 void PA14Lowerer::RegisterTemporaryObject(const TypePtr& type, const string& address)
 {
     if(!state_ || !type || address.empty()) return;

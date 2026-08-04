@@ -84,15 +84,29 @@ string PA18TemplateExpander::FunctionResultType(const TemplateDefinition& defini
 			return string();
 		}
 	}
+	map<string, map<string, vector<string> > >::const_iterator cached_packs =
+		inferred_function_pack_substitutions_.find(FunctionPackKey(definition,
+			arguments, context, explicit_prefix));
 	size_t argument_index = 0;
 	for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter) {
 		const TemplateParameter& detail = definition.parameters[parameter];
 		if(detail.pack) {
 			size_t count = 0;
+			vector<string> values;
+			bool cached_pack_found = false;
+			if(cached_packs != inferred_function_pack_substitutions_.end()) {
+				map<string, vector<string> >::const_iterator cached =
+					cached_packs->second.find(detail.name);
+				if(cached != cached_packs->second.end()) {
+					cached_pack_found = true;
+					values = cached->second;
+					count = values.size();
+				}
+			}
 			map<string, size_t>::const_iterator explicit_count =
 				explicit_pack_counts.find(detail.name);
-			if(explicit_count != explicit_pack_counts.end()) count = explicit_count->second;
-			else {
+			if(!cached_pack_found && explicit_count != explicit_pack_counts.end()) count = explicit_count->second;
+			else if(!cached_pack_found && explicit_count == explicit_pack_counts.end()) {
 				size_t trailing_fixed = 0, trailing_known_pack = 0;
 				for(size_t later = parameter + 1; later < definition.parameters.size(); ++later) {
 					if(!definition.parameters[later].pack) ++trailing_fixed;
@@ -107,8 +121,7 @@ string PA18TemplateExpander::FunctionResultType(const TemplateDefinition& defini
 				const size_t reserved = trailing_fixed + trailing_known_pack;
 				count = available > reserved ? available - reserved : 0;
 			}
-			vector<string> values;
-			for(size_t value = 0; value < count; ++value)
+			if(!cached_pack_found) for(size_t value = 0; value < count; ++value)
 				values.push_back(arguments[argument_index + value]);
 			if(!detail.name.empty()) {
 				active_pack_substitutions_[detail.name] = values;
@@ -257,6 +270,19 @@ bool PA18TemplateExpander::ImmediateReturnConstraintDisabled(
 	return PA19Raw(enabled) == 0;
 }
 
+string PA18TemplateExpander::FunctionPackKey(const TemplateDefinition& definition,
+	const vector<string>& arguments, const string& context,
+	const vector<string>* explicit_prefix) const
+{
+	ostringstream key;
+	key << definition.declaration.get() << "|" << context;
+	for(size_t argument = 0; argument < arguments.size(); ++argument)
+		key << "|a:" << CanonicalSpelling(arguments[argument]);
+	if(explicit_prefix) for(size_t argument = 0; argument < explicit_prefix->size(); ++argument)
+		key << "|e:" << CanonicalSpelling((*explicit_prefix)[argument]);
+	return key.str();
+}
+
 bool PA18TemplateExpander::InferFunctionTypeArguments(const TemplateDefinition& definition,
 	const vector<string>& actual_types, vector<string>* result,
 	const map<string, string>& substitutions, const string& context,
@@ -287,6 +313,21 @@ bool PA18TemplateExpander::InferFunctionTypeArguments(const TemplateDefinition& 
 		if(definition.parameters[i].pack) pack_parameter_names.insert(definition.parameters[i].name);
 	}
 	map<string, vector<string> > inferred_packs;
+	const auto by_value_deduction_type = [this](const string& raw_pattern,
+		const string& raw_actual) {
+		string pattern = CanonicalSpelling(raw_pattern);
+		string actual = CollapseReferenceSpelling(raw_actual);
+		const bool reference_pattern =
+			(pattern.size() >= 2 && pattern.compare(pattern.size() - 2, 2, "&&") == 0) ||
+			(!pattern.empty() && pattern[pattern.size() - 1] == '&');
+		if(!reference_pattern) {
+			while(actual.size() >= 2 && actual.compare(actual.size() - 2, 2, "&&") == 0)
+				actual = CanonicalSpelling(actual.substr(0, actual.size() - 2));
+			while(!actual.empty() && actual[actual.size() - 1] == '&')
+				actual = CanonicalSpelling(actual.substr(0, actual.size() - 1));
+		}
+		return actual;
+	};
 	if(explicit_prefix) {
 		// Explicit template arguments use the same left-to-right pack rule as
 		// ordinary call deduction.  A pack before a later fixed parameter absorbs
@@ -335,10 +376,11 @@ bool PA18TemplateExpander::InferFunctionTypeArguments(const TemplateDefinition& 
 			if(pack_pattern.size() >= 3 &&
 				pack_pattern.compare(pack_pattern.size() - 3, 3, "...") == 0)
 				pack_pattern.erase(pack_pattern.size() - 3);
-			for(size_t visit = 0; visit < visits; ++visit) {
-				map<string, string> one;
-				if(!MatchTypePattern(pack_pattern, actual_types[actual + visit],
-					parameter_names, &one, context)) return false;
+				for(size_t visit = 0; visit < visits; ++visit) {
+					map<string, string> one;
+					if(!MatchTypePattern(pack_pattern, by_value_deduction_type(pack_pattern,
+						actual_types[actual + visit]),
+						parameter_names, &one, context)) return false;
 				for(map<string, string>::const_iterator binding = one.begin();
 					binding != one.end(); ++binding) {
 					if(pack_parameter_names.find(binding->first) != pack_parameter_names.end())
@@ -370,7 +412,7 @@ bool PA18TemplateExpander::InferFunctionTypeArguments(const TemplateDefinition& 
 		}
 		if(dependent) {
 			const string dependent_pattern = CanonicalSpelling(pattern);
-			const string actual_type = CollapseReferenceSpelling(actual_types[actual]);
+			const string actual_type = by_value_deduction_type(pattern, actual_types[actual]);
 			if(dependent_pattern.size() > 2 &&
 				dependent_pattern.compare(dependent_pattern.size() - 2, 2, "&&") == 0 &&
 				!actual_type.empty() && actual_type[actual_type.size() - 1] == '&') {
@@ -379,16 +421,25 @@ bool PA18TemplateExpander::InferFunctionTypeArguments(const TemplateDefinition& 
 				if(parameter_names.find(base) != parameter_names.end()) inferred[base] = actual_type;
 				else if(!MatchTypePattern(dependent_pattern, actual_type,
 					parameter_names, &inferred, context)) return false;
-			} else if(!MatchTypePattern(dependent_pattern, actual_type,
-				parameter_names, &inferred, context)) return false;
+				} else if(!MatchTypePattern(dependent_pattern, actual_type,
+					parameter_names, &inferred, context)) return false;
 		}
 		++actual;
 	}
+	map<string, vector<string> > resolved_packs = inferred_packs;
 	for(size_t i = 0; i < definition.parameters.size(); ++i) {
 		if(definition.parameters[i].pack) {
-			map<string, vector<string> >::const_iterator found = inferred_packs.find(
+			map<string, vector<string> >::const_iterator found = resolved_packs.find(
 				definition.parameters[i].name);
-			if(found != inferred_packs.end())
+			if(found == resolved_packs.end()) {
+				map<string, string>::const_iterator scalar = inferred.find(
+					definition.parameters[i].name);
+				if(scalar != inferred.end())
+					resolved_packs[definition.parameters[i].name] =
+						SplitTemplateArguments(scalar->second);
+				found = resolved_packs.find(definition.parameters[i].name);
+			}
+			if(found != resolved_packs.end())
 				result->insert(result->end(), found->second.begin(), found->second.end());
 			continue;
 		}
@@ -400,8 +451,9 @@ bool PA18TemplateExpander::InferFunctionTypeArguments(const TemplateDefinition& 
 			// that is a failed candidate, not a hard error in the surrounding
 			// expression (the usual detection-idiom/SFINAE boundary).
 			try {
-				result->push_back(RewriteText(definition.parameters[i].default_type,
-					context, inferred, 0));
+					const string rewritten_default = RewriteText(definition.parameters[i].default_type,
+						context, inferred, 0);
+					result->push_back(rewritten_default);
 			} catch(const PA18SubstitutionFailure&) {
 				result->clear();
 				return false;
@@ -409,6 +461,8 @@ bool PA18TemplateExpander::InferFunctionTypeArguments(const TemplateDefinition& 
 		}
 		else return false;
 	}
+	inferred_function_pack_substitutions_[FunctionPackKey(definition, *result,
+		context, explicit_prefix)] = resolved_packs;
 	(void)substitutions;
 	return true;
 }

@@ -74,6 +74,12 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformInstantiatedNode(
 	}
 	try {
 		RegisterEarlyIntegralMembers(definition, context, substitutions);
+		if(definition.declaration && (definition.declaration->kind ==
+			"class-specifier" || definition.declaration->kind ==
+			"function-definition" || definition.declaration->kind ==
+			"special-member-definition"))
+			MaterializeDeferredLambdaClasses(definition.declaration, context,
+				substitutions);
 		CPPGMAstNodePtr result = TransformNode(definition.declaration, context, substitutions);
 		active_integral_substitutions_ = previous;
 		active_pack_substitutions_ = previous_packs;

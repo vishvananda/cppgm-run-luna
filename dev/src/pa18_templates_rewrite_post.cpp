@@ -43,6 +43,17 @@ void PA18TemplateExpander::DeduceAutoInitializerType(
             inferred = CanonicalSpelling(inferred.substr(0, inferred.size() - 9));
     }
     if(inferred.empty()) return;
+	const string variable_name = list->children[0]->children.empty() ?
+		string() : FirstIdentifierLocal(list->children[0]->children[0]);
+	if(!variable_name.empty()) {
+		// Auto deduction is a typed local-variable fact.  Keep the recovered type
+		// in the same scoped table used by later member-template deduction; the
+		// rewritten declaration spelling alone is not visible to those probes.
+		variable_types_[variable_name] = inferred;
+		function_parameter_types_[context][variable_name] = inferred;
+		if(!context.empty()) variable_qualified_names_[variable_name] =
+			JoinPath(context, variable_name);
+	}
     for(size_t i = 0; i < specs->children.size(); ++i)
         if(specs->children[i] && RemoveMarker(specs->children[i]->value) == "auto") {
             const size_t marker = specs->children[i]->value.find(':');

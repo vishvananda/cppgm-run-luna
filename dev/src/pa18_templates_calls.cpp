@@ -109,6 +109,13 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformCallExpression(
 		result_callee = result_callee->children[0];
 		result->children[0] = result_callee;
 	}
+	// A member-template body is still a dependent source body while a concrete
+	// class specialization is being assembled.  Replaying its calls here would
+	// materialize free-function specializations for the member's own parameters
+	// (for example move_like<U1>) before the member call supplies those types.
+	// Keep the transformed call typed by its source spelling; the concrete
+	// constructor replay path materializes the selected call later.
+	if(active_template_declaration_depth_ != 0) return result;
 	result_callee = MaterializeStaticCastCall(result, result_callee, context, substitutions);
 	bool constructor_replayed = false;
 	if(MaterializeNamedCallTarget(result, &result_callee, context, substitutions,

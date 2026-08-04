@@ -59,24 +59,6 @@ bool ContainsStaticAssert(const CPPGMAstNodePtr& node)
 	return false;
 }
 
-bool NeedsPA18Expansion(const CPPGMAstNodePtr& node)
-{
-	if(!node) return false;
-	if(node->kind == "literal" && !node->value.empty() &&
-		isdigit(static_cast<unsigned char>(node->value[0])) &&
-		node->value.find('_') != string::npos) return true;
-	if(node->kind == "template-declaration" ||
-		node->kind == "explicit-instantiation-declaration") return true;
-	if((node->kind == "id-expression" || node->kind == "decl-specifier" ||
-		node->kind == "type-name" || node->kind == "type-specifier" ||
-		node->kind == "class-specifier" || node->kind == "class-forward-declaration" ||
-		node->kind == "alias-declaration" || node->kind == "target") &&
-		node->value.find('<') != string::npos) return true;
-	for(size_t i = 0; i < node->children.size(); ++i)
-		if(NeedsPA18Expansion(node->children[i])) return true;
-	return false;
-}
-
 }
 
 namespace pa18_templates_internal {
@@ -144,6 +126,7 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformTranslationUnit(
 	namespace_occurrences_.clear();
 	CountNamespaceOccurrences(input, string());
 	CollectVariables(input, string());
+	PrepareLambdaClassFields(input);
 	CPPGMAstNodePtr result(new CPPGMAstNode("translation-unit"));
 	map<string, string> top_level_substitutions;
 	for(size_t i = 0; i < input->children.size(); ++i) {
@@ -1456,9 +1439,21 @@ void PA18TemplateExpander::CollectVariables(const CPPGMAstNodePtr& node,
 			const CPPGMAstNodePtr item = list->children[i];
 			if(!item || item->children.empty()) continue;
 			const string name = FirstIdentifierLocal(item->children[0]);
-			if(!name.empty() && !type.empty()) {
-				string declared_type = DeclaratorTypeSpelling(type, item->children[0]);
-				if(context.find("<unnamed>") != string::npos) {
+				if(!name.empty() && !type.empty()) {
+					string declared_type = DeclaratorTypeSpelling(type, item->children[0]);
+					// A local lambda has a synthetic closure class by the time
+					// variable facts are collected.  Preserve that typed identity for
+					// later decltype(fn) and pack-SFINAE probes instead of recording
+					// the source-only `auto` spelling.
+					if(item->children.size() > 1) {
+						const CPPGMAstNodePtr lambda = DescendantOfKind(
+							item->children[1], "lambda-expression");
+						map<const CPPGMAstNode*, string>::const_iterator closure =
+							lambda_class_names_.find(lambda.get());
+						if(lambda && closure != lambda_class_names_.end())
+							declared_type = closure->second;
+					}
+					if(context.find("<unnamed>") != string::npos) {
 					const string qualified_declared_type = QualifyTypeArgument(
 						declared_type, context, context, true);
 					if(!qualified_declared_type.empty()) declared_type = qualified_declared_type;

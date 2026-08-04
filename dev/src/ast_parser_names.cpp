@@ -115,7 +115,7 @@ bool Parser::ParseOperatorName(string* value, bool allow_template)
 		// cv/ref spelling before the call parentheses.  Keep that complete
 		// type-id together so an explicit conversion call remains one name.
 		string type;
-		while (!AtEnd() && !Is("("))
+		while (!AtEnd() && !Is("(") && !Is(";") && !Is(","))
 		{
 			if (!type.empty() &&
 			    (isalnum(static_cast<unsigned char>(type[type.size() - 1])) ||

@@ -240,6 +240,20 @@ public:
 		if (binding) result = binding->type;
 		else result = ExpressionType(expression, scope);
 		if (!result) throw logic_error("unknown decltype expression");
+		// A dependent decltype probe is represented by the existing `auto`
+		// placeholder until PA18 substitutes its operand.  Do not retain the
+		// unevaluated expression's value-category reference around that
+		// placeholder: a declaration such as `decltype(probe<T>())*` is a
+		// dependent pointer type during template collection, and a pointer to
+		// the temporary reference placeholder is not a valid semantic type.
+			if ((result->kind == TYPE_LVALUE_REFERENCE ||
+				result->kind == TYPE_RVALUE_REFERENCE) && result->child &&
+				((result->child->kind == TYPE_FUNDAMENTAL &&
+					result->child->name == "auto") ||
+				 result->child->kind == TYPE_TEMPLATE_PARAMETER ||
+				 result->child->kind == TYPE_TEMPLATE_TEMPLATE_PARAMETER)) {
+				result = result->child;
+			}
 		if (expression->kind == "parenthesized-expression")
 		{
 			const CPPGMAstNodePtr inner = expression->children.empty() ?
@@ -259,6 +273,14 @@ public:
 		while (!spelling.empty() && isspace(static_cast<unsigned char>(spelling[0]))) spelling.erase(0, 1);
 		while (!spelling.empty() && isspace(static_cast<unsigned char>(spelling[spelling.size() - 1])))
 			spelling.erase(spelling.size() - 1, 1);
+		// PA18 keeps an unresolved expression-SFINAE result as the typed
+		// `auto` placeholder.  Its source value category may be spelled `auto&`
+		// or `auto&&`, but that reference is not the final substituted type and
+		// must not be wrapped in the pointer declarator of the probe.
+		if (spelling == "auto&" || spelling == "auto&&")
+			return Fundamental("auto");
+		if (spelling.compare(0, 8, "KW_AUTO:") == 0)
+			spelling = spelling.substr(8);
 		spelling = StripTypeMarker(spelling); TypePtr function_type = ResolveFunctionSpelledType(spelling, scope, info); if (function_type) return function_type;
 		if(TypePtr array_reference = ResolveArrayReferenceSpelledType(spelling, scope, info)) return array_reference;
 		if (spelling.compare(0, 8, "typename ") == 0) spelling = spelling.substr(8);
@@ -347,7 +369,9 @@ public:
 						trailing_qualifiers[qualifier].second.second);
 			if (processed == suffixes.size()) break;
 			const char suffix = suffixes[suffixes.size() - processed - 1];
-			if (suffix == '*') base = PointerTo(base);
+			if (suffix == '*') {
+				base = PointerTo(base);
+			}
 			else base = ReferenceTo(suffix == 'R' ? TYPE_RVALUE_REFERENCE : TYPE_LVALUE_REFERENCE, base);
 		}
 		for (size_t i = array_bounds.size(); i > 0; --i)
@@ -620,6 +644,9 @@ public:
 			return TypeFromTypeId(expression->children[0], scope);
 		if (expression->kind == "call-expression" && !expression->children.empty())
 		{
+			if (expression->children[0] && expression->children[0]->kind ==
+				"id-expression" && IsFundamentalWord(expression->children[0]->value))
+				return Fundamental(expression->children[0]->value);
 			size_t arity = static_cast<size_t>(-1);
 			if (expression->children.size() > 1 && expression->children[1])
 				arity = expression->children[1]->children.size();

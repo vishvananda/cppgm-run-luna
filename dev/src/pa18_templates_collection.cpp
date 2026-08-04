@@ -1,7 +1,6 @@
 #include "pa18_templates_collection.h"
 #include "pa18_templates_rewrite.h"
 using namespace std;
-
 namespace pa18_templates_internal {
 
 bool IsTemplateQualifiedIdentifier(const string& raw, size_t identifier_begin)
@@ -928,10 +927,11 @@ void PA18TemplateExpander::IndexStaticMembers(const CPPGMAstNodePtr& node,
 		}
 	}
 }
-
 vector<CPPGMAstNodePtr> PA18TemplateExpander::Run(
 	const vector<CPPGMAstNodePtr>& input)
 {
+	vector<CPPGMAstNodePtr> working; for(size_t i = 0; i < input.size(); ++i)
+		working.push_back(CloneNode(input[i])); PrepareLambdaClasses(&working);
 	active_static_member_ = false;
 	generated_by_primary_.clear();
 	source_order_.clear();
@@ -939,19 +939,19 @@ vector<CPPGMAstNodePtr> PA18TemplateExpander::Run(
 	function<void(const CPPGMAstNodePtr&)> index_source_order =
 		[&](const CPPGMAstNodePtr& node) { if(!node) return; source_order_[node.get()] = source_order++;
 			for(size_t child = 0; child < node->children.size(); ++child) index_source_order(node->children[child]); };
-	for(size_t i = 0; i < input.size(); ++i) index_source_order(input[i]);
+	for(size_t i = 0; i < working.size(); ++i) index_source_order(working[i]);
 	active_source_order_ = static_cast<size_t>(-1);
-	ValidateTemplateDiagnostics(input);
-	for(size_t i = 0; i < input.size(); ++i)
-		CollectLexical(input[i], string(), string());
-	for(size_t i = 0; i < input.size(); ++i) Collect(input[i], string());
+	ValidateTemplateDiagnostics(working);
+	for(size_t i = 0; i < working.size(); ++i)
+		CollectLexical(working[i], string(), string());
+	for(size_t i = 0; i < working.size(); ++i) Collect(working[i], string());
 	ResolveUsingDeclarationTargets();
 	IndexOrdinaryConversionDefinitions();
-	for(size_t i = 0; i < input.size(); ++i)
-		ValidateTemplateArgumentKinds(input[i], string(), map<string, bool>());
+	for(size_t i = 0; i < working.size(); ++i)
+		ValidateTemplateArgumentKinds(working[i], string(), map<string, bool>());
 	vector<CPPGMAstNodePtr> result;
-	for(size_t i = 0; i < input.size(); ++i) {
-		CPPGMAstNodePtr tree = TransformTranslationUnit(input[i]);
+	for(size_t i = 0; i < working.size(); ++i) {
+		CPPGMAstNodePtr tree = TransformTranslationUnit(working[i]);
 		if(tree) result.push_back(tree);
 	}
 	return result;
@@ -988,11 +988,13 @@ void PA18TemplateExpander::CollectValidationNames(
 		names.insert(LastComponent(RemoveMarker(node->value)));
 	if(node->kind == "class-specifier" ||
 		node->kind == "class-forward-declaration" ||
+		node->kind == "enum-specifier" ||
 		node->kind == "function-definition" ||
 		node->kind == "special-member-definition" ||
 		node->kind == "special-member-declaration" ||
 		node->kind == "alias-declaration") {
-		const string name = DeclarationName(node);
+		const string name = node->kind == "enum-specifier" ?
+			LastComponent(node->value) : DeclarationName(node);
 		if(!name.empty()) names.insert(name);
 	}
 	if(node->kind == "simple-declaration") {

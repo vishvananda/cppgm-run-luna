@@ -3,6 +3,62 @@
 using namespace std;
 namespace pa18_templates_internal {
 
+string PA18TemplateExpander::AssignmentExpressionType(
+	const string& expression, const string& context,
+	const map<string, string>& substitutions, bool* handled)
+{
+	if(handled) *handled = false;
+	int angle = 0, parentheses = 0, brackets = 0;
+	const char* const operations[] = {
+		"<<=", ">>=", "+=", "-=", "*=", "/=", "%=", "&=", "^=", "|=", "="};
+	for(size_t position = 0; position < expression.size(); ++position) {
+		const char ch = expression[position];
+		if(ch == '(') ++parentheses;
+		else if(ch == ')' && parentheses > 0) --parentheses;
+		else if(ch == '[') ++brackets;
+		else if(ch == ']' && brackets > 0) --brackets;
+		else if(ch == '<' && IsTemplateAngleOpen(expression, position)) ++angle;
+		else if(ch == '>' && angle > 0 && IsTemplateAngleClose(expression, position)) --angle;
+		if(angle || parentheses || brackets) continue;
+		string operation;
+		for(size_t candidate = 0; candidate < sizeof(operations) / sizeof(*operations); ++candidate) {
+			const string wanted = operations[candidate];
+			if(expression.compare(position, wanted.size(), wanted) == 0) {
+				operation = operations[candidate];
+				break;
+			}
+		}
+		if(operation.empty()) continue;
+		if(handled) *handled = true;
+		const string left = ExpressionTypeSpelling(expression.substr(0, position),
+			context, substitutions);
+		const string right = ExpressionTypeSpelling(expression.substr(position + operation.size()),
+			context, substitutions);
+		if(left.empty() || right.empty()) return string();
+		if(operation == "=") {
+			const string left_object = FunctionArgumentObjectType(left, context);
+			if(LastComponent(left_object).compare(0, 9, "__lambda_") == 0 &&
+				FindClassDeclaration(left_object, context)) return string();
+		}
+		return !left.empty() && left[left.size() - 1] == '&' ? left :
+			CanonicalSpelling(left + "&");
+	}
+	return string();
+}
+
+string PA18TemplateExpander::AggregateExpressionType(
+	const string& expression, const string& context,
+	const map<string, string>& substitutions)
+{
+	if(expression.size() < 2 || expression.compare(expression.size() - 2, 2, "{}") != 0)
+		return string();
+	string aggregate = Trim(expression.substr(0, expression.size() - 2));
+	if(aggregate.empty()) return string();
+	aggregate = NormalizeTypeArgument(ResolveAlias(ReplaceIdentifiers(
+		RewriteText(aggregate, context, substitutions, 0), substitutions), context));
+	return IsKnownTypeSpelling(aggregate, context) ? aggregate : string();
+}
+
 string PA18TemplateExpander::NormalizeTemplateTemplateArgument(
 	string raw, const string& context,
 	const map<string, string>& substitutions) const
@@ -1147,7 +1203,7 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformRegularNode(
 		}
 		CPPGMAstNodePtr template_call = RewriteTemplateCastCall(input, context, substitutions);
 		if(template_call) return template_call;
-		CPPGMAstNodePtr result(new CPPGMAstNode(input->kind, input->value));
+	CPPGMAstNodePtr result(new CPPGMAstNode(input->kind, input->value));
 		result->initializer_form = input->initializer_form;
 		result->template_instantiation = input->template_instantiation;
 		result->explicit_specialization = input->explicit_specialization;
@@ -1179,4 +1235,6 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformRegularNode(
 	const bool defer_type_only_classes = input->kind == "alias-declaration" ||
 		(input->kind == "simple-declaration" && !input->children.empty() &&
 		 HasDeclarationSpecifier(input->children[0], "typedef"));
-	return FinishRegularNode(input, context, substitutions, result, promoted_local_class, defer_type_only_classes); } } // namespace pa18_templates_internal
+	CPPGMAstNodePtr finished = FinishRegularNode(input, context, substitutions, result,
+		promoted_local_class, defer_type_only_classes);
+	return finished; } } // namespace pa18_templates_internal

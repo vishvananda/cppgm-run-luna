@@ -476,8 +476,8 @@ struct FunctionSignature
 	CPPGMAstNodePtr result_specifiers;
 	CPPGMAstNodePtr declarator;
 	CPPGMAstNodePtr parameters; bool lvalue_argument; bool deleted; FunctionSignature() : result_specifiers(), declarator(), parameters(), lvalue_argument(false), deleted(false) {}
-}; bool IsDeletedFunctionDeclaration(const CPPGMAstNodePtr& declaration);
-string CanonicalBuiltinScalarSpelling(string raw);
+}; struct LambdaCaptureSpec { string name; bool this_capture; bool by_reference; string type; CPPGMAstNodePtr function_source; LambdaCaptureSpec(const string& capture_name = string(), bool is_this = false, bool by_ref = true) : name(capture_name), this_capture(is_this), by_reference(by_ref), type(), function_source() {} };
+bool IsDeletedFunctionDeclaration(const CPPGMAstNodePtr& declaration); string CanonicalBuiltinScalarSpelling(string raw); bool NeedsPA18Expansion(const CPPGMAstNodePtr& node);
 struct ExplicitCallSelection; struct MemberCallState; struct MemberCallCandidateState; class PA18TemplateExpander
 {
 public:
@@ -530,6 +530,8 @@ private:
 	set<string> class_contexts_;
 	set<string> function_contexts_;
 	map<string, string> function_owners_;
+	map<const CPPGMAstNode*, string> lambda_class_names_; map<pair<size_t, size_t>, string> lambda_class_names_by_span_; set<string> lambda_class_name_set_;
+	map<string, string> lambda_capture_contexts_; map<string, CPPGMAstNodePtr> lambda_source_nodes_; set<string> lambda_deferred_classes_; size_t next_lambda_serial_ = 0;
 	map<string, string> local_class_names_; map<string, CPPGMAstNodePtr> class_declarations_; map<string, set<string> > static_members_by_class_; map<string, vector<const TemplateDefinition*> > using_member_template_targets_;
 	map<string, vector<string> > constant_member_owners_;
 	set<string> named_type_contexts_; map<string, string> enumerator_types_; map<string, string> variable_types_; map<string, string> variable_qualified_names_;
@@ -540,24 +542,12 @@ private:
 	map<string, PA19IntegralValue> active_integral_substitutions_;
 	set<string> active_function_pointer_substitutions_, early_integral_members_;
 	set<IntegralEvaluationKey> active_integral_evaluations_;
-	// Source position of the explicit class instantiation currently being
-	// replayed.  Explicit instantiation only sees member definitions that have
-	// appeared before its declaration.
 	size_t explicit_instantiation_visibility_ = static_cast<size_t>(-1);
-	// During replay, the source class context remains dependent while its
-	// materialized class is being transformed.  Keep the concrete owner in
-	// typed state so an unqualified static member such as `_v` resolves to the
-	// current specialization rather than a previous specialization's fallback.
 	string active_instantiation_name_; bool active_static_member_;
-	// Propagate the concrete enclosing specialization through nested RewriteText
-	// calls without smuggling it through the ordinary identifier substitutions.
 	ConcreteOwnerContext active_concrete_owner_;
-	// A template parameter pack is a collection of typed substitutions.  Keep
-	// the collection separate from the scalar substitution map so an expanded
-	// declaration or call can consume every element without losing the first
-	// one to ordinary identifier replacement.
 	map<string, vector<string> > active_pack_substitutions_; map<string, vector<string> > active_pack_identifier_substitutions_;
 	map<string, vector<string> > active_function_pack_substitutions_;
+	map<string, map<string, vector<string> > > inferred_function_pack_substitutions_;
 	struct ActivePackScope
 	{
 		PA18TemplateExpander* owner;
@@ -571,9 +561,6 @@ private:
 		~ActivePackScope() { owner->active_pack_substitutions_ = saved; }
 	};
 	map<string, string> type_aliases_;
-	// Alias-template specializations retain whether a type argument was a
-	// reference alias.  This lets cv applied by the alias body follow the
-	// language rule for top-level cv on a reference typedef.
 	map<string, bool> reference_alias_specializations_;
 	map<string, vector<string> > type_aliases_by_name_;
 	map<string, CPPGMAstNodePtr> function_definitions_;
@@ -582,7 +569,6 @@ private:
 	map<string, vector<FunctionSignature> > function_overloads_; set<const CPPGMAstNode*> template_function_signatures_; map<string, string> specialization_bases_;
 	map<string, vector<string> > specialization_arguments_; map<string, const TemplateDefinition*> specialization_definitions_;
 	/* Owner-bound identity for replaying qualified nested member templates. */ map<string, string> specialization_bases_by_owner_; map<string, vector<string> > specialization_arguments_by_owner_;
-	// Use-site arity prevents deduction from binding a pack to class defaults.
 	map<string, size_t> specialization_explicit_argument_counts_;
 	map<string, vector<string> > specialization_names_by_base_; map<string, set<string> > specialization_name_sets_by_base_;
 	set<ClassSpecializationIdentity> instantiated_class_specializations_; set<const CPPGMAstNode*> explicit_class_specializations_seen_;
@@ -624,7 +610,7 @@ private:
 	string DeclaratorSuffix(const CPPGMAstNodePtr& declarator) const;
 	string ReturnDeclaratorSuffix(const CPPGMAstNodePtr& declarator) const;
 	string DeclaratorArraySuffix(const CPPGMAstNodePtr& declarator) const;
-	string MemberAliasType(const string& class_key, const string& member) const;
+	string MemberAliasType(const string& class_key, const string& member, bool allow_nested_class = false) const;
 	string QualifyNestedMembers(string spelling, const string& class_key,
 		const CPPGMAstNodePtr& declaration) const;
 	string ParameterTypeSpelling(const CPPGMAstNodePtr& parameter) const;
@@ -633,8 +619,6 @@ private:
 		const CPPGMAstNodePtr& declarator) const;
 	string TypeIdSpelling(const CPPGMAstNodePtr& type_id) const;
 	bool CollectImmediateReturnConstraint(const CPPGMAstNodePtr& declaration, string* condition) const; bool IsDirectCvQualifiedAliasTarget(const CPPGMAstNodePtr& declaration, const vector<TemplateParameter>& parameters) const;
-	// Keep generated declaration ownership in one typed helper so forwards,
-	// class shells, and materialized definitions cannot diverge.
 	string GeneratedOwner(const TemplateDefinition& definition) const; string QualifyAliasTarget(const string& target, const string& alias) const; void ResolveUsingDeclarationTargets(); bool HasUsingMemberTemplate(const string& context, const string& member) const;
 	bool HasReplayContext(const map<string, string>& substitutions) const
 	{
@@ -885,6 +869,22 @@ private:
 		for(size_t i = 0; i < node->children.size(); ++i)
 			CollectLexical(node->children[i], child_context, child_logical_context);
 	}
+	void PrepareLambdaClasses(vector<CPPGMAstNodePtr>* trees); void PrepareLambdaClassFields(const CPPGMAstNodePtr& tree);
+	void CollectExplicitLambdaCaptures(const CPPGMAstNodePtr& lambda, vector<LambdaCaptureSpec>* captures, set<string>* names, bool* has_default, bool* default_reference) const;
+	void AppendDefaultLambdaCaptures(const CPPGMAstNodePtr& lambda, const string& context, const set<string>& declared_variables, vector<LambdaCaptureSpec>* captures, set<string>* names, bool default_reference) const;
+	void ExpandLambdaCapturePacks(vector<LambdaCaptureSpec>* captures) const; vector<LambdaCaptureSpec> CollectLambdaCaptureSpecs(const CPPGMAstNodePtr& lambda, const string& context, const set<string>& declared_variables) const;
+	void ResolveLambdaCaptureTypes(const CPPGMAstNodePtr& tree, const string& context, vector<LambdaCaptureSpec>* captures) const; void InstallLambdaCaptureFields(const CPPGMAstNodePtr& class_node, const string& context, vector<LambdaCaptureSpec>* captures) const;
+	void SelectCapturedLambdaPackMember(const CPPGMAstNodePtr& node, size_t index) const;
+	void MaterializeDeferredLambdaClasses(const CPPGMAstNodePtr& source,
+		const string& context, const map<string, string>& substitutions);
+	void CollectLambdaClasses(const CPPGMAstNodePtr& node, const string& context,
+		const string& function_context, vector<CPPGMAstNodePtr>* generated,
+		bool call_argument = false, bool assignment_rhs = false,
+		bool template_context = false);
+	CPPGMAstNodePtr BuildLambdaClass(const CPPGMAstNodePtr& lambda,
+		const string& class_name) const;
+	string LambdaClassName(const CPPGMAstNodePtr& lambda,
+		const string& function_context);
 	bool RegisterExplicitFunctionSpecialization(
 		const CPPGMAstNodePtr& node, const CPPGMAstNodePtr& declaration,
 		const string& declaration_spelling, const string& context,

@@ -345,6 +345,12 @@ class PA14Lowerer
   vector<string> string_order_;
 	map<const CPPGMAstNode*, GlobalRecord*> local_static_plans_;
 	map<const CPPGMAstNode*, FunctionRecord*> lambda_functions_;
+	// PA18 preserves the source lambda and adds a synthetic closure class.  The
+	// final AST is rebuilt during template rewriting, so pointer identity is
+	// not stable here; source spans are the durable identity at this boundary.
+	map<pair<size_t, size_t>, string> lambda_closure_names_;
+	map<string, TypePtr> lambda_closure_types_;
+	map<string, CPPGMAstNodePtr> lambda_closure_nodes_;
 	size_t next_lambda_serial_;
 	set<string> deferred_static_members_;
 	set<const Type*> complete_template_object_uses_;
@@ -364,6 +370,7 @@ class PA14Lowerer
 	mutable bool hidden_friend_binding_index_ready_;
 	void IndexFriendOwners();
 	void IndexClassTypesByName();
+	void IndexLambdaClosures();
 	void IndexMaterializedMemberObjectUses();
   void IndexCompleteTemplateObjectUses(const CPPGMAstNodePtr& node,
                                        bool class_member_declaration = false);
@@ -666,7 +673,18 @@ bool IsEmptyBaseStorage(const TypePtr& type) const;
 
 bool IsTrivialValueStorage(const TypePtr& type) const;
 
-FunctionRecord* EnsureImplicitCopyConstructor(const TypePtr& type, bool move);
+	FunctionRecord* EnsureImplicitCopyConstructor(const TypePtr& type, bool move);
+
+	string LambdaClosureName(const CPPGMAstNodePtr& lambda) const;
+	TypePtr LambdaClosureType(const CPPGMAstNodePtr& lambda) const;
+	bool IsLambdaClosureType(const TypePtr& type) const;
+	bool LambdaNeedsClosure(const CPPGMAstNodePtr& lambda,
+	                       const TypePtr& expected = TypePtr()) const;
+	bool EmitLambdaClosureValue(const CPPGMAstNodePtr& lambda, Scope* scope,
+		const TypePtr& expected, Value* result);
+	bool IsLambdaOperator(const FunctionRecord& function) const;
+	void InitializeLambdaClosureAt(const TypePtr& closure, const string& destination,
+	                               const CPPGMAstNodePtr& lambda, Scope* scope);
 
 FunctionRecord* EnsureImplicitAssignment(const TypePtr& type, bool move);
 

@@ -76,10 +76,6 @@ inline vector<string> SplitCallArguments(const string& raw)
 		const map<string, string>& substitutions, const string& context)
 	{
 		const FunctionSignature* signature = FindFunctionSignature(callee, context);
-		// A call from a class member must prefer a member declaration over an
-		// out-of-class function-template definition with the same source name.
-		// The member's parameter spelling can still be dependent in the source
-		// class, so type equality alone cannot identify this ordinary match.
 		if(callee.find("::") == string::npos) {
 			const string owner = PrefixComponent(context);
 			const FunctionSignature* member = 0;
@@ -269,6 +265,9 @@ inline vector<string> SplitCallArguments(const string& raw)
 		const vector<string>& actual_types, vector<string>* result,
 		const map<string, string>& substitutions, const string& context,
 		const vector<string>* explicit_prefix = 0);
+	string FunctionPackKey(const TemplateDefinition& definition, const vector<string>& arguments, const string& context, const vector<string>* explicit_prefix = 0) const;
+	string AssignmentExpressionType(const string& expression, const string& context, const map<string, string>& substitutions, bool* handled);
+	string AggregateExpressionType(const string& expression, const string& context, const map<string, string>& substitutions);
 	bool ImmediateReturnConstraintDisabled(const TemplateDefinition& definition, const string& context, const map<string, string>& substitutions);
 	string FunctionResultType(const TemplateDefinition& definition,
 		const vector<string>& arguments, const string& context,
@@ -338,6 +337,9 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 	string BinaryExpressionType(string expression, const string& context,
 		const map<string, string>& substitutions)
 	{
+		bool assignment_handled = false; const string assignment =
+			AssignmentExpressionType(expression, context, substitutions, &assignment_handled);
+		if(assignment_handled) return assignment;
 		int angle = 0, parentheses = 0, brackets = 0;
 		for(size_t i = 0; i + 1 < expression.size(); ++i) {
 			const char ch = expression[i];
@@ -368,10 +370,6 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 			}
 			return IsKnownTypeSpelling(left, context) ? left : string();
 		}
-		// Preserve the historical member-shift path above, then handle the
-		// other top-level binary operators with the typed operator and builtin
-		// rules.  Keeping the shift path separate avoids treating the first `<`
-		// of `<<` as a template delimiter in the compact PA10 spelling.
 		angle = parentheses = brackets = 0;
 		for(size_t i = 0; i < expression.size(); ++i) {
 			const char ch = expression[i];
@@ -450,10 +448,6 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 		raw = NormalizeTypeArgument(ResolveAlias(ReplaceIdentifiers(raw, substitutions),
 			context));
 		if(IsKnownTypeSpelling(raw, context)) return raw;
-		// A type-only operand in decltype can name an alias declared in the
-		// current class.  IsKnownTypeSpelling intentionally describes global and
-		// qualified type names, so consult the typed class-member index for the
-		// unqualified spelling before treating it as an unknown dependent name.
 		for(string current = context; ; ) {
 			if(!current.empty()) {
 				string member_type;
@@ -580,6 +574,9 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 				if(template_argument < arguments.size()) ++template_argument;
 			}
 		}
+		map<string, map<string, vector<string> > >::const_iterator cached_packs = inferred_function_pack_substitutions_.find(FunctionPackKey(definition, arguments, context, explicit_prefix));
+		if(cached_packs != inferred_function_pack_substitutions_.end()) for(map<string, vector<string> >::const_iterator pack = cached_packs->second.begin(); pack != cached_packs->second.end(); ++pack) pack_arguments[pack->first] = pack->second;
+		ActivePackScope function_pack_scope(this); for(map<string, vector<string> >::const_iterator pack = pack_arguments.begin(); pack != pack_arguments.end(); ++pack) function_pack_scope.Set(pack->first, pack->second);
 		for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter) {
 			const TemplateParameter& detail = definition.parameters[parameter];
 			if(detail.type || detail.non_type_type.empty()) continue;
@@ -636,10 +633,10 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 						if(visit >= values.size()) return false;
 						one[pack_name] = values[visit];
 					}
-					string expected = RewriteText(pattern, context, one, 0);
-					expected = NormalizeTypeArgument(ReplaceIdentifiers(expected, one)); if(HasUnavailableGeneratedMemberType(expected, context, one)) return false;
-					if(!FunctionArgumentViable(expected, actual_types[actual + visit], context))
-						return false;
+						string expected = RewriteText(pattern, context, one, 0);
+						expected = NormalizeTypeArgument(ReplaceIdentifiers(expected, one)); if(HasUnavailableGeneratedMemberType(expected, context, one)) return false;
+						if(!FunctionArgumentViable(expected, actual_types[actual + visit], context))
+							return false;
 				}
 				actual += visits;
 				continue;
@@ -668,9 +665,9 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 				}
 				return false;
 			}
-			string expected = RewriteText(ParameterTypeSpelling(node), context, local, 0);
-			expected = NormalizeTypeArgument(ReplaceIdentifiers(expected, local)); if(HasUnavailableGeneratedMemberType(expected, context, local)) return false;
-				if(!FunctionArgumentViable(expected, actual_types[actual], context)) {
+				string expected = RewriteText(ParameterTypeSpelling(node), context, local, 0);
+				expected = NormalizeTypeArgument(ReplaceIdentifiers(expected, local)); if(HasUnavailableGeneratedMemberType(expected, context, local)) return false;
+					if(!FunctionArgumentViable(expected, actual_types[actual], context)) {
 					return false;
 				}
 			++actual;
@@ -681,6 +678,8 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 		const map<string, string>& substitutions)
 	{
 		expression = StripTextParentheses(CanonicalSpelling(expression));
+		const string aggregate = AggregateExpressionType(expression, context, substitutions);
+		if(!aggregate.empty()) return aggregate;
 		string cast_type, cast_operand;
 		string call_callee, call_arguments;
 		if(SplitTextCall(expression, &call_callee, &call_arguments) &&

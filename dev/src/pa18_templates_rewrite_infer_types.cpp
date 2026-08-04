@@ -573,13 +573,113 @@ bool PA18TemplateExpander::InferArgument(const CPPGMAstNodePtr& expression,
 	const string& context, FunctionSignature* function_signature,
 	bool this_function_argument) const
 	{
-		if(!expression || !result) return false;
-		if(function_signature) *function_signature = FunctionSignature();
-		if(!expression->inferred_type.empty()) {
-			*result = expression->inferred_type;
+	if(!expression || !result) return false;
+	if(function_signature) *function_signature = FunctionSignature();
+	if(!expression->inferred_type.empty()) {
+		*result = expression->inferred_type;
+		return true;
+	}
+	if(expression->kind == "lambda-expression") {
+		map<const CPPGMAstNode*, string>::const_iterator closure =
+			lambda_class_names_.find(expression.get());
+		if(closure != lambda_class_names_.end()) {
+			*result = closure->second;
 			return true;
 		}
-		if(expression->kind == "literal") {
+		if(expression->source_token_begin != static_cast<size_t>(-1) &&
+		   expression->source_token_end != static_cast<size_t>(-1)) {
+			map<pair<size_t, size_t>, string>::const_iterator by_span =
+				lambda_class_names_by_span_.find(make_pair(
+					expression->source_token_begin, expression->source_token_end));
+			if(by_span != lambda_class_names_by_span_.end()) {
+				*result = by_span->second;
+				return true;
+			}
+		}
+		if(!this_function_argument) return false;
+		// A captureless lambda which is used as a constructor-template argument
+		// remains on PA14's function-pointer representation.  Such a lambda is
+		// deliberately not assigned a synthetic closure class, but template
+		// deduction still needs the callable's concrete function type.  Recover
+		// the small typed signature here from its parameter list and return body;
+		// the lowering pass performs the authoritative auto-return resolution when
+		// it materializes the lambda function.
+		const CPPGMAstNodePtr declarator = ChildOfKindLocal(expression,
+			"lambda-declarator");
+		const CPPGMAstNodePtr parameters = declarator ? ChildOfKindLocal(
+			declarator, "parameter-clause") : CPPGMAstNodePtr();
+		vector<string> parameter_types;
+		if(parameters) for(size_t parameter = 0; parameter < parameters->children.size();
+			++parameter) {
+			const CPPGMAstNodePtr item = parameters->children[parameter];
+			if(!item || item->kind != "parameter-declaration") continue;
+			parameter_types.push_back(ParameterTypeSpelling(item));
+		}
+		string return_type;
+		const CPPGMAstNodePtr trailing = declarator ? ChildOfKindLocal(declarator,
+			"trailing-return-type") : CPPGMAstNodePtr();
+		if(trailing && !trailing->children.empty())
+			return_type = TypeIdSpelling(trailing->children[0]);
+		const CPPGMAstNodePtr body = ChildOfKindLocal(expression,
+			"compound-statement");
+		function<string(const CPPGMAstNodePtr&)> infer_lambda_expression;
+		infer_lambda_expression = [&](const CPPGMAstNodePtr& node) -> string {
+			if(!node) return string();
+			if(node->kind == "id-expression" && parameters) {
+				const string name = LastComponent(RemoveMarker(node->value));
+				for(size_t parameter = 0; parameter < parameters->children.size();
+					++parameter) {
+					const CPPGMAstNodePtr item = parameters->children[parameter];
+					if(!item || item->kind != "parameter-declaration" ||
+						item->children.size() < 2) continue;
+					if(LastComponent(RemoveMarker(FirstIdentifierLocal(
+						item->children[1]))) == name)
+						return ParameterTypeSpelling(item);
+				}
+			}
+			if(node->kind == "literal") return InferLiteralArgumentType(node->value);
+			if(node->kind == "binary-expression" && node->children.size() >= 2) {
+				const string op = RemoveMarker(node->value);
+				if(op == "==" || op == "!=" || op == "<" || op == ">" ||
+					op == "<=" || op == ">=" || op == "&&" || op == "||") return "bool";
+				if(op == ",") return infer_lambda_expression(node->children[1]);
+				string left = infer_lambda_expression(node->children[0]);
+				if(!left.empty()) return left;
+				return infer_lambda_expression(node->children[1]);
+			}
+			if(node->kind == "conditional-expression" && node->children.size() >= 3) {
+				string branch = infer_lambda_expression(node->children[1]);
+				if(!branch.empty()) return branch;
+				return infer_lambda_expression(node->children[2]);
+			}
+			if(node->kind == "unary-expression" && !node->children.empty())
+				return infer_lambda_expression(node->children[0]);
+			string inferred;
+			return InferArgument(node, &inferred, substitutions, context) ? inferred : string();
+		};
+		function<void(const CPPGMAstNodePtr&)> find_return;
+		find_return = [&](const CPPGMAstNodePtr& node) {
+			if(!node || !return_type.empty()) return;
+			if(node->kind == "lambda-expression") return;
+			if(node->kind == "return-statement" && !node->children.empty() &&
+				node->children[0]) {
+				const string inferred = infer_lambda_expression(node->children[0]);
+				if(!inferred.empty()) return_type = inferred;
+			}
+			for(size_t child = 0; child < node->children.size(); ++child)
+				find_return(node->children[child]);
+		};
+		if(return_type.empty()) find_return(body);
+		if(return_type.empty()) return_type = "void";
+		string signature = CanonicalSpelling(return_type + "(*) (");
+		for(size_t parameter = 0; parameter < parameter_types.size(); ++parameter) {
+			if(parameter) signature += ',';
+			signature += parameter_types[parameter];
+		}
+		*result = CanonicalSpelling(signature + ")");
+		return !result->empty();
+	}
+	if(expression->kind == "literal") {
 			const string value = expression->value;
 			if(value.find('"') != string::npos) *result = "const char*";
 			else if(value.find('\'') != string::npos) *result = "char";

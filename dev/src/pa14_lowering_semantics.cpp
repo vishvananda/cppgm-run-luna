@@ -752,6 +752,8 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferMember(const CPPGMAstNodePtr& node,
       if(!selected) selected = candidates[i];
     }
     result.binding = selected;
+    const bool reference_member = selected && selected->kind != BIND_FUNCTION &&
+      type_is_reference(selected->type);
     if(selected && !IsAccessible(selected, scope))
       throw logic_error("inaccessible member");
     if(selected && selected->kind == BIND_ENUMERATOR) {
@@ -764,7 +766,8 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferMember(const CPPGMAstNodePtr& node,
     }
     result.type = selected ? PA12AdjustedType(selected->type) : Fundamental("int");
     if(type_is_reference(result.type)) result.type = result.type->child;
-    if(selected && selected->kind != BIND_FUNCTION && object && object->is_const &&
+    if(selected && selected->kind != BIND_FUNCTION && !reference_member &&
+       object && object->is_const &&
        !selected->is_static && selected->member_owner &&
        selected->member_index != static_cast<size_t>(-1) &&
        selected->member_index < selected->member_owner->class_members.size() &&
@@ -1278,6 +1281,13 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferUncached(const CPPGMAstNodePtr& node, Sc
     if(node->kind == "keyword-literal") return InferKeyword(node);
     if(node->kind == "id-expression") return InferIdentifier(node, scope, expected);
     if(node->kind == "lambda-expression") {
+      TypePtr closure = LambdaClosureType(node);
+      if(closure && LambdaNeedsClosure(node, expected)) {
+        ExprInfo result;
+        result.type = closure;
+        result.category = "prvalue";
+        return result;
+      }
       FunctionRecord* function = EnsureLambdaFunction(node, scope);
       ExprInfo result;
       // The closure's captureless conversion is represented at expression

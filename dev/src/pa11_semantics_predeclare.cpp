@@ -11,7 +11,8 @@ void Analyzer::PredeclareGeneratedScopes(const CPPGMAstNodePtr& tree)
 		if (!node) return;
 		if ((node->kind == "class-specifier" ||
 			node->kind == "class-forward-declaration") &&
-			(node->template_instantiation || node->explicit_specialization))
+			(node->template_instantiation || node->explicit_specialization ||
+			 LastComponent(node->value).compare(0, 9, "__lambda_") == 0))
 			generated_spellings.insert(node->value);
 		for (size_t i = 0; i < node->children.size(); ++i)
 			collect_generated(node->children[i]);

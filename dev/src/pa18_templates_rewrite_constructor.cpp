@@ -256,8 +256,8 @@ void PA18TemplateExpander::MaterializeInitializerConstructor(
 			try {
 				if(InstantiateMemberCall(conversion_call, member, conversion_name,
 					context, substitutions, false)) break;
-			} catch(const PA18SubstitutionFailure&) {
-			} catch(const logic_error&) {
+				} catch(const PA18SubstitutionFailure&) {
+				} catch(const logic_error&) {
 			}
 		}
 		}
@@ -316,14 +316,21 @@ void PA18TemplateExpander::MaterializeInitializerConstructor(
 			CPPGMAstNodePtr call(new CPPGMAstNode("call-expression"));
 			call->children.push_back(member);
 			CPPGMAstNodePtr call_arguments(new CPPGMAstNode("argument-list"));
-			call_arguments->children.push_back(argument);
+			if(argument->kind == "braced-init-list")
+				call_arguments->children = argument->children;
+			else call_arguments->children.push_back(argument);
 			call->children.push_back(call_arguments);
 			try {
-				if(InstantiateMemberCall(call, member, source_name, context, substitutions))
+				const bool nested_materialized = InstantiateMemberCall(call, member, source_name,
+					context, substitutions);
+				if(nested_materialized)
 					return;
-			} catch(const PA18SubstitutionFailure&) {
+			} catch(const PA18SubstitutionFailure& error) {
+				(void)error;
 				// This candidate is unavailable after substitution; another
 				// constructor template may still be viable.
+			} catch(const logic_error& error) {
+				(void)error;
 			}
 		}
 		// Copy-initialization may select a conversion-function template on the

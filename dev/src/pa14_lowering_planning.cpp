@@ -800,7 +800,7 @@ bool PA14Lowerer::AppendAggregateConstructorDefaults(
     vector<CPPGMAstNodePtr>* arguments)
 {
     TypePtr object_type = type_value(raw_object_type);
-    if(!object_type || object_type->kind != TYPE_CLASS || !arguments || arguments->empty())
+    if(!object_type || object_type->kind != TYPE_CLASS || !arguments)
       return false;
     if(HasUserProvidedConstructor(object_type)) return false;
     size_t initialized_members = 0;
@@ -1283,7 +1283,8 @@ void PA14Lowerer::ResolveAutoFunctionReturn(FunctionRecord& record)
     };
     collect_returns(body);
     if(returns.empty()) {
-      if(!record.lambda_function) throw logic_error("cannot deduce auto return type");
+      if(!record.lambda_function && !IsLambdaOperator(record))
+        throw logic_error("cannot deduce auto return type");
       const TypePtr old_source = record.source_type;
       const TypePtr result_type = Fundamental("void");
       ApplyAutoFunctionReturn(record, old_source, source_function, result_type);
@@ -1313,7 +1314,7 @@ TypePtr PA14Lowerer::DeduceAutoFunctionReturn(FunctionRecord& record,
         CPPGMAstNodePtr(), CPPGMAstNodePtr());
       if(this_plan) scratch.environments.back()["this"] = this_plan;
     }
-    if(record.lambda_function) {
+    if(record.lambda_function || IsLambdaOperator(record)) {
       // The normal auto-return pass runs before a local lambda is emitted, so
       // its body has not gone through PlanFunction yet.  Plan it here to make
       // local declarations available to return-expression inference; the

@@ -112,7 +112,22 @@ ExplicitCallSelection PA18TemplateExpander::SelectExplicitCallDefinition(
 					!explicit_definition->alias_template &&
 					!explicit_definition->variable_template) {
 					vector<const TemplateDefinition*> overloads = FindFunctionDefinitions(base, context);
-					const vector<string> raw_explicit_args = SplitTemplateArguments(argument_text);
+						vector<string> raw_explicit_args = SplitTemplateArguments(argument_text);
+						// Explicit template prefixes are validated before the ordinary
+						// call replay transforms the callee.  In a concrete member
+						// replay, an unqualified alias such as `key_type` therefore
+						// needs the same generated-owner lookup as a type argument in
+						// RewriteText; otherwise selection stops at the source spelling
+						// and the call reaches PA14 as an unknown expression.
+						for(size_t argument = 0; argument < raw_explicit_args.size();
+							++argument) {
+							try {
+								const string rewritten = NormalizeTypeArgument(RewriteText(
+									raw_explicit_args[argument], context, substitutions, 0,
+									true, true));
+								if(!rewritten.empty()) raw_explicit_args[argument] = rewritten;
+							} catch(const PA18SubstitutionFailure&) {}
+						}
 					// An explicit prefix must participate in call ranking when the
 					// overload set differs only by a dependent reference cv-qualifier
 					// (`U&` versus `U const&`).  Non-dependent overloads still use the
@@ -324,9 +339,9 @@ bool PA18TemplateExpander::TransformExplicitFunctionCall(
 					explicit_args[i] = NormalizeTypeArgument(RewriteText(
 						explicit_args[i], context, explicit_substitutions, 0));
 					explicit_args[i] = ResolveAlias(explicit_args[i], context);
-					explicit_args[i] = QualifyTypeArgument(explicit_args[i], context,
-						explicit_definition->owner);
-				}
+								explicit_args[i] = QualifyTypeArgument(explicit_args[i], context,
+									explicit_definition->owner);
+					}
 				if(PreserveUnresolvedExplicitTemplateCall(input, result, explicit_args, context, explicit_substitutions, substitutions)) return true;
 				const TemplateDefinition* explicit_specialization =
 					FindExplicitFunctionSpecialization(explicit_definition, explicit_args);
@@ -433,8 +448,13 @@ bool PA18TemplateExpander::TransformUnqualifiedMemberTemplateCall(
 					else current.erase(separator);
 				}
 				bool has_member_candidate = false;
+				bool static_member_call = true;
 				for(size_t candidate = 0; candidate < member_candidates.size(); ++candidate)
-					if(member_candidates[candidate]->member_template) { has_member_candidate = true; break; }
+					if(member_candidates[candidate]->member_template) {
+						has_member_candidate = true;
+						if(!member_candidates[candidate]->static_member)
+							static_member_call = false;
+					}
 				if(member_context && has_member_candidate) {
 					CPPGMAstNodePtr member(new CPPGMAstNode("member-expression", "."));
 					member->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
@@ -451,6 +471,23 @@ bool PA18TemplateExpander::TransformUnqualifiedMemberTemplateCall(
 					const bool instantiated = InstantiateMemberCall(member_call, member, raw_member_id, context,
 						substitutions);
 					if(instantiated) {
+						if(static_member_call && !member_candidates.empty()) {
+							string owner = member_candidates[0]->owner;
+							if(owner.empty()) {
+								map<string, string>::const_iterator function_owner =
+									function_owners_.find(context);
+								if(function_owner != function_owners_.end())
+									owner = function_owner->second;
+							}
+							if(!owner.empty() && member_call->children[0] &&
+								member_call->children[0]->children.size() > 1) {
+								const string materialized_name =
+									member_call->children[0]->children[1]->value;
+								member_call->children[0] = CPPGMAstNodePtr(
+									new CPPGMAstNode("id-expression",
+										owner + "::" + materialized_name));
+							}
+						}
 						result->children = member_call->children;
 						result->template_primary = member_call->template_primary; result->template_arguments = member_call->template_arguments;
 						result->template_instantiation = true;
@@ -594,8 +631,37 @@ bool PA18TemplateExpander::MaterializeNamedCallTarget(
 						LastComponent(constructor_type) : LastComponent(constructor_base->second))));
 				replayed = InstantiateMemberCall(result, synthetic_member,
 					constructor_base == specialization_bases_.end() ?
-						LastComponent(constructor_type) : LastComponent(constructor_base->second),
+					LastComponent(constructor_type) : LastComponent(constructor_base->second),
 					context, substitutions);
+				if(result->children.size() > 1 && result->children[1] &&
+					result->children[1]->kind == "argument-list") {
+					// A functional construction such as `Payload({a, b})` passes a
+					// braced-init-list as one constructor argument.  Replay the
+					// destination's class-typed parameter as a real nested
+					// initialization so its member-template constructor is available
+					// to PA11/PA14 before lowering the outer call.
+					CPPGMAstNodePtr nested_input(new CPPGMAstNode("simple-declaration"));
+					CPPGMAstNodePtr nested_input_specs(new CPPGMAstNode("decl-specifier-seq"));
+					nested_input_specs->children.push_back(CPPGMAstNodePtr(
+						new CPPGMAstNode("decl-specifier", constructor_type)));
+					nested_input->children.push_back(nested_input_specs);
+					CPPGMAstNodePtr nested_input_list(new CPPGMAstNode("init-declarator-list"));
+					CPPGMAstNodePtr nested_input_item(new CPPGMAstNode("init-declarator"));
+					nested_input_item->children.push_back(CPPGMAstNodePtr(
+						new CPPGMAstNode("declarator")));
+					CPPGMAstNodePtr nested_input_initializer(new CPPGMAstNode("paren-initializer"));
+					nested_input_initializer->children = result->children[1]->children;
+					nested_input_item->children.push_back(nested_input_initializer);
+					nested_input_list->children.push_back(nested_input_item);
+					nested_input->children.push_back(nested_input_list);
+					CPPGMAstNodePtr nested_result = CloneNode(nested_input);
+					if(nested_result && !nested_result->children.empty() &&
+						nested_result->children[0] &&
+						!nested_result->children[0]->children.empty())
+						nested_result->children[0]->children[0]->value = result_callee->value;
+						MaterializeInitializerConstructor(nested_input, nested_result,
+							context, substitutions);
+				}
 			}
 		CPPGMAstNodePtr operator_member(new CPPGMAstNode("member-expression", "."));
 		operator_member->children.push_back(result_callee);

@@ -24,6 +24,16 @@ CPPGMAstNodePtr PA18TemplateExpander::RewriteRegularNodeValue(
 	else result->value = RewriteText(input->value, context, substitutions, &template_replaced,
 		!type_spelling, true,
 		defer_type_only_class_definitions_ != 0);
+	if(input->kind == "decl-specifier" && input->value.compare(0, 9, "decltype(") == 0 &&
+		input->value.find('=') != string::npos) {
+		string assigned_type = RemoveMarker(result->value);
+		while(!assigned_type.empty() && assigned_type[assigned_type.size() - 1] == '&')
+			assigned_type.erase(assigned_type.size() - 1);
+		assigned_type = CanonicalSpelling(assigned_type);
+		if(LastComponent(assigned_type).compare(0, 9, "__lambda_") == 0 &&
+			FindClassDeclaration(assigned_type, context))
+			throw PA18SubstitutionFailure("lambda closure assignment is deleted");
+	}
 	if((input->kind == "special-member-definition" ||
 		input->kind == "special-member-declaration" || input->kind == "identifier") &&
 		result->value.compare(0, 8, "operator") == 0) {

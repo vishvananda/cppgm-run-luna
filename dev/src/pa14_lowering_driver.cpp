@@ -220,6 +220,7 @@ void PA14Lowerer::PrepareLoweringProgram()
       program_->children.push_back(trees_[i]->children[j]);
   }
   analyzer_.Analyze(program_);
+  IndexLambdaClosures();
   IndexClassTypesByName();
   complete_template_object_uses_.clear();
   complete_template_parameter_uses_.clear();
@@ -307,12 +308,19 @@ void PA14Lowerer::EmitOrdinaryAndHiddenRoots(vector<string>& entries)
   bool added = true;
   while(added) {
     added = false;
-    for(size_t i = 0; i < functions_.size(); ++i) {
-      FunctionRecord& function = functions_[i];
-      if(!function.definition || function.member || function.hidden_friend ||
-         function.emitted || !function.needed ||
-         (!function.template_instantiation && !function.inline_definition &&
-          !function.lambda_function)) continue;
+    while(true) {
+      size_t selected = functions_.size();
+      for(size_t i = 0; i < functions_.size(); ++i) {
+        FunctionRecord& candidate = functions_[i];
+        if(!candidate.definition || candidate.member || candidate.hidden_friend ||
+           candidate.emitted || !candidate.needed ||
+           (!candidate.template_instantiation && !candidate.inline_definition &&
+            !candidate.lambda_function)) continue;
+        if(selected == functions_.size() || candidate.needed_order <
+           functions_[selected].needed_order) selected = i;
+      }
+      if(selected == functions_.size()) break;
+      FunctionRecord& function = functions_[selected];
       entries.push_back(EmitFunction(function));
       function.emitted = true;
       added = true;

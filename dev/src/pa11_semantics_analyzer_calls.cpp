@@ -218,9 +218,12 @@ TypePtr Analyzer::ExpressionCallType(const CPPGMAstNodePtr& expression,
 	};
 	const auto has_class_conversion = [&](TypePtr source, TypePtr target) {
 		while (target && (target->kind == TYPE_LVALUE_REFERENCE ||
-			target->kind == TYPE_RVALUE_REFERENCE)) target = target->child;
+			 target->kind == TYPE_RVALUE_REFERENCE)) target = target->child;
+		const bool source_const = source && source->is_const;
+		const bool source_volatile = source && source->is_volatile;
 		vector<TypePtr> pending;
 		set<const Type*> visited;
+		int best_rank = 1000000;
 		if (source) pending.push_back(source);
 		while (!pending.empty()) {
 			TypePtr current = pending.back();
@@ -234,6 +237,8 @@ TypePtr Analyzer::ExpressionCallType(const CPPGMAstNodePtr& expression,
 				if (candidate.kind != BIND_FUNCTION || !candidate.type ||
 					candidate.type->kind != TYPE_FUNCTION || !candidate.type->child ||
 					candidate.name.compare(0, 8, "operator") != 0) continue;
+				if ((source_const && !candidate.type->function_const) ||
+					(source_volatile && !candidate.type->function_volatile)) continue;
 				TypePtr converted = rebound_type(candidate.type->child, current);
 				while (converted && (converted->kind == TYPE_LVALUE_REFERENCE ||
 					converted->kind == TYPE_RVALUE_REFERENCE)) converted = converted->child;
@@ -247,7 +252,13 @@ TypePtr Analyzer::ExpressionCallType(const CPPGMAstNodePtr& expression,
 					converted = resolve_spelled(rebound_spelling(candidate.name.substr(8), current), current);
 				while (converted && (converted->kind == TYPE_LVALUE_REFERENCE ||
 					converted->kind == TYPE_RVALUE_REFERENCE)) converted = converted->child;
-				if (SameTypeIgnoringTopCv(converted, target)) return true;
+				if (SameTypeIgnoringTopCv(converted, target)) {
+					// For a non-const object, a non-const conversion member is the
+					// better user-defined conversion when both conversion targets can
+					// bind to the same const reference parameter.
+					const int rank = (!source_const && candidate.type->function_const) ? 1 : 0;
+					if (rank < best_rank) best_rank = rank;
+				}
 			}
 			vector<TypePtr> bases = current->direct_bases;
 			if (bases.empty() && current->direct_base) bases.push_back(current->direct_base);
@@ -256,7 +267,7 @@ TypePtr Analyzer::ExpressionCallType(const CPPGMAstNodePtr& expression,
 				pending.push_back(rebound ? rebound : bases[base]);
 			}
 		}
-		return false;
+		return best_rank == 1000000 ? -1 : best_rank;
 	};
 	for (size_t i = 0; i < candidates.size(); ++i) {
 		Binding* candidate = candidates[i];
@@ -277,8 +288,11 @@ TypePtr Analyzer::ExpressionCallType(const CPPGMAstNodePtr& expression,
 			if (formal && formal->kind == TYPE_TEMPLATE_PARAMETER) score += 10;
 			else if (SameTypeIgnoringTopCv(actual, formal)) {} else if (null_pointer_constant && formal && formal->kind == TYPE_POINTER) score += 3;
 			else if (actual && formal && actual->kind == TYPE_FUNDAMENTAL && formal->kind == TYPE_FUNDAMENTAL) score += 2;
-			else if (has_class_conversion(actual, formal)) score += 5;
-			else { viable = false; break; }
+			else {
+				const int conversion_rank = has_class_conversion(actual, formal);
+				if (conversion_rank >= 0) score += 5 + conversion_rank;
+				else { viable = false; break; }
+			}
 		}
 		if (viable && (!selected || score < selected_score)) {
 			selected = candidate;

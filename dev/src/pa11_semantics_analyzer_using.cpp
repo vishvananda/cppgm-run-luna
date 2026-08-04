@@ -11,7 +11,7 @@ void Analyzer::ProcessUsingDeclaration(const CPPGMAstNodePtr& node, Scope* scope
 	const string target_name = target_node->value;
 	const string target_component = LastComponent(target_name);
 	const bool operator_name = target_component.compare(0, 8, "operator") == 0 &&
-		target_component.size() > 8 && target_component[8] != ' ';
+		target_component.size() > 8;
 	const size_t target_separator = target_name.rfind("::");
 	string target_owner_component = target_separator == string::npos ? string() :
 		LastComponent(target_name.substr(0, target_separator));
@@ -24,6 +24,7 @@ void Analyzer::ProcessUsingDeclaration(const CPPGMAstNodePtr& node, Scope* scope
 	const string target_owner_name = target_separator == string::npos ? string() :
 		LastComponent(target_name.substr(0, target_separator));
 	vector<Binding*> targets;
+	Scope* operator_owner_scope = 0;
 	if (target_separator != string::npos)
 	{
 		PathTarget owner = ResolvePath(scope, target_name.substr(0, target_separator));
@@ -88,6 +89,7 @@ void Analyzer::ProcessUsingDeclaration(const CPPGMAstNodePtr& node, Scope* scope
 					if (same_arguments) owner_scope = ScopeForType(candidate);
 				}
 		}
+		operator_owner_scope = owner_scope;
 		if (owner_scope)
 			for (size_t i = 0; i < owner_scope->bindings.size(); ++i)
 				if (owner_scope->bindings[i].name == LastComponent(target_name))
@@ -141,6 +143,38 @@ void Analyzer::ProcessUsingDeclaration(const CPPGMAstNodePtr& node, Scope* scope
 	if (targets.empty()) {
 		Binding* target = ResolveBinding(scope, target_name);
 		if (target) targets.push_back(target);
+	}
+	// A conversion using-id can name the target through a derived alias:
+	// `using base_type::operator integral_type;`.  The source base binding is
+	// spelled with its own alias (`operator int_type`), so exact identifier
+	// lookup is insufficient even though both conversion targets are the same
+	// concrete type in the specialization.
+	if (targets.empty() && operator_name && operator_owner_scope) {
+		string requested = target_component.substr(8);
+		while (!requested.empty() && isspace(static_cast<unsigned char>(requested[0])))
+			requested.erase(0, 1);
+		while (!requested.empty() && isspace(static_cast<unsigned char>(requested[requested.size() - 1])))
+			requested.erase(requested.size() - 1);
+		SpecFacts requested_facts;
+		TypePtr requested_type;
+		try { requested_type = ResolveSpelledType(requested, scope, requested_facts); }
+		catch (const logic_error&) {}
+		if (requested_type) for (size_t i = 0; i < operator_owner_scope->bindings.size(); ++i) {
+			Binding& candidate = operator_owner_scope->bindings[i];
+			if (candidate.kind != BIND_FUNCTION || candidate.name.compare(0, 8, "operator") != 0)
+				continue;
+			string available = candidate.name.substr(8);
+			while (!available.empty() && isspace(static_cast<unsigned char>(available[0])))
+				available.erase(0, 1);
+			SpecFacts available_facts;
+			TypePtr available_type;
+			try { available_type = ResolveSpelledType(available, operator_owner_scope, available_facts); }
+			catch (const logic_error&) {}
+			if (available_type && SameTypeIgnoringTopCv(available_type, requested_type)) {
+				targets.push_back(&candidate);
+				break;
+			}
+		}
 	}
 	if (targets.empty())
 	{

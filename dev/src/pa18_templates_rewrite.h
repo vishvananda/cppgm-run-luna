@@ -581,6 +581,7 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 	void ExpandNestedTemplateArgumentPacks(vector<string>* arguments,
 		string* arguments_text);
 	string RewriteText(string raw, const string& context, const map<string, string>& substitutions, bool* template_replaced, bool resolve_alias = true, bool resolve_member = true, bool defer_class_definition = false); DeferredTemplateSummary AnalyzeDeferredTemplate(const TemplateDefinition* source_definition, const vector<string>& current_arguments, bool defer_class_definition) const; string BuildDeferredTemplateSpelling(const string& lookup_base, const string& base, const vector<string>& args, const vector<string>& raw_template_args, const string& context, const map<string, string>& substitutions, const DeferredTemplateSummary& summary) const; bool RewriteDeferredTemplate(string* raw, size_t begin, size_t close, const string& base, const string& lookup_base, const vector<string>& args, const vector<string>& raw_template_args, const string& context, const map<string, string>& substitutions, bool class_template, const DeferredTemplateSummary& summary, bool defer_class_definition, bool* template_replaced, size_t* search) const;
+	void ResolveBareGeneratedMemberAlias(string* raw, const string& context) const;
 	void StripStaleGeneratedArguments(string* text) const; void RebindGeneratedOwnerMembers(string* raw, const string& context, const map<string, string>& substitutions, bool* template_replaced);
 	bool RewriteOwnerBoundNestedSpecialization(string* raw, size_t begin, size_t close, const string& base, const vector<string>& current_arguments, const string& context, const map<string, string>& substitutions, bool* template_replaced, size_t* search); bool RewriteUnqualifiedGeneratedSpecialization(string* raw, size_t begin, size_t close, const string& base, const vector<string>& current_arguments, const string& context, const map<string, string>& substitutions, bool* template_replaced, size_t* search);
 	bool RewriteQualifiedGeneratedNestedSpecialization(string* raw, size_t begin, size_t close, const string& base, const vector<string>& current_arguments, const string& context, const map<string, string>& substitutions, bool* template_replaced, size_t* search); bool MatchQualifiedGeneratedOwner(const string& nested_owner_source, const vector<string>& owner_arguments, const string& selected_owner_name, const string& owner_primary_source, const string& context) const;
@@ -908,7 +909,9 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 			vector<string> selected(1, expansion_values[i]);
 			ActivePackScope selected_pack(this);
 			selected_pack.Set(name, selected);
-			CPPGMAstNodePtr child = TransformNode(original_child->children[0],
+			CPPGMAstNodePtr expanded_child = CloneNode(original_child->children[0]);
+			SelectCapturedLambdaPackMember(expanded_child, i);
+			CPPGMAstNodePtr child = TransformNode(expanded_child,
 				child_context, one);
 			if(child) result->children.push_back(child);
 		}

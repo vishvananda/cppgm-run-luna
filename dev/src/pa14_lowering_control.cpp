@@ -40,9 +40,9 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
                                     bool allow_aggregate, bool force_move,
                                     bool value_initialization)
 {
-    const size_t temporary_mark = state_ ? state_->temporary_objects.size() : 0;
-    TypePtr object_type = type_value(raw_object_type);
-    if(!object_type || object_type->kind != TYPE_CLASS) return false;
+	const size_t temporary_mark = state_ ? state_->temporary_objects.size() : 0;
+	TypePtr object_type = type_value(raw_object_type);
+	if(!object_type || object_type->kind != TYPE_CLASS) return false;
     vector<CPPGMAstNodePtr> raw_arguments = input_arguments;
     // Default construction is normally collected while walking a class body,
     // but a replayed specialization can first become observable through a
@@ -190,25 +190,44 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
 		      rank = function->parameters[a]->kind == TYPE_RVALUE_REFERENCE ? 2 : 3;
 		      braced_class_handled = true;
 		    }
-		    if(!braced_class_handled && raw_arguments[a]->children.empty()) {
-		      const vector<Binding*> defaults = MemberBindings(parameter_type,
-		        LastComponent(parameter_type->name));
-		      for(size_t candidate = 0; candidate < defaults.size(); ++candidate) {
-		        FunctionRecord* default_record = RecordForBinding(defaults[candidate]);
-		        TypePtr default_function = function_target_type(defaults[candidate]->type);
-		        if(!default_record || !default_record->constructor ||
-		           default_record->deleted || !default_function) continue;
-		        bool defaultable = default_function->parameters.empty();
-		        for(size_t parameter = 0; defaultable &&
-		            parameter < default_function->parameters.size(); ++parameter)
-		          if(!HasDefaultArgument(defaults[candidate], parameter)) defaultable = false;
-		        if(defaultable) {
-		          rank = function->parameters[a]->kind == TYPE_RVALUE_REFERENCE ? 2 : 3;
-		          braced_class_handled = true;
-		          break;
-		        }
-		      }
-		    }
+			    if(!braced_class_handled && raw_arguments[a]->children.empty()) {
+			      const vector<Binding*> defaults = MemberBindings(parameter_type,
+			        LastComponent(parameter_type->name));
+			      for(size_t candidate = 0; candidate < defaults.size(); ++candidate) {
+			        FunctionRecord* default_record = RecordForBinding(defaults[candidate]);
+			        TypePtr default_function = function_target_type(defaults[candidate]->type);
+			        if(!default_record || !default_record->constructor ||
+			           default_record->deleted || !default_function) continue;
+			        bool defaultable = default_function->parameters.empty();
+			        for(size_t parameter = 0; defaultable &&
+			            parameter < default_function->parameters.size(); ++parameter)
+			          if(!HasDefaultArgument(defaults[candidate], parameter)) defaultable = false;
+			        if(defaultable) {
+			          rank = function->parameters[a]->kind == TYPE_RVALUE_REFERENCE ? 2 : 3;
+			          braced_class_handled = true;
+			          break;
+			        }
+			      }
+			    }
+			    if(!braced_class_handled) {
+			      // A braced argument can initialize a class through a user-declared
+			      // constructor, not only through the synthesized aggregate path.
+			      // The actual nested construction is emitted by EmitReferenceArgument
+			      // after this outer overload has been selected; keep that constructor
+			      // viable during the outer probe as well.
+			      const vector<Binding*> nested = MemberBindings(parameter_type,
+			        LastComponent(parameter_type->name));
+			      for(size_t nested_candidate = 0; nested_candidate < nested.size();
+			        ++nested_candidate) {
+			        FunctionRecord* nested_record = RecordForBinding(nested[nested_candidate]);
+			        if(!nested_record || !nested_record->constructor || nested_record->deleted ||
+			           (nested_record->implicit_constructor && !nested_record->copy_constructor &&
+			            !nested_record->move_constructor)) continue;
+			        rank = function->parameters[a]->kind == TYPE_RVALUE_REFERENCE ? 2 : 3;
+			        braced_class_handled = true;
+			        break;
+			      }
+			    }
 		  }
 		}
 		if(!braced_class_handled)

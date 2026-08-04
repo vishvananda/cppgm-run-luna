@@ -271,8 +271,11 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
     const bool is_member = static_cast<bool>(member_owner) && !hidden_friend;
     bool is_static = facts.is_static;
     if(is_member && member_owner->owned_scope) {
+      const string member_lookup_name =
+        IsGeneratedMemberTemplate(node, raw_name) && !node->template_primary.empty() ?
+        LastComponent(node->template_primary) : LastComponent(raw_name);
       const vector<Binding*> owner_bindings =
-        DirectBindings(member_owner->owned_scope, LastComponent(raw_name));
+        DirectBindings(member_owner->owned_scope, member_lookup_name);
       bool matched_owner = false;
       for(size_t i = 0; i < owner_bindings.size(); ++i) {
         TypePtr existing = function_target_type(owner_bindings[i]->type);
@@ -296,7 +299,9 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
         is_static = owner_bindings[0]->is_static;
     }
     if(is_member && member_owner->owned_scope) {
-      const string member_name = LastComponent(raw_name);
+      const string member_name =
+        IsGeneratedMemberTemplate(node, raw_name) && !node->template_primary.empty() ?
+        LastComponent(node->template_primary) : LastComponent(raw_name);
       vector<Binding*> bindings = DirectBindings(member_owner->owned_scope, member_name);
       for(size_t i = 0; i < bindings.size(); ++i) {
         TypePtr existing = function_target_type(bindings[i]->type);
@@ -381,9 +386,12 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
     record->scope = hidden_friend ? function_scope_owner : scope;
     record->source_type = function;
     record->member_owner = member_owner;
-    record->member = is_member;
-    record->hidden_friend = hidden_friend;
-    record->static_member = is_static;
+	record->member = is_member;
+	record->hidden_friend = hidden_friend;
+	record->static_member = is_static;
+	if(is_member && member_owner && raw_name == "operator()" &&
+	   last_component(member_owner->name).compare(0, 9, "__lambda_") == 0)
+		record->weak_binding = true;
 	record->member_template = record->member_template ||
 		(is_member && IsGeneratedMemberTemplate(node, raw_name));
 	record->member_template_frame |= node->template_instantiation && member_owner &&
@@ -412,8 +420,9 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
 		 node->kind == "special-member-definition")) ||
 		node->explicit_instantiation || node->extern_instantiation)
 	  MarkFunctionNeeded(record);
-	record->weak_binding = record->template_instantiation && !record->extern_template &&
-		!record->explicit_specialization;
+	record->weak_binding = record->weak_binding ||
+		(record->template_instantiation && !record->extern_template &&
+		 !record->explicit_specialization);
 	record->inline_definition = record->inline_definition || HasInline(node) || facts.is_constexpr;
 	const bool out_of_class_definition = definition && is_member && member_owner &&
 		member_owner->owned_scope && scope != member_owner->owned_scope;
@@ -1371,7 +1380,6 @@ void PA14Lowerer::StoreGlobalDeclaration(GlobalRecord& record,
     if(stored && record_value && record_value->kind == TYPE_CLASS)
       DemandTemplateStaticMembers(record_value);
   }
-
 void PA14Lowerer::CollectClassStaticMember(const CPPGMAstNodePtr& child,
                                            const CPPGMAstNodePtr& item,
                                            const TypePtr& owner, Scope* class_scope,

@@ -285,9 +285,7 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 		// treated as one dependent operand and a valid return-type probe fails.
 		expression = ExpandPackCallText(expression, active_pack_substitutions_);
 		string callee, argument_text;
-		if(!SplitTextCall(expression, &callee, &argument_text)) {
-			return false;
-		}
+		if(!SplitTextCall(expression, &callee, &argument_text)) return false;
 		callee = StripTextParentheses(callee);
 		if(callee.empty()) {
 			return false;
@@ -396,10 +394,10 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 			string base_arguments, base;
 			size_t template_close = string::npos, begin = 0;
 			const string& template_source = qualified_member_call ? qualified_member_name : callee;
-			if(!TemplateBase(template_source, template_open, &begin, &base) ||
-				!TemplateRange(template_source, template_open, &base_arguments, &template_close)) {
-				return false;
-			}
+				if(!TemplateBase(template_source, template_open, &begin, &base) ||
+					!TemplateRange(template_source, template_open, &base_arguments, &template_close)) {
+						return false;
+					}
 				explicit_base_name = base;
 				explicit_definition = FindExplicitFunctionTemplate(base,
 					qualified_member_call && !qualified_owner.empty() ? qualified_owner :
@@ -415,7 +413,9 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 					function_context, &inherited, &active, &concrete_owners);
 				if(!inherited.empty()) explicit_definition = inherited[0];
 			}
-			if(!explicit_definition) return false;
+			if(!explicit_definition) {
+					return false;
+			}
 			if(explicit_definition->class_template) {
 				// A class-template-id followed by `()` is a functional cast.  It is
 				// not a function-template call, so let the typed constructor probe
@@ -589,7 +589,9 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 		}
 		if(callee[callee.size() - 1] == ')' && ResolveCallableTemporaryCallResult(callee,
 			function_context, context, substitutions, actual_types, result,
-			has_nested_object_type ? &nested_object_type : 0)) return true;
+			has_nested_object_type ? &nested_object_type : 0)) {
+			return true;
+		}
 		string callable_type, callable_operand;
 		if(SplitStaticCast(callee, &callable_type, &callable_operand)) {
 			string function_result;
@@ -718,16 +720,18 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 					try {
 						if(!InferFunctionTypeArguments(definition, actual_types, &arguments,
 							candidate_substitutions, function_context,
-							explicit_definition ? &explicit_arguments : 0)) continue;
+							explicit_definition ? &explicit_arguments : 0)) {
+								continue;
+							}
 					} catch(const PA18SubstitutionFailure&) {
 						continue;
 					}
 				}
 				try {
 					if(!FunctionArgumentsViable(definition, arguments, actual_types,
-					function_context, &candidate_substitutions,
-					explicit_definition ? &explicit_arguments : 0)) {
-						continue;
+						function_context, &candidate_substitutions,
+						explicit_definition ? &explicit_arguments : 0)) {
+							continue;
 					}
 				if(HasAbstractFunctionParameter(definition, arguments,
 					function_context, candidate_substitutions)) {

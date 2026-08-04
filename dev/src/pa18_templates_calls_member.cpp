@@ -828,6 +828,7 @@ bool PA18TemplateExpander::PrepareMemberCandidateArguments(
 				return false;
 			}
 		};
+		vector<bool> explicit_argument_is_type(explicit_arguments.size(), false);
 		size_t explicit_index = 0;
 		for(size_t parameter = 0; parameter < definition.parameters.size() &&
 			explicit_index < explicit_arguments.size(); ++parameter) {
@@ -841,9 +842,11 @@ bool PA18TemplateExpander::PrepareMemberCandidateArguments(
 				if(count > trailing_fixed) count -= trailing_fixed;
 				else count = 0;
 			}
-			for(size_t value = 0; value < count && explicit_index < explicit_arguments.size(); ++value)
+			for(size_t value = 0; value < count && explicit_index < explicit_arguments.size(); ++value) {
+				if(detail.type) explicit_argument_is_type[explicit_index] = true;
 				if(!explicit_argument_matches(detail, explicit_arguments[explicit_index++]))
 					return false;
+			}
 		}
 		for(size_t argument = 0; argument < explicit_arguments.size(); ++argument) {
 			explicit_arguments[argument] = NormalizeTypeArgument(RewriteText(
@@ -853,6 +856,19 @@ bool PA18TemplateExpander::PrepareMemberCandidateArguments(
 			explicit_arguments[argument] = ResolveAlias(explicit_arguments[argument], context);
 			explicit_arguments[argument] = QualifyTypeArgument(
 				explicit_arguments[argument], context, definition.owner);
+			if(explicit_arguments[argument].find("::") == string::npos &&
+				explicit_argument_is_type[argument]) {
+				for(string current = context; !current.empty(); ) {
+					const string nested = MemberAliasType(current, explicit_arguments[argument], true);
+					if(!nested.empty() && FindClassDeclaration(nested, context)) {
+						explicit_arguments[argument] = nested;
+						break;
+					}
+					const size_t separator = current.rfind("::");
+					if(separator == string::npos) current.clear();
+					else current.erase(separator);
+				}
+			}
 		}
 		candidate->inferred = false;
 		bool& inferred = candidate->inferred;
@@ -1287,7 +1303,7 @@ bool PA18TemplateExpander::EmitMemberCandidate(
 		}
 	}
 	const ConcreteOwnerContext previous_concrete_owner = active_concrete_owner_;
-		if(requested_owner_pointer) SetActiveConcreteOwner(requested_owner, context);
+	if(requested_owner_pointer) SetActiveConcreteOwner(requested_owner, context);
 	try {
 			generated_name = Instantiate(restored_function_defaults ? materialization_definition :
 				inference_definition, raw_instantiation_arguments, context,

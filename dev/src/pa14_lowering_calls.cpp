@@ -37,6 +37,20 @@ string PA14Lowerer::EmitReferenceArgument(const CPPGMAstNodePtr& node, Scope* sc
                                const TypePtr& target)
 {
     TypePtr referred = target->child;
+    CPPGMAstNodePtr lambda_source = node;
+    while(lambda_source && lambda_source->kind == "parenthesized-expression" &&
+          lambda_source->children.size() == 1 && lambda_source->children[0])
+      lambda_source = lambda_source->children[0];
+    if(lambda_source && lambda_source->kind == "lambda-expression" && referred) {
+      const TypePtr closure = LambdaClosureType(lambda_source);
+      if(closure && PA12SameType(closure, type_value(referred), true)) {
+        const string slot = new_special_slot("arg", low_type(closure));
+        const string address = new_temp();
+        AddInstruction(address + " = addr $" + slot);
+        InitializeLambdaClosureAt(closure, address, lambda_source, scope);
+        return address;
+      }
+    }
     if(node && node->kind == "cast-expression" && node->children.size() > 1 &&
        type_is_reference(target) && node->children[1] &&
        node->children[1]->kind != "call-expression") {

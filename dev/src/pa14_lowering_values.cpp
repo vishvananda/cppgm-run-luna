@@ -540,6 +540,33 @@ bool PA14Lowerer::ClassValueNeedsIndirect(const TypePtr& raw_type) const
               return true;
           }
     }
+    // A concrete pair-like result with a declared move constructor and a
+    // converting constructor template crosses the same non-trivial object
+    // boundary as the source ABI.  The template constructor is not itself a
+    // copy/move member, so it is intentionally not folded into
+    // IsTrivialValueStorage; keep this typed classification local to the
+    // result ABI decision.
+    bool has_move_constructor_template = false;
+    bool has_nonstatic_data_member = false;
+    for(size_t member = 0; member < type->class_members.size(); ++member)
+      if(!type->class_members[member].is_static &&
+         type->class_members[member].type) {
+        has_nonstatic_data_member = true;
+        break;
+      }
+    if(type->owned_scope) for(size_t binding_index = 0;
+        binding_index < type->owned_scope->bindings.size(); ++binding_index) {
+      const Binding& binding = type->owned_scope->bindings[binding_index];
+      if(binding.kind != BIND_FUNCTION) continue;
+      FunctionRecord* record = RecordForBinding(const_cast<Binding*>(&binding));
+      if(record && record->constructor &&
+         !record->value_special_member) {
+        has_move_constructor_template = true;
+        break;
+      }
+    }
+    if(has_move_constructor_template && has_nonstatic_data_member &&
+       ClassHasDeclaredMoveMember(type)) return true;
     if(type_size(type) > 16) return true;
     bool base_only = type->direct_base != 0;
     for(size_t i = 0; i < type->class_members.size(); ++i) {
@@ -904,16 +931,23 @@ Binding* PA14Lowerer::FindConversionOperator(const TypePtr& raw_source,
       if(!best || candidate_rank < best_rank) {
         best = binding;
         best_rank = candidate_rank;
-      } else if(candidate_rank == best_rank) {
-        FunctionRecord* best_record = RecordForBinding(best);
-        const bool candidate_template = record->member_template;
-        const bool best_template = best_record && best_record->member_template;
+		} else if(candidate_rank == best_rank) {
+			FunctionRecord* best_record = RecordForBinding(best);
+			const bool candidate_template = record->member_template;
+			const bool best_template = best_record && best_record->member_template;
         if(best_template && !candidate_template) {
           best = binding;
           continue;
         }
-        if(!best_template && candidate_template) continue;
-        if(!PA12SameType(function, function_target_type(best->type), false))
+			if(!best_template && candidate_template) continue;
+			TypePtr best_function = function_target_type(best->type);
+			if(best_function && !function->function_const && best_function->function_const) {
+				best = binding;
+				continue;
+			}
+			if(best_function && function->function_const && !best_function->function_const)
+				continue;
+			if(!PA12SameType(function, function_target_type(best->type), false))
           throw logic_error("ambiguous conversion function");
       }
     }
@@ -1056,6 +1090,14 @@ int PA14Lowerer::ConversionRank(const ExprInfo& source, const TypePtr& target) c
     TypePtr source_value = type_value(source.type);
     TypePtr target_value = type_value(target);
     if(!source_value || !target_value) return -1;
+    // A captureless lambda is still represented as a function pointer while
+    // overload candidates are being ranked.  A materialized closure class is
+    // the corresponding typed object parameter, not a user-defined
+    // conversion through a constructor.  Recognize this identity here so
+    // the selected call can materialize the final closure object exactly once.
+    if(IsLambdaClosureType(target_value) && source_value->kind == TYPE_POINTER &&
+       source_value->child && source_value->child->kind == TYPE_FUNCTION)
+      return 0;
     // The recursive conversion hazard is specific to class values.  The
     // generic PA12 type relation deliberately ignores nested cv for some
     // callers, but that is not an identity conversion for pointer types
@@ -1150,6 +1192,9 @@ int PA14Lowerer::ConversionRank(const ExprInfo& source, const TypePtr& target) c
         if(target_value->kind == TYPE_POINTER && source_value->kind == TYPE_ARRAY &&
            source_value->child && target_value->child &&
            PA12SameType(source_value->child, target_value->child, true)) return 1;
+        if(target_value->kind == TYPE_POINTER && source_value->kind == TYPE_FUNCTION &&
+           target_value->child && target_value->child->kind == TYPE_FUNCTION &&
+           PA12SameType(source_value, target_value->child, true)) return 1;
         if(is_arithmetic_type(source_value) && is_arithmetic_type(target_value)) return 2;
         return -1;
       }

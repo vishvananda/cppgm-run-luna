@@ -22,8 +22,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 {
 	if(template_replaced) *template_replaced = false;
 	const string source_spelling = raw;
-	bool materialized_member_type = false;
-	bool preserved_static_member = false;
+	bool materialized_member_type = false; bool preserved_static_member = false;
 	raw = NormalizeElaboratedSpelling(raw, context);
 	StripStaleGeneratedArguments(&raw);
 	if(!resolve_alias && resolve_member && active_instantiation_name_.empty() &&
@@ -55,6 +54,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			else current.erase(separator);
 		}
 	}
+	if(resolve_alias && resolve_member) ResolveBareGeneratedMemberAlias(&raw, context);
 	for(size_t qualifier = 0; qualifier < 2; ++qualifier) {
 		const string word = qualifier == 0 ? "const" : "volatile";
 		for(size_t at = raw.find(word); at != string::npos; ) {

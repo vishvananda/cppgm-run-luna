@@ -198,6 +198,19 @@ PA14Lowerer::Value PA14Lowerer::EmitObjectValueArgument(
     while(source_node && source_node->kind == "parenthesized-expression" &&
           source_node->children.size() == 1 && source_node->children[0])
       source_node = source_node->children[0];
+    if(source_node && source_node->kind == "lambda-expression") {
+      const TypePtr closure = LambdaClosureType(source_node);
+      if(closure && PA12SameType(closure, object_type, true)) {
+        const string slot = new_special_slot("argobj", low_type(object_type));
+        const string address = new_temp();
+        AddInstruction(address + " = addr $" + slot);
+        InitializeLambdaClosureAt(closure, address, source_node, scope);
+        Value result;
+        result.type = object_type;
+        result.operand = "$" + slot;
+        return result;
+      }
+    }
     const string slot = new_special_slot("argobj", low_type(object_type));
     const string address = new_temp();
     AddInstruction(address + " = addr $" + slot);

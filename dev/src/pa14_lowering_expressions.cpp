@@ -1101,6 +1101,9 @@ PA14Lowerer::Value PA14Lowerer::EmitValue(const CPPGMAstNodePtr& node, Scope* sc
 {
     if(!node) throw logic_error("missing value during LowIR lowering");
     if(node->kind == "lambda-expression") {
+      Value closure_result;
+      if(EmitLambdaClosureValue(node, scope, expected, &closure_result))
+        return closure_result;
       FunctionRecord* function = EnsureLambdaFunction(node, scope);
       Value result;
       result.type = function->source_type;

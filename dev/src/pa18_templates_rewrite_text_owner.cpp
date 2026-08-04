@@ -5,6 +5,28 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
+void PA18TemplateExpander::ResolveBareGeneratedMemberAlias(
+	string* raw, const string& context) const
+{
+	if(!raw || raw->find("::") != string::npos || raw->find('<') != string::npos)
+		return;
+	const string member_name = RemoveMarker(*raw);
+	if(member_name.empty()) return;
+	for(size_t character = 0; character < member_name.size(); ++character)
+		if(!IsIdentifierCharacter(member_name[character])) return;
+	for(string current = context; !current.empty(); ) {
+		const bool concrete = specialization_bases_.find(LastComponent(current)) !=
+			specialization_bases_.end();
+		if(concrete) {
+			const string member_type = MemberAliasType(current, member_name);
+			if(!member_type.empty()) { *raw = member_type; return; }
+		}
+		const size_t separator = current.rfind("::");
+		if(separator == string::npos) current.clear();
+		else current.erase(separator);
+	}
+}
+
 void PA18TemplateExpander::StripStaleGeneratedArguments(string* text) const
 {
 	if(!text) return;
