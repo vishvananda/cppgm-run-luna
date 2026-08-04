@@ -4,9 +4,9 @@
 
 The turn-start PA24 report had 104 tests with 26 passing and 78 failing.  The
 complete failure set was inspected and grouped by shared compiler behavior
-before implementation.  This checkpoint completes the typed initialization,
-conversion, and supported range-for increment; the map below is the complete
-post-checkpoint failure set.
+before implementation.  The map below is the complete post-checkpoint
+failure set after the typed initialization, conversion, range-for, and first
+captureless-lambda increments.
 
 ## Remaining Work Map
 
@@ -18,36 +18,23 @@ LowIR mismatch in constructor/default handling:
 - `200-aggregate-omitted-class-tail`
 - `200-direct-init-single-braced-constructor-argument`
 
-### 2. Lambda closure synthesis and callable/template use (36 tests)
+### 2. Lambda closure synthesis and callable/template use (22 tests)
 
-Lambda ASTs parse, but closure entities, captures, implicit returns, and
-callable/template deduction are not yet lowered:
+The supported captureless function-pointer path is complete.  Closure
+entities, captures, and callable/template deduction are not yet lowered in
+these cases:
 
-- `200-captureless-lambda-forward-pack-array-ref-call`
-- `200-captureless-lambda-forward-pack-call`
 - `200-captureless-lambda-forwarding-reference-call`
-- `200-captureless-lambda-implicit-return-parameter-member`
-- `200-captureless-lambda-no-declarator-template-reference`
-- `200-captureless-lambda-private-member-object-call`
-- `200-captureless-lambda-sizeof-parameter-pack-call`
-- `200-captureless-lambda-sizeof-parameter-pack`
 - `200-captureless-lambda-template-parameter-call`
-- `200-captureless-lambda-trailing-return-decltype-parameter`
-- `200-captureless-lambda-wrapper-conversion`
-- `200-class-template-lambda-static-member-template-call`
 - `200-included-template-member-dual-capturing-lambda-call`
 - `200-lambda-argument-overload-resolution`
 - `200-lambda-closure-assignment-sfinae`
 - `200-lambda-constructor-template-preferred`
 - `200-lambda-copy-move-constructible-traits`
 - `200-lambda-enumerator-default-capture`
-- `200-lambda-global`
 - `200-lambda-local-destructor-sfinae`
 - `200-lambda-local-synthesized-special-member-symbol`
-- `200-lambda-local`
 - `200-lambda-member-template-assignment`
-- `200-lambda-multistmt-implicit-return`
-- `200-lambda-user-range-for-implicit-return`
 - `200-member-template-captureless-lambda-inside-if`
 - `200-member-template-explicit-captureless-lambda-call`
 - `200-nested-lambda-captures-outer-local`
@@ -95,22 +82,33 @@ ABI behavior.
 
 The range-for increment is complete for bounded arrays, braced-init lists,
 member `begin`/`end`, namespace-qualified ADL `begin`/`end`, inherited member
-ranges, and const/reference loop declarations.  Its hidden range, iterator,
-condition, update, and cleanup state is lowered through the existing typed
-control-flow path.  The lambda-user-range case remains in the lambda group
-because its range body is inside an unsupported lambda entity.
+ranges, const/reference loop declarations, and the lambda-user-range case.
+Its hidden range, iterator, condition, update, and cleanup state is lowered
+through the existing typed control-flow path.
 
 ## Checkpoint Result
 
 Completed.  `make test-report ACTIVE_TEST_REPORT_PAS='pa24'` reports
-`59 / 104` tests passed, improving the turn-start baseline by 33 tests.
+`73 / 104` tests passed, improving the turn-start baseline by 47 tests.
 `make test-report-through-pa23` is green at `2496 / 2496`, and the PA24 file
 audit passes with only the repository's existing warnings.
 
+## Current checkpoint scope
+
+This turn targets the first coherent lambda increment: captureless lambda
+expressions with explicit or deduced non-class return types, ordinary named
+parameters, local/global function-pointer conversion, and lowering of their
+compound bodies through the existing typed function/control-flow machinery.
+The validation scope is the basic local/global/implicit-return lambda cases
+plus the existing PA24 report and through-PA23 gate.  Captures, generic
+lambda/template replay, and class-valued lambda returns remain outside this
+increment and stay grouped below until this callable foundation is stable.
+
 ## Next checkpoint group
 
-Implement captureless lambda entity synthesis first, including function-body
-scope and implicit return deduction, then extend it to supported by-reference
-and `this` captures.  Recheck the two aggregate/direct-list LowIR cases and
-the five semantic lookup edges after the lambda boundary is stable; finish
-with dependent template replay and lambda/template combinations.
+Implement captureless closure-object materialization and template-callable
+deduction as one group.  This should cover lambda arguments to forwarding and
+ordinary templates, closure-sensitive assignment/trait queries, and the
+member-template call paths.  Capturing and nested lambdas then remain the
+following group, followed by the two aggregate LowIR mismatches, the five
+semantic lookup edges, and dependent template replay.

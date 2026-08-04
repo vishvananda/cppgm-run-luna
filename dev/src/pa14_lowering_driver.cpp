@@ -241,6 +241,7 @@ void PA14Lowerer::EmitInitialFunctionRoots(vector<string>& entries)
   for(size_t i = 0; i < functions_.size(); ++i) {
     FunctionRecord& function = functions_[i];
     if(!function.definition || function.member || function.template_instantiation ||
+       function.lambda_function ||
        (function.inline_definition && !function.needed) ||
        (function.hidden_friend && !function.needed)) continue;
     entries.push_back(EmitFunction(function));
@@ -310,7 +311,8 @@ void PA14Lowerer::EmitOrdinaryAndHiddenRoots(vector<string>& entries)
       FunctionRecord& function = functions_[i];
       if(!function.definition || function.member || function.hidden_friend ||
          function.emitted || !function.needed ||
-         (!function.template_instantiation && !function.inline_definition)) continue;
+         (!function.template_instantiation && !function.inline_definition &&
+          !function.lambda_function)) continue;
       entries.push_back(EmitFunction(function));
       function.emitted = true;
       added = true;
@@ -336,7 +338,8 @@ void PA14Lowerer::EmitNeededOrdinary(vector<string>& entries)
       FunctionRecord& function = functions_[i];
       if(!function.definition || function.member || function.hidden_friend ||
          function.emitted || !function.needed ||
-         (!function.template_instantiation && !function.inline_definition)) continue;
+         (!function.template_instantiation && !function.inline_definition &&
+          !function.lambda_function)) continue;
       entries.push_back(EmitFunction(function));
       function.emitted = true;
       added = true;

@@ -1282,7 +1282,13 @@ void PA14Lowerer::ResolveAutoFunctionReturn(FunctionRecord& record)
         collect_returns(node->children[child]);
     };
     collect_returns(body);
-    if(returns.empty()) throw logic_error("cannot deduce auto return type");
+    if(returns.empty()) {
+      if(!record.lambda_function) throw logic_error("cannot deduce auto return type");
+      const TypePtr old_source = record.source_type;
+      const TypePtr result_type = Fundamental("void");
+      ApplyAutoFunctionReturn(record, old_source, source_function, result_type);
+      return;
+    }
     TypePtr result_type = DeduceAutoFunctionReturn(record, source_function, body, returns);
     if(ContainsAutoType(result_type)) throw logic_error("could not deduce auto return type");
     const TypePtr old_source = record.source_type;
@@ -1306,6 +1312,17 @@ TypePtr PA14Lowerer::DeduceAutoFunctionReturn(FunctionRecord& record,
       VariablePlan* this_plan = AddVariablePlan("this", PointerTo(this_type),
         CPPGMAstNodePtr(), CPPGMAstNodePtr());
       if(this_plan) scratch.environments.back()["this"] = this_plan;
+    }
+    if(record.lambda_function) {
+      // The normal auto-return pass runs before a local lambda is emitted, so
+      // its body has not gone through PlanFunction yet.  Plan it here to make
+      // local declarations available to return-expression inference; the
+      // final emission pass replans the body in its ordinary state.
+      PlanFunction(scratch);
+      map<string, VariablePlan*> planned;
+      for(size_t variable = 0; variable < scratch.variables.size(); ++variable)
+        planned[scratch.variables[variable].source_name] = &scratch.variables[variable];
+      scratch.environments.push_back(planned);
     }
     Scope* expression_scope = record.scope;
     map<const CPPGMAstNode*, Scope*>::const_iterator function_scope =

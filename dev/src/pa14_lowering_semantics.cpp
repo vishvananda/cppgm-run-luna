@@ -1277,6 +1277,17 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferUncached(const CPPGMAstNodePtr& node, Sc
     if(node->kind == "literal") return InferLiteral(node, expected, scope);
     if(node->kind == "keyword-literal") return InferKeyword(node);
     if(node->kind == "id-expression") return InferIdentifier(node, scope, expected);
+    if(node->kind == "lambda-expression") {
+      FunctionRecord* function = EnsureLambdaFunction(node, scope);
+      ExprInfo result;
+      // The closure's captureless conversion is represented at expression
+      // boundaries as a pointer to its internal callable function.  EmitValue
+      // retains the function designator so ConvertValue can materialize the
+      // observable function-to-pointer decay at the initialization/call site.
+      result.type = PointerTo(function->source_type);
+      result.category = "prvalue";
+      return result;
+    }
     if(node->kind == "parenthesized-expression") return node->children.empty() ? ExprInfo() : Infer(node->children[0], scope, expected);
     if(node->kind == "new-expression" || node->kind == "delete-expression")
       return InferAllocation(node, scope);

@@ -361,7 +361,8 @@ namespace cppgm_pa14_lowering {
 PA14Lowerer::PA14Lowerer(const vector<CPPGMAstNodePtr>& trees)
     : trees_(trees), program_(new CPPGMAstNode("translation-unit")), analyzer_(),
       functions_(), globals_(), function_by_key_(), global_by_key_(),
-      string_data_(), string_symbols_(), string_order_(), deferred_static_members_(),
+      string_data_(), string_symbols_(), string_order_(), local_static_plans_(),
+      lambda_functions_(), next_lambda_serial_(0), deferred_static_members_(),
       needs_init_helper_(false),
       needs_fini_helper_(false), emitted_vtables_(), external_vtables_(),
       emitted_rtti_(), class_types_by_name_(), state_(), next_needed_order_(0),

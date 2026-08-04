@@ -124,6 +124,11 @@ class PA14Lowerer
     bool base_entry;
     bool out_of_class_definition;
     bool inherited_constructor_wrapper;
+    // Captureless lambdas are lowered as internal function entities.  Keep
+    // this fact separate from inline/template linkage: a lambda is emitted
+    // only after its address is demanded, but its LowIR binding remains
+    // internal and has no C++ object alias.
+    bool lambda_function;
     bool indirect_result;
     string effects;
     string object_name;
@@ -152,6 +157,7 @@ class PA14Lowerer
         emitted(false), variadic(false), unwind_no(false), noreturn(false), base_entry(false),
         out_of_class_definition(false),
         inherited_constructor_wrapper(false),
+        lambda_function(false),
         indirect_result(false), effects(), object_name(), template_primary(), template_arguments(),
         base_entry_for(), parameter_metadata(),
         indirect_parameters(), special_initializer(), default_arguments() {}
@@ -338,6 +344,8 @@ class PA14Lowerer
   map<string, string> string_symbols_;
   vector<string> string_order_;
 	map<const CPPGMAstNode*, GlobalRecord*> local_static_plans_;
+	map<const CPPGMAstNode*, FunctionRecord*> lambda_functions_;
+	size_t next_lambda_serial_;
 	set<string> deferred_static_members_;
 	set<const Type*> complete_template_object_uses_;
 	set<const Type*> complete_template_parameter_uses_;
@@ -639,6 +647,12 @@ FunctionRecord* EnsureAggregateConstructor(const TypePtr& type);
 
 FunctionRecord* EnsureAggregateConstructorForArguments(const TypePtr& type,
                                                        size_t argument_count);
+
+// Materialize a captureless lambda as a demand-driven internal function.  The
+// returned record owns the typed callable signature used by both inference and
+// LowIR call lowering.
+FunctionRecord* EnsureLambdaFunction(const CPPGMAstNodePtr& lambda,
+                                     Scope* scope);
 
 void ClassifySpecialMember(FunctionRecord* record);
 

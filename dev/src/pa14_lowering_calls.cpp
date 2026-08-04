@@ -590,6 +590,17 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
 	} else {
 	  Value callee_value = EmitValue(callee_node, scope);
 	  callee = callee_value.operand;
+	  const bool lambda_callee = callee_node &&
+	    (callee_node->kind == "lambda-expression" ||
+	     (callee_node->kind == "parenthesized-expression" &&
+	      callee_node->children.size() == 1 && callee_node->children[0] &&
+	      callee_node->children[0]->kind == "lambda-expression"));
+	  if(lambda_callee && callee_value.function && callee_value.type &&
+	     type_value(callee_value.type)->kind == TYPE_FUNCTION) {
+	    const string decay = new_temp();
+	    AddInstruction(decay + " = unary decay ptr " + callee);
+	    callee = decay;
+	  }
 	  // A named function used through a non-type function-pointer parameter is
 	  // still a function designator at this boundary.  Materialize the standard
 	  // function-to-pointer conversion before the indirect call; local function

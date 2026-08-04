@@ -636,6 +636,7 @@ CPPGMAstNodePtr Parser::ParseLambdaExpression()
 	--ordinary_depth_;
 	CPPGMAstNodePtr result = Node("lambda-expression");
 	Add(result, introducer);
+	const size_t declarator_begin = position_;
 	if (Is("("))
 	{
 		CPPGMAstNodePtr declarator = Node("lambda-declarator");
@@ -664,9 +665,15 @@ CPPGMAstNodePtr Parser::ParseLambdaExpression()
 		}
 		Add(result, declarator);
 	}
+	const size_t body_begin = position_;
 	CPPGMAstNodePtr body = ParseCompoundStatement();
 	if (!body) { Restore(mark); return CPPGMAstNodePtr(); }
 	Add(result, body);
+	// PA14 uses the normalized token span for stable internal lambda names.
+	// The span starts at the lambda declarator when `()` is present and at the
+	// body otherwise, and ends at the body's opening-brace token.
+	result->source_token_begin = declarator_begin;
+	result->source_token_end = body_begin;
 	return result;
 }
 

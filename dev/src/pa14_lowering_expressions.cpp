@@ -1100,6 +1100,14 @@ PA14Lowerer::Value PA14Lowerer::EmitValue(const CPPGMAstNodePtr& node, Scope* sc
                   const TypePtr& expected)
 {
     if(!node) throw logic_error("missing value during LowIR lowering");
+    if(node->kind == "lambda-expression") {
+      FunctionRecord* function = EnsureLambdaFunction(node, scope);
+      Value result;
+      result.type = function->source_type;
+      result.operand = function_address(function);
+      result.function = true;
+      return result;
+    }
     if(node->kind == "literal") {
       if(is_user_defined_string_literal(node->value)) {
         const string operator_name = "operator\"\"" +

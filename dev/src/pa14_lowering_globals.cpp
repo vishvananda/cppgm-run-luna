@@ -408,6 +408,14 @@ PA14Lowerer::AddressInit PA14Lowerer::StaticAddress(const CPPGMAstNodePtr& expre
       return result;
     }
     if(node->kind == "keyword-literal" && PA12Operator(node->value) == "nullptr") return result;
+    if(node->kind == "lambda-expression") {
+      FunctionRecord* function = EnsureLambdaFunction(node, scope);
+      MarkFunctionNeeded(function);
+      result.valid = true;
+      result.function = true;
+      result.symbol = function->symbol;
+      return result;
+    }
     if(node->kind == "unary-expression" && PA12Operator(node->value) == "&" &&
        !node->children.empty()) return StaticAddress(node->children[0], scope);
     if(node->kind == "id-expression") {
@@ -597,7 +605,10 @@ string PA14Lowerer::RenderGlobal(GlobalRecord& global)
     const string low = storage_type(type);
     out << "global @" << global.symbol << " : " << low << GlobalMetadata(global) << " = ";
     AddressInit address = StaticAddress(expression, global.scope);
-    if(type_value(type)->kind == TYPE_POINTER && address.valid && !address.function) {
+    const bool lambda_function_address = address.function && expression &&
+      expression->kind == "lambda-expression";
+    if(type_value(type)->kind == TYPE_POINTER && address.valid &&
+       (!address.function || lambda_function_address)) {
       out << "addr @" << address.symbol;
       if(address.addend) out << " + " << address.addend;
     } else {
