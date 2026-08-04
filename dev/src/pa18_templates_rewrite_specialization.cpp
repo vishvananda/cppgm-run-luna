@@ -381,10 +381,58 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 		MatchScope(set<string>* value, const string& name) : active(value), key(name) {}
 		~MatchScope() { active->erase(key); }
 	} match_scope(&active_class_specialization_matches_, match_key);
+	// The pattern carried by a partial specialization only has the parameters
+	// needed by that specialization.  Its use-site arguments, however, have
+	// already been completed with the primary template's trailing defaults.
+	// Match those defaults against the primary contract; using the partial's
+	// shorter parameter vector makes every defaulted partial look inapplicable
+	// (and incorrectly falls back to the primary template).
+	const vector<TemplateParameter>* parameter_contract = &definition.parameters;
+	if(definition.partial_specialization) {
+		map<string, TemplateDefinition>::const_iterator primary = definitions_.find(
+			definition.qualified_name);
+		if(primary != definitions_.end() && primary->second.class_template &&
+			!primary->second.partial_specialization)
+			parameter_contract = &primary->second.parameters;
+	}
 	set<string> parameter_names;
 	for(size_t i = 0; i < definition.specialization_parameters.size(); ++i)
 		if(!definition.specialization_parameters[i].empty())
 			parameter_names.insert(definition.specialization_parameters[i]);
+	// A template-template parameter constrains the template argument's own
+	// parameter kinds.  Matching only the spelling of `R<A0>` would otherwise
+	// let `int_<1>` satisfy `template<class> class R`, even though `int_` takes a
+	// non-type parameter.  That false partial-specialization match can send a
+	// recursive member replay through an invalid `T::type` path instead of the
+	// primary template's direct `typedef R type`.
+	const auto template_template_argument_matches = [this, &definition, &context](
+		const string& pattern, const string& actual) -> bool {
+		const size_t pattern_open = pattern.find('<');
+		if(pattern_open == string::npos) return true;
+		string pattern_arguments;
+		size_t pattern_close = string::npos;
+		if(!TemplateRange(pattern, pattern_open, &pattern_arguments, &pattern_close)) return true;
+		const string pattern_base = LastComponent(pattern.substr(0, pattern_open));
+		const TemplateParameter* expected = 0;
+		for(size_t parameter = 0; parameter < definition.specialization_parameter_details.size(); ++parameter)
+			if(definition.specialization_parameter_details[parameter].template_template &&
+				definition.specialization_parameter_details[parameter].name == pattern_base) {
+				expected = &definition.specialization_parameter_details[parameter];
+				break;
+			}
+		if(!expected) return true;
+		string actual_base = CanonicalSpelling(actual);
+		const size_t actual_open = actual_base.find('<');
+		if(actual_open != string::npos) actual_base.erase(actual_open);
+		const string actual_generated_name = LastComponent(actual_base);
+		map<string, string>::const_iterator generated_base =
+			specialization_bases_.find(actual_generated_name);
+		if(generated_base != specialization_bases_.end()) actual_base = generated_base->second;
+		const TemplateDefinition* actual_definition = FindDefinition(actual_base, context);
+		if(!actual_definition || !actual_definition->class_template) return false;
+		return CompatibleTemplateParameterList(expected->template_parameters,
+			actual_definition->parameters);
+	};
 	map<string, string> local;
 	vector<pair<string, string> > deferred_decltypes;
 	size_t pattern_index = 0;
@@ -392,6 +440,94 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 	for(; pattern_index < definition.specialization_pattern.size(); ++pattern_index) {
 		string pattern = CanonicalSpelling(
 			definition.specialization_pattern[pattern_index]);
+		bool qualify_actual = false;
+		// A nondependent qualified name in a partial-specialization head is
+		// looked up where the specialization was declared, not where the
+		// concrete class is being queried.  Keeping the source-relative spelling
+		// here makes names such as `execution::relationship_t::fork_t` resolve
+		// from `main` and incorrectly rejects the otherwise matching partial.
+		bool dependent_pattern = false;
+		for(set<string>::const_iterator parameter = parameter_names.begin();
+			parameter != parameter_names.end() && !dependent_pattern; ++parameter) {
+			if(parameter->empty()) continue;
+			for(size_t occurrence = pattern.find(*parameter);
+				occurrence != string::npos;
+				occurrence = pattern.find(*parameter, occurrence + parameter->size())) {
+				const bool left_boundary = occurrence == 0 ||
+					!IsIdentifierCharacter(pattern[occurrence - 1]);
+				const size_t end = occurrence + parameter->size();
+				const bool right_boundary = end == pattern.size() ||
+					!IsIdentifierCharacter(pattern[end]);
+				if(left_boundary && right_boundary) {
+					dependent_pattern = true;
+					break;
+				}
+			}
+		}
+		if(!dependent_pattern && !definition.owner.empty()) {
+			const size_t member_separator = TopLevelScopeSeparator(pattern);
+			if(member_separator != string::npos) {
+				const string source_owner = pattern.substr(0, member_separator);
+				const string member = pattern.substr(member_separator + 2);
+				string qualified_owner = source_owner;
+				for(string current = definition.owner; ; ) {
+					const string candidate = JoinPath(current, source_owner);
+					if(FindClassDeclaration(candidate, definition.owner)) {
+						qualified_owner = candidate;
+						break;
+					}
+					if(current.empty()) break;
+					const size_t parent = current.rfind("::");
+					if(parent == string::npos) current.clear();
+					else current.erase(parent);
+				}
+				if(member.find('<') == string::npos &&
+					FindClassDeclaration(qualified_owner, definition.owner)) {
+					map<string, string> member_substitutions;
+					set<string> active_members;
+					string member_type;
+					if(FindClassMemberType(qualified_owner, member,
+						member_substitutions, definition.owner, &member_type,
+						&active_members, true) && !member_type.empty()) {
+						const string member_scope = PrefixComponent(qualified_owner);
+						const string scoped_member = member_scope.empty() ? member_type :
+							JoinPath(member_scope, member_type);
+						// FindClassDeclaration performs lookup from the partial's
+						// namespace.  That is too broad for an alias target written
+						// relative to a nested class's lexical scope: `detail::T`
+						// in `api::execution::relationship_t` must first be tested as
+						// `api::execution::detail::T`, not as `api::detail::T`.
+						const string qualified_member = QualifyTypeArgument(member_type,
+							member_scope, member_scope, true);
+						if(!qualified_member.empty() &&
+							FindClassDeclaration(qualified_member, definition.owner)) {
+							pattern = qualified_member;
+							qualify_actual = true;
+						}
+						else if(FindClassDeclaration(member_type, definition.owner))
+							pattern = member_type;
+						else if(FindClassDeclaration(scoped_member, definition.owner)) {
+							pattern = scoped_member;
+							qualify_actual = true;
+						}
+						else if(!member_scope.empty() && member_type.find("::") != string::npos &&
+							member_type.compare(0, member_scope.size() + 2,
+								member_scope + "::") != 0)
+							pattern = scoped_member;
+						else {
+							pattern = QualifyTypeArgument(member_type, member_scope,
+								member_scope, true);
+							qualify_actual = true;
+						}
+					}
+				}
+			}
+			if(pattern == definition.specialization_pattern[pattern_index]) {
+				pattern = QualifyTypeArgument(pattern, definition.owner,
+					definition.owner, true);
+				qualify_actual = true;
+			}
+		}
 		// An explicit class specialization is stored in the same pattern index as
 		// a partial specialization, but its empty template-parameter clause means
 		// that each unqualified pattern component is a concrete type.  Resolve it
@@ -419,10 +555,10 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 					const string condition = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(
 						enable_if_parts[0], local));
 					PA19IntegralValue enabled;
-					const bool condition_known = !condition.empty() &&
-						const_cast<PA18TemplateExpander*>(this)->EvaluateIntegralText(
-							condition, context, local, &enabled);
-					if(condition_known && enabled.known && PA19Raw(enabled) == 0)
+						const bool condition_known = !condition.empty() &&
+							const_cast<PA18TemplateExpander*>(this)->EvaluateIntegralText(
+								condition, context, local, &enabled);
+						if(condition_known && enabled.known && PA19Raw(enabled) == 0)
 						return false;
 				}
 			}
@@ -532,8 +668,10 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 			if(specialization_bases_.find(generated_actual_key) != specialization_bases_.end() &&
 				specialization_arguments_.find(generated_actual_key) !=
 					specialization_arguments_.end())
-				actual = generated_actual_key;
+					actual = generated_actual_key;
 		}
+		if(qualify_actual)
+			actual = QualifyTypeArgument(actual, definition.owner, definition.owner, true);
 		const size_t actual_parameter = argument_index - 1;
 		bool dependent_actual = false;
 		for(size_t actual_word = 0; actual_word < actual.size();) {
@@ -576,8 +714,8 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 				break;
 			}
 		}
-		if(!dependent_actual && actual_parameter < definition.parameters.size() &&
-			definition.parameters[actual_parameter].type &&
+		if(!dependent_actual && actual_parameter < parameter_contract->size() &&
+			(*parameter_contract)[actual_parameter].type &&
 			(actual.find("::") != string::npos || actual.find('<') != string::npos)) {
 			map<string, string> protected_actual_substitutions = local;
 			ProtectMaterializedTemplateBases(actual, context, local,
@@ -590,7 +728,33 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 		}
 		const size_t pattern_open = pattern.find('<');
 		const size_t pattern_scope = pattern.rfind("::");
-		const bool dependent_member_pattern = pattern_scope != string::npos &&
+		bool dependent_member_owner = false;
+		for(set<string>::const_iterator parameter = parameter_names.begin();
+			parameter != parameter_names.end() && !dependent_member_owner; ++parameter) {
+			if(parameter->empty()) continue;
+			const string marker = *parameter + "::";
+			for(size_t occurrence = pattern.find(marker);
+				occurrence != string::npos;
+				occurrence = pattern.find(marker, occurrence + marker.size())) {
+				if((occurrence == 0 || !IsIdentifierCharacter(pattern[occurrence - 1]))) {
+					dependent_member_owner = true;
+					break;
+				}
+			}
+		}
+		if(!dependent_member_owner && pattern.find("decltype(") != string::npos &&
+			pattern.find("::") != string::npos &&
+			(pattern.find("static_query_v") != string::npos ||
+				(pattern.find("::type") != string::npos &&
+					pattern.find("enable_if") == string::npos)))
+			for(set<string>::const_iterator parameter = parameter_names.begin();
+				parameter != parameter_names.end(); ++parameter)
+				if(!parameter->empty() && pattern.find(*parameter) != string::npos) {
+					dependent_member_owner = true;
+					break;
+				}
+		const bool dependent_member_pattern = dependent_member_owner &&
+			pattern_scope != string::npos &&
 			(pattern_open == string::npos || pattern_scope > pattern_open);
 		if(pattern.find("typename") != string::npos || dependent_member_pattern) {
 			try {
@@ -638,11 +802,11 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 				template_parameter = true;
 				break;
 			}
-		if(argument_index > 0 && argument_index - 1 < definition.parameters.size() &&
-			!definition.parameters[argument_index - 1].type &&
-			!definition.parameters[argument_index - 1].template_template) {
+		if(argument_index > 0 && argument_index - 1 < parameter_contract->size() &&
+			!(*parameter_contract)[argument_index - 1].type &&
+			!(*parameter_contract)[argument_index - 1].template_template) {
 			const PA19IntegralType expected_type = PA19Type(
-				ResolveAlias(ReplaceIdentifiers(definition.parameters[argument_index - 1].non_type_type,
+				ResolveAlias(ReplaceIdentifiers((*parameter_contract)[argument_index - 1].non_type_type,
 					local), context));
 			PA19ConstantExpressionParser parser(constant_values_, local,
 				constant_type_sizes_, constant_type_alignments_, type_aliases_);
@@ -692,21 +856,87 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 			 (lvalue_reference_pattern && actual_rvalue_reference) ||
 			 (rvalue_reference_pattern && actual_lvalue_reference)))
 			return false;
-		if(template_parameter) {
+		if(!template_parameter && parameter_names.find(pattern) != parameter_names.end() &&
+			pattern.find("::") == string::npos && pattern.find('<') == string::npos) {
+			map<string, string>::const_iterator prior = local.find(pattern);
+			if(prior != local.end()) {
+				string prior_type = NormalizeTypeArgument(prior->second);
+				const string actual_type = NormalizeTypeArgument(actual);
+				bool same_type = prior_type == actual_type;
+				if(!same_type && prior_type.compare(0, 6, "const ") == 0)
+					same_type = prior_type.substr(6) == actual_type;
+				if(!same_type) {
+					string prior_integral = prior_type;
+					if(prior_integral.compare(0, 6, "const ") == 0)
+						prior_integral = prior_integral.substr(6);
+					const PA19IntegralType prior_info = PA19Type(prior_integral);
+					const PA19IntegralType actual_info = PA19Type(actual_type);
+					same_type = prior_info.integral && actual_info.integral &&
+						prior_info.is_unsigned == actual_info.is_unsigned &&
+						prior_info.bits == actual_info.bits &&
+						prior_info.rank == actual_info.rank;
+				}
+				if(!same_type) return false;
+			} else {
+				local[pattern] = actual;
+			}
+		} else if(template_parameter) {
 			map<string, string>::const_iterator prior = local.find(pattern);
 			if(prior != local.end() && CanonicalSpelling(prior->second) != actual) return false;
 			local[pattern] = actual;
 		} else {
-			const bool matched_pattern = pattern == actual ||
-				MatchTypePattern(pattern, actual, parameter_names, &local, context, true);
+			// Earlier specialization arguments are already concrete at this
+			// point.  Substitute them before matching a later dependent alias
+			// head; otherwise `enable_if_t<trait<T>::value>` remains opaque and
+			// cannot be reduced to the actual `void` argument even though the
+			// partial specialization's substitution is valid.
+			const string matching_pattern = local.empty() ? pattern :
+				CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(pattern, local));
+			string reduced_pattern = matching_pattern;
+			const size_t reduced_open = matching_pattern.find('<');
+			if(reduced_open != string::npos) {
+				string reduced_base, reduced_arguments;
+				size_t reduced_begin = 0, reduced_close = string::npos;
+				if(TemplateBase(matching_pattern, reduced_open, &reduced_begin, &reduced_base) &&
+					TemplateRange(matching_pattern, reduced_open, &reduced_arguments, &reduced_close)) {
+					const string reduced_name = LastComponent(reduced_base);
+					const string reduced_suffix = matching_pattern.substr(reduced_close + 1);
+					if((reduced_name == "enable_if" || reduced_name == "enable_if_c" ||
+						reduced_name == "enable_if_t") && reduced_suffix == "::type") {
+						const vector<string> reduced_parts = SplitTemplateArguments(reduced_arguments);
+						if(!reduced_parts.empty()) {
+							const string condition = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(
+								reduced_parts[0], local));
+							PA19IntegralValue enabled;
+							const bool condition_known = !condition.empty() &&
+								const_cast<PA18TemplateExpander*>(this)->EvaluateIntegralText(
+									condition, context, local, &enabled);
+							if(condition_known && enabled.known) {
+								if(PA19Raw(enabled) == 0) return false;
+								if(reduced_parts.size() > 1)
+									reduced_pattern = CanonicalSpelling(reduced_parts[1]);
+							}
+						}
+							}
+						}
+					}
+					// Alias replay can turn a concrete class-template member into
+					// its generated local name.  Recover the registered source
+					// specialization spelling before comparing it with a source
+					// argument that still carries its ordinary template-id.
+					reduced_pattern = CanonicalSpelling(RestoreSpecializationSpelling(
+						reduced_pattern));
+			const bool matched_pattern = template_template_argument_matches(reduced_pattern, actual) &&
+				(reduced_pattern == actual || MatchTypePattern(reduced_pattern, actual,
+					parameter_names, &local, context, true));
 			if(!matched_pattern) return false;
 		}
 	}
 	while(argument_index < arguments.size()) {
-		if(argument_index >= definition.parameters.size() ||
-			definition.parameters[argument_index].default_type.empty()) return false;
+		if(argument_index >= parameter_contract->size() ||
+			(*parameter_contract)[argument_index].default_type.empty()) return false;
 		const string expected = NormalizeTypeArgument(ReplaceIdentifiers(
-			definition.parameters[argument_index].default_type, local));
+			(*parameter_contract)[argument_index].default_type, local));
 		if(expected != NormalizeTypeArgument(arguments[argument_index])) return false;
 		++argument_index;
 	}
@@ -738,6 +968,35 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 			&protected_pattern_substitutions);
 		const string substituted_pattern = ReplaceIdentifiersPreservingPackSizes(
 			CanonicalSpelling(source_pattern), protected_pattern_substitutions);
+		// Once the condition of an enable_if alias is a typed, known value, the
+		// alias has already crossed its substitution boundary.  Rewriting the
+		// whole alias here can replay a detection idiom (for example the
+		// symmetric decltype probe used by query_member) while the enclosing
+		// partial specialization is still being selected.  Preserve the ordinary
+		// SFINAE path for unknown conditions, but let known conditions finish
+		// without re-entering member replay.
+		string alias_base, alias_arguments;
+		size_t alias_begin = 0, alias_close = string::npos;
+		const size_t alias_open = substituted_pattern.find('<');
+		if(alias_open != string::npos &&
+			TemplateBase(substituted_pattern, alias_open, &alias_begin, &alias_base) &&
+			TemplateRange(substituted_pattern, alias_open, &alias_arguments, &alias_close) &&
+			(alias_close + 1 == substituted_pattern.size() ||
+				(substituted_pattern.substr(alias_close + 1) == "::type")) &&
+			(LastComponent(alias_base) == "enable_if" ||
+				LastComponent(alias_base) == "enable_if_c" ||
+				LastComponent(alias_base) == "enable_if_t")) {
+			const vector<string> alias_parts = SplitTemplateArguments(alias_arguments);
+			if(!alias_parts.empty()) {
+				PA19IntegralValue enabled;
+				if(const_cast<PA18TemplateExpander*>(this)->EvaluateIntegralText(
+					CanonicalSpelling(alias_parts[0]), context,
+					protected_pattern_substitutions, &enabled) && enabled.known) {
+					if(PA19Raw(enabled) == 0) return false;
+					continue;
+				}
+			}
+		}
 		try {
 			const string rewritten = const_cast<PA18TemplateExpander*>(this)->RewriteText(
 				substituted_pattern, context, protected_pattern_substitutions, 0);

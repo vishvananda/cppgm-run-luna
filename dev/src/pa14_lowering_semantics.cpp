@@ -188,7 +188,7 @@ vector<Binding*> PA14Lowerer::Lookup(const string& raw, Scope* from) const
     Scope* current = absolute ? analyzer_.global_.get() : from;
     for(size_t i = 0; i + 1 < parts.size(); ++i) {
       current = ScopeComponent(current, parts[i], i == 0, absolute);
-      if(!current) return vector<Binding*>();
+      if(!current) break;
     }
     if(current && current->kind == SCOPE_CLASS && current->owner_type)
       return MemberBindings(current->owner_type, parts.back());
@@ -200,8 +200,37 @@ vector<Binding*> PA14Lowerer::Lookup(const string& raw, Scope* from) const
       if(target.binding) result.push_back(target.binding);
       else if(target.scope) AppendBindings(target.scope, parts.back(), result, visited);
     }
+	if(result.empty() && parts.size() > 1) {
+		// Generated specializations can retain a source-relative namespace
+		// spelling after PA18 materialization.  Recover only a unique typed
+		// binding whose semantic qualified path has that suffix; ordinary
+		// overload lookup remains governed by the lexical path above.
+		string suffix = raw;
+		while(suffix.compare(0, 2, "::") == 0) suffix.erase(0, 2);
+		Binding* match = 0;
+		bool ambiguous = false;
+		function<void(Scope*)> find_suffix;
+		find_suffix = [&](Scope* scope) {
+			if(!scope || ambiguous) return;
+			for(size_t binding = 0; binding < scope->bindings.size(); ++binding) {
+				Binding* candidate = &scope->bindings[binding];
+				if(candidate->hidden_friend || (candidate->kind != BIND_TYPE &&
+					candidate->kind != BIND_TYPE_ALIAS) || !candidate->type) continue;
+				const string& qualified = candidate->qualified_name;
+				if(qualified != suffix && (qualified.size() <= suffix.size() ||
+					qualified.compare(qualified.size() - suffix.size(), suffix.size(), suffix) != 0 ||
+					qualified[qualified.size() - suffix.size() - 1] != ':')) continue;
+				if(match && match != candidate) { ambiguous = true; return; }
+				match = candidate;
+			}
+			for(size_t child = 0; child < scope->children.size(); ++child)
+				find_suffix(scope->children[child].get());
+		};
+		find_suffix(analyzer_.global_.get());
+		if(match && !ambiguous) result.push_back(match);
+	}
     return result;
-  }
+}
 
 Scope* PA14Lowerer::FindTypeOwnerScope(Scope* scope, const TypePtr& type) const
 {

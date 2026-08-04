@@ -580,7 +580,7 @@ private:
 	map<string, FunctionSignature> function_signatures_;
 	map<string, vector<string> > function_signatures_by_name_;
 	map<string, vector<FunctionSignature> > function_overloads_; set<const CPPGMAstNode*> template_function_signatures_; map<string, string> specialization_bases_;
-	map<string, vector<string> > specialization_arguments_;
+	map<string, vector<string> > specialization_arguments_; map<string, const TemplateDefinition*> specialization_definitions_;
 	/* Owner-bound identity for replaying qualified nested member templates. */ map<string, string> specialization_bases_by_owner_; map<string, vector<string> > specialization_arguments_by_owner_;
 	// Use-site arity prevents deduction from binding a pack to class defaults.
 	map<string, size_t> specialization_explicit_argument_counts_;
@@ -599,7 +599,7 @@ private:
 	map<string, string> deferred_class_keys_;
 	size_t defer_type_only_class_definitions_ = 0;
 	size_t defer_operator_template_materialization_ = 0;
-	size_t active_template_declaration_depth_ = 0; set<string> active_template_member_types_;
+	size_t active_template_declaration_depth_ = 0; set<string> active_template_member_types_; mutable map<string, string> member_type_replay_cache_; mutable map<string, const TemplateDefinition*> class_template_selection_cache_;
 	mutable set<string> active_member_type_lookups_, active_static_member_lookups_,
 		active_alias_resolutions_, active_function_results_,
 		active_class_template_selections_, active_class_template_selection_families_,

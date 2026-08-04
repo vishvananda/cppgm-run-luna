@@ -112,6 +112,14 @@ void Analyzer::PredeclareGeneratedScopes(const CPPGMAstNodePtr& tree)
 			AddTypeBinding(scope, name, type);
 		}
 		type->tag = ClassKey(node);
+		if (node->template_instantiation) {
+			type->template_specialization = true;
+			type->template_primary = node->template_primary;
+			type->template_arguments = node->template_arguments;
+			type->template_parameter_names = node->template_parameter_names;
+			type->template_parameter_packs = node->template_parameter_packs;
+			type->template_empty_pack = node->template_empty_pack;
+		}
 		Scope* class_scope = ClassScope(type, scope, name);
 		for (size_t i = 0; i < node->children.size(); ++i) {
 			const CPPGMAstNodePtr child = node->children[i];
@@ -120,6 +128,74 @@ void Analyzer::PredeclareGeneratedScopes(const CPPGMAstNodePtr& tree)
 		}
 	};
 	predeclare(tree, global_.get(), false);
+	// PA18 may place a materialized alias or class specialization before the
+	// source declaration that caused the demand.  Its generated scope still
+	// belongs to the source translation unit, so make source class identities
+	// visible before the early alias pass without processing their members or
+	// computing layout out of source order.  The ordinary Process pass below
+	// reuses these bindings and remains responsible for the complete definition.
+	if (has_generated) {
+		function<void(const CPPGMAstNodePtr&, Scope*)> predeclare_source_classes;
+		predeclare_source_classes = [&](const CPPGMAstNodePtr& node, Scope* scope) {
+			if (!node || !scope) return;
+			if (node->kind == "translation-unit") {
+				for (size_t i = 0; i < node->children.size(); ++i)
+					predeclare_source_classes(node->children[i], scope);
+				return;
+			}
+			if (node->kind == "namespace-definition") {
+				Scope* namespace_scope = 0;
+				map<const CPPGMAstNode*, Scope*>::iterator mapped =
+					namespace_scopes_.find(node.get());
+				if (mapped != namespace_scopes_.end()) namespace_scope = mapped->second;
+				if (!namespace_scope) {
+					map<string, Scope*>::iterator found = scope->namespace_children.find(node->value);
+					if (found != scope->namespace_children.end()) namespace_scope = found->second;
+				}
+				if (!namespace_scope) return;
+				for (size_t i = 0; i < node->children.size(); ++i)
+					predeclare_source_classes(node->children[i], namespace_scope);
+				return;
+			}
+			if (node->kind == "template-declaration") {
+				for (size_t i = 0; i < node->children.size(); ++i)
+					predeclare_source_classes(node->children[i], scope);
+				return;
+			}
+			if (node->kind == "enum-specifier") {
+				const string name = LastComponent(node->value);
+				if (name.empty() || scope->local(name)) return;
+				TypePtr type(new Type(TYPE_ENUM, name));
+				type->complete = false;
+				type->underlying = Fundamental("int");
+				if (!scope->qualified_prefix.empty())
+					type->name = scope->qualified_prefix + "::" + name;
+				AddTypeBinding(scope, name, type);
+				return;
+			}
+			if (node->kind != "class-specifier" &&
+				node->kind != "class-forward-declaration") return;
+			if (node->template_instantiation || node->explicit_specialization) return;
+			const string name = LastComponent(node->value);
+			if (name.empty()) return;
+			TypePtr type;
+			Binding* existing = scope->local(name);
+			if (existing && existing->kind == BIND_TYPE && existing->type &&
+				existing->type->kind == TYPE_CLASS) type = existing->type;
+			else {
+				type.reset(new Type(TYPE_CLASS, name));
+				type->tag = ClassKey(node);
+				if (!scope->qualified_prefix.empty())
+					type->name = scope->qualified_prefix + "::" + name;
+				AddTypeBinding(scope, name, type);
+			}
+			type->tag = ClassKey(node);
+			Scope* class_scope = ClassScope(type, scope, name);
+			for (size_t i = 0; i < node->children.size(); ++i)
+				predeclare_source_classes(node->children[i], class_scope);
+		};
+		predeclare_source_classes(tree, global_.get());
+	}
 	// Generated nested specializations can be processed before the source
 	// declaration that names a global typedef.  Make ordinary typedef names
 	// available during that early class replay, while leaving alias templates

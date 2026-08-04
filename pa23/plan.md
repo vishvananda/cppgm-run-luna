@@ -5371,3 +5371,86 @@ termination boundary shared by the three status cases, then use that stable
 identity to close the two generated owner/declaration comparisons.  Retain
 the timeout as a semantic termination gate and keep acceptance on the normal
 typed semantic and LowIR pipelines.
+
+## Checkpoint 51 scope — 2026-08-03 (before implementation)
+
+### Current failure baseline and Remaining Work Map
+
+The current required PA23 report is **391/396**, with PA1 through PA22
+passing.  The complete five-fixture failure set is grouped by shared compiler
+behavior:
+
+- **Recursive qualified-result and reentrant query identity (3 status cases):**
+  `general/500-recursive-qualified-member-template-bool-arg.t` loses the
+  concrete function-type owner/result while replaying a nested member-template
+  call; `general/500-reentrant-static-query-callable-enable-if-cache.t` fails
+  to revalidate a cached dependent `enable_if_t` result after the executor
+  becomes concrete; and `general/500-reentrant-static-query-enable-if-partial.t`
+  re-enters the same class partial-specialization query until the harness
+  times out.  These are one typed semantic boundary: a dependent query needs
+  a stable owner/argument identity and an unresolved or substitution-failure
+  state while it is in flight, followed by ordinary replay once concrete.
+- **Defaulted class-template argument and generated LowIR identity (2
+  comparisons):**
+  `spec/400-defaulted-nested-class-argument-partial-specialization.t` and
+  `spec/400-defaulted-template-arg-partial-base-completion.t` select the
+  expected source specializations but materialize different defaulted
+  argument storage, generated body demand, declaration identity, or call
+  order.  These are downstream consumers of the same typed specialization and
+  owner facts, not textual-output exceptions.
+
+### Checkpoint Scope
+
+Complete the five-fixture integration group through the normal typed compiler
+pipeline.  First make recursive `FindClassMemberType`/alias/member-template
+replay preserve the concrete generated owner and function-type result without
+re-materializing the active query.  Represent reentrant static-query and class
+partial-selection requests with a stable semantic identity plus a typed
+unresolved/substitution-failure state, so an in-flight dependent request
+terminates and is reconsidered after its arguments are concrete.  Then carry
+the selected defaulted argument and owner identity through declaration demand
+and LowIR materialization, preserving ordinary initialization and call order
+in both spec fixtures.  No timeout-specific acceptance, spelling-based test
+gate, or reference/test change is in scope.
+
+Validation for this checkpoint is all five named fixtures, the complete
+`make test-report ACTIVE_TEST_REPORT_PAS='pa23'` report, the required
+through-PA22 report, the PA23 source file audit, and a clean committed
+worktree.  If the status/query boundary closes without both comparison
+fixtures, record the independent materialization remainder explicitly in the
+checkpoint result and keep it as the next group.
+
+## Checkpoint 52 result — 2026-08-03
+
+### Result
+
+The typed replay increment is complete for the status/termination group. It
+now preserves generated specialization source identities and selected partial
+definitions, replays known integral members from typed generated state, keeps
+enum-valued members available during replay, and bounds qualified member
+lookup to complete, non-compound operands. Partial matching now carries the
+primary parameter contract through defaulted arguments, preserves dependent
+member substitution points, and qualifies a nondependent partial-head type
+and its use-site argument together. The integral comparison path is limited
+to qualified typed-member comparisons, so ordinary earlier-PA expressions and
+constructor initialization retain their normal evaluation/lowering.
+
+Validation: `make test-report ACTIVE_TEST_REPORT_PAS='pa23'` is **394/396**, up
+from the **391/396** turn-start baseline; the three PA23 status/timeout cases
+are closed. `make test-report-through-pa22` passes **2100/2100**. The two
+remaining PA23 failures are checked-in LowIR comparisons only.
+
+### Remaining Work Map
+
+- **Generated owner/defaulted-argument LowIR (2 comparisons):**
+  `spec/400-defaulted-nested-class-argument-partial-specialization.t` and
+  `spec/400-defaulted-template-arg-partial-base-completion.t` still differ in
+  generated declaration demand or call identity after relaxed canonicalization.
+
+### Next Checkpoint Scope
+
+Close both generated owner/defaulted-argument materialization cases as one
+downstream LowIR group. Trace the selected source partial, defaulted class
+argument, generated declaration demand, and emitted call order through the
+normal typed replay and lowering pipeline, while preserving the 2100/2100
+through-PA22 result and the five PA23 status/termination witnesses.

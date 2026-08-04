@@ -799,119 +799,6 @@ void PA18TemplateExpander::NormalizeIntegralText(string* raw,
 		expression_substitutions));
 	*raw = NormalizeIntegralExpression(*raw);
 }
-bool PA18TemplateExpander::EvaluateIntegralTextSpecialForms(const string& raw,
-	const string& context, const map<string, string>& substitutions,
-	PA19IntegralValue* result)
-{
-	// A dependent type-id can contain `::value` as part of a source template
-	// body, but it is not an integral expression until its enclosing class
-	// specialization supplies the template parameters.  Do not send that
-	// spelling through RewriteText: member replay would try to materialize the
-	// same dependent owner while evaluating the value that selects it.
-	if(raw.find("typename") != string::npos && HasUnresolvedTemplateParameter(
-		raw, context, substitutions)) return false;
-	if(EvaluateVariableTemplateValue(raw, context, substitutions, result)) return true;
-	if(raw.find('<') != string::npos) {
-		const string rewritten = CanonicalSpelling(RemoveMarker(
-			RewriteText(raw, context, substitutions, 0)));
-		if(rewritten != raw && EvaluateIntegralText(rewritten, context,
-			substitutions, result)) return true;
-	}
-	string expanded_size;
-	if(EvaluateExpandedSizeofText(raw, context, substitutions, result, &expanded_size)) return true;
-	if(raw.compare(0, 7, "sizeof(") == 0 && !raw.empty() && raw[raw.size() - 1] == ')') {
-		const string operand = raw.substr(7, raw.size() - 8);
-		string call_type;
-		if(FunctionCallResultType(operand, context, substitutions, &call_type)) {
-			string resolved = CanonicalSpelling(RemoveMarker(RewriteText(
-				call_type, context, substitutions, 0)));
-		resolved = ResolveAlias(resolved, context);
-			const size_t size = EstimateTypeSize(resolved, context);
-			if(size) {
-				*result = PA19IntegralValue::Unsigned(
-					static_cast<unsigned long long>(size), "unsigned long", 64);
-				return true;
-			}
-		}
-	}
-	bool invalid_sizeof = false;
-	for(size_t search = expanded_size.find("sizeof("); search != string::npos && !invalid_sizeof; ) {
-		const size_t open = search + 6;
-		int depth = 0; size_t close = string::npos;
-		for(size_t position = open; position < expanded_size.size(); ++position) {
-			if(expanded_size[position] == '(') ++depth;
-			else if(expanded_size[position] == ')' && --depth == 0) { close = position; break; }
-		}
-		if(close == string::npos) break;
-		string operand = CanonicalSpelling(ReplaceIdentifiers(
-			expanded_size.substr(open + 1, close - open - 1), substitutions));
-		while(operand.compare(0, 6, "const ") == 0)
-			operand = CanonicalSpelling(operand.substr(6));
-		while(operand.compare(0, 9, "volatile ") == 0)
-			operand = CanonicalSpelling(operand.substr(9));
-		const string resolved_operand = ResolveAlias(operand, context);
-		if(resolved_operand == "void" || resolved_operand == "const void" ||
-			resolved_operand == "volatile void") invalid_sizeof = true;
-		map<string, CPPGMAstNodePtr>::const_iterator incomplete =
-			class_declarations_.find(resolved_operand);
-		if(incomplete != class_declarations_.end() && incomplete->second &&
-			incomplete->second->kind == "class-forward-declaration") invalid_sizeof = true;
-		search = expanded_size.find("sizeof(", close + 1);
-	}
-	if(invalid_sizeof) return true;
-	if(EvaluateActivePackSize(raw, result)) return true;
-	const size_t subscript_open = raw.find('[');
-	if(subscript_open != string::npos && raw[raw.size() - 1] == ']' && subscript_open > 0) {
-		PA19IntegralValue index;
-		const string index_text = raw.substr(subscript_open + 1, raw.size() - subscript_open - 2);
-		if(EvaluateIntegralText(index_text, context, substitutions, &index)) {
-			const vector<PA19IntegralValue>* values = FindConstantArray(
-				raw.substr(0, subscript_open), context);
-			const long long offset = PA19Signed(index);
-			if(values && offset >= 0 && static_cast<size_t>(offset) < values->size()) {
-				*result = (*values)[static_cast<size_t>(offset)]; return result->known;
-			}
-		}
-	}
-	const size_t value_separator = raw.rfind("::value");
-	if(value_separator != string::npos) {
-		const string owner = raw.substr(0, value_separator);
-		const string resolved_owner = CanonicalSpelling(ResolveAlias(owner, context));
-		if(!resolved_owner.empty() && resolved_owner != owner) {
-			PA19IntegralValue aliased_value;
-			if(EvaluateIntegralText(resolved_owner + "::value", context,
-				substitutions, &aliased_value)) {
-				*result = aliased_value; return result->known;
-			}
-		}
-	}
-	const size_t functional_open = raw.find('(');
-	const bool functional_cast = functional_open != string::npos &&
-		!raw.empty() && raw[raw.size() - 1] == ')' && functional_open > 0;
-	const size_t braced_open = raw.find('{');
-	const bool braced_cast = braced_open != string::npos &&
-		!raw.empty() && raw[raw.size() - 1] == '}' && braced_open > 0;
-	if(functional_cast || braced_cast) {
-		const size_t open = functional_cast ? functional_open : braced_open;
-		const string target = ResolveAlias(CanonicalSpelling(raw.substr(0, open)), context);
-		const PA19IntegralType target_type = PA19Type(target);
-		if(target_type.integral) {
-			const string operand = raw.substr(open + 1, raw.size() - open - 2);
-			PA19IntegralValue converted;
-			if(EvaluateIntegralText(operand, context, substitutions, &converted)) {
-				*result = PA19Convert(converted, target_type); return result->known;
-			}
-		}
-	}
-	if(EvaluateIntegralTextCStyleCast(raw, context, substitutions, result)) return true;
-	if(raw.compare(0, 2, "::") == 0) {
-		string unscoped = raw;
-		while(unscoped.compare(0, 2, "::") == 0) unscoped.erase(0, 2);
-		map<string, PA19IntegralValue>::const_iterator known = constant_values_.find(unscoped);
-		if(known != constant_values_.end()) { *result = known->second; return result->known; }
-	}
-	return false;
-}
 bool PA18TemplateExpander::EvaluateIntegralTextKnownValues(const string& raw,
 	const string& context, const map<string, string>& substitutions,
 	PA19IntegralValue* result)
@@ -1068,6 +955,57 @@ bool PA18TemplateExpander::EvaluateIntegralText(string raw, const string& contex
 			: active(value), key(name) {}
 		~IntegralEvaluationScope() { active->erase(key); }
 	} evaluation_scope(&active_integral_evaluations_, evaluation_key);
+	// Qualified typed-member lookup below intentionally resolves the operand
+	// (`Trait<Args>::value`) without parsing its surrounding expression.  Keep
+	// a leading unary negation in the expression layer so resolving a typed
+	// false fact does not turn `!Trait<Args>::value` into false as well.
+	if(!raw.empty() && raw[0] == '!') {
+		size_t not_count = 0;
+		while(not_count < raw.size() && raw[not_count] == '!') ++not_count;
+		PA19IntegralValue operand;
+		if(not_count < raw.size() && EvaluateIntegralText(raw.substr(not_count),
+			context, substitutions, &operand) && operand.known) {
+			bool value = PA19Raw(operand) != 0;
+			if(not_count % 2) value = !value;
+			*result = PA19IntegralValue::Signed(value ? 1 : 0, "bool", 1);
+			return true;
+		}
+	}
+	// Template enable_if conditions frequently compare an enum-valued static
+	// member with an enumerator (`Trait<Args>::overload == call_member`).  The
+	// ordinary constant parser cannot discover the generated member while its
+	// enclosing specialization is being replayed, but both operands are typed
+	// facts at this point.  Evaluate the comparison before the generic parser
+	// asks RewriteText to materialize the same class again.
+	if(raw.find("::") != string::npos) {
+		int parentheses = 0, brackets = 0;
+		for(size_t position = 0; position + 1 < raw.size(); ++position) {
+			const char character = raw[position];
+			if(character == '(') { ++parentheses; continue; }
+			if(character == ')' && parentheses > 0) { --parentheses; continue; }
+			if(character == '[') { ++brackets; continue; }
+			if(character == ']' && brackets > 0) { --brackets; continue; }
+			if(parentheses != 0 || brackets != 0) continue;
+			string operation;
+			if(raw.compare(position, 2, "==") == 0 ||
+				raw.compare(position, 2, "!=") == 0)
+				operation = raw.substr(position, 2);
+			if(operation.empty()) continue;
+			PA19IntegralValue left, right;
+			const string left_text = CanonicalSpelling(raw.substr(0, position));
+			const string right_text = CanonicalSpelling(raw.substr(position + 2));
+			if(!left_text.empty() && !right_text.empty() &&
+				EvaluateIntegralText(left_text, context, substitutions, &left) &&
+				EvaluateIntegralText(right_text, context, substitutions, &right) &&
+				left.known && right.known) {
+				const bool equal = PA19Raw(left) == PA19Raw(right);
+				const bool value = operation == "==" ? equal : !equal;
+				*result = PA19IntegralValue::Signed(value ? 1 : 0, "bool", 1);
+				return true;
+			}
+			break;
+		}
+	}
 	if(raw.find("::") == string::npos && !active_instantiation_name_.empty()) {
 		map<string, PA19IntegralValue>::const_iterator active_value =
 			constant_values_.find(JoinPath(active_instantiation_name_, raw));
@@ -1387,10 +1325,45 @@ void PA18TemplateExpander::ReplayCachedInstantiation(const TemplateDefinition& d
 void PA18TemplateExpander::RegisterGeneratedSpecialization(
 	const TemplateDefinition& definition, const vector<string>& metadata_args,
 	const string& local_name)
-{
-	if(!definition.class_template) return;
-	specialization_bases_[local_name] = definition.qualified_name;
-	specialization_arguments_[local_name] = metadata_args;
+	{
+		if(!definition.class_template) return;
+		map<string, const TemplateDefinition*>::const_iterator previous_definition =
+			specialization_definitions_.find(local_name);
+		if(previous_definition != specialization_definitions_.end() &&
+			previous_definition->second != &definition) {
+			const auto stale_generated = [&](const CPPGMAstNodePtr& node) {
+				return node && LastComponent(node->value) == local_name &&
+					node->template_primary == definition.qualified_name;
+			};
+			for(map<string, vector<CPPGMAstNodePtr> >::iterator owner = generated_by_owner_.begin();
+				owner != generated_by_owner_.end(); ++owner)
+				owner->second.erase(remove_if(owner->second.begin(), owner->second.end(),
+					stale_generated), owner->second.end());
+			for(map<string, vector<CPPGMAstNodePtr> >::iterator owner = generated_namespace_forwards_.begin();
+				owner != generated_namespace_forwards_.end(); ++owner)
+				owner->second.erase(remove_if(owner->second.begin(), owner->second.end(),
+					stale_generated), owner->second.end());
+			for(map<string, vector<CPPGMAstNodePtr> >::iterator primary = generated_by_primary_.begin();
+				primary != generated_by_primary_.end(); ++primary)
+				primary->second.erase(remove_if(primary->second.begin(), primary->second.end(),
+					stale_generated), primary->second.end());
+			const string stale_constant_prefix = local_name + "::";
+			for(map<string, PA19IntegralValue>::iterator value = constant_values_.begin();
+				value != constant_values_.end(); ) {
+				if(value->first.compare(0, stale_constant_prefix.size(),
+					stale_constant_prefix) == 0)
+					value = constant_values_.erase(value);
+				else ++value;
+			}
+		}
+		specialization_bases_[local_name] = definition.qualified_name;
+		specialization_arguments_[local_name] = metadata_args;
+		specialization_definitions_[local_name] = &definition;
+	// A newly materialized specialization can make an enable_if-based partial
+	// specialization viable by publishing a typed `value` member.  Any earlier
+	// primary-template fallback was therefore provisional; do not let the
+	// selection cache conceal the newly available semantic fact.
+	class_template_selection_cache_.clear();
 	vector<string>& indexed_names = specialization_names_by_base_[
 		LastComponent(definition.qualified_name)];
 	if(find(indexed_names.begin(), indexed_names.end(), local_name) == indexed_names.end())
