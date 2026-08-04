@@ -477,7 +477,7 @@ struct FunctionSignature
 	CPPGMAstNodePtr declarator;
 	CPPGMAstNodePtr parameters; bool lvalue_argument; bool deleted; FunctionSignature() : result_specifiers(), declarator(), parameters(), lvalue_argument(false), deleted(false) {}
 }; struct LambdaCaptureSpec { string name; bool this_capture; bool by_reference; string type; CPPGMAstNodePtr function_source; LambdaCaptureSpec(const string& capture_name = string(), bool is_this = false, bool by_ref = true) : name(capture_name), this_capture(is_this), by_reference(by_ref), type(), function_source() {} };
-bool IsDeletedFunctionDeclaration(const CPPGMAstNodePtr& declaration); string CanonicalBuiltinScalarSpelling(string raw); bool NeedsPA18Expansion(const CPPGMAstNodePtr& node);
+bool IsDeletedFunctionDeclaration(const CPPGMAstNodePtr& declaration); string CanonicalBuiltinScalarSpelling(string raw); bool NeedsPA18Expansion(const CPPGMAstNodePtr& node); bool ContainsLambdaExpression(const CPPGMAstNodePtr& node);
 struct ExplicitCallSelection; struct MemberCallState; struct MemberCallCandidateState; class PA18TemplateExpander
 {
 public:
@@ -869,7 +869,7 @@ private:
 		for(size_t i = 0; i < node->children.size(); ++i)
 			CollectLexical(node->children[i], child_context, child_logical_context);
 	}
-	void PrepareLambdaClasses(vector<CPPGMAstNodePtr>* trees); void PrepareLambdaClassFields(const CPPGMAstNodePtr& tree);
+	void PrepareLambdaClasses(vector<CPPGMAstNodePtr>* trees); vector<CPPGMAstNodePtr> PrepareLambdaWorkingTrees(const vector<CPPGMAstNodePtr>& input); void PrepareLambdaClassFields(const CPPGMAstNodePtr& tree);
 	void CollectExplicitLambdaCaptures(const CPPGMAstNodePtr& lambda, vector<LambdaCaptureSpec>* captures, set<string>* names, bool* has_default, bool* default_reference) const;
 	void AppendDefaultLambdaCaptures(const CPPGMAstNodePtr& lambda, const string& context, const set<string>& declared_variables, vector<LambdaCaptureSpec>* captures, set<string>* names, bool default_reference) const;
 	void ExpandLambdaCapturePacks(vector<LambdaCaptureSpec>* captures) const; vector<LambdaCaptureSpec> CollectLambdaCaptureSpecs(const CPPGMAstNodePtr& lambda, const string& context, const set<string>& declared_variables) const;

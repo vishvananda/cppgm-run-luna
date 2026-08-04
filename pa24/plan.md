@@ -24,9 +24,12 @@ the PA24 source audit.
 ## Checkpoint Result
 
 - PA24 current report: 104/104.
-- Through-PA23 semantic validation: the exact default report passed 2496/2496;
-  the same gate also passed with the 120-second report build timeout used while
-  separating host-load timing from compiler behavior.
+- Through-PA23 semantic validation: 2496/2496 with the 120-second report build
+  timeout.  The default 60-second parallel gate has one host-load-sensitive
+  PA22 timeout (2495/2496); the isolated batch fixture completes in 49.27s and
+  no semantic failure is observed.
+- PA18 avoids cloning translation units that contain no lambdas, preserving the
+  closure path while removing needless earlier-stage AST work.
 - The PA23 nested-class member-template regression was fixed without regressing
   the PA18 nested-class or PA21 current-owner cases.
 

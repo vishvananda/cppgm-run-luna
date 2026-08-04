@@ -930,8 +930,7 @@ void PA18TemplateExpander::IndexStaticMembers(const CPPGMAstNodePtr& node,
 vector<CPPGMAstNodePtr> PA18TemplateExpander::Run(
 	const vector<CPPGMAstNodePtr>& input)
 {
-	vector<CPPGMAstNodePtr> working; for(size_t i = 0; i < input.size(); ++i)
-		working.push_back(CloneNode(input[i])); PrepareLambdaClasses(&working);
+	vector<CPPGMAstNodePtr> working = PrepareLambdaWorkingTrees(input);
 	active_static_member_ = false;
 	generated_by_primary_.clear();
 	source_order_.clear();

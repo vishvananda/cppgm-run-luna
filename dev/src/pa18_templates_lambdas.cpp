@@ -337,6 +337,15 @@ void RewriteCapturedLambdaBody(const CPPGMAstNodePtr& node,
 
 } // namespace
 
+bool ContainsLambdaExpression(const CPPGMAstNodePtr& node)
+{
+  if(!node) return false;
+  if(node->kind == "lambda-expression") return true;
+  for(size_t child = 0; child < node->children.size(); ++child)
+    if(ContainsLambdaExpression(node->children[child])) return true;
+  return false;
+}
+
 bool NeedsPA18Expansion(const CPPGMAstNodePtr& node)
 {
   if(!node) return false;
@@ -561,6 +570,23 @@ void PA18TemplateExpander::PrepareLambdaClasses(vector<CPPGMAstNodePtr>* trees)
     CollectLambdaClasses(input, string(), string(), &generated);
     input->children.insert(input->children.end(), generated.begin(), generated.end());
   }
+}
+
+vector<CPPGMAstNodePtr> PA18TemplateExpander::PrepareLambdaWorkingTrees(
+  const vector<CPPGMAstNodePtr>& input)
+{
+  bool has_lambda = false;
+  for(size_t i = 0; i < input.size(); ++i)
+    has_lambda = has_lambda || ContainsLambdaExpression(input[i]);
+  vector<CPPGMAstNodePtr> working = input;
+  if(!has_lambda) {
+    PrepareLambdaClasses(&working);
+    return working;
+  }
+  working.clear();
+  for(size_t i = 0; i < input.size(); ++i) working.push_back(CloneNode(input[i]));
+  PrepareLambdaClasses(&working);
+  return working;
 }
 
 void PA18TemplateExpander::CollectExplicitLambdaCaptures(
