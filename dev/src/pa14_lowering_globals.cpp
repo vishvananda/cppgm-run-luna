@@ -737,7 +737,15 @@ void PA14Lowerer::EmitDeclarations(vector<string>& entries)
       if(function.variadic) metadata.push_back("arity=variadic");
       if(!function.effects.empty()) metadata.push_back("effects=" + function.effects);
       if(function.unwind_no) metadata.push_back("unwind=no");
+      if(function.qualified_name == "__external_runtime____cxa_bad_typeid")
+        metadata.push_back("unwind=may");
+      if(function.qualified_name == "__external_runtime____cxa_bad_cast")
+        metadata.push_back("unwind=may");
       if(function.noreturn) metadata.push_back("return=noreturn");
+      if(function.qualified_name == "__external_runtime____dynamic_cast" ||
+         function.qualified_name == "__external_runtime____cxa_bad_typeid" ||
+         function.qualified_name == "__external_runtime____cxa_bad_cast")
+        metadata.push_back("linkage=c");
       metadata.push_back(function.weak_binding ? "binding=weak" : "binding=strong");
       const string object = function.qualified_name == "__cxa_pure_virtual" ?
         string() : (function.object_name.empty() ? function.symbol : function.object_name);
@@ -1203,11 +1211,11 @@ string PA14Lowerer::EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
     }
     if(node->kind == "cast-expression" && node->children.size() > 1) {
       TypePtr target = analyzer_.TypeFromTypeId(node->children[0], scope);
+      if(PA12Operator(node->value) == "dynamic_cast" && type_is_reference(target)) return EmitDynamicCast(node, scope, target).operand;
       if(type_is_reference(target)) {
         TypePtr target_value = type_value(target);
         ExprInfo source_info = Infer(node->children[1], scope); TypePtr source_value = expression_value_type(source_info);
-        if(target_value && target_value->kind == TYPE_CLASS && source_value &&
-           source_value->kind == TYPE_CLASS && !PA12SameType(target_value, source_value, true)) {
+        if(target_value && target_value->kind == TYPE_CLASS && source_value && source_value->kind == TYPE_CLASS && !PA12SameType(target_value, source_value, true)) {
           if(IsDerivedFrom(source_value, target_value))
             return AdjustBaseAddress(EmitAddress(node->children[1], scope), source_value, target_value);
           if(IsDerivedFrom(target_value, source_value))

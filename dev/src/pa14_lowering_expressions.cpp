@@ -1,5 +1,4 @@
 #include "pa14_lowering.h"
-
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
@@ -14,7 +13,6 @@
 #include <utility>
 
 using namespace std;
-
 namespace cppgm_pa14_lowering {
 
 void PA14Lowerer::InferLocalIdentifierConstant(const TypePtr& type,
@@ -44,6 +42,14 @@ PA14Lowerer::Value PA14Lowerer::EmitUnary(const CPPGMAstNodePtr& node, Scope* sc
                   const TypePtr& expected)
 {
     const string op = PA12Operator(node->value);
+    if(op == "&" && !node->children.empty() &&
+       IsTypeidExpression(node->children[0])) {
+      Value type_info = EmitValue(node->children[0], scope);
+      // `typeid` is represented internally by the address of its lvalue
+      // result.  Taking its address therefore preserves that same pointer.
+      type_info.lvalue = false;
+      return type_info;
+    }
     vector<CPPGMAstNodePtr> operator_arguments;
     operator_arguments.push_back(node->children[0]);
     if(ChooseOperatorCall(OperatorFunctionName(op), operator_arguments, scope).binding)
@@ -924,7 +930,6 @@ string PA14Lowerer::EmitConditionalAddress(const CPPGMAstNodePtr& node, Scope* s
     (void)type;
     return emit_load("$" + slot, PointerTo(Fundamental("char")));
   }
-
 string PA14Lowerer::EmitLogicalRightTruth(const CPPGMAstNodePtr& node, Scope* scope)
 {
     CPPGMAstNodePtr value_node = node;
@@ -955,7 +960,6 @@ string PA14Lowerer::EmitLogicalRightTruth(const CPPGMAstNodePtr& node, Scope* sc
     }
     return EmitTruthValue(value);
   }
-
 PA14Lowerer::Value PA14Lowerer::EmitLogicalValue(const CPPGMAstNodePtr& node, Scope* scope)
 {
     const string op = PA12Operator(node->value);
@@ -1100,6 +1104,7 @@ PA14Lowerer::Value PA14Lowerer::EmitValue(const CPPGMAstNodePtr& node, Scope* sc
                   const TypePtr& expected)
 {
     if(!node) throw logic_error("missing value during LowIR lowering");
+    if(IsTypeidExpression(node)) return EmitTypeidExpression(node, scope);
     if(node->kind == "lambda-expression") {
       Value closure_result;
       if(EmitLambdaClosureValue(node, scope, expected, &closure_result))
@@ -1360,6 +1365,8 @@ PA14Lowerer::Value PA14Lowerer::EmitValue(const CPPGMAstNodePtr& node, Scope* sc
     }
     if(node->kind == "cast-expression") {
       TypePtr target = analyzer_.TypeFromTypeId(node->children[0], scope);
+      if(target && PA12Operator(node->value) == "dynamic_cast")
+        return EmitDynamicCast(node, scope, target);
       if(target && type_value(target) && type_value(target)->kind == TYPE_POINTER &&
          PA12Operator(node->value) == "reinterpret_cast") {
         Value source = EmitValue(node->children[1], scope);

@@ -284,8 +284,14 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
       return false;
     }
     FunctionRecord* record = RecordForBinding(best_binding);
+    const bool replayed_template_context = state_ && state_->record &&
+      state_->record->template_instantiation;
+    const bool rtti_template_copy = replayed_template_context &&
+      !demanded_rtti_types_.empty() &&
+      demanded_rtti_types_.find(RttiMangledName(object_type)) != demanded_rtti_types_.end();
     if(record && record->copy_constructor && raw_arguments.size() == 1 &&
-       raw_arguments[0] && IsTrivialValueStorage(object_type)) {
+       raw_arguments[0] && IsTrivialValueStorage(object_type) &&
+       !rtti_template_copy) {
       if(IsEmptyBaseStorage(object_type)) {
         EmitTemporaryDestructors(temporary_mark, scope);
         return true;

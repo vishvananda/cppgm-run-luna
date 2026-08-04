@@ -225,9 +225,15 @@ void PA14Lowerer::IndexLambdaClosures()
   lambda_closure_names_.clear();
   lambda_closure_types_.clear();
   lambda_closure_nodes_.clear();
+  has_rtti_syntax_ = false;
   function<void(const CPPGMAstNodePtr&)> visit;
   visit = [&](const CPPGMAstNodePtr& node) {
     if(!node) return;
+    if((node->kind == "type-trait-expression" &&
+        node->value.find("typeid") != string::npos) ||
+       (node->kind == "cast-expression" &&
+        node->value.find("dynamic_cast") != string::npos))
+      has_rtti_syntax_ = true;
     if(node->kind == "class-specifier") {
       const string name = last_component(node->value);
       if(name.compare(0, 9, "__lambda_") == 0) {

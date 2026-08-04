@@ -365,7 +365,8 @@ PA14Lowerer::PA14Lowerer(const vector<CPPGMAstNodePtr>& trees)
       lambda_functions_(), next_lambda_serial_(0), deferred_static_members_(),
       needs_init_helper_(false),
       needs_fini_helper_(false), emitted_vtables_(), external_vtables_(),
-      emitted_rtti_(), class_types_by_name_(), state_(), next_needed_order_(0),
+      emitted_rtti_(), demanded_rtti_types_(), has_rtti_syntax_(false),
+      class_types_by_name_(), state_(), next_needed_order_(0),
       infer_cache_(), friend_owner_index_(), hidden_friend_binding_index_(),
       hidden_friend_binding_index_ready_(false)
 {}
@@ -472,7 +473,6 @@ void PA14Lowerer::InstallBuiltins()
     const TypePtr character = Fundamental("char");
     const TypePtr const_character = CloneWithCv(character, true, false);
     const TypePtr size_type = Fundamental("unsigned long int");
-
     struct BuiltinSpec
     {
       const char* name;
@@ -483,15 +483,15 @@ void PA14Lowerer::InstallBuiltins()
       const char* first_parameter;
       const char* second_parameter;
     };
-
     vector<TypePtr> strlen_parameters;
     strlen_parameters.push_back(PointerTo(const_character));
     vector<TypePtr> byte_copy_parameters;
     byte_copy_parameters.push_back(PointerTo(character));
     byte_copy_parameters.push_back(PointerTo(const_character));
     byte_copy_parameters.push_back(size_type);
+    vector<TypePtr> dynamic_cast_parameters(3, PointerTo(Fundamental("void")));
+    dynamic_cast_parameters.push_back(Fundamental("long int"));
     vector<TypePtr> no_parameters;
-
     vector<BuiltinSpec> specs;
     specs.push_back(BuiltinSpec{"__builtin_strlen",
       FunctionOf(strlen_parameters, false, size_type, false), "readonly",
@@ -509,6 +509,15 @@ void PA14Lowerer::InstallBuiltins()
       FunctionOf(byte_copy_parameters, false, PointerTo(Fundamental("void")), false),
       "readwrite", "cppgm_builtin_memmove", false,
       "capture=nocapture, access=readwrite", "capture=nocapture, access=read"});
+    specs.push_back(BuiltinSpec{"__external_runtime____cxa_bad_typeid",
+      FunctionOf(no_parameters, false, Fundamental("void"), false),
+      "readnone", "__cxa_bad_typeid", true, 0, 0});
+    specs.push_back(BuiltinSpec{"__external_runtime____cxa_bad_cast",
+      FunctionOf(no_parameters, false, Fundamental("void"), false),
+      "readnone", "__cxa_bad_cast", true, 0, 0});
+    specs.push_back(BuiltinSpec{"__external_runtime____dynamic_cast",
+      FunctionOf(dynamic_cast_parameters, false, PointerTo(Fundamental("void")), false),
+      "", "__dynamic_cast", false, 0, 0});
 
     for(size_t i = 0; i < specs.size(); ++i) {
       const BuiltinSpec& spec = specs[i];
@@ -534,12 +543,11 @@ void PA14Lowerer::InstallBuiltins()
       if(spec.second_parameter) record->parameter_metadata.push_back(spec.second_parameter);
       if(spec.first_parameter && spec.type->parameters.size() > 2)
         record->parameter_metadata.push_back(string());
+      if(string(spec.name) == "__external_runtime____dynamic_cast" ||
+         string(spec.name) == "__external_runtime____cxa_bad_typeid" ||
+         string(spec.name) == "__external_runtime____cxa_bad_cast")
+        record->unwind_no = false;
     }
-
-    // Allocation expressions are lowered through the ordinary overload and
-    // call machinery.  Keep the language-level spellings used by the AST
-    // (`operatornew`/`operatordelete`) as bindings, while giving the LowIR
-    // declarations their stable runtime symbols and object identities.
     vector<TypePtr> new_parameters(1, size_type);
     vector<TypePtr> new_array_parameters(1, size_type);
     vector<TypePtr> delete_parameters(1, PointerTo(Fundamental("void")));

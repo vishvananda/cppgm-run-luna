@@ -230,6 +230,8 @@ void PA14Lowerer::PrepareLoweringProgram()
   InstallBuiltins();
   CollectTopLevel(program_, analyzer_.global_.get());
   ResolveAutoFunctionReturns();
+  if(has_rtti_syntax_)
+    IndexRttiUses(program_, analyzer_.global_.get());
   PreparePolymorphicModel();
   FinalizeSymbols();
   CollectStringLiterals(program_);

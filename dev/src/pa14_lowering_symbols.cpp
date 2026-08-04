@@ -1095,6 +1095,13 @@ string template_type_mangled_name(const TypePtr& type)
 	return abi_type_components(type);
 }
 
+string template_type_mangled_name_with_substitutions(const TypePtr& type)
+{
+  if(!type) return "1X";
+  AbiMangleContext context;
+  return context.encode_type(type);
+}
+
 string PA14Lowerer::TemplateGlobalObjectName(const GlobalRecord& global) const
 {
   if(!global.template_instantiation) return string();
@@ -1201,7 +1208,6 @@ string PA14Lowerer::TemplateFunctionObjectName(const FunctionRecord& function) c
       member_name = abi_last_component(function.template_primary);
     terminal = abi_terminal(member_name, source->child);
   }
-
   if(nested) {
     result += "N";
     if(source->function_const) result += "K";
@@ -1214,18 +1220,13 @@ string PA14Lowerer::TemplateFunctionObjectName(const FunctionRecord& function) c
       abi_nested_body(function.member_owner);
     if(owner.size() >= 2 && owner[0] == 'N' && owner[owner.size() - 1] == 'E')
       owner = owner.substr(1, owner.size() - 2);
-    // A class template with an empty parameter pack still carries the
-    // Itanium ABI pack marker in a nested member-template name.  The typed
-    // specialization model has the concrete owner arguments but elides that
-    // empty pack; retain the marker for the generated function entity.
     if(!contextual_member_template && function.member_template && function.member_owner &&
        function.member_owner->template_specialization &&
        function.member_owner->template_empty_pack) {
       const size_t close = owner.rfind('E');
       if(close != string::npos) owner.insert(close, "JE");
     }
-    result += owner;
-    result += terminal;
+    result += owner; result += terminal;
     if(function.member_template && !function.template_arguments.empty()) {
       result += "I";
 		if(contextual_member_template) result += abi_context.encode_function_arguments(
@@ -1236,9 +1237,6 @@ string PA14Lowerer::TemplateFunctionObjectName(const FunctionRecord& function) c
 	}
 	result += "E";
 	if(function.member_template && !source->parameters.empty()) {
-		// The concrete argument types are retained for lowering, while the
-		// mangled member-template signature refers to its original template
-		// parameters.
 		const string source_template_type = abi_function_template_type(function.node,
 			source);
 		if(!source_template_type.empty()) result += source_template_type;
@@ -1264,18 +1262,48 @@ string PA14Lowerer::TemplateFunctionObjectName(const FunctionRecord& function) c
     }
     return result;
   }
-
-  const vector<string> components = abi_split_qualified(function.qualified_name);
+  bool lambda_template_abi = false;
+  if(function.template_instantiation && function.node &&
+     function.node->source_token_begin != static_cast<size_t>(-1) &&
+     function.node->source_token_end != static_cast<size_t>(-1))
+    for(map<string, CPPGMAstNodePtr>::const_iterator lambda = lambda_closure_nodes_.begin();
+        lambda != lambda_closure_nodes_.end(); ++lambda)
+      if(lambda->second && lambda->second->source_token_begin >=
+           function.node->source_token_begin &&
+         lambda->second->source_token_end <= function.node->source_token_end) {
+        lambda_template_abi = true;
+        break;
+      }
+  const string abi_function_name = lambda_template_abi &&
+    !function.template_primary.empty() ? function.template_primary : function.qualified_name;
+  const vector<string> components = abi_split_qualified(abi_function_name);
   if(components.empty()) return string();
   if(components.size() > 1) result += "N";
   for(size_t i = 0; i + 1 < components.size(); ++i) result += abi_component(components[i]);
   result += abi_terminal(components.back(), source->child);
-    if(function.template_instantiation && !function.template_arguments.empty()) {
+  if(function.template_instantiation && !function.template_arguments.empty()) {
     result += "I";
     for(size_t i = 0; i < function.template_arguments.size(); ++i)
       result += abi_type_text(function.template_arguments[i]);
     result += "E";
-    if(!function.constructor && !function.destructor) result += abi_type(source->child);
+    if(!function.constructor && !function.destructor) {
+      if(lambda_template_abi && function.node &&
+         function.node->template_function_patterns.size() ==
+         source->parameters.size() + 1) {
+        for(size_t pattern = 0; pattern < function.node->template_function_patterns.size();
+            ++pattern)
+          result += abi_template_pattern_type(function.node->template_function_patterns[pattern],
+            function.node->template_function_parameter_names);
+      } else {
+        result += abi_type(source->child);
+      }
+    }
+    if(lambda_template_abi && function.node &&
+       function.node->template_function_patterns.size() ==
+       source->parameters.size() + 1) {
+      if(components.size() > 1) result += "E";
+      return result;
+    }
   }
   if(components.size() > 1) result += "E";
   return result + abi_function_parameters(source);
@@ -1286,6 +1314,22 @@ void PA14Lowerer::FinalizeSymbols()
   map<string, unsigned int> overloads;
   for(size_t i = 0; i < functions_.size(); ++i) {
     FunctionRecord& function = functions_[i];
+    // A member defined in a class is implicitly inline.  Most records carry
+    // that fact from declaration collection; lambda-containing definitions
+    // are materialized through the PA18 replay path, so recover this one
+    // linkage fact from the durable closure spans without recursively walking
+    // every function body.
+    if(function.member && !function.inline_definition && !IsLambdaOperator(function) &&
+       function.node && function.node->source_token_begin != static_cast<size_t>(-1) &&
+       function.node->source_token_end != static_cast<size_t>(-1))
+      for(map<string, CPPGMAstNodePtr>::const_iterator lambda = lambda_closure_nodes_.begin();
+          lambda != lambda_closure_nodes_.end(); ++lambda)
+        if(lambda->second && lambda->second->source_token_begin >=
+             function.node->source_token_begin &&
+           lambda->second->source_token_end <= function.node->source_token_end) {
+          function.inline_definition = true;
+          break;
+        }
     BuildFunctionABI(function);
     string base = low_symbol_component(function.qualified_name);
     unsigned int& count = overloads[base];

@@ -1,11 +1,9 @@
 #include "pa14_lowering.h"
-
 #include <cstdlib>
 #include <functional>
 using namespace std;
 
 namespace cppgm_pa14_lowering {
-
 namespace {
 
 string TypeNameValue(const CPPGMAstNodePtr& node)
@@ -18,7 +16,6 @@ string TypeNameValue(const CPPGMAstNodePtr& node)
     }
     return string();
   }
-
 string StripTemplateArgumentsForLookup(const string& raw)
 {
     string result;
@@ -30,7 +27,6 @@ string StripTemplateArgumentsForLookup(const string& raw)
     }
     return result;
   }
-
 bool FriendTypeMatches(const TypePtr& pattern, const TypePtr& actual)
 {
     TypePtr left = type_value(pattern);
@@ -70,7 +66,6 @@ bool FriendTypeMatches(const TypePtr& pattern, const TypePtr& actual)
       return FriendTypeMatches(left->child, right->child);
     return true;
   }
-
 bool FriendFunctionMatches(const FriendAccess& access, const string& identity,
     const TypePtr& function_type)
 {
@@ -81,9 +76,7 @@ bool FriendFunctionMatches(const FriendAccess& access, const string& identity,
     return access.target && function_type &&
       FriendTypeMatches(access.target, function_type);
   }
-
 } // namespace
-
 CPPGMAstNodePtr PA14Lowerer::MakeMemberCall(const CPPGMAstNodePtr& object,
                                              const string& name,
                                              const vector<CPPGMAstNodePtr>& arguments) const
@@ -98,7 +91,6 @@ CPPGMAstNodePtr PA14Lowerer::MakeMemberCall(const CPPGMAstNodePtr& object,
     call->children.push_back(list);
     return call;
   }
-
 void PA14Lowerer::AppendBindings(Scope* scope, const string& name,
                       vector<Binding*>& result, set<Scope*>& visited) const
 {
@@ -109,7 +101,6 @@ void PA14Lowerer::AppendBindings(Scope* scope, const string& name,
     for(size_t i = 0; i < scope->using_directives.size(); ++i)
       AppendBindings(scope->using_directives[i], name, result, visited);
   }
-
 vector<Binding*> PA14Lowerer::DirectBindings(Scope* scope, const string& name) const
 {
     vector<Binding*> result;
@@ -118,7 +109,6 @@ vector<Binding*> PA14Lowerer::DirectBindings(Scope* scope, const string& name) c
       if(scope->bindings[i].name == name) result.push_back(&scope->bindings[i]);
     return result;
   }
-
 vector<Binding*> PA14Lowerer::LookupUnqualifiedAll(Scope* from, const string& name) const
 {
 	for(Scope* scope = from; scope != 0; scope = scope->parent) {
@@ -148,7 +138,6 @@ vector<Binding*> PA14Lowerer::LookupUnqualifiedAll(Scope* from, const string& na
     }
     return vector<Binding*>();
   }
-
 Scope* PA14Lowerer::ScopeComponent(Scope* current, const string& component,
                         bool first, bool absolute) const
 {
@@ -166,7 +155,6 @@ Scope* PA14Lowerer::ScopeComponent(Scope* current, const string& component,
       return analyzer_.ScopeForType(target.binding->type);
     return 0;
   }
-
 vector<Binding*> PA14Lowerer::Lookup(const string& raw, Scope* from) const
 {
     bool absolute = false;
@@ -230,8 +218,7 @@ vector<Binding*> PA14Lowerer::Lookup(const string& raw, Scope* from) const
 		if(match && !ambiguous) result.push_back(match);
 	}
     return result;
-}
-
+  }
 Scope* PA14Lowerer::FindTypeOwnerScope(Scope* scope, const TypePtr& type) const
 {
     if(!scope || !type) return 0;
@@ -245,7 +232,6 @@ Scope* PA14Lowerer::FindTypeOwnerScope(Scope* scope, const TypePtr& type) const
     }
     return 0;
   }
-
 void PA14Lowerer::AppendAssociatedOperatorBindings(const TypePtr& raw_type,
                                                     const string& name,
                                                     vector<Binding*>& result,
@@ -320,7 +306,6 @@ void PA14Lowerer::AppendAssociatedOperatorBindings(const TypePtr& raw_type,
           result.push_back(namespace_bindings[i]);
     }
   }
-
 vector<Binding*> PA14Lowerer::OperatorCandidates(const string& name,
                                                   const vector<ExprInfo>& arguments,
                                                   Scope* scope) const
@@ -339,7 +324,6 @@ vector<Binding*> PA14Lowerer::OperatorCandidates(const string& name,
         result, visited_types, visited_scopes);
     return result;
   }
-
 bool PA14Lowerer::IsAccessible(Binding* binding, Scope* scope) const
 {
     if(!binding || !binding->is_member || binding->access.empty() ||
@@ -426,7 +410,6 @@ bool PA14Lowerer::IsAccessible(Binding* binding, Scope* scope) const
         if(current == owner) return true;
     return false;
   }
-
 void PA14Lowerer::CheckTypeAccess(const CPPGMAstNodePtr& declaration,
                                   Scope* scope) const
 {
@@ -441,7 +424,6 @@ void PA14Lowerer::CheckTypeAccess(const CPPGMAstNodePtr& declaration,
         throw logic_error("inaccessible type member");
     }
   }
-
 Binding* PA14Lowerer::MemberBinding(const CPPGMAstNodePtr& node, Scope* scope,
                                     ExprInfo* object_info)
 {
@@ -1052,6 +1034,16 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferBinary(const CPPGMAstNodePtr& node, Scop
     const string op = PA12Operator(node->value);
     ExprInfo left = Infer(node->children[0], scope);
     ExprInfo right = Infer(node->children[1], scope);
+    const bool typeid_comparison = op == "==" || op == "!=" || op == "not_eq";
+    if(typeid_comparison && IsTypeidExpression(node->children[0]) &&
+       IsTypeidExpression(node->children[1])) {
+      const TypePtr type_info = TypeInfoType(scope);
+      const string member_name = op == "==" ? "operator==" : "operator!=";
+      if(MemberBindings(type_info, member_name).empty())
+        throw logic_error("type_info comparison operator is unavailable");
+      result.type = Fundamental("bool"); result.category = "prvalue";
+      return result;
+    }
     vector<CPPGMAstNodePtr> operator_arguments;
     operator_arguments.push_back(node->children[0]);
     operator_arguments.push_back(node->children[1]);
@@ -1353,6 +1345,16 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferUncached(const CPPGMAstNodePtr& node, Sc
     if(node->kind == "cast-expression") {
       ExprInfo result;
       result.type = analyzer_.TypeFromTypeId(node->children[0], scope);
+      if(PA12Operator(node->value) == "dynamic_cast") {
+        const bool reference_target = type_is_reference(result.type);
+        const TypePtr target = reference_target ? type_value(result.type->child) : type_value(result.type);
+        if(!target || (target->kind != TYPE_POINTER && target->kind != TYPE_CLASS) ||
+           (target->kind == TYPE_POINTER && (!target->child ||
+             type_value(target->child)->kind != TYPE_CLASS)) ||
+           (target->kind == TYPE_CLASS && !target->owned_scope))
+          throw logic_error("unsupported dynamic_cast target");
+        EnsureRttiType(target->kind == TYPE_POINTER ? target->child : target);
+      }
       result.category = type_is_reference(result.type) ?
         result.type->kind == TYPE_LVALUE_REFERENCE ? "lvalue" : "xvalue" : "prvalue";
       return result;
@@ -1364,6 +1366,8 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferUncached(const CPPGMAstNodePtr& node, Sc
       result.constant = node->value.empty() ? 0 : atoll(node->value.c_str());
       return result;
     }
+    if(node->kind == "type-trait-expression" && IsTypeidExpression(node))
+      return InferTypeidExpression(node, scope);
     if(node->kind == "sizeof-expression" || node->kind == "type-trait-expression")
       return InferSizeofExpression(node, scope);
     if(node->kind == "braced-init-list") {

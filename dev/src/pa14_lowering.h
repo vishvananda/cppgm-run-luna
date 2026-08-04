@@ -45,6 +45,7 @@ vector<unsigned char> decode_string_literal(const string& raw);
 string canonical_literal(const string& raw, TypePtr* type_out = 0,
                          long long* constant = 0, bool* known = 0);
 string template_type_mangled_name(const TypePtr& type);
+string template_type_mangled_name_with_substitutions(const TypePtr& type);
 
 class PA14Lowerer
 {
@@ -361,6 +362,8 @@ class PA14Lowerer
 	set<const Type*> emitted_vtables_;
 	set<const Type*> external_vtables_;
 	set<const Type*> emitted_rtti_;
+	map<string, TypePtr> demanded_rtti_types_;
+	bool has_rtti_syntax_;
 	map<string, vector<TypePtr> > class_types_by_name_;
 	FunctionState* state_;
 	size_t next_needed_order_;
@@ -509,6 +512,19 @@ string TemplateGlobalObjectName(const GlobalRecord& global) const;
 void PreparePolymorphicModel();
 
 void EmitPolymorphicGlobals(vector<string>& entries);
+
+void IndexRttiUses(const CPPGMAstNodePtr& node, Scope* scope);
+void EnsureRttiType(const TypePtr& type);
+TypePtr TypeInfoType(Scope* scope) const;
+bool IsTypeidExpression(const CPPGMAstNodePtr& node) const;
+TypePtr RttiValueType(const TypePtr& type) const;
+string RttiMangledName(const TypePtr& type) const;
+string RttiInfoSymbol(const TypePtr& type) const;
+string RttiSymbol(const TypePtr& type) const;
+string LambdaRttiMangledName(const TypePtr& type) const;
+string LambdaRttiLowName(const TypePtr& type) const;
+string RttiTemplateMangledName(const TypePtr& type) const;
+string RttiTemplateLowName(const TypePtr& type) const;
 
 bool IsVirtualFunction(const FunctionRecord& function) const;
 
@@ -979,6 +995,9 @@ void EmitCondition(const CPPGMAstNodePtr& node, Scope* scope,
 
 Value EmitValue(const CPPGMAstNodePtr& node, Scope* scope,
                 const TypePtr& expected = TypePtr());
+Value EmitTypeidExpression(const CPPGMAstNodePtr& node, Scope* scope);
+Value EmitDynamicCast(const CPPGMAstNodePtr& node, Scope* scope,
+                      const TypePtr& target);
 
 Value EmitNewExpression(const CPPGMAstNodePtr& node, Scope* scope, const TypePtr& expected = TypePtr());
 Value EmitDeleteExpression(const CPPGMAstNodePtr& node, Scope* scope);
@@ -1167,6 +1186,7 @@ ExprInfo InferUncached(const CPPGMAstNodePtr& node, Scope* scope,
                        const TypePtr& expected);
 
 ExprInfo InferSizeofExpression(const CPPGMAstNodePtr& node, Scope* scope);
+ExprInfo InferTypeidExpression(const CPPGMAstNodePtr& node, Scope* scope);
 
 ExprInfo InferAllocation(const CPPGMAstNodePtr& node, Scope* scope);
 };
