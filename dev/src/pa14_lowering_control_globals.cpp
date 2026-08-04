@@ -8,6 +8,198 @@ using namespace std;
 namespace cppgm_pa14_lowering
 {
 
+namespace {
+
+CPPGMAstNodePtr range_runtime_identifier(const string& name)
+{
+  return CPPGMAstNodePtr(new CPPGMAstNode("id-expression", name));
+}
+
+CPPGMAstNodePtr range_runtime_unary(const string& op, const string& name)
+{
+  CPPGMAstNodePtr result(new CPPGMAstNode("unary-expression", "range:" + op));
+  result->children.push_back(range_runtime_identifier(name));
+  return result;
+}
+
+CPPGMAstNodePtr range_runtime_binary(const string& op, const string& left,
+                                     const string& right)
+{
+  CPPGMAstNodePtr result(new CPPGMAstNode("binary-expression", "range:" + op));
+  result->children.push_back(range_runtime_identifier(left));
+  result->children.push_back(range_runtime_identifier(right));
+  return result;
+}
+
+CPPGMAstNodePtr range_identifier(const string& name)
+{
+  return CPPGMAstNodePtr(new CPPGMAstNode("id-expression", name));
+}
+
+CPPGMAstNodePtr range_unary(const string& op, const CPPGMAstNodePtr& child)
+{
+  CPPGMAstNodePtr result(new CPPGMAstNode("unary-expression", "range:" + op));
+  result->children.push_back(child);
+  return result;
+}
+
+CPPGMAstNodePtr range_call(const CPPGMAstNodePtr& object, const string& name,
+                           bool member)
+{
+  CPPGMAstNodePtr callee;
+  if(member) {
+    callee.reset(new CPPGMAstNode("member-expression", "OP_DOT:."));
+    callee->children.push_back(object);
+    callee->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("identifier", name)));
+  } else callee = range_identifier(name);
+  CPPGMAstNodePtr result(new CPPGMAstNode("call-expression"));
+  result->children.push_back(callee);
+  CPPGMAstNodePtr arguments(new CPPGMAstNode("argument-list"));
+  if(!member) arguments->children.push_back(object);
+  result->children.push_back(arguments);
+  return result;
+}
+
+CPPGMAstNodePtr range_initializer(const CPPGMAstNodePtr& expression)
+{
+  CPPGMAstNodePtr result(new CPPGMAstNode("initializer"));
+  result->initializer_form = AST_INITIALIZER_COPY;
+  result->children.push_back(expression);
+  return result;
+}
+
+CPPGMAstNodePtr range_subscript(const string& object, const string& index)
+{
+  CPPGMAstNodePtr result(new CPPGMAstNode("subscript-expression"));
+  result->children.push_back(range_identifier(object));
+  result->children.push_back(range_identifier(index));
+  return result;
+}
+
+} // namespace
+
+void PA14Lowerer::EmitReturn(const CPPGMAstNodePtr& node, Scope* scope)
+{
+    TypePtr return_type = SourceReturnType(*state_->record);
+    if(state_->record->indirect_result) {
+      if(!return_type || type_value(return_type)->kind != TYPE_CLASS)
+        throw logic_error("indirect result is not a class value");
+      if(node->children.empty()) {
+        EmitLiveDestructors(scope);
+        Terminate("return void");
+        return;
+      }
+      const vector<string> names = ParameterNames(*state_->record);
+      if(names.empty()) throw logic_error("indirect result has no destination");
+      const CPPGMAstNodePtr expression = node->children[0];
+      if(expression->kind == "id-expression" && state_->return_slot_plan &&
+         FindLocalPlan(expression->value) == state_->return_slot_plan) {
+        EmitLiveDestructors(scope);
+        Terminate("return void");
+        return;
+      }
+      const ExprInfo expression_info = Infer(expression, scope);
+      TypePtr move_source_type = type_value(expression_info.type);
+      if(expression_info.type && type_is_reference(expression_info.type))
+        move_source_type = type_value(expression_info.type->child);
+      const bool implicit_return_move = expression->kind == "id-expression" &&
+        FindLocalPlan(expression->value) && move_source_type &&
+        !move_source_type->is_const;
+      if(!EmitObjectTransferAt(type_value(return_type), "%" + names[0],
+                               expression, scope, true, implicit_return_move))
+        throw logic_error("no viable return value transfer");
+      EmitLiveDestructors(scope);
+      Terminate("return void");
+      return;
+    }
+    if(!return_type || low_type(return_type) == "void") {
+      if(!node->children.empty()) EmitDiscard(node->children[0], scope);
+      EmitLiveDestructors(scope);
+      Terminate("return void");
+      return;
+    }
+    if(node->children.empty()) {
+      EmitLiveDestructors(scope);
+      Terminate("return " + low_type(return_type) + " 0");
+      return;
+    }
+    CPPGMAstNodePtr expression = node->children[0];
+    if(type_is_reference(return_type)) {
+      const ExprInfo expression_info = Infer(expression, scope);
+      const TypePtr source_type = expression_value_type(expression_info);
+      const TypePtr target_type = type_value(return_type);
+      string address;
+      if(expression->kind == "literal" && target_type &&
+         target_type->kind == TYPE_FUNDAMENTAL) {
+        const string slot = new_special_slot("retref", low_type(target_type));
+        Value value = EmitValue(expression, scope, target_type);
+        value = ConvertValue(value, target_type, false, true);
+        emit_store(target_type, value.operand, "$" + slot);
+        address = new_temp();
+        AddInstruction(address + " = addr $" + slot);
+      } else {
+        address = EmitAddress(expression, scope);
+      }
+      if(source_type && target_type && source_type->kind == TYPE_CLASS &&
+         target_type->kind == TYPE_CLASS &&
+         IsDerivedFrom(source_type, target_type))
+        address = AdjustBaseAddress(address, source_type, target_type);
+      EmitLiveDestructors(scope);
+      Terminate("return ptr " + address);
+      return;
+    }
+    TypePtr return_value_type = type_value(return_type);
+    if(return_value_type && return_value_type->kind == TYPE_CLASS) {
+      if(state_->return_object_slot.empty())
+        state_->return_object_slot = new_special_slot("retobj", low_type(return_value_type));
+      const string slot = state_->return_object_slot;
+      const string destination = new_temp();
+      AddInstruction(destination + " = addr $" + slot);
+      const ExprInfo expression_info = Infer(expression, scope);
+      TypePtr move_source_type = type_value(expression_info.type);
+      if(expression_info.type && type_is_reference(expression_info.type))
+        move_source_type = type_value(expression_info.type->child);
+      const bool implicit_return_move = expression->kind == "id-expression" &&
+        FindLocalPlan(expression->value) && move_source_type &&
+        !move_source_type->is_const;
+      if(!EmitObjectTransferAt(return_value_type, destination, expression, scope, true,
+                               implicit_return_move))
+        throw logic_error("no viable direct class return transfer");
+      EmitLiveDestructors(scope);
+      Terminate("return " + low_type(return_type) + " $" + slot);
+      return;
+    }
+    Value value = EmitValue(expression, scope, return_type);
+    const bool preserve_sizeof_type = expression->kind == "sizeof-expression" ||
+      expression->kind == "sizeof-pack-expression" ||
+      expression->kind == "type-trait-expression";
+    if(value.known_constant && is_integral_type(value.type) && is_integral_type(return_type) &&
+       !preserve_sizeof_type &&
+       (type_size(return_type) <= type_size(value.type) ||
+        (!is_unsigned_type(return_type) && type_size(return_type) > type_size(value.type)))) {
+      // A known integral return value is already folded by the semantic
+      // evaluator; retain it as an immediate across the ordinary integral
+      // conversion boundary.
+      EmitLiveDestructors(scope);
+      Terminate("return " + low_type(return_type) + " " + integer_text(value.constant));
+      return;
+    }
+    value = ConvertValue(value, return_type, true, true);
+    const bool enum_functional_cast = return_value_type &&
+      return_value_type->kind == TYPE_ENUM && expression &&
+      expression->kind == "call-expression" && expression->children.size() > 0 &&
+      expression->children[0] && expression->children[0]->kind == "id-expression" &&
+      expression->children[0]->value == LastComponent(return_value_type->name) &&
+      value.type && low_type(value.type) == low_type(return_type);
+    if(enum_functional_cast) {
+      const string copied = new_temp();
+      AddInstruction(copied + " = copy " + low_type(return_type) + " " + value.operand);
+      value.operand = copied;
+    }
+    EmitLiveDestructors(scope);
+    Terminate("return " + low_type(return_type) + " " + value.operand);
+  }
+
 void PA14Lowerer::EmitGlobalInitializer(GlobalRecord& global, Scope* scope)
 {
     TypePtr type = global.type;
@@ -142,6 +334,230 @@ void PA14Lowerer::EmitGlobalInitializer(GlobalRecord& global, Scope* scope)
     value = ConvertValue(value, type);
     emit_store(type, value.operand, "@" + global.symbol);
   }
+void PA14Lowerer::PlanRangeFor(const CPPGMAstNodePtr& node, Scope* scope)
+{
+    if(!node || node->children.size() < 3) throw logic_error("invalid range-for statement");
+    const CPPGMAstNodePtr declaration = node->children[0];
+    const CPPGMAstNodePtr initializer = node->children[1];
+    const CPPGMAstNodePtr expression = initializer && !initializer->children.empty() ?
+      initializer->children[0] : CPPGMAstNodePtr();
+    if(!declaration || declaration->children.size() < 2 || !expression)
+      throw logic_error("invalid range-for declaration");
+    const string loop_name = FirstIdentifier(declaration->children[1]);
+    if(loop_name.empty()) throw logic_error("range-for declaration has no name");
+    const bool braced = expression->kind == "braced-init-list";
+    string range_kind;
+    string first_hidden;
+    string second_hidden;
+    unsigned int hidden = ++state_->variable_name_counts["\001range-hidden"];
+    TypePtr element_type;
+    CPPGMAstNodePtr element_expression;
+    if(braced) {
+      if(expression->children.empty()) throw logic_error("empty range initializer");
+      element_type = expression_value_type(Infer(expression->children[0], scope));
+      if(!element_type) throw logic_error("range initializer has no element type");
+      first_hidden = "__range" + integer_text(static_cast<long long>(hidden));
+      second_hidden = "__idx" + integer_text(static_cast<long long>(hidden + 1));
+      range_kind = "braced";
+      AddVariablePlan(first_hidden, ArrayOf(
+        static_cast<long long>(expression->children.size()), type_value(element_type)),
+        CPPGMAstNodePtr(), range_initializer(expression));
+      AddVariablePlan(second_hidden, Fundamental("int"), CPPGMAstNodePtr(),
+        range_initializer(CPPGMAstNodePtr(new CPPGMAstNode("literal", "0"))));
+      element_expression = range_subscript(first_hidden, second_hidden);
+    } else {
+      ExprInfo source_info = Infer(expression, scope);
+      TypePtr source_type = expression_value_type(source_info);
+      if(!source_type) throw logic_error("range expression has no type");
+      if(source_type->kind == TYPE_ARRAY) {
+        if(source_type->bound < 0) throw logic_error("range array has unknown bound");
+        first_hidden = "__idx" + integer_text(static_cast<long long>(hidden));
+        range_kind = "array";
+        element_type = type_value(source_type->child);
+        AddVariablePlan(first_hidden, Fundamental("int"), CPPGMAstNodePtr(),
+          range_initializer(CPPGMAstNodePtr(new CPPGMAstNode("literal", "0"))));
+        element_expression = range_subscript(expression->value, first_hidden);
+      } else if(source_type->kind == TYPE_CLASS) {
+        const bool member_begin = !MemberBindings(source_type, "begin").empty();
+        const bool member_end = !MemberBindings(source_type, "end").empty();
+        if(member_begin != member_end) throw logic_error("range begin/end mismatch");
+        first_hidden = "__begin" + integer_text(static_cast<long long>(hidden));
+        second_hidden = "__end" + integer_text(static_cast<long long>(hidden + 1));
+        range_kind = member_begin ? "member" : "adl";
+        const size_t namespace_separator = source_type->name.rfind("::");
+        const string associated_namespace = !member_begin &&
+          namespace_separator != string::npos ?
+          source_type->name.substr(0, namespace_separator) : string();
+        const string begin_name = associated_namespace.empty() ? "begin" :
+          associated_namespace + "::begin";
+        const string end_name = associated_namespace.empty() ? "end" :
+          associated_namespace + "::end";
+        const CPPGMAstNodePtr begin = range_call(expression, begin_name, member_begin);
+        const CPPGMAstNodePtr end = range_call(expression, end_name, member_end);
+        TypePtr begin_type = expression_value_type(Infer(begin, scope));
+        TypePtr end_type = expression_value_type(Infer(end, scope));
+        if(!begin_type || !end_type) throw logic_error("range begin/end has no type");
+        AddVariablePlan(first_hidden, begin_type, CPPGMAstNodePtr(), range_initializer(begin));
+        AddVariablePlan(second_hidden, end_type, CPPGMAstNodePtr(), range_initializer(end));
+        element_expression = range_unary("*", range_identifier(first_hidden));
+        element_type = expression_value_type(Infer(element_expression, scope));
+      } else throw logic_error("unsupported range expression");
+    }
+    if(!element_type) throw logic_error("range has no element type");
+    Analyzer::SpecFacts facts;
+    TypePtr declared = analyzer_.TypeFromSpecSeq(declaration->children[0], scope, &facts);
+    declared = analyzer_.BuildDeclarator(declaration->children[1], declared, scope);
+    TypePtr loop_type = declared;
+    if(ContainsAutoType(declared))
+      loop_type = DeduceAutoType(declared, range_initializer(element_expression), scope);
+    AddVariablePlan(loop_name, loop_type, declaration->children[1],
+      range_initializer(element_expression));
+    state_->environments.push_back(map<string, VariablePlan*>());
+    for(size_t i = 0; i < state_->variables.size(); ++i) {
+      VariablePlan& variable = state_->variables[i];
+      if(variable.source_name == first_hidden || variable.source_name == second_hidden ||
+         variable.source_name == loop_name)
+        state_->environments.back()[variable.source_name] = &variable;
+    }
+    PlanStatement(node->children[2], scope);
+    state_->environments.pop_back();
+    node->value = range_kind + "|" + first_hidden + "|" + second_hidden;
+  }
+
+void PA14Lowerer::EmitRangeFor(const CPPGMAstNodePtr& node, Scope* scope)
+{
+    if(!node || node->children.size() < 3) throw logic_error("invalid range-for statement");
+    const size_t first_separator = node->value.find('|');
+    const size_t second_separator = first_separator == string::npos ? string::npos :
+      node->value.find('|', first_separator + 1);
+    if(first_separator == string::npos || second_separator == string::npos)
+      throw logic_error("range-for plan is missing hidden names");
+    const string kind = node->value.substr(0, first_separator);
+    const string first_name = node->value.substr(first_separator + 1,
+      second_separator - first_separator - 1);
+    const string second_name = node->value.substr(second_separator + 1);
+    const string loop_name = FirstIdentifier(node->children[0]->children[1]);
+    state_->environments.push_back(map<string, VariablePlan*>());
+    VariablePlan* first = 0;
+    VariablePlan* second = 0;
+    VariablePlan* loop = 0;
+    for(size_t i = state_->variables.size(); i > 0; --i) {
+      VariablePlan& variable = state_->variables[i - 1];
+      if(variable.source_name == first_name && !first) first = &variable;
+      if(variable.source_name == second_name && !second) second = &variable;
+      if(variable.source_name == loop_name && !loop) loop = &variable;
+    }
+    if(!first || !loop || (kind != "array" && (!second || second_name.empty())))
+      throw logic_error("range-for plan has no hidden variables");
+    state_->environments.back()[first_name] = first;
+    if(second) state_->environments.back()[second_name] = second;
+    state_->environments.back()[loop_name] = loop;
+    const auto declare_slot = [&](VariablePlan* variable) {
+      if(variable && !variable->slot_declared) {
+        variable->slot_declared = true;
+        state_->slot_order.push_back(FunctionState::SlotEntry(
+          false, variable->slot_name, variable));
+      }
+    };
+    declare_slot(first);
+    EmitInitializer(first, first->initializer, scope);
+    if(second) {
+      declare_slot(second);
+      EmitInitializer(second, second->initializer, scope);
+    }
+    const string condition_label = new_label("for_cond");
+    const string body_label = new_label("for_body");
+    const string iteration_label = new_label("for_iter");
+    const string end_label = new_label("for_end");
+    if(!state_->current->terminated) Terminate("jump ^" + condition_label);
+    AddBlock(condition_label);
+    const string index_name = kind == "braced" ? second_name : first_name;
+    CPPGMAstNodePtr condition;
+    if(kind == "array" || kind == "braced") {
+      const CPPGMAstNodePtr expression = node->children[1]->children.empty() ?
+        CPPGMAstNodePtr() : node->children[1]->children[0];
+      long long bound = 0;
+      if(kind == "braced") bound = expression && expression->kind == "braced-init-list" ?
+        static_cast<long long>(expression->children.size()) : 0;
+      else {
+        TypePtr source_type = expression_value_type(Infer(expression, scope));
+        bound = source_type ? source_type->bound : 0;
+      }
+      condition = range_runtime_binary("<", index_name, integer_text(bound));
+      // The right operand is a literal spelling, not an identifier.
+      condition->children[1].reset(new CPPGMAstNode("literal", integer_text(bound)));
+    } else condition = range_runtime_binary("!=", first_name, second_name);
+    EmitCondition(condition, scope, body_label, end_label);
+    AddBlock(body_label);
+    state_->break_targets.push_back(end_label);
+    state_->continue_targets.push_back(iteration_label);
+    declare_slot(loop);
+    if(type_is_reference(loop->type)) {
+      const CPPGMAstNodePtr element = InitializerExpression(loop->initializer);
+      const ExprInfo source_info = Infer(element, scope);
+      const TypePtr source_type = expression_value_type(source_info);
+      const TypePtr target_type = type_value(loop->type);
+      string address;
+      if(source_info.category == "prvalue" && target_type &&
+         target_type->kind != TYPE_CLASS) {
+        const string temporary = new_special_slot("tmpref", low_type(target_type));
+        Value value = EmitValue(element, scope, target_type);
+        value = ConvertValue(value, target_type, false, true);
+        emit_store(target_type, value.operand, "$" + temporary);
+        address = new_temp();
+        AddInstruction(address + " = addr $" + temporary);
+      } else if(source_info.category == "prvalue" && target_type &&
+                target_type->kind == TYPE_CLASS)
+        address = EmitReferenceArgument(element, scope, loop->type);
+      else address = EmitAddress(element, scope);
+      if(source_type && target_type && source_type->kind == TYPE_CLASS &&
+         target_type->kind == TYPE_CLASS && IsDerivedFrom(source_type, target_type))
+        address = AdjustBaseAddress(address, source_type, target_type);
+      emit_store(PointerTo(Fundamental("char")), address, StorageForVariable(*loop));
+    }
+    else {
+      const CPPGMAstNodePtr element = InitializerExpression(loop->initializer);
+      Value value = EmitValue(element, scope, type_value(loop->type));
+      if(value.lvalue && value.type) {
+        value.operand = emit_load(value.operand, value.type);
+        value.lvalue = false;
+      } else if(value.type && type_is_reference(value.type)) {
+        value.operand = emit_load(value.operand, value.type->child);
+        value.type = value.type->child;
+      } else if(value.type && value.type->kind == TYPE_POINTER && element &&
+                element->kind == "unary-expression" &&
+                PA12Operator(element->value) == "*") {
+        value.operand = emit_load(value.operand, value.type->child);
+        value.type = value.type->child;
+      }
+      value = ConvertValue(value, type_value(loop->type), false, true);
+      StoreLValue(range_runtime_identifier(loop_name), scope,
+        type_value(loop->type), value.operand);
+    }
+    EmitStatement(node->children[2], scope);
+    state_->continue_targets.pop_back();
+    state_->break_targets.pop_back();
+    if(!state_->current->terminated) Terminate("jump ^" + iteration_label);
+    AddBlock(iteration_label);
+    EmitDiscard(range_runtime_unary("++", index_name), scope);
+    if(!state_->current->terminated) Terminate("jump ^" + condition_label);
+    AddBlock(end_label);
+    map<string, VariablePlan*>& environment = state_->environments.back();
+    for(size_t i = state_->variables.size(); i > 0; --i) {
+      VariablePlan& variable = state_->variables[i - 1];
+      bool bound_here = false;
+      for(map<string, VariablePlan*>::const_iterator it = environment.begin();
+          it != environment.end(); ++it)
+        if(it->second == &variable) { bound_here = true; break; }
+      if(!bound_here || type_is_reference(variable.type)) continue;
+      TypePtr object_type = type_value(variable.type);
+      if(object_type && object_type->kind == TYPE_CLASS &&
+         DestructorHasEffects(object_type))
+        (void)EmitDestructorAt(object_type, local_address(&variable), scope);
+    }
+    LeaveEnvironment();
+  }
+
 void PA14Lowerer::EmitGlobalFinalizer(GlobalRecord& global, Scope* scope)
 {
     TypePtr type = type_value(global.type);

@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cerrno>
 #include <cstdlib>
+#include <functional>
 #include <iomanip>
 #include <limits>
 #include <map>
@@ -240,6 +241,29 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
 				if(parameter_type && parameter_type->kind == TYPE_ARRAY &&
 					function->parameters[a]->kind == TYPE_LVALUE_REFERENCE)
 					rank = 2;
+			}
+			if(rank < 0 && a < function->parameters.size() &&
+				argument_nodes[a] && argument_nodes[a]->kind == "braced-init-list" &&
+				!argument_nodes[a]->children.empty() &&
+				function->parameters[a] && type_is_reference(function->parameters[a])) {
+				const TypePtr parameter_type = type_value(function->parameters[a]);
+				if(parameter_type && parameter_type->kind == TYPE_ARRAY &&
+					(parameter_type->bound < 0 ||
+					 parameter_type->bound == static_cast<long long>(argument_nodes[a]->children.size())) &&
+					(function->parameters[a]->kind == TYPE_RVALUE_REFERENCE ||
+					 (function->parameters[a]->kind == TYPE_LVALUE_REFERENCE &&
+					  parameter_type->child && parameter_type->child->is_const))) {
+					bool elements_viable = true;
+					for(size_t element = 0; element < argument_nodes[a]->children.size(); ++element) {
+						ExprInfo element_info = Infer(argument_nodes[a]->children[element], scope);
+						if(ConversionRank(element_info, parameter_type->child) < 0) {
+							elements_viable = false;
+							break;
+						}
+					}
+					if(elements_viable)
+						rank = function->parameters[a]->kind == TYPE_RVALUE_REFERENCE ? 1 : 2;
+				}
 			}
 			if(rank < 0) { viable = false; break; }
           if(rank >= 3) ++user_defined;
@@ -616,12 +640,412 @@ CPPGMAstNodePtr PA14Lowerer::InitializerExpression(const CPPGMAstNodePtr& initia
 long long PA14Lowerer::BracedElementCount(const CPPGMAstNodePtr& initializer) const
 {
     CPPGMAstNodePtr expression = InitializerExpression(initializer);
-    if(expression && expression->kind == "braced-init-list")
+    if(expression && expression->kind == "braced-init-list") {
+      if(expression->children.size() == 1 && expression->children[0] &&
+         expression->children[0]->kind == "literal" &&
+         expression->children[0]->value.find('"') != string::npos)
+        return static_cast<long long>(decode_string_literal(
+          expression->children[0]->value).size());
       return static_cast<long long>(expression->children.size());
+    }
     if(expression && expression->kind == "literal" &&
        expression->value.find('"') != string::npos)
       return static_cast<long long>(decode_string_literal(expression->value).size());
     return -1;
+  }
+
+PA14Lowerer::FunctionRecord* PA14Lowerer::EnsureAggregateConstructor(const TypePtr& raw_type)
+{
+    return EnsureAggregateConstructorForArguments(raw_type,
+      static_cast<size_t>(-1));
+  }
+
+PA14Lowerer::FunctionRecord* PA14Lowerer::EnsureAggregateConstructorForArguments(
+    const TypePtr& raw_type, size_t argument_count)
+{
+    TypePtr owner = type_value(raw_type);
+    if(!owner || owner->kind != TYPE_CLASS || !owner->owned_scope) return 0;
+    vector<Binding*> existing_constructors = MemberBindings(owner, LastComponent(owner->name));
+    for(size_t i = 0; i < existing_constructors.size(); ++i) {
+      FunctionRecord* existing = RecordForBinding(existing_constructors[i]);
+      if(existing && existing->constructor && !existing->implicit_constructor &&
+         !existing->defaulted && !existing->deleted && !existing->aggregate_constructor)
+        return 0;
+    }
+    vector<TypePtr> member_parameters;
+    vector<string> member_names;
+    for(size_t i = 0; i < owner->class_members.size(); ++i) {
+      const ClassMemberInfo& member = owner->class_members[i];
+      if(member.is_static || member.name.empty() || !member.type) continue;
+      if(argument_count != static_cast<size_t>(-1) &&
+         member_parameters.size() >= argument_count) break;
+      const vector<Binding*> field_bindings = DirectBindings(owner->owned_scope, member.name);
+      for(size_t j = 0; j < field_bindings.size(); ++j)
+        if(field_bindings[j]->kind == BIND_VARIABLE && field_bindings[j]->is_member &&
+           !field_bindings[j]->is_static && field_bindings[j]->access != "public")
+          return 0;
+      if(member.initializer) return 0;
+      member_parameters.push_back(member.type);
+      member_names.push_back(member.name);
+    }
+    if(member_parameters.empty()) return 0;
+    const string name = LastComponent(owner->name);
+    const string qname = TypeQualifiedName(owner) + "::" +
+      special_member_symbol_name(owner, name);
+    TypePtr source = FunctionOf(member_parameters, false, Fundamental("void"), false);
+    const string key = function_key(qname, source);
+    map<string, FunctionRecord*>::const_iterator found = function_by_key_.find(key);
+    if(found != function_by_key_.end()) return found->second;
+
+    CPPGMAstNodePtr special(new CPPGMAstNode("special-member-definition", name));
+    CPPGMAstNodePtr declarator(new CPPGMAstNode("declarator"));
+    declarator->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("identifier", name)));
+    CPPGMAstNodePtr clause(new CPPGMAstNode("parameter-clause"));
+    for(size_t i = 0; i < member_names.size(); ++i) {
+      CPPGMAstNodePtr parameter(new CPPGMAstNode("parameter-declaration"));
+      parameter->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("type-specifier")));
+      CPPGMAstNodePtr parameter_declarator(new CPPGMAstNode("declarator"));
+      parameter_declarator->children.push_back(CPPGMAstNodePtr(
+        new CPPGMAstNode("identifier", member_names[i])));
+      parameter->children.push_back(parameter_declarator);
+      clause->children.push_back(parameter);
+    }
+    declarator->children.push_back(clause);
+    special->children.push_back(declarator);
+    special->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("compound-statement")));
+
+    Binding binding(BIND_FUNCTION, name, source);
+    binding.qualified_name = qname;
+    binding.is_member = true;
+    binding.is_static = false;
+    binding.member_owner = owner;
+    binding.access = "public";
+    binding.declaration = special;
+    owner->owned_scope->add(binding);
+
+    functions_.push_back(FunctionRecord());
+    FunctionRecord* record = &functions_.back();
+    function_by_key_[key] = record;
+    record->node = special;
+    record->scope = owner->owned_scope;
+    record->source_type = source;
+    vector<TypePtr> parameters;
+    parameters.push_back(PointerTo(owner));
+    parameters.insert(parameters.end(), member_parameters.begin(), member_parameters.end());
+    record->type = FunctionOf(parameters, false, Fundamental("void"), false);
+    record->member_owner = owner;
+    record->qualified_name = qname;
+    record->member = true;
+    record->static_member = false;
+    record->constructor = true;
+    record->aggregate_constructor = true;
+    record->definition = true;
+    record->template_instantiation = owner->template_specialization;
+    record->weak_binding = record->template_instantiation;
+    if(owner->template_specialization) {
+      record->template_primary = owner->template_primary;
+      record->template_arguments = owner->template_arguments;
+    }
+    BuildFunctionABI(*record);
+    const string base = low_symbol_component(qname);
+    record->symbol = base + "__ov2";
+    unsigned int suffix = 2;
+    while(true) {
+      bool collision = false;
+      for(size_t i = 0; i + 1 < functions_.size(); ++i)
+        if(functions_[i].symbol == record->symbol) { collision = true; break; }
+      if(!collision) break;
+      record->symbol = base + "__ov" + integer_text(static_cast<long long>(++suffix));
+    }
+    return record;
+  }
+
+TypePtr PA14Lowerer::ArithmeticCommonType(const TypePtr& left, const TypePtr& right,
+                                          const string& op) const
+{
+    TypePtr common_left = left;
+    TypePtr common_right = right;
+    if(common_left && common_left->kind == TYPE_CLASS && common_right &&
+       common_right->kind != TYPE_CLASS) {
+      Binding* conversion = FindConversionOperator(common_left, common_right, false);
+      if(conversion) {
+        TypePtr function = function_target_type(conversion->type);
+        common_left = function ? type_value(function->child) : common_left;
+      }
+    } else if(common_right && common_right->kind == TYPE_CLASS && common_left &&
+              common_left->kind != TYPE_CLASS) {
+      Binding* conversion = FindConversionOperator(common_right, common_left, false);
+      if(conversion) {
+        TypePtr function = function_target_type(conversion->type);
+        common_right = function ? type_value(function->child) : common_right;
+      }
+    } else if(common_left && common_right && common_left->kind == TYPE_CLASS &&
+              common_right->kind == TYPE_CLASS) {
+      const vector<Binding*> conversions = ConversionBindings(common_left);
+      for(size_t conversion = 0; conversion < conversions.size(); ++conversion) {
+        TypePtr function = function_target_type(conversions[conversion]->type);
+        TypePtr result_type = function ? type_value(function->child) : TypePtr();
+        if(result_type && FindConversionOperator(common_right, result_type, false)) {
+          common_left = result_type;
+          common_right = result_type;
+          break;
+        }
+      }
+    }
+    return CommonType(common_left, common_right, op);
+  }
+
+bool PA14Lowerer::AppendAggregateConstructorDefaults(
+    const TypePtr& raw_object_type, const vector<CPPGMAstNodePtr>& input,
+    vector<CPPGMAstNodePtr>* arguments)
+{
+    TypePtr object_type = type_value(raw_object_type);
+    if(!object_type || object_type->kind != TYPE_CLASS || !arguments || arguments->empty())
+      return false;
+    if(HasUserProvidedConstructor(object_type)) return false;
+    size_t initialized_members = 0;
+    bool aggregate_class_tail = false;
+    for(size_t member = 0; member < object_type->class_members.size(); ++member) {
+      const ClassMemberInfo& field = object_type->class_members[member];
+      if(field.is_static || field.name.empty() || !field.type) continue;
+      if(initialized_members++ < arguments->size()) continue;
+      const TypePtr field_type = type_value(field.type);
+      if(field_type && (field_type->kind == TYPE_CLASS ||
+                        field_type->kind == TYPE_ARRAY)) {
+        aggregate_class_tail = true;
+        break;
+      }
+    }
+    if(!aggregate_class_tail) return false;
+    initialized_members = 0;
+    for(size_t member = 0; member < object_type->class_members.size(); ++member) {
+      const ClassMemberInfo& field = object_type->class_members[member];
+      if(field.is_static || field.name.empty() || !field.type) continue;
+      if(initialized_members++ < input.size()) continue;
+      const TypePtr field_type = type_value(field.type);
+      if(field_type && field_type->kind == TYPE_CLASS) {
+        CPPGMAstNodePtr default_call(new CPPGMAstNode("call-expression"));
+        default_call->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
+          "id-expression", LastComponent(field_type->name))));
+        default_call->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
+          "argument-list")));
+        arguments->push_back(default_call);
+      } else if(field_type && field_type->kind == TYPE_ARRAY)
+        arguments->push_back(CPPGMAstNodePtr(new CPPGMAstNode("braced-init-list")));
+      else arguments->push_back(CPPGMAstNodePtr(new CPPGMAstNode("literal", "0")));
+    }
+    return true;
+  }
+
+bool PA14Lowerer::EmitStringArrayInitializer(VariablePlan* variable,
+    const CPPGMAstNodePtr& expression, const string& base, Scope* scope)
+{
+    (void)scope;
+    if(!variable || !variable->type || variable->type->kind != TYPE_ARRAY ||
+       !expression || expression->kind != "braced-init-list" ||
+       expression->children.size() != 1 || !expression->children[0] ||
+       expression->children[0]->kind != "literal" ||
+       expression->children[0]->value.find('"') == string::npos ||
+       is_user_defined_string_literal(expression->children[0]->value)) return false;
+    const vector<unsigned char> bytes = decode_string_literal(expression->children[0]->value);
+    const long long bound = variable->type->bound >= 0 ? variable->type->bound :
+      static_cast<long long>(bytes.size());
+    for(long long byte = 0; byte < bound && byte < static_cast<long long>(bytes.size()); ++byte) {
+      string storage = base;
+      if(byte != 0) {
+        const string index = new_temp();
+        AddInstruction(index + " = index i8 " + base + ", " +
+          integer_text(byte * static_cast<long long>(type_size(variable->type->child))));
+        storage = index;
+      }
+      emit_store(variable->type->child, integer_text(bytes[byte]), storage);
+    }
+    return true;
+  }
+
+bool PA14Lowerer::EmitAggregateOmittedField(const ClassMemberInfo& member,
+    const CPPGMAstNodePtr& this_node, Scope* scope)
+{
+    const TypePtr field_type = type_value(member.type);
+    if(!field_type) return false;
+    const string this_address = EmitValue(this_node, scope).operand;
+    const string address = new_temp();
+    AddInstruction(address + " = index i8 " + this_address + ", " +
+      integer_text(member.offset));
+    if(field_type->kind == TYPE_CLASS) {
+      if(EmitConstructorAt(field_type, address, vector<CPPGMAstNodePtr>(), scope, true))
+        return true;
+      CPPGMAstNodePtr empty(new CPPGMAstNode("braced-init-list"));
+      EmitAggregateAt(address, field_type, empty, scope);
+    } else if(field_type->kind == TYPE_ARRAY) {
+      CPPGMAstNodePtr empty(new CPPGMAstNode("braced-init-list"));
+      EmitAggregateAt(address, field_type, empty, scope);
+    } else emit_store(member.type, "0", address);
+    return true;
+  }
+
+bool PA14Lowerer::EmitAggregateClassParameter(FunctionRecord& function,
+    const ClassMemberInfo& member, const string& address,
+    const vector<string>& names, size_t* parameter)
+{
+    if(!parameter || *parameter >= names.size()) return false;
+    const TypePtr field_type = type_value(member.type);
+    const bool class_value_parameter = field_type && field_type->kind == TYPE_CLASS &&
+      !type_is_reference(member.type);
+    if(!class_value_parameter) return false;
+    const size_t index = *parameter;
+    const bool by_address = LowParameterIsByAddress(function, index);
+    if(!by_address) {
+      const string source_address = new_temp();
+      AddInstruction(source_address + " = addr $" + names[index]);
+      AddInstruction("copyobj " + integer_text(static_cast<long long>(type_size(member.type))) +
+        "x" + integer_text(static_cast<long long>(type_alignment(member.type))) +
+        " " + source_address + ", " + address);
+      ++*parameter;
+      return true;
+    }
+    FunctionRecord* value_member = EnsureImplicitCopyConstructor(member.type, true);
+    if(!value_member || value_member->deleted)
+      value_member = EnsureImplicitCopyConstructor(member.type, false);
+    if(!value_member || value_member->deleted) return false;
+    MarkFunctionNeeded(value_member);
+    FunctionRecord* call_member = value_member;
+    const bool need_base_entry = !BaseEntryFor(value_member) &&
+      !value_member->template_instantiation && !function.template_instantiation &&
+      !function.synthesized_value_member && !function.aggregate_constructor &&
+      (!function.member_owner || !function.member_owner->template_specialization);
+    if(need_base_entry) EnsureConstructorBaseEntry(value_member);
+    FunctionRecord* base_member = BaseEntryFor(value_member);
+    if(base_member) {
+      MarkFunctionNeeded(base_member);
+      call_member = base_member;
+    }
+    AddInstruction("call void @" + call_member->symbol + "(" + address + ", %" +
+      names[index] + ")");
+    ++*parameter;
+    return true;
+  }
+
+bool PA14Lowerer::EmitReferenceConversionUpdate(const CPPGMAstNodePtr& node,
+    Scope* scope, Value* result)
+{
+    if(!node || node->children.empty() || !result) return false;
+    const CPPGMAstNodePtr child_node = node->children[0];
+    ExprInfo child_info = Infer(child_node, scope);
+    TypePtr type = expression_value_type(child_info);
+    Binding* conversion = FindContextConversionOperator(type, false, false);
+    TypePtr function = conversion ? function_target_type(conversion->type) : TypePtr();
+    if(!conversion || !function || !type_is_reference(function->child) ||
+       function->child->kind != TYPE_LVALUE_REFERENCE) return false;
+    Value converted = EmitContextConversion(child_node, scope, false, false);
+    if(!converted.lvalue || converted.operand.empty() || !converted.type) return false;
+    Value old;
+    old.type = converted.type;
+    old.operand = emit_load(converted.operand, converted.type);
+    Value updated;
+    updated.type = converted.type;
+    updated.lvalue = true;
+    updated.operand = new_temp();
+    AddInstruction(updated.operand + " = binary " +
+      (PA12Operator(node->value) == "++" ? "add" : "sub") + " " +
+      low_type(converted.type) + " " + old.operand + ", 1");
+    string store_address = converted.operand;
+    if(node->kind == "postfix-expression") {
+      Value store_conversion = EmitContextConversion(child_node, scope, false, false);
+      if(store_conversion.lvalue && !store_conversion.operand.empty())
+        store_address = store_conversion.operand;
+    }
+    emit_store(converted.type, updated.operand, store_address);
+    *result = node->kind == "postfix-expression" ? old : updated;
+    return true;
+  }
+
+bool PA14Lowerer::ContainsAutoType(const TypePtr& raw) const
+{
+    if(!raw) return false;
+    if(raw->kind == TYPE_FUNDAMENTAL && raw->name == "auto") return true;
+    if(raw->child && ContainsAutoType(raw->child)) return true;
+    if(raw->kind == TYPE_FUNCTION) {
+      for(size_t i = 0; i < raw->parameters.size(); ++i)
+        if(ContainsAutoType(raw->parameters[i])) return true;
+    }
+    return false;
+  }
+
+PA14Lowerer::ExprInfo PA14Lowerer::InferAutoInitializer(
+    const CPPGMAstNodePtr& initializer, Scope* scope)
+{
+    CPPGMAstNodePtr expression = InitializerExpression(initializer);
+    if(!expression) throw logic_error("auto declaration requires an initializer");
+    if(expression->kind == "braced-init-list") {
+      if(expression->children.size() != 1)
+        throw logic_error("cannot deduce auto from an initializer list");
+      expression = expression->children[0];
+      if(!expression) throw logic_error("cannot deduce auto from an empty initializer");
+    }
+    return Infer(expression, scope);
+  }
+
+TypePtr PA14Lowerer::DeduceAutoType(const TypePtr& declared,
+                                    const CPPGMAstNodePtr& initializer,
+                                    Scope* scope)
+{
+    if(!declared || !ContainsAutoType(declared)) return declared;
+    const ExprInfo source_info = InferAutoInitializer(initializer, scope);
+    TypePtr source = source_info.type;
+    if(!source) throw logic_error("auto initializer has no type");
+    TypePtr source_value = type_value(source);
+
+    // A by-value placeholder follows the ordinary array/function adjustment
+    // before the placeholder is substituted.  References retain the source
+    // value and category, which is the distinction that makes auto&& useful.
+    const auto without_top_cv = [](const TypePtr& original) -> TypePtr {
+      if(!original) return original;
+      TypePtr result(new Type(*original));
+      result->is_const = false;
+      result->is_volatile = false;
+      return result;
+    };
+    if(declared->kind != TYPE_LVALUE_REFERENCE &&
+       declared->kind != TYPE_RVALUE_REFERENCE) {
+      if(source_value && source_value->kind == TYPE_ARRAY)
+        source_value = PointerTo(source_value->child);
+      else source_value = without_top_cv(source_value);
+    }
+
+    function<TypePtr(const TypePtr&, const TypePtr&)> substitute;
+    substitute = [&](const TypePtr& pattern, const TypePtr& value) -> TypePtr {
+      if(!pattern) return value;
+      if(pattern->kind == TYPE_FUNDAMENTAL && pattern->name == "auto") {
+        if(!value) throw logic_error("auto initializer has no deduced type");
+        return CloneWithCv(value, pattern->is_const, pattern->is_volatile);
+      }
+      if(pattern->kind == TYPE_POINTER) {
+        if(!value || value->kind != TYPE_POINTER)
+          throw logic_error("auto pointer initializer has incompatible type");
+        return PointerTo(substitute(pattern->child, value->child));
+      }
+      if(pattern->kind == TYPE_ARRAY) {
+        if(!value || value->kind != TYPE_ARRAY)
+          throw logic_error("auto array initializer has incompatible type");
+        const long long bound = pattern->bound >= 0 ? pattern->bound : value->bound;
+        return ArrayOf(bound, substitute(pattern->child, value->child));
+      }
+      if(ContainsAutoType(pattern))
+        throw logic_error("unsupported auto declarator shape");
+      return pattern;
+    };
+
+    if(declared->kind == TYPE_LVALUE_REFERENCE ||
+       declared->kind == TYPE_RVALUE_REFERENCE) {
+      const TypeKind reference_kind = declared->kind == TYPE_LVALUE_REFERENCE ||
+        source_info.category == "lvalue" ||
+        (source && source->kind == TYPE_LVALUE_REFERENCE) ?
+        TYPE_LVALUE_REFERENCE : TYPE_RVALUE_REFERENCE;
+      TypePtr referred = substitute(declared->child, source_value);
+      return ReferenceTo(reference_kind, referred);
+    }
+    return substitute(declared, source_value);
   }
 
 TypePtr PA14Lowerer::PlannedType(const CPPGMAstNodePtr& declaration,
@@ -635,6 +1059,8 @@ TypePtr PA14Lowerer::PlannedType(const CPPGMAstNodePtr& declaration,
       const long long count = BracedElementCount(initializer);
       if(count >= 0) type = ArrayOf(count, type->child);
     }
+    if(type->kind != TYPE_FUNCTION && ContainsAutoType(type))
+      type = DeduceAutoType(type, initializer, scope);
     if(facts.is_constexpr && type->kind != TYPE_FUNCTION)
       type = CloneWithCv(type, true, false);
     return type;
@@ -693,8 +1119,8 @@ void PA14Lowerer::PlanCondition(const CPPGMAstNodePtr& condition, Scope* scope)
 {
     if(!condition || condition->kind != "condition-declaration" || condition->children.size() < 3) return;
     Analyzer::SpecFacts facts;
-    TypePtr base = analyzer_.TypeFromSpecSeq(condition->children[0], scope, &facts);
-    TypePtr type = analyzer_.BuildDeclarator(condition->children[1], base, scope);
+    TypePtr type = PlannedType(condition->children[0], condition->children[1],
+      scope, condition->children[2]);
     AddVariablePlan(declarator_name(condition->children[1]), type,
       condition->children[1], condition->children[2]);
   }
@@ -707,6 +1133,10 @@ CPPGMAstNodePtr PA14Lowerer::ChildNamed(const CPPGMAstNodePtr& node, const strin
 void PA14Lowerer::PlanStatement(const CPPGMAstNodePtr& node, Scope* scope)
 {
     if(!node) return;
+    if(node->kind == "range-for-statement") {
+      PlanRangeFor(node, scope);
+      return;
+    }
     if(node->kind == "compound-statement") {
       state_->environments.push_back(map<string, VariablePlan*>());
       for(size_t i = 0; i < node->children.size(); ++i) PlanStatement(node->children[i], scope);
@@ -822,6 +1252,157 @@ void PA14Lowerer::PlanFunction(FunctionState& state)
         }
       }
     }
+  }
+
+void PA14Lowerer::ResolveAutoFunctionReturns()
+{
+    for(size_t function_index = 0; function_index < functions_.size();
+        ++function_index) {
+      ResolveAutoFunctionReturn(functions_[function_index]);
+    }
+  }
+
+void PA14Lowerer::ResolveAutoFunctionReturn(FunctionRecord& record)
+{
+    TypePtr source_function = function_target_type(record.source_type);
+    if(!source_function || !ContainsAutoType(source_function->child) ||
+       !record.definition || !record.node) return;
+    CPPGMAstNodePtr body = ChildOfKind(record.node, "compound-statement");
+    if(!body && record.node->children.size() > 2) body = record.node->children[2];
+    if(!body) throw logic_error("auto function has no definition body");
+    vector<CPPGMAstNodePtr> returns;
+    function<void(const CPPGMAstNodePtr&)> collect_returns;
+    collect_returns = [&](const CPPGMAstNodePtr& node) {
+      if(!node || node->kind == "lambda-expression") return;
+      if(node->kind == "return-statement") {
+        if(!node->children.empty() && node->children[0]) returns.push_back(node->children[0]);
+        return;
+      }
+      for(size_t child = 0; child < node->children.size(); ++child)
+        collect_returns(node->children[child]);
+    };
+    collect_returns(body);
+    if(returns.empty()) throw logic_error("cannot deduce auto return type");
+    TypePtr result_type = DeduceAutoFunctionReturn(record, source_function, body, returns);
+    if(ContainsAutoType(result_type)) throw logic_error("could not deduce auto return type");
+    const TypePtr old_source = record.source_type;
+    TypePtr adjusted_source(new Type(*source_function));
+    adjusted_source->child = result_type;
+    ApplyAutoFunctionReturn(record, old_source, source_function, result_type);
+    (void)adjusted_source;
+  }
+
+TypePtr PA14Lowerer::DeduceAutoFunctionReturn(FunctionRecord& record,
+    const TypePtr& source_function, const CPPGMAstNodePtr& body,
+    const vector<CPPGMAstNodePtr>& returns)
+{
+    FunctionState* saved_state = state_;
+    FunctionState scratch(this, &record);
+    state_ = &scratch;
+    scratch.environments.push_back(map<string, VariablePlan*>());
+    if(record.member && !record.static_member && record.member_owner) {
+      TypePtr this_type = CloneWithCv(type_value(record.member_owner),
+        source_function->function_const, source_function->function_volatile);
+      VariablePlan* this_plan = AddVariablePlan("this", PointerTo(this_type),
+        CPPGMAstNodePtr(), CPPGMAstNodePtr());
+      if(this_plan) scratch.environments.back()["this"] = this_plan;
+    }
+    Scope* expression_scope = record.scope;
+    map<const CPPGMAstNode*, Scope*>::const_iterator function_scope =
+      analyzer_.function_scopes_.find(record.node.get());
+    if(function_scope != analyzer_.function_scopes_.end()) expression_scope = function_scope->second;
+    map<const CPPGMAstNode*, Scope*>::const_iterator body_scope =
+      analyzer_.compound_scopes_.find(body.get());
+    if(body_scope != analyzer_.compound_scopes_.end()) expression_scope = body_scope->second;
+    TypePtr deduced;
+    string category;
+    for(size_t result_index = 0; result_index < returns.size(); ++result_index) {
+      ExprInfo info = Infer(returns[result_index], expression_scope);
+      TypePtr value = expression_value_type(info);
+      if(!value) throw logic_error("auto return expression has no type");
+      if(!deduced) {
+        deduced = value;
+        category = info.category;
+        if(info.type && info.type->kind == TYPE_LVALUE_REFERENCE) category = "lvalue";
+        else if(info.type && info.type->kind == TYPE_RVALUE_REFERENCE) category = "xvalue";
+      } else if(!PA12SameType(deduced, value, false) || category != info.category) {
+        if(!PA12SameType(deduced, value, false) ||
+           (source_function->child->kind == TYPE_LVALUE_REFERENCE ||
+            source_function->child->kind == TYPE_RVALUE_REFERENCE) &&
+           category != info.category)
+          throw logic_error("inconsistent auto return deduction");
+      }
+    }
+    const auto without_top_cv = [](const TypePtr& original) -> TypePtr {
+      if(!original) return original;
+      TypePtr result(new Type(*original));
+      result->is_const = false;
+      result->is_volatile = false;
+      return result;
+    };
+    function<TypePtr(const TypePtr&, const TypePtr&)> substitute;
+    substitute = [&](const TypePtr& pattern, const TypePtr& value) -> TypePtr {
+      if(!pattern) return value;
+      if(pattern->kind == TYPE_FUNDAMENTAL && pattern->name == "auto")
+        return CloneWithCv(value, pattern->is_const, pattern->is_volatile);
+      if(pattern->kind == TYPE_POINTER) {
+        if(!value || value->kind != TYPE_POINTER)
+          throw logic_error("auto return pointer has incompatible type");
+        return PointerTo(substitute(pattern->child, value->child));
+      }
+      if(pattern->kind == TYPE_ARRAY) {
+        if(!value || value->kind != TYPE_ARRAY)
+          throw logic_error("auto return array has incompatible type");
+        return ArrayOf(pattern->bound, substitute(pattern->child, value->child));
+      }
+      return pattern;
+    };
+    TypePtr result_type;
+    if(source_function->child->kind == TYPE_LVALUE_REFERENCE ||
+       source_function->child->kind == TYPE_RVALUE_REFERENCE) {
+      const TypeKind kind = source_function->child->kind == TYPE_LVALUE_REFERENCE ||
+        category == "lvalue" ? TYPE_LVALUE_REFERENCE : TYPE_RVALUE_REFERENCE;
+      result_type = ReferenceTo(kind, substitute(source_function->child->child, deduced));
+    } else result_type = substitute(source_function->child, without_top_cv(deduced));
+    state_ = saved_state;
+    return result_type;
+  }
+
+void PA14Lowerer::ApplyAutoFunctionReturn(FunctionRecord& record,
+    const TypePtr& old_source, const TypePtr& source_function,
+    const TypePtr& result_type)
+{
+    TypePtr adjusted_source(new Type(*source_function));
+    adjusted_source->child = result_type;
+    record.source_type = adjusted_source;
+    if(record.type) {
+      TypePtr adjusted_type(new Type(*record.type));
+      adjusted_type->child = result_type;
+      record.type = adjusted_type;
+    }
+    function<void(Scope*)> update_bindings;
+    update_bindings = [&](Scope* scope) {
+      if(!scope) return;
+      for(size_t binding_index = 0; binding_index < scope->bindings.size(); ++binding_index) {
+        Binding& binding = scope->bindings[binding_index];
+        if(binding.kind != BIND_FUNCTION) continue;
+        const bool same_declaration = binding.declaration && record.node &&
+          binding.declaration.get() == record.node.get();
+        const bool same_name = !record.qualified_name.empty() &&
+          binding.qualified_name == record.qualified_name;
+        if(!same_declaration && !same_name) continue;
+        TypePtr existing = function_target_type(binding.type);
+        if(existing && (ContainsAutoType(existing) ||
+           PA12SameType(existing, function_target_type(old_source), false)))
+          binding.type = adjusted_source;
+      }
+      for(size_t child = 0; child < scope->children.size(); ++child)
+        update_bindings(scope->children[child].get());
+    };
+    update_bindings(analyzer_.global_.get());
+    function_by_key_[function_key(record.qualified_name, source_function)] = &record;
+    function_by_key_[function_key(record.qualified_name, adjusted_source)] = &record;
+    infer_cache_.clear();
   }
 
 CPPGMAstNodePtr PA14Lowerer::FindDirectReturnExpression(

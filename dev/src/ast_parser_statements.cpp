@@ -2,6 +2,21 @@
 
 using namespace std;
 
+namespace {
+
+string RangeDeclaratorIdentifier(const CPPGMAstNodePtr& node)
+{
+	if (!node) return string();
+	if (node->kind == "identifier") return node->value;
+	for (size_t i = 0; i < node->children.size(); ++i) {
+		const string result = RangeDeclaratorIdentifier(node->children[i]);
+		if (!result.empty()) return result;
+	}
+	return string();
+}
+
+} // namespace
+
 namespace cppgm_pa10 {
 
 CPPGMAstNodePtr Parser::ParseCompoundStatement()
@@ -261,6 +276,43 @@ CPPGMAstNodePtr Parser::ParseIterationStatement()
 	{
 		if (!Take("(")) { Restore(mark); return CPPGMAstNodePtr(); }
 		++ordinary_depth_;
+		// A range declaration has the same declaration-specifier/declarator
+		// prefix as the ordinary for initializer, but its colon is the
+		// disambiguating token.  Keep it as a typed AST node so PA14 can choose
+		// the array, braced-range, or begin/end lowering after semantic types
+		// are available.
+		Mark range_mark = Save();
+		set<string> range_value_names = value_names_;
+		CPPGMAstNodePtr range_specs = ParseDeclSpecifierSeq(false);
+		CPPGMAstNodePtr range_declarator = range_specs ? ParseDeclarator(false) :
+			CPPGMAstNodePtr();
+		if (range_specs && range_declarator && Take(":"))
+		{
+			CPPGMAstNodePtr range_expression;
+			if (Is("{")) range_expression = ParseBracedInitList();
+			else range_expression = ParseExpression();
+			if (range_expression && Take(")"))
+			{
+				value_names_.insert(RangeDeclaratorIdentifier(range_declarator));
+				CPPGMAstNodePtr body = ParseStatement();
+				if (body)
+				{
+					CPPGMAstNodePtr declaration = Node("range-declaration");
+					Add(declaration, range_specs);
+					Add(declaration, range_declarator);
+					CPPGMAstNodePtr initializer = Node("range-initializer");
+					Add(initializer, range_expression);
+					CPPGMAstNodePtr result = Node("range-for-statement");
+					Add(result, declaration);
+					Add(result, initializer);
+					Add(result, body);
+					--ordinary_depth_;
+					return result;
+				}
+			}
+		}
+		Restore(range_mark);
+		value_names_ = range_value_names;
 		CPPGMAstNodePtr for_init = Node("for-init-statement");
 		if (IsTypeStart())
 		{

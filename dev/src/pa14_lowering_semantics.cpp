@@ -953,6 +953,7 @@ TypePtr PA14Lowerer::BuiltinCastType(const CPPGMAstNodePtr& callee,
     if(!effective || effective->kind != "id-expression" ||
        effective->value.find("::") != string::npos) return TypePtr();
     const string name = effective->value;
+    if(name == "unsigned") return Fundamental("unsigned int");
     if(name == "bool" || name == "char" || name == "signed char" ||
        name == "unsigned char" || name == "short" || name == "short int" ||
        name == "unsigned short" || name == "unsigned short int" ||
@@ -1146,7 +1147,10 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferBinary(const CPPGMAstNodePtr& node, Scop
              expression_value_type(right)->kind == TYPE_ARRAY))
       result.type = expression_value_type(right)->kind == TYPE_ARRAY ?
         PointerTo(expression_value_type(right)->child) : expression_value_type(right);
-    else result.type = CommonType(left.type, right.type, op);
+    else {
+      result.type = ArithmeticCommonType(expression_value_type(left),
+        expression_value_type(right), op);
+    }
     result.category = "prvalue";
     return result;
   }

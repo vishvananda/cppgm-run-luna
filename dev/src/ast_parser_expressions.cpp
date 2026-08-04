@@ -13,6 +13,22 @@ string OperatorValue(const string& text)
 	return text;
 }
 
+bool OrdinaryStringLiteral(const string& text)
+{
+	const size_t quote = text.find('"');
+	return quote != string::npos && !text.empty() && text[text.size() - 1] == '"' &&
+		(quote == 0 || (quote == 1 && (text[0] == 'u' || text[0] == 'U' || text[0] == 'L')) ||
+		 (quote == 2 && text.compare(0, 2, "u8") == 0));
+}
+
+string ConcatenateStringLiterals(const string& left, const string& right)
+{
+	const size_t left_end = left.rfind('"');
+	const size_t right_begin = right.find('"');
+	if(left_end == string::npos || right_begin == string::npos) return left;
+	return left.substr(0, left_end) + right.substr(right_begin + 1);
+}
+
 } // namespace
 
 namespace cppgm_pa10 {
@@ -350,8 +366,6 @@ CPPGMAstNodePtr Parser::ParseAliasFunctionalCast()
 
 CPPGMAstNodePtr Parser::ParsePrimaryExpression()
 {
-	// Keep dependent functional constructions in a call-shaped AST so PA18
-	// can substitute the enclosing specialization before semantic lowering.
 	if(Is("typename")) {
 		CPPGMAstNodePtr dependent = ParseDependentTypeConstruction();
 		if(dependent) return dependent;
@@ -360,6 +374,13 @@ CPPGMAstNodePtr Parser::ParsePrimaryExpression()
 	{
 		string literal;
 		TakeLiteral(&literal);
+		if (OrdinaryStringLiteral(literal)) {
+			while (Peek().kind == AST_LITERAL && OrdinaryStringLiteral(Peek().text)) {
+				string adjacent;
+				TakeLiteral(&adjacent);
+				literal = ConcatenateStringLiterals(literal, adjacent);
+			}
+		}
 		return Node("literal", literal);
 	}
 	if (Is("true") || Is("false") || Is("nullptr") || Is("this"))
@@ -421,8 +442,7 @@ CPPGMAstNodePtr Parser::ParsePrimaryExpression()
 		++position_;
 		return Node("id-expression", keyword);
 	}
-	CPPGMAstNodePtr alias_cast = ParseAliasFunctionalCast();
-	if (alias_cast) return alias_cast;
+	CPPGMAstNodePtr alias_cast = ParseAliasFunctionalCast(); if (alias_cast) return alias_cast;
 	if (Is("["))
 	{
 		CPPGMAstNodePtr lambda = ParseLambdaExpression();

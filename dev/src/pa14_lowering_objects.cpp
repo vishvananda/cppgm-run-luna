@@ -543,8 +543,7 @@ bool PA14Lowerer::EmitObjectTransferAt(const TypePtr& raw_target,
     if(!target || target->kind != TYPE_CLASS || !source) return false;
     if(source->kind == "braced-init-list") {
       const vector<CPPGMAstNodePtr> arguments = source->children;
-      const bool allow_aggregate = !arguments.empty() &&
-        EnsureAggregateConstructor(target);
+      const bool allow_aggregate = EnsureAggregateConstructor(target) != 0;
       return EmitConstructorAt(target, destination, arguments, scope,
         allow_explicit, false, allow_aggregate);
     }
@@ -1333,39 +1332,19 @@ void PA14Lowerer::EmitAggregateConstructorBody(FunctionRecord& function, Scope* 
     for(size_t i = 0; i < owner->class_members.size(); ++i) {
       const ClassMemberInfo& member = owner->class_members[i];
       if(member.is_static || member.name.empty() || !member.type) continue;
-      if(parameter >= names.size()) break;
-      const bool by_address = LowParameterIsByAddress(function, parameter) &&
-        type_value(member.type) && type_value(member.type)->kind == TYPE_CLASS;
+      const TypePtr field_type = type_value(member.type);
+      if(parameter >= names.size()) {
+        EmitAggregateOmittedField(member, this_node, scope);
+        continue;
+      }
       string value;
-      if(!by_address) value = emit_load("$" + names[parameter], member.type);
+      if(!field_type || field_type->kind != TYPE_CLASS || type_is_reference(member.type))
+        value = emit_load("$" + names[parameter], member.type);
       const string this_address = EmitValue(this_node, scope).operand;
       const string address = new_temp();
       AddInstruction(address + " = index i8 " + this_address + ", " +
         integer_text(member.offset));
-      if(by_address) {
-        FunctionRecord* value_member = EnsureImplicitCopyConstructor(member.type, true);
-        if(!value_member || value_member->deleted)
-          value_member = EnsureImplicitCopyConstructor(member.type, false);
-        if(value_member && !value_member->deleted) {
-          MarkFunctionNeeded(value_member);
-          FunctionRecord* call_member = value_member;
-          const bool need_base_entry = !BaseEntryFor(value_member) &&
-            !value_member->template_instantiation && !function.template_instantiation &&
-            !function.synthesized_value_member && !function.aggregate_constructor &&
-            (!function.member_owner || !function.member_owner->template_specialization);
-          if(need_base_entry)
-            EnsureConstructorBaseEntry(value_member);
-          FunctionRecord* base_member = BaseEntryFor(value_member);
-          if(base_member) {
-            MarkFunctionNeeded(base_member);
-            call_member = base_member;
-          }
-          AddInstruction("call void @" + call_member->symbol + "(" + address + ", %" +
-            names[parameter] + ")");
-          ++parameter;
-          continue;
-        }
-      }
+      if(EmitAggregateClassParameter(function, member, address, names, &parameter)) continue;
       Binding* binding = 0;
       vector<Binding*> candidates = DirectBindings(owner->owned_scope, member.name);
       for(size_t j = 0; j < candidates.size(); ++j)

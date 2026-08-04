@@ -35,7 +35,7 @@ PA14Lowerer::Value PA14Lowerer::ValueWithNullptr() const
     return result;
   }
 bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string& address,
-                                    const vector<CPPGMAstNodePtr>& raw_arguments,
+                                    const vector<CPPGMAstNodePtr>& input_arguments,
                                     Scope* scope, bool allow_explicit, bool base_entry,
                                     bool allow_aggregate, bool force_move,
                                     bool value_initialization)
@@ -43,6 +43,7 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
     const size_t temporary_mark = state_ ? state_->temporary_objects.size() : 0;
     TypePtr object_type = type_value(raw_object_type);
     if(!object_type || object_type->kind != TYPE_CLASS) return false;
+    vector<CPPGMAstNodePtr> raw_arguments = input_arguments;
     // Default construction is normally collected while walking a class body,
     // but a replayed specialization can first become observable through a
     // local whose only source use is unevaluated.  Materialize the implicit
@@ -106,11 +107,6 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
     const string constructor_name = object_type->template_specialization &&
       !object_type->template_primary.empty() ?
       LastComponent(object_type->template_primary) : LastComponent(object_type->name);
-    // The ordinary semantic pass does not need to materialize an implicit copy
-    // constructor merely to type-check a class mem-initializer.  Lowering does
-    // need that candidate when a base is initialized from an object value,
-    // however; make the implicit special member available before overload
-    // selection so `Base(base_value)` follows the C++ copy-initialization path.
     if(raw_arguments.size() == 1 && raw_arguments[0]) {
       TypePtr argument_type = expression_value_type(Infer(raw_arguments[0], scope));
       if(argument_type && argument_type->kind == TYPE_CLASS &&
@@ -118,7 +114,16 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
           IsDerivedFrom(argument_type, object_type)))
         (void)EnsureImplicitCopyConstructor(object_type, false);
     }
-	if(!raw_arguments.empty()) (void)EnsureAggregateConstructor(object_type);
+    bool aggregate_class_tail = false;
+    if(allow_aggregate) {
+      aggregate_class_tail = AppendAggregateConstructorDefaults(object_type,
+        input_arguments, &raw_arguments);
+      if(!raw_arguments.empty()) {
+        if(!aggregate_class_tail)
+          (void)EnsureAggregateConstructorForArguments(object_type, raw_arguments.size());
+        else (void)EnsureAggregateConstructor(object_type);
+      }
+    } else if(!raw_arguments.empty()) (void)EnsureAggregateConstructor(object_type);
     vector<Binding*> candidates = MemberBindings(object_type, LastComponent(object_type->name));
     if(candidates.empty() && constructor_name != LastComponent(object_type->name))
       candidates = MemberBindings(object_type, constructor_name);
@@ -489,6 +494,7 @@ void PA14Lowerer::EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr&
       }
       if(expression->kind != "braced-init-list") return;
       TypePtr element_type = type_value(variable->type->child);
+	  if(EmitStringArrayInitializer(variable, expression, base, scope)) return;
       for(size_t i = 0; i < expression->children.size(); ++i) {
         Value value;
         string storage = base;
@@ -825,116 +831,6 @@ bool PA14Lowerer::StatementTerminates(const CPPGMAstNodePtr& node) const
         StatementTerminates(else_node->children[0]);
     }
     return false;
-  }
-void PA14Lowerer::EmitReturn(const CPPGMAstNodePtr& node, Scope* scope)
-{
-    TypePtr return_type = SourceReturnType(*state_->record);
-    if(state_->record->indirect_result) {
-      if(!return_type || type_value(return_type)->kind != TYPE_CLASS)
-        throw logic_error("indirect result is not a class value");
-      if(node->children.empty()) {
-        EmitLiveDestructors(scope);
-        Terminate("return void");
-        return;
-      }
-      const vector<string> names = ParameterNames(*state_->record);
-      if(names.empty()) throw logic_error("indirect result has no destination");
-      const CPPGMAstNodePtr expression = node->children[0];
-      if(expression->kind == "id-expression" && state_->return_slot_plan &&
-         FindLocalPlan(expression->value) == state_->return_slot_plan) {
-        EmitLiveDestructors(scope);
-        Terminate("return void");
-        return;
-      }
-      const ExprInfo expression_info = Infer(expression, scope);
-      TypePtr move_source_type = type_value(expression_info.type);
-      if(expression_info.type && type_is_reference(expression_info.type))
-        move_source_type = type_value(expression_info.type->child);
-      const bool implicit_return_move = expression->kind == "id-expression" &&
-        FindLocalPlan(expression->value) && move_source_type &&
-        !move_source_type->is_const;
-      if(!EmitObjectTransferAt(type_value(return_type), "%" + names[0],
-                               expression, scope, true, implicit_return_move))
-        throw logic_error("no viable return value transfer");
-      EmitLiveDestructors(scope);
-      Terminate("return void");
-      return;
-    }
-    if(!return_type || low_type(return_type) == "void") {
-      if(!node->children.empty()) EmitDiscard(node->children[0], scope);
-      EmitLiveDestructors(scope);
-      Terminate("return void");
-      return;
-    }
-    if(node->children.empty()) {
-      EmitLiveDestructors(scope);
-      Terminate("return " + low_type(return_type) + " 0");
-      return;
-    }
-    CPPGMAstNodePtr expression = node->children[0];
-    if(type_is_reference(return_type)) {
-      const ExprInfo expression_info = Infer(expression, scope);
-      const TypePtr source_type = expression_value_type(expression_info);
-      const TypePtr target_type = type_value(return_type);
-      string address;
-      if(expression->kind == "literal" && target_type &&
-         target_type->kind == TYPE_FUNDAMENTAL) {
-        const string slot = new_special_slot("retref", low_type(target_type));
-        Value value = EmitValue(expression, scope, target_type);
-        value = ConvertValue(value, target_type, false, true);
-        emit_store(target_type, value.operand, "$" + slot);
-        address = new_temp();
-        AddInstruction(address + " = addr $" + slot);
-      } else {
-        address = EmitAddress(expression, scope);
-      }
-      if(source_type && target_type && source_type->kind == TYPE_CLASS &&
-         target_type->kind == TYPE_CLASS &&
-         IsDerivedFrom(source_type, target_type))
-        address = AdjustBaseAddress(address, source_type, target_type);
-      EmitLiveDestructors(scope);
-      Terminate("return ptr " + address);
-      return;
-    }
-    TypePtr return_value_type = type_value(return_type);
-    if(return_value_type && return_value_type->kind == TYPE_CLASS) {
-      if(state_->return_object_slot.empty())
-        state_->return_object_slot = new_special_slot("retobj", low_type(return_value_type));
-      const string slot = state_->return_object_slot;
-      const string destination = new_temp();
-      AddInstruction(destination + " = addr $" + slot);
-      const ExprInfo expression_info = Infer(expression, scope);
-      TypePtr move_source_type = type_value(expression_info.type);
-      if(expression_info.type && type_is_reference(expression_info.type))
-        move_source_type = type_value(expression_info.type->child);
-      const bool implicit_return_move = expression->kind == "id-expression" &&
-        FindLocalPlan(expression->value) && move_source_type &&
-        !move_source_type->is_const;
-      if(!EmitObjectTransferAt(return_value_type, destination, expression, scope, true,
-                               implicit_return_move))
-        throw logic_error("no viable direct class return transfer");
-      EmitLiveDestructors(scope);
-      Terminate("return " + low_type(return_type) + " $" + slot);
-      return;
-    }
-	Value value = EmitValue(expression, scope, return_type);
-    const bool preserve_sizeof_type = expression->kind == "sizeof-expression" ||
-      expression->kind == "sizeof-pack-expression" ||
-      expression->kind == "type-trait-expression";
-    if(value.known_constant && is_integral_type(value.type) && is_integral_type(return_type) &&
-       !preserve_sizeof_type &&
-       (type_size(return_type) <= type_size(value.type) ||
-        (!is_unsigned_type(return_type) && type_size(return_type) > type_size(value.type)))) {
-      // A known integral return value is already folded by the semantic
-      // evaluator; retain it as an immediate across the ordinary integral
-      // conversion boundary.
-      EmitLiveDestructors(scope);
-      Terminate("return " + low_type(return_type) + " " + integer_text(value.constant));
-      return;
-    }
-    value = ConvertValue(value, return_type, true, true);
-    EmitLiveDestructors(scope);
-    Terminate("return " + low_type(return_type) + " " + value.operand);
   }
 void PA14Lowerer::EmitIf(const CPPGMAstNodePtr& node, Scope* scope)
 {
@@ -1442,6 +1338,7 @@ void PA14Lowerer::EmitStatement(const CPPGMAstNodePtr& node, Scope* scope)
     if(node->kind == "if-statement") { EmitIf(node, scope); return; }
     if(node->kind == "while-statement") { EmitWhile(node, scope); return; }
     if(node->kind == "do-statement") { EmitDo(node, scope); return; }
+    if(node->kind == "range-for-statement") { EmitRangeFor(node, scope); return; }
     if(node->kind == "for-statement") { EmitFor(node, scope); return; }
     if(node->kind == "switch-statement") { EmitSwitch(node, scope); return; }
     if(node->kind == "for-init-statement") {

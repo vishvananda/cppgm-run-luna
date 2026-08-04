@@ -422,6 +422,20 @@ void BindClassMember(Binding* binding, bool is_static, const TypePtr& owner) con
 
 void CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, bool definition);
 
+void ResolveAutoFunctionReturns();
+
+void ResolveAutoFunctionReturn(FunctionRecord& function);
+
+TypePtr DeduceAutoFunctionReturn(FunctionRecord& function,
+                                 const TypePtr& source_function,
+                                 const CPPGMAstNodePtr& body,
+                                 const vector<CPPGMAstNodePtr>& returns);
+
+void ApplyAutoFunctionReturn(FunctionRecord& function,
+                             const TypePtr& old_source,
+                             const TypePtr& source_function,
+                             const TypePtr& result_type);
+
 void CollectLocalStatics(const CPPGMAstNodePtr& node, Scope* scope,
                          const string& function_name,
                          bool template_function_context = false);
@@ -594,6 +608,9 @@ int BaseDistance(const TypePtr& derived, const TypePtr& base) const;
 TypePtr CommonType(const TypePtr& left, const TypePtr& right,
                   const string& op = string()) const;
 
+TypePtr ArithmeticCommonType(const TypePtr& left, const TypePtr& right,
+                             const string& op) const;
+
 string OperatorFunctionName(const string& op) const;
 
 int ConversionRank(const ExprInfo& source, const TypePtr& target) const;
@@ -619,6 +636,9 @@ FunctionRecord* RecordForBinding(Binding* binding) const;
 FunctionRecord* BaseEntryFor(FunctionRecord* function) const;
 
 FunctionRecord* EnsureAggregateConstructor(const TypePtr& type);
+
+FunctionRecord* EnsureAggregateConstructorForArguments(const TypePtr& type,
+                                                       size_t argument_count);
 
 void ClassifySpecialMember(FunctionRecord* record);
 
@@ -726,6 +746,23 @@ TypePtr PlannedType(const CPPGMAstNodePtr& declaration,
                     const CPPGMAstNodePtr& declarator,
                     Scope* scope, const CPPGMAstNodePtr& initializer);
 
+bool ContainsAutoType(const TypePtr& type) const;
+
+ExprInfo InferAutoInitializer(const CPPGMAstNodePtr& initializer,
+                              Scope* scope);
+
+TypePtr DeduceAutoType(const TypePtr& declared,
+                       const CPPGMAstNodePtr& initializer,
+                       Scope* scope);
+
+bool AppendAggregateConstructorDefaults(const TypePtr& object_type,
+                                        const vector<CPPGMAstNodePtr>& input,
+                                        vector<CPPGMAstNodePtr>* arguments);
+
+bool EmitStringArrayInitializer(VariablePlan* variable,
+                                const CPPGMAstNodePtr& expression,
+                                const string& base, Scope* scope);
+
 VariablePlan* AddVariablePlan(const string& name, const TypePtr& type,
                               const CPPGMAstNodePtr& declarator,
                               const CPPGMAstNodePtr& initializer);
@@ -737,6 +774,7 @@ void PlanCondition(const CPPGMAstNodePtr& condition, Scope* scope);
 CPPGMAstNodePtr ChildNamed(const CPPGMAstNodePtr& node, const string& name) const;
 
 void PlanStatement(const CPPGMAstNodePtr& node, Scope* scope);
+void PlanRangeFor(const CPPGMAstNodePtr& node, Scope* scope);
 
 void PlanFunction(FunctionState& state);
 
@@ -870,6 +908,9 @@ Value EmitAssignment(const CPPGMAstNodePtr& node, Scope* scope);
 
 Value EmitUpdate(const CPPGMAstNodePtr& node, Scope* scope, bool address_only);
 
+bool EmitReferenceConversionUpdate(const CPPGMAstNodePtr& node, Scope* scope,
+                                   Value* result);
+
 Value EmitCompare(const CPPGMAstNodePtr& node, Scope* scope);
 
 Value EmitBinary(const CPPGMAstNodePtr& node, Scope* scope);
@@ -948,6 +989,16 @@ void EmitDestructorBody(FunctionRecord& function, Scope* scope);
 void EmitLiveDestructors(Scope* scope);
 
 void EmitAggregateConstructorBody(FunctionRecord& function, Scope* scope);
+
+bool EmitAggregateClassParameter(FunctionRecord& function,
+                                 const ClassMemberInfo& member,
+                                 const string& address,
+                                 const vector<string>& names,
+                                 size_t* parameter);
+
+bool EmitAggregateOmittedField(const ClassMemberInfo& member,
+                               const CPPGMAstNodePtr& this_node,
+                               Scope* scope);
 
 void EmitAggregateAt(const string& base, const TypePtr& type,
                      const CPPGMAstNodePtr& expression, Scope* scope,
@@ -1033,6 +1084,7 @@ void EmitWhile(const CPPGMAstNodePtr& node, Scope* scope);
 void EmitDo(const CPPGMAstNodePtr& node, Scope* scope);
 
 void EmitFor(const CPPGMAstNodePtr& node, Scope* scope);
+void EmitRangeFor(const CPPGMAstNodePtr& node, Scope* scope);
 
 void CollectCaseNodes(const CPPGMAstNodePtr& node,
                       vector<CPPGMAstNodePtr>& cases) const;

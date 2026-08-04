@@ -1117,6 +1117,10 @@ void PA14Lowerer::CollectSimpleDeclarationItem(const CPPGMAstNodePtr& node,
     if(facts.is_typedef) return;
     const string name = declarator_name(declarator);
     if(name.empty()) return;
+    Binding* semantic_binding = scope ? scope->local(name) : 0;
+    if(semantic_binding && semantic_binding->kind == BIND_VARIABLE &&
+       ContainsAutoType(semantic_binding->type))
+      semantic_binding->type = type;
     if(type->kind == TYPE_FUNCTION) {
       if(initializer && !initializer->children.empty() && initializer->children[0] &&
          initializer->children[0]->kind == "special-initializer" &&
@@ -1441,16 +1445,30 @@ void PA14Lowerer::CollectClassStaticMember(const CPPGMAstNodePtr& child,
     const bool integral_constant = is_integral_type(member_value) ||
       (member_value && member_value->kind == TYPE_FUNDAMENTAL &&
        member_value->name == "bool");
+    const bool constexpr_enum = facts.is_constexpr && record.initializer &&
+      member_value && member_value->kind == TYPE_ENUM;
     Binding* semantic_binding = class_scope->local(name);
     const bool initializer_calls = record.initializer &&
       DescendantOfKind(record.initializer, "call-expression");
     const bool typed_const = facts.is_const || facts.is_constexpr ||
       (member_type && member_type->is_const) ||
       (member_value && member_value->is_const);
+    if(constexpr_enum && semantic_binding && !semantic_binding->has_value) {
+      long long constant = 0;
+      if(FoldInteger(InitializerExpression(record.initializer), class_scope,
+                     &constant, 0)) {
+        semantic_binding->constant_value = PA19Convert(
+          PA19IntegralValue::Signed(constant, "long long", 64),
+          PA19Type(TypeText(member_type, true)));
+        semantic_binding->has_value = true;
+        semantic_binding->value = PA19Signed(semantic_binding->constant_value);
+      }
+    }
     if(owner->template_specialization && typed_const && integral_constant) return;
     if(typed_const && integral_constant && !record.initializer) return;
     if((facts.is_const || facts.is_constexpr) && record.initializer &&
-       integral_constant && ((semantic_binding && semantic_binding->has_value) ||
+       (integral_constant || constexpr_enum) &&
+       ((semantic_binding && semantic_binding->has_value) ||
        !initializer_calls)) return;
     const string key = global_key(record.qualified_name);
     map<string, GlobalRecord*>::iterator global_found = global_by_key_.find(key);

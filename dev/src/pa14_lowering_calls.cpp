@@ -241,6 +241,7 @@ string PA14Lowerer::EmitReferenceArgument(const CPPGMAstNodePtr& node, Scope* sc
         const TypePtr conversion_result = conversion_function ?
           conversion_function->child : TypePtr();
         Value converted;
+        string conversion_address;
         if(conversion_result && type_is_reference(conversion_result)) {
           converted = EmitConversionOperator(node, scope, referred, false);
         } else {
@@ -253,10 +254,21 @@ string PA14Lowerer::EmitReferenceArgument(const CPPGMAstNodePtr& node, Scope* sc
           choice.static_member = false;
           choice.conversion = true;
           const string slot = new_special_slot("arg", low_type(referred));
-          const string address = new_temp();
-          AddInstruction(address + " = addr $" + slot);
-          converted = EmitChosenCall(choice, CPPGMAstNodePtr(),
-            vector<CPPGMAstNodePtr>(), scope, address);
+          FunctionRecord* conversion_record = RecordForBinding(conversion);
+          const bool direct_template_conversion = conversion_record &&
+            (conversion_record->member_template ||
+             conversion_record->template_instantiation);
+          if(direct_template_conversion) {
+            conversion_address = new_temp();
+            AddInstruction(conversion_address + " = addr $" + slot);
+            converted = EmitChosenCall(choice, CPPGMAstNodePtr(),
+              vector<CPPGMAstNodePtr>(), scope, conversion_address);
+          } else {
+            conversion_address = new_temp();
+            AddInstruction(conversion_address + " = addr $" + slot);
+            converted = EmitChosenCall(choice, CPPGMAstNodePtr(),
+              vector<CPPGMAstNodePtr>(), scope);
+          }
         }
         if(converted.operand.empty()) return converted.operand;
         if(converted.lvalue) return converted.operand;
@@ -266,7 +278,16 @@ string PA14Lowerer::EmitReferenceArgument(const CPPGMAstNodePtr& node, Scope* sc
         // same conversion as a converting constructor indefinitely.
         if(converted.type && type_value(converted.type) &&
            type_value(converted.type)->kind == TYPE_CLASS) {
-          RegisterTemporaryObject(type_value(converted.type), converted.operand);
+          const TypePtr converted_type = type_value(converted.type);
+          if(!conversion_address.empty() && converted.operand != conversion_address) {
+            AddInstruction("copyobj " +
+              integer_text(static_cast<long long>(type_size(converted_type))) +
+              "x" + integer_text(static_cast<long long>(type_alignment(converted_type))) +
+              " " + converted.operand + ", " + conversion_address);
+            RegisterTemporaryObject(converted_type, conversion_address);
+            return conversion_address;
+          }
+          RegisterTemporaryObject(converted_type, converted.operand);
           return converted.operand;
         }
       }
@@ -521,7 +542,8 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
       if(target && value.known_constant && !preserve_size_expression &&
          is_integral_type(value.type) &&
          is_integral_type(target) &&
-         (type_size(target) < type_size(value.type) ||
+         (type_size(target) == type_size(value.type) ||
+          type_size(target) < type_size(value.type) ||
           (!is_unsigned_type(target) && type_size(target) > type_size(value.type)))) {
         value.type = target;
         value.operand = integer_text(value.constant);

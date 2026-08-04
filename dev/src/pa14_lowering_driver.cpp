@@ -228,6 +228,7 @@ void PA14Lowerer::PrepareLoweringProgram()
   IndexFriendOwners();
   InstallBuiltins();
   CollectTopLevel(program_, analyzer_.global_.get());
+  ResolveAutoFunctionReturns();
   PreparePolymorphicModel();
   FinalizeSymbols();
   CollectStringLiterals(program_);

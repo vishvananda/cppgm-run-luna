@@ -204,6 +204,13 @@ PA14Lowerer::Value PA14Lowerer::ConvertValue(Value value, const TypePtr& target,
       }
       return result;
     }
+    if(source_low == "ptr" && is_integral_type(target_value)) {
+      Value result = value;
+      result.type = target_value;
+      result.operand = new_temp();
+      AddInstruction(result.operand + " = copy " + target_low + " " + value.operand);
+      return result;
+    }
     if(target_low == "ptr" || source_low == "ptr") return value;
     Value result;
     result.type = target_value;
@@ -776,8 +783,17 @@ PA14Lowerer::VariablePlan* PA14Lowerer::BindCondition(const CPPGMAstNodePtr& con
 {
     if(!condition || condition->kind != "condition-declaration" || condition->children.size() < 2)
       return 0;
-    return BindPlan(condition->children[1]);
-  }
+    VariablePlan* variable = BindPlan(condition->children[1]);
+    // The condition declaration is entered before its condition value is
+    // emitted.  Reserve its ordinary slot at that point so any temporary
+    // created while evaluating the initializer is listed afterwards.
+    if(variable && !variable->slot_declared) {
+      variable->slot_declared = true;
+      state_->slot_order.push_back(FunctionState::SlotEntry(
+        false, variable->slot_name, variable));
+    }
+    return variable;
+}
 
 void PA14Lowerer::EnterEnvironment()
 { state_->environments.push_back(map<string, VariablePlan*>()); }
@@ -1346,6 +1362,7 @@ string PA14Lowerer::EmitMemberAddress(const CPPGMAstNodePtr& node, Scope* scope,
     if(op == "->") object = object && object->kind == TYPE_POINTER ?
       type_value(object->child) : TypePtr();
     else if(object && object->kind == TYPE_POINTER) object = type_value(object->child);
+    bool projected_injected_storage = false;
     if(member->injected_member && member->injected_owner &&
        (!object || !PA12SameType(object, member->injected_owner, true))) {
       bool found_injected_storage = false;
@@ -1361,6 +1378,7 @@ string PA14Lowerer::EmitMemberAddress(const CPPGMAstNodePtr& node, Scope* scope,
               AddInstruction(adjusted + " = index i8 [projection=field] " + base + ", " +
                 integer_text(outer.offset));
               base = adjusted;
+              projected_injected_storage = true;
             }
             break;
           }
@@ -1369,6 +1387,18 @@ string PA14Lowerer::EmitMemberAddress(const CPPGMAstNodePtr& node, Scope* scope,
       if(!found_injected_storage)
         throw logic_error("anonymous member has no storage record");
     } else base = AdjustBaseAddress(base, object, member->member_owner);
+    // An injected member of an anonymous union uses the union storage itself
+    // when its layout offset is zero.  The injected binding carries the
+    // outer member's offset in the projection above; applying a second
+    // zero-offset field projection changes the canonical LowIR shape and,
+    // more importantly, obscures that this is the union object address.
+    const TypePtr injected_owner = type_value(member->injected_owner);
+    if(member->injected_member && injected_owner && injected_owner->kind == TYPE_CLASS &&
+       injected_owner->is_union && fact.offset == 0 &&
+       projected_injected_storage) {
+      if(!stable_key.empty() && state_) state_->stable_member_addresses[stable_key] = base;
+      return base;
+    }
     const string result = new_temp();
     const bool raw_bit_field = IsBitField(member) && op == ".";
     const bool reference_field = reference_projection && type_is_reference(fact.type);

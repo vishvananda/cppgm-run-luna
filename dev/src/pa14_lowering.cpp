@@ -752,9 +752,15 @@ void PA14Lowerer::CollectClassMembers(const CPPGMAstNodePtr& node, Scope* scope)
         const CPPGMAstNodePtr item = list->children[j];
         if(!item || item->children.empty()) continue;
         const CPPGMAstNodePtr declarator = item->children[0];
-        TypePtr member_type = analyzer_.BuildDeclarator(declarator, base, class_scope);
+		const CPPGMAstNodePtr initializer = item->children.size() > 1 ?
+		  item->children[1] : CPPGMAstNodePtr();
+		TypePtr member_type = analyzer_.BuildDeclarator(declarator, base, class_scope);
 		const string member_name = declarator_name(declarator);
 		Binding* member_binding = member_name.empty() ? 0 : class_scope->local(member_name);
+		if(ContainsAutoType(member_type))
+		  member_type = PlannedType(child->children[0], declarator, class_scope, initializer);
+		if(member_binding && ContainsAutoType(member_binding->type))
+		  member_binding->type = member_type;
         BindClassMember(member_binding, facts.is_static, type_found->second);
         if(!function_type(member_type)) {
           CollectClassStaticMember(child, item, type_found->second, class_scope,
@@ -765,9 +771,9 @@ void PA14Lowerer::CollectClassMembers(const CPPGMAstNodePtr& node, Scope* scope)
         wrapper->children.push_back(child->children[0]);
         wrapper->children.push_back(declarator);
         if(item->children.size() > 1) wrapper->children.push_back(item->children[1]);
-        CPPGMAstNodePtr initializer = item->children.size() > 1 ? item->children[1] :
+        CPPGMAstNodePtr function_initializer = item->children.size() > 1 ? item->children[1] :
           CPPGMAstNodePtr();
-        CPPGMAstNodePtr special_initializer = ChildOfKind(initializer, "special-initializer");
+        CPPGMAstNodePtr special_initializer = ChildOfKind(function_initializer, "special-initializer");
         const bool definition = special_initializer && special_initializer->value == "default";
         CollectFunction(wrapper, class_scope, definition);
       }
@@ -1259,103 +1265,6 @@ void PA14Lowerer::EnsureConstructorBaseEntry(FunctionRecord* function)
       base_entry.symbol = base_symbol + "__ov" + integer_text(static_cast<long long>(++suffix));
     }
     functions_.push_back(base_entry);
-  }
-
-PA14Lowerer::FunctionRecord* PA14Lowerer::EnsureAggregateConstructor(const TypePtr& raw_type)
-{
-    TypePtr owner = type_value(raw_type);
-    if(!owner || owner->kind != TYPE_CLASS || !owner->owned_scope) return 0;
-    vector<Binding*> existing_constructors = MemberBindings(owner, LastComponent(owner->name));
-    for(size_t i = 0; i < existing_constructors.size(); ++i) {
-      FunctionRecord* existing = RecordForBinding(existing_constructors[i]);
-      if(existing && existing->constructor && !existing->implicit_constructor &&
-         !existing->defaulted && !existing->deleted && !existing->aggregate_constructor)
-        return 0;
-    }
-    vector<TypePtr> member_parameters;
-    vector<string> member_names;
-    for(size_t i = 0; i < owner->class_members.size(); ++i) {
-      const ClassMemberInfo& member = owner->class_members[i];
-      if(member.is_static || member.name.empty() || !member.type) continue;
-      const vector<Binding*> field_bindings = DirectBindings(owner->owned_scope, member.name);
-      for(size_t j = 0; j < field_bindings.size(); ++j)
-        if(field_bindings[j]->kind == BIND_VARIABLE && field_bindings[j]->is_member &&
-           !field_bindings[j]->is_static && field_bindings[j]->access != "public")
-          return 0;
-      if(member.initializer) return 0;
-      member_parameters.push_back(member.type);
-      member_names.push_back(member.name);
-    }
-    if(member_parameters.empty()) return 0;
-    const string name = LastComponent(owner->name);
-    const string qname = TypeQualifiedName(owner) + "::" +
-      special_member_symbol_name(owner, name);
-    TypePtr source = FunctionOf(member_parameters, false, Fundamental("void"), false);
-    const string key = function_key(qname, source);
-    map<string, FunctionRecord*>::const_iterator found = function_by_key_.find(key);
-    if(found != function_by_key_.end()) return found->second;
-
-    CPPGMAstNodePtr special(new CPPGMAstNode("special-member-definition", name));
-    CPPGMAstNodePtr declarator(new CPPGMAstNode("declarator"));
-    declarator->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("identifier", name)));
-    CPPGMAstNodePtr clause(new CPPGMAstNode("parameter-clause"));
-    for(size_t i = 0; i < member_names.size(); ++i) {
-      CPPGMAstNodePtr parameter(new CPPGMAstNode("parameter-declaration"));
-      parameter->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("type-specifier")));
-      CPPGMAstNodePtr parameter_declarator(new CPPGMAstNode("declarator"));
-      parameter_declarator->children.push_back(CPPGMAstNodePtr(
-        new CPPGMAstNode("identifier", member_names[i])));
-      parameter->children.push_back(parameter_declarator);
-      clause->children.push_back(parameter);
-    }
-    declarator->children.push_back(clause);
-    special->children.push_back(declarator);
-    special->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("compound-statement")));
-
-    Binding binding(BIND_FUNCTION, name, source);
-    binding.qualified_name = qname;
-    binding.is_member = true;
-    binding.is_static = false;
-    binding.member_owner = owner;
-    binding.access = "public";
-    binding.declaration = special;
-    owner->owned_scope->add(binding);
-
-    functions_.push_back(FunctionRecord());
-    FunctionRecord* record = &functions_.back();
-    function_by_key_[key] = record;
-    record->node = special;
-    record->scope = owner->owned_scope;
-    record->source_type = source;
-    vector<TypePtr> parameters;
-    parameters.push_back(PointerTo(owner));
-    parameters.insert(parameters.end(), member_parameters.begin(), member_parameters.end());
-    record->type = FunctionOf(parameters, false, Fundamental("void"), false);
-    record->member_owner = owner;
-    record->qualified_name = qname;
-    record->member = true;
-    record->static_member = false;
-    record->constructor = true;
-    record->aggregate_constructor = true;
-    record->definition = true;
-    record->template_instantiation = owner->template_specialization;
-    record->weak_binding = record->template_instantiation;
-    if(owner->template_specialization) {
-      record->template_primary = owner->template_primary;
-      record->template_arguments = owner->template_arguments;
-    }
-    BuildFunctionABI(*record);
-    const string base = low_symbol_component(qname);
-    record->symbol = base + "__ov2";
-    unsigned int suffix = 2;
-    while(true) {
-      bool collision = false;
-      for(size_t i = 0; i + 1 < functions_.size(); ++i)
-        if(functions_[i].symbol == record->symbol) { collision = true; break; }
-      if(!collision) break;
-      record->symbol = base + "__ov" + integer_text(static_cast<long long>(++suffix));
-    }
-    return record;
   }
 
 bool PA14Lowerer::HasDefaultArgument(Binding* binding, size_t index) const

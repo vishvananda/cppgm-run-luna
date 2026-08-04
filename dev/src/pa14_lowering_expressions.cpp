@@ -480,6 +480,9 @@ PA14Lowerer::Value PA14Lowerer::EmitUpdate(const CPPGMAstNodePtr& node, Scope* s
                               operator_arguments, scope);
     ExprInfo child_info = Infer(child_node, scope);
     TypePtr type = expression_value_type(child_info);
+    Value converted_result;
+    if(EmitReferenceConversionUpdate(node, scope, &converted_result))
+      return converted_result;
     string cached_address;
     Binding* cached_member = 0;
     if(child_node && (child_node->kind == "member-expression" ||
@@ -541,34 +544,8 @@ PA14Lowerer::Value PA14Lowerer::EmitCompare(const CPPGMAstNodePtr& node, Scope* 
     ExprInfo right_info = Infer(node->children[1], scope);
     TypePtr left_type = expression_value_type(left_info);
     TypePtr right_type = expression_value_type(right_info);
-    if(left_type && left_type->kind == TYPE_CLASS && right_type &&
-       right_type->kind != TYPE_CLASS) {
-      Binding* conversion = FindConversionOperator(left_type, right_type, false);
-      if(conversion) {
-        TypePtr function = function_target_type(conversion->type);
-        left_type = function ? type_value(function->child) : left_type;
-      }
-    } else if(right_type && right_type->kind == TYPE_CLASS && left_type &&
-              left_type->kind != TYPE_CLASS) {
-      Binding* conversion = FindConversionOperator(right_type, left_type, false);
-      if(conversion) {
-        TypePtr function = function_target_type(conversion->type);
-        right_type = function ? type_value(function->child) : right_type;
-      }
-    } else if(left_type && right_type && left_type->kind == TYPE_CLASS &&
-              right_type->kind == TYPE_CLASS) {
-      const vector<Binding*> conversions = ConversionBindings(left_type);
-      for(size_t i = 0; i < conversions.size(); ++i) {
-        TypePtr function = function_target_type(conversions[i]->type);
-        TypePtr result_type = function ? type_value(function->child) : TypePtr();
-        if(result_type && FindConversionOperator(right_type, result_type, false)) {
-          left_type = result_type;
-          right_type = result_type;
-          break;
-        }
-      }
-    }
-    TypePtr common = CommonType(left_type, right_type, PA12Operator(node->value));
+    TypePtr common = ArithmeticCommonType(left_type, right_type,
+      PA12Operator(node->value));
     if(left_type && right_type && left_type->kind == TYPE_POINTER && right_type->kind == TYPE_POINTER)
       common = left_type;
     const bool left_bit_field = node->children[0] &&
@@ -732,7 +709,7 @@ PA14Lowerer::Value PA14Lowerer::EmitBinary(const CPPGMAstNodePtr& node, Scope* s
       value.operand = EmitPointerOffset(node, scope);
       return value;
     }
-	TypePtr common = CommonType(left_type, right_type, op);
+	TypePtr common = ArithmeticCommonType(left_type, right_type, op);
 	const auto is_conditional_operand = [](CPPGMAstNodePtr value) {
 		while(value && value->kind == "parenthesized-expression" &&
 			!value->children.empty()) value = value->children[0];
@@ -1205,6 +1182,11 @@ PA14Lowerer::Value PA14Lowerer::EmitValue(const CPPGMAstNodePtr& node, Scope* sc
            node->children[1]->children.size() != 1)
           throw logic_error("built-in cast requires one argument");
         CPPGMAstNodePtr argument = node->children[1]->children[0];
+        if(argument && argument->kind == "braced-init-list") {
+          if(argument->children.size() != 1)
+            throw logic_error("built-in cast list-initializer has multiple elements");
+          argument = argument->children[0];
+        }
         ExprInfo argument_info = Infer(argument, scope);
         Value value;
         if(expression_value_type(argument_info) &&
