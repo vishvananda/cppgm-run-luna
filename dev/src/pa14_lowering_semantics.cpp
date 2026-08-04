@@ -630,7 +630,7 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferIdentifier(const CPPGMAstNodePtr& node, 
       }
       return result;
     }
-    result.candidates = Lookup(node->value, scope);
+    result.candidates = Lookup(node->value, scope); if(result.candidates.empty()) return InferCapturedIdentifier(node, scope, expected);
     if(result.candidates.size() > 1) {
       bool repeated_binding = true;
       for(size_t i = 1; i < result.candidates.size(); ++i)
@@ -1269,6 +1269,8 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferUncached(const CPPGMAstNodePtr& node, Sc
                 const TypePtr& expected)
 {
     if(!node) throw logic_error("missing expression during LowIR lowering");
+    ExprInfo initializer_list_info;
+    if(InferInitializerListNode(node, scope, expected, &initializer_list_info)) return initializer_list_info;
     if(node->kind == "literal") return InferLiteral(node, expected, scope);
     if(node->kind == "keyword-literal") return InferKeyword(node);
     if(node->kind == "id-expression") return InferIdentifier(node, scope, expected);

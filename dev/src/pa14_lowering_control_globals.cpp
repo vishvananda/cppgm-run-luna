@@ -377,6 +377,21 @@ void PA14Lowerer::PlanRangeFor(const CPPGMAstNodePtr& node, Scope* scope)
         AddVariablePlan(first_hidden, Fundamental("int"), CPPGMAstNodePtr(),
           range_initializer(CPPGMAstNodePtr(new CPPGMAstNode("literal", "0"))));
         element_expression = range_subscript(expression->value, first_hidden);
+      } else if(IsInitializerListType(source_type)) {
+        first_hidden = expression->kind == "id-expression" ? expression->value :
+          "__range" + integer_text(static_cast<long long>(hidden));
+        second_hidden = "__idx" + integer_text(static_cast<long long>(hidden));
+        range_kind = "initializer-list";
+        element_type = InitializerListElementType(source_type, scope);
+        if(!element_type) throw logic_error("initializer_list has no element type");
+        if(first_hidden.compare(0, 7, "__range") == 0)
+          AddVariablePlan(first_hidden, source_type, CPPGMAstNodePtr(),
+            range_initializer(expression));
+        AddVariablePlan(second_hidden, Fundamental("int"), CPPGMAstNodePtr(),
+          range_initializer(CPPGMAstNodePtr(new CPPGMAstNode("literal", "0"))));
+        element_expression.reset(new CPPGMAstNode("initializer-list-element"));
+        element_expression->children.push_back(expression);
+        element_expression->children.push_back(range_identifier(second_hidden));
       } else if(source_type->kind == TYPE_CLASS) {
         const bool member_begin = !MemberBindings(source_type, "begin").empty();
         const bool member_end = !MemberBindings(source_type, "end").empty();
@@ -460,7 +475,7 @@ void PA14Lowerer::EmitRangeFor(const CPPGMAstNodePtr& node, Scope* scope)
       }
     };
     declare_slot(first);
-    EmitInitializer(first, first->initializer, scope);
+    if(kind != "initializer-list") EmitInitializer(first, first->initializer, scope);
     if(second) {
       declare_slot(second);
       EmitInitializer(second, second->initializer, scope);
@@ -471,7 +486,7 @@ void PA14Lowerer::EmitRangeFor(const CPPGMAstNodePtr& node, Scope* scope)
     const string end_label = new_label("for_end");
     if(!state_->current->terminated) Terminate("jump ^" + condition_label);
     AddBlock(condition_label);
-    const string index_name = kind == "braced" ? second_name : first_name;
+    const string index_name = kind == "braced" || kind == "initializer-list" ? second_name : first_name;
     CPPGMAstNodePtr condition;
     if(kind == "array" || kind == "braced") {
       const CPPGMAstNodePtr expression = node->children[1]->children.empty() ?
@@ -486,6 +501,12 @@ void PA14Lowerer::EmitRangeFor(const CPPGMAstNodePtr& node, Scope* scope)
       condition = range_runtime_binary("<", index_name, integer_text(bound));
       // The right operand is a literal spelling, not an identifier.
       condition->children[1].reset(new CPPGMAstNode("literal", integer_text(bound)));
+    } else if(kind == "initializer-list") {
+      const CPPGMAstNodePtr expression = node->children[1]->children.empty() ?
+        CPPGMAstNodePtr() : node->children[1]->children[0];
+      condition = range_runtime_binary("<", index_name, string());
+      condition->children[1].reset(new CPPGMAstNode("initializer-list-size"));
+      condition->children[1]->children.push_back(expression);
     } else condition = range_runtime_binary("!=", first_name, second_name);
     EmitCondition(condition, scope, body_label, end_label);
     AddBlock(body_label);

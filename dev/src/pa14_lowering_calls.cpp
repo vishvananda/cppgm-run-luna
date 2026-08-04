@@ -109,6 +109,9 @@ string PA14Lowerer::EmitReferenceArgument(const CPPGMAstNodePtr& node, Scope* sc
        node->children[1]->kind == "call-expression")
       return EmitTemporaryObjectAddress(node->children[1], scope, "refcall");
     if(node && node->kind == "braced-init-list" && referred &&
+       IsInitializerListType(referred))
+      return EmitInitializerListArgument(node, target, scope, "arg");
+    if(node && node->kind == "braced-init-list" && referred &&
        type_value(referred)->kind == TYPE_CLASS) {
       TypePtr object_type = type_value(referred);
       const string slot = new_special_slot("arg", low_type(object_type));
@@ -459,6 +462,12 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
 	        // class value here would copy the most-derived object and lose the
 	        // typed base projection used by a subsequent member call.
 	        object_operand = EmitAddress(choice.object, scope);
+	      } else if(object_type && object_type->kind == TYPE_CLASS &&
+	                object_info.category == "xvalue") {
+	        // An xvalue class expression denotes an existing object.  A
+	        // forwarding-reference helper can return the callable closure by
+	        // reference, so materializing it here would add an extra copy.
+	        object_operand = EmitAddress(choice.object, scope);
 	      } else if(choice.object->kind == "call-expression" &&
                 !choice.object->children.empty() &&
                 ConstructorObjectType(choice.object->children[0], scope)) {
@@ -483,10 +492,18 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
         const string slot = new_special_slot("tmpobj", low_type(object_type));
         object_operand = new_temp();
         AddInstruction(object_operand + " = addr $" + slot);
-        Value object_value = EmitValue(choice.object, scope);
-        AddInstruction("copyobj " + integer_text(static_cast<long long>(type_size(object_type))) +
-          "x" + integer_text(static_cast<long long>(type_alignment(object_type))) + " " +
-          object_value.operand + ", " + object_operand);
+        CPPGMAstNodePtr lambda_object = choice.object;
+        while(lambda_object && lambda_object->kind == "parenthesized-expression" &&
+              lambda_object->children.size() == 1 && lambda_object->children[0])
+          lambda_object = lambda_object->children[0];
+        if(!lambda_object || lambda_object->kind != "lambda-expression" ||
+           !EmitObjectTransferAt(type_value(object_type), object_operand,
+                                 choice.object, scope, true)) {
+          Value object_value = EmitValue(choice.object, scope);
+          AddInstruction("copyobj " + integer_text(static_cast<long long>(type_size(object_type))) +
+            "x" + integer_text(static_cast<long long>(type_alignment(object_type))) + " " +
+            object_value.operand + ", " + object_operand);
+        }
       } else if(choice.conversion && object_info.category == "lvalue" &&
                 object_type && object_type->kind == TYPE_CLASS) {
         object_operand = EmitAddress(choice.object, scope);
@@ -525,6 +542,12 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
           operands.push_back(EmitTemporaryObjectAddress(all_arguments[i], scope, "arg"));
           continue;
         }
+      }
+      if(target && all_arguments[i] && all_arguments[i]->kind == "braced-init-list" &&
+         IsInitializerListType(target)) {
+        operands.push_back(EmitInitializerListArgument(all_arguments[i], target, scope,
+          type_is_reference(target) ? "arg" : "argobj"));
+        continue;
       }
       if(target && type_is_reference(target)) {
         operands.push_back(EmitReferenceArgument(all_arguments[i], scope, target));

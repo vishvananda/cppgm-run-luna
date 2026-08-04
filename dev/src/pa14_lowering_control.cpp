@@ -184,7 +184,12 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
 		if(a < function->parameters.size() && raw_arguments[a] &&
 		   raw_arguments[a]->kind == "braced-init-list") {
 		  const TypePtr parameter_type = type_value(function->parameters[a]);
-		  if(parameter_type && parameter_type->kind == TYPE_CLASS) {
+		  if(IsInitializerListType(parameter_type) &&
+		     InitializerListArgumentViable(raw_arguments[a], function->parameters[a], scope)) {
+		    rank = 0;
+		    braced_class_handled = true;
+		  }
+		  if(!braced_class_handled && parameter_type && parameter_type->kind == TYPE_CLASS) {
 		    FunctionRecord* aggregate = EnsureAggregateConstructor(parameter_type);
 		    if(aggregate && !aggregate->deleted) {
 		      rank = function->parameters[a]->kind == TYPE_RVALUE_REFERENCE ? 2 : 3;
@@ -376,7 +381,10 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
     operands.push_back(address);
     for(size_t i = 0; i < arguments.size(); ++i) {
       TypePtr target = i < best_function->parameters.size() ? best_function->parameters[i] : TypePtr();
-      if(target && type_is_reference(target))
+      if(target && arguments[i] && arguments[i]->kind == "braced-init-list" &&
+         IsInitializerListType(target))
+        operands.push_back(EmitInitializerListArgument(arguments[i], target, scope, "argobj"));
+      else if(target && type_is_reference(target))
         operands.push_back(EmitReferenceArgument(arguments[i], scope, target));
       else if(record && target && type_value(target) &&
               type_value(target)->kind == TYPE_CLASS &&
@@ -597,6 +605,60 @@ void PA14Lowerer::EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr&
     }
     TypePtr aggregate_type = type_value(variable->type);
     if(aggregate_type && aggregate_type->kind == TYPE_CLASS) {
+      // A replayed template body can expose a promoted function-local class
+      // through its use before the copied class definition has crossed the
+      // PA14 collection boundary.  Recover that definition from the typed
+      // function node before asking the aggregate constructor cache for a
+      // layout record.
+      if(aggregate_type->class_members.empty() && state_ && state_->record &&
+         state_->record->node) {
+        const string wanted = LastComponent(aggregate_type->name);
+        function<void(const CPPGMAstNodePtr&)> recover_local_class;
+        recover_local_class = [&](const CPPGMAstNodePtr& current) {
+          if(!current || !aggregate_type->class_members.empty()) return;
+          if(current->kind == "class-specifier") {
+            map<const CPPGMAstNode*, TypePtr>::const_iterator found =
+              analyzer_.class_types_.find(current.get());
+            if(found != analyzer_.class_types_.end() && found->second &&
+               (found->second.get() == aggregate_type.get() ||
+                LastComponent(found->second->name) == wanted ||
+                LastComponent(current->value) == wanted)) {
+              if(found->second.get() != aggregate_type.get() &&
+                 !found->second->class_members.empty()) {
+                aggregate_type = found->second;
+                variable->type = aggregate_type;
+              } else CollectClassMembers(current, scope);
+              if(!aggregate_type->class_members.empty()) return;
+            }
+          }
+          for(size_t child = 0; child < current->children.size(); ++child)
+            recover_local_class(current->children[child]);
+        };
+        recover_local_class(state_->record->node);
+      }
+      if(aggregate_type->class_members.empty()) {
+        const string wanted = LastComponent(aggregate_type->name);
+        for(map<const CPPGMAstNode*, TypePtr>::const_iterator type =
+              analyzer_.class_types_.begin(); type != analyzer_.class_types_.end(); ++type) {
+          const TypePtr candidate = type->second;
+          if(!candidate || candidate.get() == aggregate_type.get() ||
+             LastComponent(candidate->name) != wanted ||
+             candidate->class_members.empty() || !candidate->layout_complete) continue;
+          aggregate_type = candidate;
+          variable->type = candidate;
+          break;
+        }
+      }
+      if(expression && expression->kind == "braced-init-list" &&
+         IsInitializerListType(aggregate_type)) {
+        string address;
+        if(!variable->initialization_address.empty()) {
+          address = variable->initialization_address;
+          variable->initialization_address.clear();
+        } else address = EmitAddress(CPPGMAstNodePtr(
+          new CPPGMAstNode("id-expression", variable->source_name)), scope);
+        if(EmitInitializerListAt(address, expression, aggregate_type, scope)) return;
+      }
       // A value-initialized materialized class specialization uses its
       // implicitly generated default constructor.  Treating an empty list as
       // an aggregate initializer instead leaks the member-zeroing path and
@@ -690,6 +752,13 @@ void PA14Lowerer::EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr&
       FunctionRecord* aggregate_candidate = EnsureAggregateConstructor(aggregate_type);
       vector<CPPGMAstNodePtr> constructor_arguments;
 		if(expression && expression->kind == "braced-init-list") {
+			if(HasInitializerListConstructor(aggregate_type)) {
+				CPPGMAstNodePtr list_expression = expression;
+				if(expression->children.size() == 1 && expression->children[0] &&
+				   expression->children[0]->kind == "braced-init-list")
+					list_expression = expression->children[0];
+				constructor_arguments.push_back(list_expression);
+			} else {
 			const bool parenthesized_braced = !initializer->children.empty() &&
 			  initializer->children[0] &&
 			  initializer->children[0]->kind == "paren-initializer";
@@ -705,6 +774,7 @@ void PA14Lowerer::EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr&
 			else if(parenthesized_braced && parenthesized)
 				constructor_arguments = parenthesized->children;
 			else constructor_arguments = expression->children;
+			}
 		}
       else if(!initializer->children.empty() && initializer->children[0] &&
               initializer->children[0]->kind == "paren-initializer")
@@ -1158,7 +1228,7 @@ void PA14Lowerer::EmitStatement(const CPPGMAstNodePtr& node, Scope* scope)
           TypePtr object_type = type_value(variable.type);
           if(!object_type) continue;
           if(object_type->kind == TYPE_CLASS) {
-            if(HasDestructor(object_type))
+            if(HasDestructor(object_type) && DestructorHasEffects(object_type))
               (void)EmitDestructorAt(object_type, local_address(&variable), scope);
             continue;
           }

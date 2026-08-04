@@ -570,6 +570,35 @@ bool PA18TemplateExpander::InferFunctionParameter(
 		FunctionSignature signature;
 		bool inferred_argument = InferArgument(argument, &type, parameter_substitutions,
 				context, &signature, true);
+		if(!inferred_argument && argument && argument->kind == "braced-init-list" &&
+			!argument->children.empty()) {
+			const size_t list_open = deduction_pattern.find('<');
+			const size_t list_close = deduction_pattern.rfind('>');
+			const string list_primary = list_open == string::npos ? string() :
+				LastComponent(CanonicalSpelling(deduction_pattern.substr(0, list_open)));
+			if(list_primary == "initializer_list" && list_close > list_open) {
+				string element_type;
+				for(size_t element = 0; element < argument->children.size(); ++element) {
+					string child_type;
+					if(!InferArgument(argument->children[element], &child_type,
+						parameter_substitutions, context)) return false;
+					child_type = ReplaceIdentifiersPreservingPackSizes(child_type,
+						parameter_substitutions);
+					try {
+						child_type = const_cast<PA18TemplateExpander*>(this)->RewriteText(
+							child_type, context, parameter_substitutions, 0);
+					} catch(const PA18SubstitutionFailure&) {}
+					child_type = CanonicalSpelling(ResolveAlias(child_type, context));
+					if(child_type.empty()) return false;
+					if(element_type.empty()) element_type = child_type;
+					else if(CanonicalSpelling(ResolveAlias(element_type, context)) != child_type)
+						return false;
+				}
+				type = deduction_pattern.substr(0, list_open) + "<" + element_type + ">" +
+					deduction_pattern.substr(list_close + 1);
+				inferred_argument = true;
+			} else if(pack_parameter) return false;
+		}
 		if(inferred_argument && !type.empty()) {
 			string resolved_type = ReplaceIdentifiersPreservingPackSizes(type,
 				parameter_substitutions);

@@ -166,6 +166,60 @@ CPPGMAstNodePtr LambdaFieldExpression(const string& name)
 
 } // namespace
 
+CPPGMAstNodePtr PA14Lowerer::LambdaCapturedExpression(const string& name) const
+{
+  if(!state_ || !state_->record || !IsLambdaOperator(*state_->record))
+    return CPPGMAstNodePtr();
+  const TypePtr closure = type_value(state_->record->member_owner);
+  const ClassMemberInfo* direct = LambdaField(closure,
+    string("__capture_") + name);
+  if(direct) return LambdaFieldExpression(direct->name);
+
+  // An explicit `this` capture stores the enclosing object pointer.  An
+  // unqualified member in the lambda body therefore means a member access
+  // through that captured pointer, while ordinary local/parameter lookup has
+  // already been given precedence by the callers.
+  const ClassMemberInfo* captured_this = LambdaField(closure, "__capture_this");
+  if(!captured_this || !captured_this->type) return CPPGMAstNodePtr();
+  TypePtr captured_type = type_value(captured_this->type);
+  if(!captured_type || captured_type->kind != TYPE_POINTER)
+    return CPPGMAstNodePtr();
+  TypePtr enclosing = type_value(captured_type->child);
+  if(!enclosing || enclosing->kind != TYPE_CLASS ||
+     MemberBindings(enclosing, name).empty()) return CPPGMAstNodePtr();
+  CPPGMAstNodePtr member(new CPPGMAstNode("member-expression", "OP_ARROW:->"));
+  member->children.push_back(LambdaFieldExpression(captured_this->name));
+  member->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("identifier", name)));
+  return member;
+}
+
+string PA14Lowerer::EmitCapturedAddress(const CPPGMAstNodePtr& node, Scope* scope)
+{
+  CPPGMAstNodePtr captured = LambdaCapturedExpression(node ? node->value : string());
+  if(captured) return EmitAddress(captured, scope);
+  throw logic_error("unknown address expression");
+}
+
+void PA14Lowerer::ApplyCapturedThisProjection(const CPPGMAstNodePtr& node,
+                                               const string& op, string* base)
+{
+  if(!base || op != "->" || !node || node->children.size() < 2 ||
+     !node->children[0] || node->children[0]->kind != "member-expression" ||
+     node->children[0]->children.size() < 2 || !node->children[0]->children[1] ||
+     node->children[0]->children[1]->value != "__capture_this") return;
+  const string projected = new_temp();
+  AddInstruction(projected + " = index i8 " + *base + ", 0");
+  *base = projected;
+}
+
+PA14Lowerer::ExprInfo PA14Lowerer::InferCapturedIdentifier(
+  const CPPGMAstNodePtr& node, Scope* scope, const TypePtr& expected) const
+{
+  CPPGMAstNodePtr captured = LambdaCapturedExpression(node ? node->value : string());
+  if(captured) return const_cast<PA14Lowerer*>(this)->Infer(captured, scope, expected);
+  throw logic_error("unknown expression name: " + (node ? node->value : string()));
+}
+
 void PA14Lowerer::InitializeLambdaClosureAt(
   const TypePtr& raw_closure, const string& destination,
   const CPPGMAstNodePtr& lambda, Scope* scope)
@@ -213,6 +267,15 @@ void PA14Lowerer::InitializeLambdaClosureAt(
       // closure's field slot.
       string address = EmitAddress(source_node, scope);
       emit_store(PointerTo(Fundamental("char")), address, field_address);
+    } else if(type_value(field.type) &&
+              type_value(field.type)->kind == TYPE_CLASS &&
+              EmitObjectTransferAt(type_value(field.type), field_address,
+                                   source_node, scope, true)) {
+      // Value captures of class objects use the same typed copy/move boundary
+      // as ordinary object initialization.  In particular, this preserves
+      // the class copy constructor and avoids reducing a class capture to a
+      // raw load/store pair.
+      continue;
     } else {
       Value value = EmitValue(source_node, scope, type_value(field.type));
       emit_store(field.type, value.operand, field_address);

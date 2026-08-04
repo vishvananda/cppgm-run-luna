@@ -86,7 +86,8 @@ string PA14Lowerer::EmitFunction(FunctionRecord& function)
          type_value(source_parameter)->kind == TYPE_CLASS &&
          !type_is_reference(source_parameter)) {
         TypePtr source_class = type_value(source_parameter);
-        const bool empty_class = IsEmptyBaseStorage(source_class);
+        const bool empty_class = !IsInitializerListType(source_class) &&
+          IsEmptyBaseStorage(source_class);
         if(empty_class) continue;
         const string address = local_address(parameter_plan);
         AddInstruction("copyobj " + integer_text(static_cast<long long>(type_size(source_parameter))) +

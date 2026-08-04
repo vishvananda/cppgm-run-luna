@@ -135,7 +135,11 @@ PA14Lowerer::Value PA14Lowerer::EmitIdentifier(const CPPGMAstNodePtr& node, Scop
     Binding* decltype_member = ResolveDecltypeStaticMember(node->value, scope);
     vector<Binding*> candidates = decltype_member ?
       vector<Binding*>(1, decltype_member) : Lookup(node->value, scope);
-    if(candidates.empty()) throw logic_error("unknown identifier during lowering: " + node->value);
+    if(candidates.empty()) {
+      CPPGMAstNodePtr captured = LambdaCapturedExpression(node->value);
+      if(captured) return EmitValue(captured, scope, expected);
+      throw logic_error("unknown identifier during lowering: " + node->value);
+    }
     if(candidates.size() > 1) {
       bool repeated_binding = true;
       for(size_t i = 1; i < candidates.size(); ++i)

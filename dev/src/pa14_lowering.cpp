@@ -432,14 +432,16 @@ string PA14Lowerer::low_type(const TypePtr& raw) const
 size_t PA14Lowerer::type_size(const TypePtr& type) const
 {
     if(!type) throw logic_error("missing type during size computation");
-    return analyzer_.TypeSize(type_value(type));
-  }
+    TypePtr normalized = type_value(type);
+    EnsureInitializerListType(normalized);
+    return analyzer_.TypeSize(normalized);
+}
 
 size_t PA14Lowerer::type_alignment(const TypePtr& type) const
 {
     if(!type) throw logic_error("missing type during alignment computation");
     return max<size_t>(1, analyzer_.TypeAlignment(type_value(type)));
-  }
+}
 
 string PA14Lowerer::storage_type(const TypePtr& type) const
 {
@@ -799,13 +801,14 @@ void PA14Lowerer::CollectStringLiterals(const CPPGMAstNodePtr& node,
                                         bool local_static_context,
                                         bool unevaluated_context,
                                         bool local_array_context,
-                                        bool function_context)
+                                        bool function_context,
+                                        bool braced_argument_context)
 {
     if(!node) return;
     const bool string_literal = !node->value.empty() &&
       string_literal_quote(node->value) != string::npos;
     if(node->kind == "literal" && !unevaluated_context &&
-       (braced_depth != 1 || local_static_context) && !local_array_context &&
+       (braced_depth != 1 || local_static_context || braced_argument_context) && !local_array_context &&
        string_literal)
       InternString(node->value);
     const bool child_local_static_context = local_static_context ||
@@ -813,6 +816,8 @@ void PA14Lowerer::CollectStringLiterals(const CPPGMAstNodePtr& node,
        Analyzer::HasNodeValue(node, "decl-specifier", "static"));
     const bool child_function_context = function_context ||
       node->kind == "function-definition";
+    const bool child_braced_argument_context = braced_argument_context ||
+      node->kind == "argument-list" || node->kind == "paren-argument-list";
     const bool character_array_declaration =
       Analyzer::HasNodeValue(node, "decl-specifier", "char") ||
       Analyzer::HasNodeValue(node, "decl-specifier", "wchar_t");
@@ -830,7 +835,7 @@ void PA14Lowerer::CollectStringLiterals(const CPPGMAstNodePtr& node,
     for(size_t i = 0; i < node->children.size(); ++i)
       CollectStringLiterals(node->children[i], child_depth, child_local_static_context,
                             child_unevaluated_context, child_local_array_context,
-                            child_function_context);
+                            child_function_context, child_braced_argument_context);
   }
 
 void PA14Lowerer::CollectImplicitConstructor(const TypePtr& owner, Scope* scope,

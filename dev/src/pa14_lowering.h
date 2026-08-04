@@ -1,5 +1,4 @@
 #pragma once
-
 #include <iosfwd>
 #include <deque>
 #include <map>
@@ -8,13 +7,10 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
-
 #include "pa12_semantics_support.h"
 
 namespace cppgm_pa14_lowering {
-
 using namespace std;
-
 // Constructor lookup is also used as a conversion probe.  Keep the ordinary
 // non-viable-candidate result distinct from ambiguity and other lowering
 // failures so a probe can try the language's next conversion candidate without
@@ -46,7 +42,6 @@ string canonical_literal(const string& raw, TypePtr* type_out = 0,
                          long long* constant = 0, bool* known = 0);
 string template_type_mangled_name(const TypePtr& type);
 string template_type_mangled_name_with_substitutions(const TypePtr& type);
-
 class PA14Lowerer
 {
   struct ExprInfo
@@ -64,7 +59,6 @@ class PA14Lowerer
       : type(), category("prvalue"), binding(), candidates(),
         null_pointer_constant(false), known_constant(false), constant(0) {}
   };
-
   struct InferCacheEntry
   {
     CPPGMAstNodePtr node;
@@ -75,7 +69,6 @@ class PA14Lowerer
                     Scope* cached_scope = 0, const ExprInfo& cached_info = ExprInfo())
       : node(cached_node), scope(cached_scope), info(cached_info) {}
   };
-
   struct FunctionRecord
   {
     CPPGMAstNodePtr node;
@@ -163,7 +156,6 @@ class PA14Lowerer
         base_entry_for(), parameter_metadata(),
         indirect_parameters(), special_initializer(), default_arguments() {}
   };
-
   struct GlobalRecord
   {
     CPPGMAstNodePtr node;
@@ -198,7 +190,6 @@ class PA14Lowerer
         dynamic_initializer(false), dynamic_finalizer(false),
         demand_constant_constructors(false) {}
   };
-
   struct VariablePlan
   {
     string source_name;
@@ -213,7 +204,6 @@ class PA14Lowerer
     bool slot_declared;
     string parameter_operand;
   };
-
   struct Value
   {
     TypePtr type;
@@ -564,7 +554,7 @@ void CollectStringLiterals(const CPPGMAstNodePtr& node, unsigned int braced_dept
                            bool local_static_context = false,
                            bool unevaluated_context = false,
                            bool local_array_context = false,
-                           bool function_context = false);
+                           bool function_context = false, bool braced_argument_context = false);
 
 FunctionRecord* FindFunction(const string& qname, const TypePtr& type) const;
 
@@ -699,6 +689,7 @@ bool IsTrivialValueStorage(const TypePtr& type) const;
 	bool EmitLambdaClosureValue(const CPPGMAstNodePtr& lambda, Scope* scope,
 		const TypePtr& expected, Value* result);
 	bool IsLambdaOperator(const FunctionRecord& function) const;
+	CPPGMAstNodePtr LambdaCapturedExpression(const string& name) const; string EmitCapturedAddress(const CPPGMAstNodePtr& node, Scope* scope); void ApplyCapturedThisProjection(const CPPGMAstNodePtr& node, const string& op, string* base);
 	void InitializeLambdaClosureAt(const TypePtr& closure, const string& destination,
 	                               const CPPGMAstNodePtr& lambda, Scope* scope);
 
@@ -734,6 +725,9 @@ void BuildFunctionABI(FunctionRecord& function);
 bool HasDefaultArgument(Binding* binding, size_t index) const;
 
 bool HasConstructor(const TypePtr& type) const;
+bool IsInitializerListType(const TypePtr& type) const; void EnsureInitializerListType(const TypePtr& type) const;
+TypePtr InitializerListElementType(const TypePtr& type, Scope* scope) const; TypePtr MakeInitializerListType(const TypePtr& element, Scope* scope) const;
+bool HasInitializerListConstructor(const TypePtr& type) const; bool InitializerListArgumentViable(const CPPGMAstNodePtr& node, const TypePtr& parameter, Scope* scope);
 
 bool HasExplicitConstructor(const TypePtr& type) const;
 
@@ -798,6 +792,7 @@ bool ContainsAutoType(const TypePtr& type) const;
 
 ExprInfo InferAutoInitializer(const CPPGMAstNodePtr& initializer,
                               Scope* scope);
+ExprInfo InferInitializerListAuto(const CPPGMAstNodePtr& expression, Scope* scope); ExprInfo InferCapturedIdentifier(const CPPGMAstNodePtr& node, Scope* scope, const TypePtr& expected) const;
 
 TypePtr DeduceAutoType(const TypePtr& declared,
                        const CPPGMAstNodePtr& initializer,
@@ -912,6 +907,7 @@ string EmitSubscriptAddress(const CPPGMAstNodePtr& node, Scope* scope);
 string EmitPointerOffset(const CPPGMAstNodePtr& node, Scope* scope);
 
 string EmitAddress(const CPPGMAstNodePtr& node, Scope* scope);
+bool EmitInitializerListAddress(const CPPGMAstNodePtr& node, Scope* scope, string* address);
 
 string EmitOperatorAddress(const CPPGMAstNodePtr& node, Scope* scope);
 
@@ -995,6 +991,7 @@ void EmitCondition(const CPPGMAstNodePtr& node, Scope* scope,
 
 Value EmitValue(const CPPGMAstNodePtr& node, Scope* scope,
                 const TypePtr& expected = TypePtr());
+bool EmitInitializerListValue(const CPPGMAstNodePtr& node, Scope* scope, const TypePtr& expected, Value* result);
 Value EmitTypeidExpression(const CPPGMAstNodePtr& node, Scope* scope);
 Value EmitDynamicCast(const CPPGMAstNodePtr& node, Scope* scope,
                       const TypePtr& target);
@@ -1008,6 +1005,10 @@ Value ValueWithNullptr() const;
 
 void EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr& initializer,
                      Scope* scope);
+bool EmitInitializerListAt(const string& destination, const CPPGMAstNodePtr& expression,
+                           const TypePtr& list_type, Scope* scope);
+string EmitInitializerListArgument(const CPPGMAstNodePtr& expression, const TypePtr& target,
+                                   Scope* scope, const string& prefix); bool EmitInitializerListAssignment(const vector<CPPGMAstNodePtr>& arguments, Scope* scope, Value* result);
 
 bool EmitObjectConstructor(VariablePlan* variable, const TypePtr& object_type,
                            const vector<CPPGMAstNodePtr>& arguments, Scope* scope,
@@ -1184,6 +1185,8 @@ ExprInfo Infer(const CPPGMAstNodePtr& node, Scope* scope,
 
 ExprInfo InferUncached(const CPPGMAstNodePtr& node, Scope* scope,
                        const TypePtr& expected);
+bool InferInitializerListNode(const CPPGMAstNodePtr& node, Scope* scope,
+                              const TypePtr& expected, ExprInfo* result);
 
 ExprInfo InferSizeofExpression(const CPPGMAstNodePtr& node, Scope* scope);
 ExprInfo InferTypeidExpression(const CPPGMAstNodePtr& node, Scope* scope);

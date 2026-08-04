@@ -242,6 +242,11 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
 					function->parameters[a]->kind == TYPE_LVALUE_REFERENCE)
 					rank = 2;
 			}
+			if(a < function->parameters.size() && argument_nodes[a] &&
+				argument_nodes[a]->kind == "braced-init-list" &&
+				IsInitializerListType(function->parameters[a]) &&
+				InitializerListArgumentViable(argument_nodes[a], function->parameters[a], scope))
+				rank = 0;
 			if(rank < 0 && a < function->parameters.size() &&
 				argument_nodes[a] && argument_nodes[a]->kind == "braced-init-list" &&
 				!argument_nodes[a]->children.empty() &&
@@ -447,8 +452,13 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseOperatorCall(
       int user_defined = 0;
       for(size_t a = argument_offset; a < arguments.size(); ++a) {
         const size_t parameter = a - argument_offset;
-        const int rank = parameter < function->parameters.size() ?
+        int rank = parameter < function->parameters.size() ?
           ConversionRank(arguments[a], function->parameters[parameter]) : 2;
+        if(parameter < function->parameters.size() && a < argument_nodes.size() &&
+           argument_nodes[a] && argument_nodes[a]->kind == "braced-init-list" &&
+           IsInitializerListType(function->parameters[parameter]) &&
+           InitializerListArgumentViable(argument_nodes[a],
+             function->parameters[parameter], scope)) rank = 0;
         if(rank < 0) { viable = false; break; }
         if(rank >= 3) ++user_defined;
         worst = max(worst, rank);
@@ -978,10 +988,7 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferAutoInitializer(
     CPPGMAstNodePtr expression = InitializerExpression(initializer);
     if(!expression) throw logic_error("auto declaration requires an initializer");
     if(expression->kind == "braced-init-list") {
-      if(expression->children.size() != 1)
-        throw logic_error("cannot deduce auto from an initializer list");
-      expression = expression->children[0];
-      if(!expression) throw logic_error("cannot deduce auto from an empty initializer");
+      return InferInitializerListAuto(expression, scope);
     }
     return Infer(expression, scope);
   }

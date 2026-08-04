@@ -1117,9 +1117,9 @@ string PA14Lowerer::EmitLiteralAddress(const CPPGMAstNodePtr& node)
 
 string PA14Lowerer::EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
 {
-    if(!node) throw logic_error("missing lvalue");
-    if(node->kind == "parenthesized-expression")
-      return node->children.empty() ? string() : EmitAddress(node->children[0], scope);
+    if(!node) throw logic_error("missing lvalue"); string initializer_list_address;
+    if(EmitInitializerListAddress(node, scope, &initializer_list_address)) return initializer_list_address;
+    if(node->kind == "parenthesized-expression") return node->children.empty() ? string() : EmitAddress(node->children[0], scope);
     if(node->kind == "id-expression") {
       VariablePlan* local = LocalForName(node->value);
       if(local) {
@@ -1134,7 +1134,7 @@ string PA14Lowerer::EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
       Binding* qualified_member = ResolveDecltypeStaticMember(node->value, scope);
       vector<Binding*> candidates = qualified_member ?
         vector<Binding*>(1, qualified_member) : Lookup(node->value, scope);
-      if(candidates.empty()) throw logic_error("unknown address expression");
+      if(candidates.empty()) return EmitCapturedAddress(node, scope);
       Binding* binding = candidates.size() == 1 ? candidates[0] : candidates[0];
       if(binding->kind == BIND_FUNCTION) {
         FunctionRecord* function = RecordForBinding(binding);
@@ -1406,6 +1406,7 @@ string PA14Lowerer::EmitMemberAddress(const CPPGMAstNodePtr& node, Scope* scope,
       if(!found_injected_storage)
         throw logic_error("anonymous member has no storage record");
     } else base = AdjustBaseAddress(base, object, member->member_owner);
+    ApplyCapturedThisProjection(node, op, &base);
     // An injected member of an anonymous union uses the union storage itself
     // when its layout offset is zero.  The injected binding carries the
     // outer member's offset in the projection above; applying a second

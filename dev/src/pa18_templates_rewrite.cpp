@@ -997,8 +997,7 @@ CPPGMAstNodePtr PA18TemplateExpander::FinishRegularNode(
 	bool defer_type_only_classes)
 {
 		string child_context = context;
-		if(input->kind == "class-specifier" || input->kind == "class-forward-declaration")
-			child_context = JoinPath(context, LastComponent(input->value));
+		if(input->kind == "class-specifier" || input->kind == "class-forward-declaration") child_context = JoinPath(context, LastComponent(input->value));
 		const CPPGMAstNodePtr source_declarator = FunctionDeclarator(input); const bool function_declaration = input->kind == "function-definition";
 		string function_context = context;
 		if(function_declaration) {
@@ -1097,9 +1096,12 @@ CPPGMAstNodePtr PA18TemplateExpander::FinishRegularNode(
 				const CPPGMAstNodePtr member = result->children[child];
 				if(!member || (member->kind != "special-member-definition" &&
 					member->kind != "special-member-declaration")) continue;
-				member->value = promoted_local_class;
 				const CPPGMAstNodePtr declarator = FunctionDeclarator(member);
-				RenameParameterIdentifier(declarator, promoted_local_class);
+				const string member_identifier = FirstIdentifierLocal(declarator); const bool destructor =
+					(!member->value.empty() && member->value[0] == '~') ||
+					(!member_identifier.empty() && member_identifier[0] == '~');
+				const string promoted_member_name = (destructor ? "~" : string()) + promoted_local_class;
+				member->value = promoted_member_name; RenameParameterIdentifier(declarator, promoted_member_name);
 				rewrite_promoted_types(member);
 			}
 			const string promoted_local_name = PromotedLocalClass(promoted_local_class, context);
@@ -1110,8 +1112,7 @@ CPPGMAstNodePtr PA18TemplateExpander::FinishRegularNode(
 				generated_owner = owner == function_owners_.end() ? PrefixComponent(context) : owner->second;
 			}
 			generated_by_owner_[generated_owner].push_back(result);
-		return CPPGMAstNodePtr();
-	}
+		return CPPGMAstNodePtr(); }
 	return result;
 }
 bool PA18TemplateExpander::TransformExplicitSpecialization(

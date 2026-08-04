@@ -284,7 +284,6 @@ void PA14Lowerer::StoreLValue(const CPPGMAstNodePtr& node, Scope* scope,
     }
     emit_store(type, value, EmitAddress(node, scope));
   }
-
 PA14Lowerer::Value PA14Lowerer::EmitAssignment(const CPPGMAstNodePtr& node, Scope* scope)
 {
     if(!node || node->children.size() < 2) throw logic_error("invalid assignment");
@@ -294,6 +293,8 @@ PA14Lowerer::Value PA14Lowerer::EmitAssignment(const CPPGMAstNodePtr& node, Scop
     operator_arguments.push_back(node->children[1]);
     if(op == "=" && node->children[1] &&
        node->children[1]->kind == "braced-init-list") {
+      Value direct_result;
+      if(EmitInitializerListAssignment(operator_arguments, scope, &direct_result)) return direct_result;
       ExprInfo left_info = Infer(node->children[0], scope);
       TypePtr left_type = expression_value_type(left_info);
       if(left_type && left_type->kind == TYPE_CLASS) {
@@ -472,7 +473,6 @@ PA14Lowerer::Value PA14Lowerer::EmitAssignment(const CPPGMAstNodePtr& node, Scop
     right.type = left_type;
     return right;
   }
-
 PA14Lowerer::Value PA14Lowerer::EmitUpdate(const CPPGMAstNodePtr& node, Scope* scope, bool address_only)
 {
     const CPPGMAstNodePtr child_node = node->children[0];
@@ -536,7 +536,6 @@ PA14Lowerer::Value PA14Lowerer::EmitUpdate(const CPPGMAstNodePtr& node, Scope* s
     (void)address_only;
     return node->kind == "postfix-expression" ? old : result;
   }
-
 PA14Lowerer::Value PA14Lowerer::EmitCompare(const CPPGMAstNodePtr& node, Scope* scope)
 {
     vector<CPPGMAstNodePtr> operator_arguments;
@@ -634,7 +633,6 @@ PA14Lowerer::Value PA14Lowerer::EmitCompare(const CPPGMAstNodePtr& node, Scope* 
       " " + left.operand + ", " + right.operand);
     return result;
   }
-
 PA14Lowerer::Value PA14Lowerer::EmitBinary(const CPPGMAstNodePtr& node, Scope* scope)
 {
     const string op = PA12Operator(node->value);
@@ -1104,6 +1102,8 @@ PA14Lowerer::Value PA14Lowerer::EmitValue(const CPPGMAstNodePtr& node, Scope* sc
                   const TypePtr& expected)
 {
     if(!node) throw logic_error("missing value during LowIR lowering");
+    Value initializer_list_value;
+    if(EmitInitializerListValue(node, scope, expected, &initializer_list_value)) return initializer_list_value;
     if(IsTypeidExpression(node)) return EmitTypeidExpression(node, scope);
     if(node->kind == "lambda-expression") {
       Value closure_result;

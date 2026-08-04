@@ -128,35 +128,47 @@ void PA18TemplateExpander::MaterializeInitializerConstructor(
 		}
 		return;
 	}
-	if(input->kind != "simple-declaration") return;
-	const CPPGMAstNodePtr original_list = ChildOfKindLocal(input,
-		"init-declarator-list");
-	const CPPGMAstNodePtr transformed_list = ChildOfKindLocal(result,
-		"init-declarator-list");
-	if(!original_list || !transformed_list || original_list->children.size() != 1 ||
-		transformed_list->children.size() != 1) return;
-	const CPPGMAstNodePtr original_item = original_list->children[0];
-	const CPPGMAstNodePtr transformed_item = transformed_list->children[0];
-	if(!original_item || !transformed_item || original_item->children.empty() ||
-		transformed_item->children.empty()) return;
-	const CPPGMAstNodePtr original_initializer = original_item->children.size() > 1 ?
-		original_item->children[1] : CPPGMAstNodePtr();
-	const CPPGMAstNodePtr transformed_initializer = transformed_item->children.size() > 1 ?
-		transformed_item->children[1] : CPPGMAstNodePtr();
+	const bool new_expression = input->kind == "new-expression";
+	if(!new_expression && input->kind != "simple-declaration") return;
+	CPPGMAstNodePtr original_initializer;
+	CPPGMAstNodePtr transformed_initializer;
+	string target;
+	vector<CPPGMAstNodePtr> arguments;
+	if(new_expression) {
+		const CPPGMAstNodePtr original_type_id = ChildOfKindLocal(input, "type-id");
+		const CPPGMAstNodePtr transformed_type_id = ChildOfKindLocal(result, "type-id");
+		if(!original_type_id || !transformed_type_id) return;
+		target = TypeIdSpelling(original_type_id);
+		original_initializer = ChildOfKindLocal(input, "initializer");
+		transformed_initializer = ChildOfKindLocal(result, "initializer");
+		if(!transformed_initializer)
+			transformed_initializer = ChildOfKindLocal(result, "braced-init-list");
+	} else {
+		const CPPGMAstNodePtr original_list = ChildOfKindLocal(input, "init-declarator-list");
+		const CPPGMAstNodePtr transformed_list = ChildOfKindLocal(result, "init-declarator-list");
+		if(!original_list || !transformed_list || original_list->children.size() != 1 ||
+			transformed_list->children.size() != 1) return;
+		const CPPGMAstNodePtr original_item = original_list->children[0];
+		const CPPGMAstNodePtr transformed_item = transformed_list->children[0];
+		if(!original_item || !transformed_item || original_item->children.empty() ||
+			transformed_item->children.empty()) return;
+		original_initializer = original_item->children.size() > 1 ?
+			original_item->children[1] : CPPGMAstNodePtr();
+		transformed_initializer = transformed_item->children.size() > 1 ?
+			transformed_item->children[1] : CPPGMAstNodePtr();
+		if(input->children.empty()) return;
+		// A typedef only names a type; it does not perform construction.  In
+		// particular, recursively materializing `typedef int_<N + 1> next` while
+		// replaying `int_<N>` walks an unbounded chain of nominal class bodies.
+		if(!original_initializer && HasDeclarationSpecifier(input->children[0], "typedef"))
+			return;
+		target = DeclaratorTypeSpelling(NodeTypeSpelling(input->children[0]),
+			original_item->children[0]);
+	}
 	if(original_initializer && !transformed_initializer) return;
-	if(input->children.empty()) return;
-	// A typedef only names a type; it does not perform construction.  In
-	// particular, recursively materializing `typedef int_<N + 1> next` while
-	// replaying `int_<N>` walks an unbounded chain of nominal class bodies.
-	if(!original_initializer && HasDeclarationSpecifier(input->children[0], "typedef"))
-		return;
-	const CPPGMAstNodePtr declarator = original_item->children[0];
-	string target = DeclaratorTypeSpelling(NodeTypeSpelling(input->children[0]),
-		declarator);
 	target = CanonicalSpelling(ResolveAlias(RewriteText(target, context,
 		substitutions, 0), context));
 	if(target.empty() || !FindClassDeclaration(target, context)) return;
-	vector<CPPGMAstNodePtr> arguments;
 	if(transformed_initializer) {
 		CPPGMAstNodePtr initializer_expression = transformed_initializer;
 		if(initializer_expression->kind == "initializer" &&
