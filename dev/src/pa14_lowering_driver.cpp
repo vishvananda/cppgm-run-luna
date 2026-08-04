@@ -245,41 +245,6 @@ void PA14Lowerer::EmitInitialFunctionRoots(vector<string>& entries)
     entries.push_back(EmitFunction(function));
     function.emitted = true;
   }
-  // Constructors directly demanded by an ordinary root belong at that root's
-  // frontier.  Constructors reached through generated functions use the
-  // member fixed-point pass instead.
-  const auto has_nested_callable_operation = [&](const FunctionRecord& constructor) {
-    const TypePtr owner = type_value(constructor.member_owner);
-    if(!owner || !owner->template_specialization) return false;
-    bool nested_argument = false;
-    for(size_t argument = 0; argument < owner->template_arguments.size(); ++argument)
-      if(owner->template_arguments[argument].find('<') != string::npos) {
-        nested_argument = true;
-        break;
-      }
-    if(!nested_argument) return false;
-    for(size_t candidate = 0; candidate < functions_.size(); ++candidate) {
-      const FunctionRecord& operation = functions_[candidate];
-      if(!operation.definition || !operation.member || operation.constructor ||
-         !operation.needed || operation.emitted || operation.member_owner.get() != owner.get())
-        continue;
-      if(LastComponent(operation.qualified_name) == "operator()") return true;
-    }
-    return false;
-  };
-  bool added = true;
-  while(added) {
-    added = false;
-    for(size_t i = 0; i < functions_.size(); ++i) {
-      FunctionRecord& function = functions_[i];
-      if(!function.definition || !function.member || !function.constructor ||
-         !function.needed || function.emitted || !function.template_instantiation ||
-         has_nested_callable_operation(function)) continue;
-      entries.push_back(EmitFunction(function));
-      function.emitted = true;
-      added = true;
-    }
-  }
 }
 
 void PA14Lowerer::EmitNestedRootOperations(vector<string>& entries)
@@ -415,6 +380,35 @@ vector<size_t> PA14Lowerer::MemberEmissionOrder() const
     for(size_t member = 0; member < positions.size(); ++member)
       order[positions[member]] = members[member];
   }
+  vector<size_t> lifecycle_positions;
+  vector<size_t> lifecycle_order;
+  bool nested_template_lifecycle = false;
+  for(size_t position = 0; position < order.size(); ++position) {
+    const FunctionRecord& function = functions_[order[position]];
+    if(function.constructor || function.destructor) {
+      lifecycle_positions.push_back(position);
+      lifecycle_order.push_back(order[position]);
+      const TypePtr owner = type_value(function.member_owner);
+      if(owner && owner->template_specialization)
+        for(size_t argument = 0; argument < owner->template_arguments.size(); ++argument)
+          if(owner->template_arguments[argument].find('<') != string::npos)
+            nested_template_lifecycle = true;
+    }
+  }
+  if(!nested_template_lifecycle) return order;
+  stable_sort(lifecycle_order.begin(), lifecycle_order.end(), [this](size_t left,
+                                                                       size_t right) {
+    const size_t unset = static_cast<size_t>(-1);
+    const size_t left_order = functions_[left].needed_order;
+    const size_t right_order = functions_[right].needed_order;
+    if((left_order != unset) != (right_order != unset))
+      return left_order != unset;
+    if(left_order != unset && left_order != right_order)
+      return left_order < right_order;
+    return left < right;
+  });
+  for(size_t position = 0; position < lifecycle_positions.size(); ++position)
+    order[lifecycle_positions[position]] = lifecycle_order[position];
   return order;
 }
 
@@ -488,12 +482,21 @@ void PA14Lowerer::Lower(ostream& out)
     MarkHiddenFriendDependencies();
     EmitInitialFunctionRoots(entries);
     EmitNestedRootOperations(entries);
-    // Nested member bodies can demand a static member-template replay while
-    // establishing their own root.  Close that member frontier before free
-    // helpers from those bodies are emitted, preserving typed declaration
-    // ownership and its source-order boundary.
+    // Close the member frontier created directly by the initial roots before
+    // discovering the next free-function frontier.  Later replayed demands
+    // are ordered separately once those roots have been emitted.
     EmitMemberPass(entries);
     EmitOrdinaryAndHiddenRoots(entries);
+    // A generated class used only inside an elided initializer can be
+    // collected during the replayed translation-unit walk.  Apply that typed
+    // demand after ordinary roots have established their own frontier.
+    for(size_t global = 0; global < globals_.size(); ++global) {
+      GlobalRecord& record = globals_[global];
+      if(record.demand_constant_constructors && record.initializer)
+        DemandConstantObjectConstructors(record.type, record.initializer,
+                                          record.scope);
+    }
+    EmitMemberPass(entries);
     EmitNeededOrdinary(entries);
     EmitMemberPass(entries);
     EmitNeededOrdinary(entries);

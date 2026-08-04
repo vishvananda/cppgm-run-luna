@@ -301,9 +301,9 @@ PA14Lowerer::Value PA14Lowerer::EmitAssignment(const CPPGMAstNodePtr& node, Scop
           if(!EmitConstructorAt(left_type, temporary, node->children[1]->children,
                                 scope, true, false, true))
             throw logic_error("braced assignment temporary has no constructor");
-          assignment->needed = true;
+          MarkFunctionNeeded(assignment);
           FunctionRecord* base_entry = BaseEntryFor(assignment);
-          if(base_entry) base_entry->needed = true;
+          if(base_entry) MarkFunctionNeeded(base_entry);
           const string result = new_temp();
           const string return_type = low_type(assignment->type->child);
           AddInstruction(result + " = call " + return_type + " @" +

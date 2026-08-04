@@ -364,8 +364,9 @@ PA14Lowerer::PA14Lowerer(const vector<CPPGMAstNodePtr>& trees)
       string_data_(), string_symbols_(), string_order_(), deferred_static_members_(),
       needs_init_helper_(false),
       needs_fini_helper_(false), emitted_vtables_(), external_vtables_(),
-      emitted_rtti_(), class_types_by_name_(), state_(), infer_cache_(), friend_owner_index_(),
-      hidden_friend_binding_index_(), hidden_friend_binding_index_ready_(false)
+      emitted_rtti_(), class_types_by_name_(), state_(), next_needed_order_(0),
+      infer_cache_(), friend_owner_index_(), hidden_friend_binding_index_(),
+      hidden_friend_binding_index_ready_(false)
 {}
 
 string PA14Lowerer::function_key(const string& name, const TypePtr& type)
@@ -1157,7 +1158,15 @@ PA14Lowerer::FunctionRecord* PA14Lowerer::RecordForBinding(Binding* binding) con
       function_target_type(binding->type));
     map<string, FunctionRecord*>::const_iterator found = function_by_key_.find(key);
     return found == function_by_key_.end() ? 0 : found->second;
-  }
+}
+
+void PA14Lowerer::MarkFunctionNeeded(FunctionRecord* function)
+{
+    if(!function) return;
+    function->needed = true;
+    if(function->needed_order == static_cast<size_t>(-1))
+      function->needed_order = next_needed_order_++;
+}
 
 PA14Lowerer::FunctionRecord* PA14Lowerer::BaseEntryFor(FunctionRecord* function) const
 {
@@ -1367,34 +1376,6 @@ bool PA14Lowerer::HasConstructor(const TypePtr& raw_type) const
       FunctionRecord* record = RecordForBinding(binding);
       if(binding->kind == BIND_FUNCTION && binding->is_member && !binding->is_static &&
          record && record->constructor) return true;
-    }
-    return false;
-  }
-
-bool PA14Lowerer::HasDefaultInitializationEffects(const TypePtr& raw_type) const
-{
-    TypePtr type = type_value(raw_type);
-    if(!type) return false;
-    if(type->kind == TYPE_ARRAY)
-      return type->bound != 0 && HasDefaultInitializationEffects(type->child);
-    if(type->kind != TYPE_CLASS) return true;
-    if(type->polymorphic) return true;
-    const vector<Binding*> constructors =
-      MemberBindings(type, LastComponent(type->name));
-    for(size_t i = 0; i < constructors.size(); ++i) {
-      FunctionRecord* record = RecordForBinding(constructors[i]);
-      if(record && record->constructor && !record->implicit_constructor &&
-         !record->defaulted) {
-        CPPGMAstNodePtr body = record->node ?
-          ChildOfKind(record->node, "compound-statement") : CPPGMAstNodePtr();
-        return true;
-      }
-    }
-    if(type->direct_base && HasDefaultInitializationEffects(type->direct_base)) return true;
-    for(size_t i = 0; i < type->class_members.size(); ++i) {
-      const ClassMemberInfo& member = type->class_members[i];
-      if(member.is_static || !member.type) continue;
-      if(HasDefaultInitializationEffects(member.type)) return true;
     }
     return false;
   }

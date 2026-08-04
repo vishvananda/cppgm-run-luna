@@ -250,7 +250,7 @@ PA14Lowerer::Value PA14Lowerer::EmitIdentifier(const CPPGMAstNodePtr& node, Scop
       if(binding->kind == BIND_FUNCTION) {
         FunctionRecord* function = RecordForBinding(binding);
         if(!function) throw logic_error("unknown member function symbol during lowering");
-        if(function->member) function->needed = true;
+        if(function->member) MarkFunctionNeeded(function);
         result.type = function->type;
         result.function = true;
         result.operand = function_address(function);

@@ -94,18 +94,19 @@ void PA14Lowerer::EmitGlobalInitializer(GlobalRecord& global, Scope* scope)
               expression->children.size() > 1 && expression->children[1])
         arguments = expression->children[1]->children;
       if(!expression && !HasConstructor(value_type)) return;
-      if(!HasDefaultInitializationEffects(value_type) && !HasDestructor(value_type)) {
-        // A constexpr variable-template member of a materialized class still
-        // needs an initialization frontier: its storage is zero-initialized,
-        // but taking its address keeps the weak object and its dependent
-        // initializer reachable in the emitted program.
+      if((!HasDefaultInitializationEffects(value_type) ||
+          HasElidedTemplateInitialization(value_type)) && !HasDestructor(value_type)) {
+        // Zero-storage objects with a user-declared constructor still
+        // participate in the initialization frontier through their address,
+        // even when no constructor action is needed.  Plain aggregate empty
+        // objects have no such runtime frontier of their own.
         const bool generated_member_template = global.node &&
           global.node->template_instantiation &&
           global.node->template_primary.find("::") != string::npos &&
           global.template_owner &&
           global.node->template_arguments.size() >
             global.template_owner->template_arguments.size();
-        if(generated_member_template && global.template_owner && expression)
+        if(HasConstructor(value_type) || generated_member_template)
           (void)global_address(&global);
         return;
       }

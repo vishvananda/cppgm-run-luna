@@ -385,10 +385,10 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
       // finished.  Demand is a property of the emitted call, not of the
       // declaration's template-instantiation bit; mark the selected record
       // here so unused SFINAE/dependent helpers remain un-emitted.
-      function_record->needed = true;
+      MarkFunctionNeeded(function_record);
       if(function_record->member) {
         FunctionRecord* base_entry = BaseEntryFor(function_record);
-        if(base_entry) base_entry->needed = true;
+        if(base_entry) MarkFunctionNeeded(base_entry);
       }
     }
     string indirect_result_address;

@@ -116,6 +116,7 @@ class PA14Lowerer
 	bool destructor;
 	bool deleting_entry;
 	bool needed;
+    size_t needed_order;
     bool emitted;
     bool variadic;
     bool unwind_no;
@@ -147,6 +148,7 @@ class PA14Lowerer
         template_instantiation(false), explicit_specialization(false), member_template(false), member_template_frame(false), extern_template(false), inline_definition(false), object_root(false), weak_binding(false),
         defaulted(false), deleted(false),
 		destructor(false), deleting_entry(false), needed(false),
+        needed_order(static_cast<size_t>(-1)),
         emitted(false), variadic(false), unwind_no(false), noreturn(false), base_entry(false),
         out_of_class_definition(false),
         inherited_constructor_wrapper(false),
@@ -176,13 +178,18 @@ class PA14Lowerer
     bool tls_guard;
     bool dynamic_initializer;
     bool dynamic_finalizer;
+    // Some constant or zero-storage initializers have no runtime action, but
+    // their typed constructor closure still has to be materialized after all
+    // replayed class members have been collected.
+    bool demand_constant_constructors;
 
     GlobalRecord()
       : node(), scope(), type(), qualified_name(), symbol(), object_name(), template_owner(),
         template_instantiation(false), explicit_specialization(false), weak_binding(false), initializer(),
         declaration(false), internal(false), local_static(false), local_static_guard(false),
         thread_local_storage(false), tls_guard(false),
-        dynamic_initializer(false), dynamic_finalizer(false) {}
+        dynamic_initializer(false), dynamic_finalizer(false),
+        demand_constant_constructors(false) {}
   };
 
   struct VariablePlan
@@ -342,6 +349,7 @@ class PA14Lowerer
 	set<const Type*> emitted_rtti_;
 	map<string, vector<TypePtr> > class_types_by_name_;
 	FunctionState* state_;
+	size_t next_needed_order_;
 	  map<const CPPGMAstNode*, InferCacheEntry> infer_cache_;
 	map<const Type*, vector<TypePtr> > friend_owner_index_;
 	mutable map<const Type*, vector<Binding*> > hidden_friend_binding_index_;
@@ -360,6 +368,7 @@ class PA14Lowerer
 	void EmitMemberPass(vector<string>& entries);
 	void EmitFinalEntries(vector<string>& entries, ostream& out,
 		size_t initial_global_count);
+	void MarkFunctionNeeded(FunctionRecord* function);
 
 public:
 explicit PA14Lowerer(const vector<CPPGMAstNodePtr>& trees)
@@ -447,7 +456,8 @@ void CollectGlobalDeclaration(const CPPGMAstNodePtr& node, Scope* scope,
                               const string& name, const TypePtr& type);
 
 void DemandConstantObjectConstructors(const TypePtr& type,
-                                      const CPPGMAstNodePtr& initializer);
+                                      const CPPGMAstNodePtr& initializer,
+                                      Scope* scope = 0);
 
 bool PrepareGlobalDeclaration(const CPPGMAstNodePtr& node, Scope* scope,
                               const Analyzer::SpecFacts& facts,
@@ -662,6 +672,8 @@ bool HasExplicitConstructor(const TypePtr& type) const;
 bool HasUserProvidedConstructor(const TypePtr& type) const;
 
 bool HasDefaultInitializationEffects(const TypePtr& type) const;
+
+bool HasElidedTemplateInitialization(const TypePtr& type) const;
 
 bool HasDefaultConstructionEffects(const TypePtr& type) const;
 

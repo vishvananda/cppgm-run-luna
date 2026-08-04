@@ -179,9 +179,9 @@ PA14Lowerer::Value PA14Lowerer::EmitNewExpression(const CPPGMAstNodePtr& node,
       FunctionRecord* record = RecordForBinding(allocation_choice.binding);
       if(!record || allocation_choice.function->parameters.empty())
         throw logic_error("new-expression has no allocation record");
-      record->needed = true;
+      MarkFunctionNeeded(record);
       FunctionRecord* base_entry = BaseEntryFor(record);
-      if(base_entry) base_entry->needed = true;
+      if(base_entry) MarkFunctionNeeded(base_entry);
       Value first = ConvertValue(allocation_size,
         allocation_choice.function->parameters[0], false, true);
       vector<string> operands;
@@ -450,9 +450,9 @@ PA14Lowerer::Value PA14Lowerer::EmitDeleteExpression(const CPPGMAstNodePtr& node
         throw logic_error("delete-expression has no viable deallocation function");
       FunctionRecord* record = RecordForBinding(choice.binding);
       if(!record) throw logic_error("delete-expression has no deallocation symbol");
-      record->needed = true;
+      MarkFunctionNeeded(record);
       FunctionRecord* base_entry = BaseEntryFor(record);
-      if(base_entry) base_entry->needed = true;
+      if(base_entry) MarkFunctionNeeded(base_entry);
       return record->symbol;
     }();
 
@@ -775,9 +775,9 @@ bool PA14Lowerer::EmitObjectTransferAt(const TypePtr& raw_target,
        !(move && ClassHasDeclaredMoveMember(target))) {
       FunctionRecord* copy_member = FindValueMember(target, false, false);
       if(copy_member && source->kind == "unary-expression") {
-        copy_member->needed = true;
+        MarkFunctionNeeded(copy_member);
         FunctionRecord* base_entry = BaseEntryFor(copy_member);
-        if(base_entry) base_entry->needed = true;
+        if(base_entry) MarkFunctionNeeded(base_entry);
       }
       string source_operand;
       if(source_info.category == "lvalue" || source_info.category == "xvalue")
@@ -1347,7 +1347,7 @@ void PA14Lowerer::EmitAggregateConstructorBody(FunctionRecord& function, Scope* 
         if(!value_member || value_member->deleted)
           value_member = EnsureImplicitCopyConstructor(member.type, false);
         if(value_member && !value_member->deleted) {
-          value_member->needed = true;
+          MarkFunctionNeeded(value_member);
           FunctionRecord* call_member = value_member;
           const bool need_base_entry = !BaseEntryFor(value_member) &&
             !value_member->template_instantiation && !function.template_instantiation &&
@@ -1357,7 +1357,7 @@ void PA14Lowerer::EmitAggregateConstructorBody(FunctionRecord& function, Scope* 
             EnsureConstructorBaseEntry(value_member);
           FunctionRecord* base_member = BaseEntryFor(value_member);
           if(base_member) {
-            base_member->needed = true;
+            MarkFunctionNeeded(base_member);
             call_member = base_member;
           }
           AddInstruction("call void @" + call_member->symbol + "(" + address + ", %" +
@@ -1426,7 +1426,7 @@ void PA14Lowerer::EmitDestructorBody(FunctionRecord& function, Scope* scope)
       FunctionRecord* deallocator = FindFunction("operatordelete",
         FunctionOf(vector<TypePtr>(1, parameter), false, Fundamental("void"), false));
       if(deallocator) {
-        deallocator->needed = true;
+        MarkFunctionNeeded(deallocator);
         const string address = EmitValue(this_node, scope).operand;
         AddInstruction("call void @" + deallocator->symbol + "(" + address + ")");
       }

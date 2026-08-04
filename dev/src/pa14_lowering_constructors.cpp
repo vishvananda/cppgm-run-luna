@@ -1,11 +1,71 @@
 #include "pa14_lowering.h"
 
+#include <functional>
 #include <cctype>
 #include <set>
 
 using namespace std;
 
 namespace cppgm_pa14_lowering {
+
+bool PA14Lowerer::HasDefaultInitializationEffects(const TypePtr& raw_type) const
+{
+    TypePtr type = type_value(raw_type);
+    if(!type) return false;
+    if(type->kind == TYPE_ARRAY)
+      return type->bound != 0 && HasDefaultInitializationEffects(type->child);
+    if(type->kind != TYPE_CLASS) return true;
+    if(type->polymorphic) return true;
+    const vector<Binding*> constructors =
+      MemberBindings(type, LastComponent(type->name));
+
+    for(size_t i = 0; i < constructors.size(); ++i) {
+      FunctionRecord* record = RecordForBinding(constructors[i]);
+      if(record && record->constructor && !record->implicit_constructor &&
+         !record->defaulted) {
+        CPPGMAstNodePtr body = record->node ?
+          ChildOfKind(record->node, "compound-statement") : CPPGMAstNodePtr();
+        return true;
+      }
+    }
+    if(type->direct_base && HasDefaultInitializationEffects(type->direct_base)) return true;
+    for(size_t i = 0; i < type->class_members.size(); ++i) {
+      const ClassMemberInfo& member = type->class_members[i];
+      if(member.is_static || !member.type) continue;
+      if(HasDefaultInitializationEffects(member.type)) return true;
+    }
+    return false;
+  }
+
+bool PA14Lowerer::HasElidedTemplateInitialization(const TypePtr& raw_type) const
+{
+    TypePtr type = type_value(raw_type);
+    if(!type || type->kind != TYPE_CLASS || !type->template_specialization ||
+       !type->owned_scope ||
+       !IsEmptyBaseStorage(type) || !IsTrivialValueStorage(type)) return false;
+    const vector<Binding*> constructors =
+      MemberBindings(type, LastComponent(type->name));
+    bool forwarding = false;
+    for(size_t i = 0; i < constructors.size(); ++i) {
+      FunctionRecord* record = RecordForBinding(constructors[i]);
+      if(!record || !record->constructor || record->implicit_constructor ||
+         record->defaulted) continue;
+      if(!record->source_type || record->source_type->parameters.empty()) return false;
+      for(size_t parameter = 0; parameter < record->source_type->parameters.size(); ++parameter) {
+        const TypePtr parameter_type = record->source_type->parameters[parameter];
+        const TypePtr parameter_value = type_value(parameter_type);
+        if(type_is_reference(parameter_type) || !parameter_value ||
+           parameter_value->kind != TYPE_CLASS) return false;
+      }
+      CPPGMAstNodePtr body = record->node ?
+        ChildOfKind(record->node, "compound-statement") : CPPGMAstNodePtr();
+      if(body && !body->children.empty()) return false;
+      if(record->special_initializer &&
+         DescendantOfKind(record->special_initializer, "call-expression")) return false;
+      forwarding = true;
+    }
+    return forwarding;
+  }
 
 bool PA14Lowerer::TryElideEmptyClassConversion(
   const TypePtr& target, const TypePtr& source,
@@ -37,9 +97,9 @@ bool PA14Lowerer::TryElideEmptyClassConversion(
   TypePtr constructed = ConstructorObjectType(returned->children[0], scope);
   if(!constructed || !PA12SameType(type_value(constructed), type_value(target), true) ||
      HasDefaultInitializationEffects(target) || HasDestructor(target)) return false;
-  record->needed = true;
+  MarkFunctionNeeded(record);
   FunctionRecord* base_entry = BaseEntryFor(record);
-  if(base_entry) base_entry->needed = true;
+  if(base_entry) MarkFunctionNeeded(base_entry);
   return true;
 }
 
@@ -221,11 +281,11 @@ bool PA14Lowerer::EmitDestructorAt(const TypePtr& raw_object_type, const string&
       if(!record || !record->destructor) continue;
       if(!HasDestructor(object_type)) continue;
       if(!force_empty && !DestructorHasEffects(object_type)) continue;
-      record->needed = true;
+      MarkFunctionNeeded(record);
       FunctionRecord* base_entry = BaseEntryFor(record);
       FunctionRecord* call_record = object_type->polymorphic && force_empty && base_entry ?
         base_entry : record;
-      if(base_entry) base_entry->needed = true;
+      if(base_entry) MarkFunctionNeeded(base_entry);
       AddInstruction("call void @" + call_record->symbol + "(" + address + ")");
       return true;
     }
@@ -314,9 +374,9 @@ bool PA14Lowerer::EmitValueSpecialMemberBody(FunctionRecord& function, Scope* sc
                (function.copy_constructor || function.move_constructor) &&
                !BaseEntryFor(base_record))
               EnsureConstructorBaseEntry(base_record);
-            base_record->needed = true;
+            MarkFunctionNeeded(base_record);
             FunctionRecord* base_call = BaseEntryFor(base_record);
-            if(base_call) base_call->needed = true;
+            if(base_call) MarkFunctionNeeded(base_call);
             if(!base_call) base_call = base_record;
             const string base_arguments = destination_base + ", " + source_base;
             if(assignment) {
@@ -422,14 +482,14 @@ bool PA14Lowerer::EmitValueSpecialMemberBody(FunctionRecord& function, Scope* sc
               FindValueMember(member_type, true, false);
             if(member_move_constructor && !member_move_constructor->deleted &&
                !member_move_constructor->defaulted)
-              member_move_constructor->needed = true;
+              MarkFunctionNeeded(member_move_constructor);
           }
           FunctionRecord* member_record = assignment ?
             EnsureImplicitAssignment(member_type, move) :
             EnsureImplicitCopyConstructor(member_type, move);
           if(!member_record || member_record->deleted)
             throw logic_error("value member has deleted class operation");
-          member_record->needed = true;
+          MarkFunctionNeeded(member_record);
           const string member_arguments = destination_member + ", " + source_member;
           if(assignment) {
             const string result = new_temp();
@@ -523,7 +583,7 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
           FunctionRecord* record = RecordForBinding(member_constructors[candidate]);
           if(record && record->constructor && record->definition &&
              !record->implicit_constructor)
-            record->needed = true;
+            MarkFunctionNeeded(record);
         }
       }
     }
@@ -777,6 +837,16 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
       }
       if(field_type && field_type->kind == TYPE_CLASS &&
          !type_is_reference(field->type) && !arguments.empty()) {
+        // Copying an empty, trivially stored class has no object bytes to
+        // transfer.  Still form the destination member address above, but do
+        // not evaluate a reference source merely to feed an elided transfer.
+        // This preserves constructor ABI demand while avoiding a spurious
+        // load from forwarding parameters in generated empty functors.
+        if(HasElidedTemplateInitialization(field_type) && arguments.size() == 1 &&
+           arguments[0]) {
+          const TypePtr source_type = expression_value_type(Infer(arguments[0], scope));
+          if(source_type && source_type->kind == TYPE_CLASS) continue;
+        }
         if(function.base_entry && IsEmptyBaseStorage(field_type)) continue;
         if(arguments.size() == 1 && arguments[0] &&
            arguments[0]->kind != "braced-init-list" &&
@@ -1037,7 +1107,8 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
   }
 
 void PA14Lowerer::DemandConstantObjectConstructors(const TypePtr& raw_type,
-                                                    const CPPGMAstNodePtr& initializer)
+                                                    const CPPGMAstNodePtr& initializer,
+                                                    Scope* scope)
 {
   TypePtr type = type_value(raw_type);
   if(!type || !initializer) return;
@@ -1049,12 +1120,13 @@ void PA14Lowerer::DemandConstantObjectConstructors(const TypePtr& raw_type,
   if(type->kind == TYPE_ARRAY) {
     if(expression->kind == "braced-init-list")
       for(size_t i = 0; i < expression->children.size(); ++i)
-        DemandConstantObjectConstructors(type->child, expression->children[i]);
+        DemandConstantObjectConstructors(type->child, expression->children[i], scope);
     return;
   }
   if(type->kind != TYPE_CLASS) return;
   vector<CPPGMAstNodePtr> arguments;
-  if(expression->kind == "braced-init-list") arguments = expression->children;
+  if(expression->kind == "braced-init-list" || expression->kind == "argument-list")
+    arguments = expression->children;
   else if(expression->kind == "call-expression" && expression->children.size() > 1) {
     CPPGMAstNodePtr list = expression->children[1];
     arguments = list ? list->children : vector<CPPGMAstNodePtr>();
@@ -1068,14 +1140,59 @@ void PA14Lowerer::DemandConstantObjectConstructors(const TypePtr& raw_type,
   vector<Binding*> candidates = MemberBindings(type, LastComponent(type->name));
   if(candidates.empty() && constructor_name != LastComponent(type->name))
     candidates = MemberBindings(type, constructor_name);
+  if(candidates.empty() && arguments.empty() && scope && type->owned_scope) {
+    // Empty class expressions use the implicitly declared default constructor,
+    // which is not represented by a binding until a concrete object use
+    // demands it.  Materialize that typed member before matching the call.
+    CollectImplicitConstructor(type, type->owned_scope, true);
+    candidates = MemberBindings(type, LastComponent(type->name));
+    if(candidates.empty() && constructor_name != LastComponent(type->name))
+      candidates = MemberBindings(type, constructor_name);
+  }
   for(size_t i = 0; i < candidates.size(); ++i) {
     Binding* binding = candidates[i];
     FunctionRecord* record = RecordForBinding(binding);
     if(!record || !record->constructor || record->deleted ||
        !record->source_type || record->source_type->parameters.size() != arguments.size())
       continue;
-    record->needed = true;
-    return;
+    MarkFunctionNeeded(record);
+    break;
+  }
+
+  // A zero-storage global may still have a typed constructor closure even
+  // when its runtime initialization is elided.  Walk nested construction
+  // expressions so the closure remains available in LowIR without emitting
+  // the elided constructor actions themselves.
+  if(scope) {
+    function<void(const CPPGMAstNodePtr&)> demand_nested;
+    demand_nested = [&](const CPPGMAstNodePtr& node) {
+      if(!node) return;
+      if(node->kind == "call-expression" && !node->children.empty()) {
+        TypePtr constructed;
+        try {
+          constructed = ConstructorObjectType(node->children[0], scope);
+        } catch(const logic_error&) {
+          constructed.reset();
+        }
+        if(!constructed && !node->inferred_type.empty()) {
+          try {
+            constructed = type_value(analyzer_.ResolveType(scope,
+              node->inferred_type));
+          } catch(const logic_error&) {
+            constructed.reset();
+          }
+        }
+        if(constructed) {
+          const CPPGMAstNodePtr nested_initializer = node->children.size() > 1 &&
+            node->children[1] ? node->children[1] : node;
+          DemandConstantObjectConstructors(constructed, nested_initializer, scope);
+          return;
+        }
+      }
+      for(size_t child = 0; child < node->children.size(); ++child)
+        demand_nested(node->children[child]);
+    };
+    demand_nested(expression);
   }
 }
 

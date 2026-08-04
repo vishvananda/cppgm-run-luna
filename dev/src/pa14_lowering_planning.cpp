@@ -321,9 +321,9 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
       if(selected && !pure_virtual_dispatch &&
          (!state_ || !state_->unevaluated_context) &&
          !(best.binding && best.binding->is_pure)) {
-        selected->needed = true;
+        MarkFunctionNeeded(selected);
         FunctionRecord* base_entry = BaseEntryFor(selected);
-        if(base_entry) base_entry->needed = true;
+        if(base_entry) MarkFunctionNeeded(base_entry);
       }
 		return best;
 	}
@@ -462,9 +462,9 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseOperatorCall(
     if(best.binding && (!state_ || !state_->unevaluated_context)) {
       FunctionRecord* record = RecordForBinding(best.binding);
       if(record) {
-        record->needed = true;
+        MarkFunctionNeeded(record);
         FunctionRecord* base_entry = BaseEntryFor(record);
-        if(base_entry) base_entry->needed = true;
+        if(base_entry) MarkFunctionNeeded(base_entry);
       }
     }
     return best;

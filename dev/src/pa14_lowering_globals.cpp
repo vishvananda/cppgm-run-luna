@@ -412,7 +412,7 @@ PA14Lowerer::AddressInit PA14Lowerer::StaticAddress(const CPPGMAstNodePtr& expre
       Binding* binding = candidates[0];
       if(binding->kind == BIND_FUNCTION) {
         FunctionRecord* function = RecordForBinding(binding);
-        if(function) function->needed = true;
+        if(function) MarkFunctionNeeded(function);
         result.valid = true;
         result.function = true;
         result.symbol = function ? function->symbol : low_symbol_component(binding->qualified_name);
@@ -849,7 +849,7 @@ void PA14Lowerer::EnsureThreadLocalGuard(GlobalRecord* object)
 string PA14Lowerer::function_address(FunctionRecord* function)
 {
     if(!function) throw logic_error("missing function symbol");
-    function->needed = true;
+    MarkFunctionNeeded(function);
     const string temp = new_temp();
     AddInstruction(temp + " = addr @" + function->symbol);
     return temp;

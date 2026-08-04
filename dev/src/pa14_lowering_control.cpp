@@ -278,6 +278,8 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
       EmitTemporaryDestructors(temporary_mark, scope);
       return true;
     }
+    FunctionRecord* complete_record = record;
+    bool demand_complete_record = false;
     if(record && base_entry) {
       // A template specialization with a direct base can be entered solely
       // through that base ABI entry.  Keep the complete-object entry demand
@@ -287,7 +289,7 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
          !object_type->polymorphic && !record->member_template &&
          HasUserProvidedConstructor(object_type) &&
          (!record->template_instantiation || !object_type->direct_base))
-        record->needed = true;
+        demand_complete_record = true;
       const TypePtr first_parameter = record->source_type && !record->source_type->parameters.empty() ? record->source_type->parameters[0] : TypePtr();
       const bool inherited_constructor_wrapper = state_ && state_->record &&
         state_->record->inherited_constructor_wrapper;
@@ -304,16 +306,13 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
           // A member-template replay already has a typed base-entry call;
           // retaining the primary C1 entry here creates an unused duplicate.
           !replayed_member_template)
-        record->needed = true;
+        demand_complete_record = true;
       FunctionRecord* entry = BaseEntryFor(record);
       if(!entry) {
         EnsureConstructorBaseEntry(record);
         entry = BaseEntryFor(record);
       }
       if(entry) record = entry;
-    }
-    if(record) {
-      record->needed = true;
     }
 	bool has_instance_member = false;
 	for(size_t member = 0; member < object_type->class_members.size(); ++member)
@@ -376,6 +375,8 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
         operands.push_back(value.operand);
       }
     }
+    if(demand_complete_record) MarkFunctionNeeded(complete_record);
+    if(record) MarkFunctionNeeded(record);
     ostringstream call;
     call << "call void @" << record->symbol << "(";
     for(size_t i = 0; i < operands.size(); ++i) {
@@ -414,7 +415,7 @@ bool PA14Lowerer::EmitObjectConstructor(VariablePlan* variable,
            base_record->move_constructor || base_record->implicit_constructor) continue;
         TypePtr base_function = function_target_type(base_constructors[i]->type);
         if(base_function && base_function->parameters.empty()) {
-          base_record->needed = true;
+          MarkFunctionNeeded(base_record);
         }
       }
     }
@@ -626,9 +627,9 @@ void PA14Lowerer::EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr&
             if(!copy) copy = EnsureImplicitCopyConstructor(aggregate_type, false);
             if(!copy || copy->deleted)
               throw logic_error("no viable conditional object copy initializer");
-            copy->needed = true;
+            MarkFunctionNeeded(copy);
             FunctionRecord* base_entry = BaseEntryFor(copy);
-            if(base_entry) base_entry->needed = true;
+            if(base_entry) MarkFunctionNeeded(base_entry);
             AddInstruction("call void @" + copy->symbol + "(" + destination + ", " +
               argument_address + ")");
             (void)EmitDestructorAt(aggregate_type, argument_address, scope, true);
@@ -1163,7 +1164,6 @@ void PA14Lowerer::EmitSwitch(const CPPGMAstNodePtr& node, Scope* scope)
     } else {
       selector = EmitValue(condition, scope);
     }
-
     const string dispatch_label = new_label("switch_dispatch");
     const string end_label = new_label("switch_end");
     vector<CPPGMAstNodePtr> cases;
@@ -1183,7 +1183,6 @@ void PA14Lowerer::EmitSwitch(const CPPGMAstNodePtr& node, Scope* scope)
       if(state_->named_labels.find(labels[i]) == state_->named_labels.end())
         state_->named_labels[labels[i]] = new_label("goto");
     }
-
     if(!state_->current->terminated) Terminate("jump ^" + dispatch_label);
     AddBlock(dispatch_label);
     ostringstream dispatch;

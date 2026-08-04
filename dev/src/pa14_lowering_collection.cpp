@@ -1255,8 +1255,12 @@ void PA14Lowerer::CollectGlobalDeclaration(const CPPGMAstNodePtr& node,
           break;
         }
     }
+    // Keep the established eager path for constexpr scalar/object constants;
+    // only zero-storage non-constexpr objects need the deferred closure walk
+    // below, because their generated class members may not be collected yet.
     if(facts.is_constexpr && record.initializer)
       DemandConstantObjectConstructors(record.type, record.initializer);
+    record.demand_constant_constructors = false;
     if(record.template_owner && record.initializer && record.template_owner->owned_scope) {
       const string member_name = name.substr(name.rfind("::") + 2);
       vector<Binding*> members = DirectBindings(record.template_owner->owned_scope, member_name);
@@ -1314,6 +1318,9 @@ void PA14Lowerer::CollectGlobalDeclaration(const CPPGMAstNodePtr& node,
       if((constexpr_empty_initialization || static_empty_initialization) &&
          empty_value_initialization && !static_member_object)
         record.dynamic_initializer = false;
+      if(record.initializer && value_type->kind == TYPE_CLASS &&
+         HasElidedTemplateInitialization(value_type) && HasConstructor(value_type))
+        record.demand_constant_constructors = true;
       record.dynamic_finalizer = HasDestructor(value_type) &&
         (!static_member_object || DestructorHasEffects(value_type));
       if(record.dynamic_initializer) needs_init_helper_ = true;
