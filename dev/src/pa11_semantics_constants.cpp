@@ -2,7 +2,12 @@
 #include "pa11_semantics_constants_helpers.h"
 #include <cstdlib>
 namespace {
-
+size_t ConstantTopLevelScopeSeparator(const string& raw) {
+	if(raw.find('<') == string::npos || raw.find('&') == string::npos) return raw.rfind("::");
+	int angle_depth = 0; size_t separator = string::npos;
+	for(size_t i = 0; i + 1 < raw.size(); ++i) { if(raw[i] == '<') ++angle_depth; else if(raw[i] == '>' && angle_depth > 0) --angle_depth; else if(raw[i] == ':' && raw[i + 1] == ':' && angle_depth == 0) separator = i; }
+	return separator;
+}
 CPPGMAstNodePtr ConstantInitializer(const CPPGMAstNodePtr& node)
 {
 	if (!node) return CPPGMAstNodePtr();
@@ -223,7 +228,6 @@ bool NoexceptCall(Analyzer& analyzer, const CPPGMAstNodePtr& call, Scope* scope)
 	}
 	return false;
 }
-
 bool ConstantKnown(const ConstantValue& value)
 {
 	return value.integral.known || value.floating_known ||
@@ -295,9 +299,7 @@ string AssignmentOperator(const string& operation)
 	if (operation == "^=") return "^";
 	return string();
 }
-
 }
-
 bool Analyzer::ConstantFrameValue(const string& name, ConstantValue* value) const
 {
 	for (vector<map<string, ConstantValue> >::const_reverse_iterator frame =
@@ -310,7 +312,6 @@ bool Analyzer::ConstantFrameValue(const string& name, ConstantValue* value) cons
 	}
 	return false;
 }
-
 bool Analyzer::ConstantPackValue(const string& name, vector<ConstantValue>* value) const
 {
 	for (vector<map<string, vector<ConstantValue> > >::const_reverse_iterator frame =
@@ -323,7 +324,6 @@ bool Analyzer::ConstantPackValue(const string& name, vector<ConstantValue>* valu
 	}
 	return false;
 }
-
 namespace {
 
 bool FunctionAcceptsArity(const Binding& function, size_t argument_count)
@@ -1151,7 +1151,7 @@ ConstantValue Analyzer::Evaluate(const CPPGMAstNodePtr& expression, Scope* scope
 		}
 		if (expression->value.find("::") != string::npos)
 		{
-			const size_t separator = expression->value.rfind("::");
+			const size_t separator = ConstantTopLevelScopeSeparator(expression->value);
 			CPPGMAstNodePtr qualified_member(new CPPGMAstNode("member-expression"));
 			qualified_member->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
 				"id-expression", expression->value.substr(0, separator))));

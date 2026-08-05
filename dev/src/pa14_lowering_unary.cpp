@@ -13,30 +13,32 @@ PA14Lowerer::Value PA14Lowerer::EmitUnary(const CPPGMAstNodePtr& node, Scope* sc
 		return type_info;
 	}
 	ExprInfo member_address_info;
-	if(op == "&" && expected && type_value(expected) &&
-		type_value(expected)->kind == TYPE_MEMBER_POINTER && node->children[0] &&
+	if(op == "&" && node->children[0] &&
 		node->children[0]->kind == "id-expression" &&
 		node->children[0]->value.find("::") != string::npos) {
 		member_address_info = Infer(node->children[0], scope);
-		const TypePtr target = type_value(expected);
-		Binding* selected = 0;
-		for(size_t candidate = 0; candidate < member_address_info.candidates.size(); ++candidate) {
-			Binding* binding = member_address_info.candidates[candidate];
-			TypePtr function = binding ? function_target_type(binding->type) : TypePtr();
-			if(!binding || !binding->is_member || binding->is_static || !binding->member_owner ||
-				!PA12SameType(type_value(binding->member_owner), target->member_owner, true) ||
-				(target->child->kind == TYPE_FUNCTION ?
-					(!function || !PA12SameType(function, target->child, false)) :
-					(!type_value(binding->type) ||
-					 !PA12SameType(type_value(binding->type), target->child, true)))) continue;
-			if(selected && !PA12SameType(type_value(selected->type), type_value(binding->type), true))
-				throw logic_error("ambiguous member function address");
-			selected = binding;
-		}
-		if(selected) {
-			member_address_info.binding = selected;
-			member_address_info.candidates.clear();
-			member_address_info.type = selected->type;
+		if(expected && type_value(expected) &&
+			type_value(expected)->kind == TYPE_MEMBER_POINTER) {
+			const TypePtr target = type_value(expected);
+			Binding* selected = 0;
+			for(size_t candidate = 0; candidate < member_address_info.candidates.size(); ++candidate) {
+				Binding* binding = member_address_info.candidates[candidate];
+				TypePtr function = binding ? function_target_type(binding->type) : TypePtr();
+				if(!binding || !binding->is_member || binding->is_static || !binding->member_owner ||
+					!PA12SameType(type_value(binding->member_owner), target->member_owner, true) ||
+					(target->child->kind == TYPE_FUNCTION ?
+						(!function || !PA12SameType(function, target->child, false)) :
+						(!type_value(binding->type) ||
+							!PA12SameType(type_value(binding->type), target->child, true)))) continue;
+				if(selected && !PA12SameType(type_value(selected->type), type_value(binding->type), true))
+					throw logic_error("ambiguous member function address");
+				selected = binding;
+			}
+			if(selected) {
+				member_address_info.binding = selected;
+				member_address_info.candidates.clear();
+				member_address_info.type = selected->type;
+			}
 		}
 	}
 	const bool qualified_member_address = op == "&" && node->children[0] &&
@@ -63,6 +65,8 @@ PA14Lowerer::Value PA14Lowerer::EmitUnary(const CPPGMAstNodePtr& node, Scope* sc
 				throw logic_error("data member pointer has no layout record");
 			const long long encoded = static_cast<long long>(
 				owner->class_members[member_address_info.binding->member_index].offset) + 1;
+			result.known_constant = true;
+			result.constant = encoded;
 			result.operand = new_temp();
 			AddInstruction(result.operand + " = const i64 " + integer_text(encoded));
 		}

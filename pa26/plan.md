@@ -2,53 +2,25 @@
 
 ## Baseline and latest validation
 
-The implementation checkpoint started at 14/66 and landed at 41/66.  The
-checkpoint-audit baseline and post-audit PA26 reports both pass 41/66, with
-the same complete set of 25 current-PA failures.  The required through-PA25
-report passes all 2669 tests.
+The turn-start PA26 baseline was 41/66.  The completed checkpoint reports
+51/66, while the complete through-PA25 report remains 2669/2669.
 
 ## Remaining Work Map
 
-### Pack-expanded base collection
-
-- `general/100-pack-expanded-base-template-parameter-lookup.t`
-
-The PA10 parser/collector still loses the namespace boundary after a
-pack-expanded base.  This is a source-collection fix, separate from the
-member-pointer lowering work.
-
-### Dependent member-pointer replay and lookup
-
-- `general/300-dependent-member-template-nontype-target-overload.t`
-- `general/300-forwarded-data-member-pointer-nontype-base.t`
-- `general/300-member-function-pointer-nontype-partial-specialization-call.t`
-- `general/300-member-function-pointer-nttp-inherited-type-collision-sfinae.t`
-- `general/300-member-pointer-pack-decltype-memfn.t`
-- `general/300-qualified-template-id-owner-function-call-probe.t`
-- `general/300-template-member-function-template-nttp-dedup.t`
-- `general/300-template-member-pointer-nttp-execute.t`
-- `general/300-template-member-pointer-nttp-inline-method-reference.t`
-- `general/300-using-directive-template-id-member-pointer-owner.t`
-- `general/400-reference-reset-recollects-inclass-template.t`
-- `general/400-top-level-cv-function-pointer-partial-specialization-ordering.t`
-- `spec/300-member-pointer-nontype-template-parameter.t`
-- `spec/300-member-pointer-parameter-variadic-deduction.t`
-- `spec/300-overloaded-member-pointer-function-template-deduction.t`
-- `spec/300-using-member-operator-template-hides-inherited-instantiations.t`
-
-These are the remaining shared typed-state edges: inherited member-template
-visibility, dependent non-type replay, owner recovery, pack deduction, and
-partial-specialization ordering.
-
-### Friend, operator, and construction selection
+### Semantic replay and lookup
 
 - `general/300-friend-template-adl-existing-definition.t`
+- `general/300-member-function-pointer-nttp-inherited-type-collision-sfinae.t`
+- `general/300-using-directive-template-id-member-pointer-owner.t`
+- `general/400-reference-reset-recollects-inclass-template.t`
+- `general/400-top-level-cv-function-pointer-partial-ordering.t`
 - `spec/300-template-comma-operator-return-construction.t`
+- `spec/300-using-member-operator-template-hides-inherited-instantiations.t`
 
-Friend/ADL declaration identity and the inherited operator/construction
-selection path still diverge after replay.
+These are the remaining friend/ADL, inherited-owner, using-directive,
+recollection, partial-ordering, and operator/construction selection edges.
 
-### LowIR shape canonicalization
+### LowIR shape and comparison
 
 - `general/300-bind-typed-member-pointer-source-arg.t`
 - `general/300-member-function-pointer-type-arg-qualified-void.t`
@@ -56,43 +28,40 @@ selection path still diverge after replay.
 - `general/300-qualified-template-member-type-sfinae.t`
 - `general/300-structured-bool-conditional-member-pointer-dead-branch.t`
 - `spec/300-ambiguous-member-nontype-arg-sfinae.t`
+- `spec/300-overloaded-member-pointer-function-template-deduction.t`
+- `general/300-member-pointer-pack-decltype-memfn.t` (the report comparator
+  still aborts while reading an undefined comparison sidecar)
 
-These compile through semantic lowering but differ in canonical LowIR for
-member-pointer calls, `.*`/`->*`, qualified function types, and structured
-boolean branches.
+These compile or reach the expected semantic path but still need canonical
+member-pointer call/data or comparison-surface alignment.
 
 ## Checkpoint Scope
 
-This turn completes the typed member-pointer/template increment and its
-earlier-stage compatibility boundary:
+This checkpoint completes the pack/base and typed member-pointer replay
+increment:
 
-1. Parse and preserve data/function member-pointer types, owners, cv
-   qualifiers, references, packs, and member-pointer declarators.
-2. Carry typed member-pointer values through address formation, null and
-   conversion checks, deduction, partial specialization, generated nested
-   owners, and cached replay.
-3. Lower built-in `.*` and `->*`, member-pointer calls/data access, base-path
-   adjustment, and the associated multi-base/RTTI facts.
-4. Restrict the member-pointer `static_cast` decltype probe to actual
-   member-pointer types, preserving ordinary function-pointer call results and
-   SFINAE behavior in PA22/PA23.
+1. Parse class template-ids and pack expansions in base and constructor
+   initializer names, preserving namespace and parameter scope.
+2. Correlate multiple active packs by element index for dependent bases and
+   constructor replay, while retaining the established single-pack deferral
+   behavior used by earlier assignments.
+3. Carry typed member-pointer facts through qualified address formation,
+   direct data/function lowering, `.*`/`->*`, null/conversion checks, template
+   argument validation, deduction, and replayed dependent member targets.
+4. Match concrete direct-base initializers by type binding, without treating
+   member variables as base aliases, and preserve prior polymorphic cleanup.
 
-Validation covers the PA26 checkpoint floor and the complete through-PA25
-report; the current-PA failure set remains explicitly mapped above.
+Validation for the scope includes the PA26 report, focused pack/replay tests,
+the affected PA25 constructor/typeid tests, and the complete through-PA25
+report.  No tests or reference fixtures were changed.
 
 ## Checkpoint Result
 
-Completed: the checkpoint landed at 41/66 from the 14/66 implementation
-baseline, and the audit fixes preserve 41/66.  Through-PA25 remains
-2669/2669.  The three earlier decltype/trailing-pack regressions were isolated
-to the over-broad member-pointer cast probe and now pass.  The audit also
-removed downstream string reclassification, ambiguous owner fallback, a
-duplicate parameter-expansion implementation, and repeated conversion-graph
-walks.
+Complete for this turn: PA26 improved from 41/66 to 51/66, the affected PA25
+tests pass, the through-PA25 gate passes 2669/2669, and the stage file audit
+passes.  Fifteen PA26 tests remain in the grouped map above.
 
 ## Next Checkpoint Group
 
-Fix the pack-expanded-base collection case together with the 16-test
-dependent member-pointer replay/lookup group, then rerun the PA26 report
-before taking on the six LowIR-shape mismatches.  This is the next substantial
-checkpoint; the remaining friend/operator group has only two tests.
+Take the seven semantic replay/lookup and operator/construction exit failures
+as the next group.  Then address the eight LowIR/comparison-shape failures.

@@ -174,6 +174,59 @@ bool PA18TemplateExpander::TryMemberCandidate(MemberCallState* state,
 	if(!PrepareMemberCandidateArguments(&candidate)) {
 		return false;
 	}
+	if(candidate.owner->address_replay && !candidate.owner->expected_result.empty() &&
+		candidate.owner->explicit_member_arguments.size() == candidate.explicit_arguments.size())
+		// The parser's explicit spelling is already concrete for this replay.  The
+		// ordinary type-argument qualifier can otherwise reinterpret a non-type
+		// member-function address as a generated owner-qualified type.
+		candidate.explicit_arguments = candidate.owner->explicit_member_arguments;
+	// A qualified static member-template address is selected by the destination
+	// function-pointer type even when the source has no runtime call arguments.
+	// Feed that typed fact back into member-template deduction so an overload with
+	// a trailing function-template parameter is not mistaken for the shorter one.
+	if(candidate.owner->address_replay && !candidate.owner->expected_result.empty()) {
+		string expected = CanonicalSpelling(RewriteText(candidate.owner->expected_result,
+			candidate.owner->context, candidate.candidate_substitutions, 0));
+		while(expected.size() > 6 && expected.compare(expected.size() - 6, 6,
+			" const") == 0)
+			expected = CanonicalSpelling(expected.substr(0, expected.size() - 6));
+		while(expected.size() > 9 && expected.compare(expected.size() - 9, 9,
+			" volatile") == 0)
+			expected = CanonicalSpelling(expected.substr(0, expected.size() - 9));
+		expected = CanonicalSpelling(ResolveAlias(expected, candidate.owner->context));
+		string expected_result;
+		vector<string> expected_parameters;
+		if(SplitFunctionPointerType(expected, &expected_result, &expected_parameters)) {
+			const CPPGMAstNodePtr declaration = candidate.definition->declaration;
+			const CPPGMAstNodePtr declarator = FunctionDeclarator(declaration);
+			const CPPGMAstNodePtr parameter_clause = DescendantOfKind(declarator,
+				"parameter-clause");
+			if(!declaration || declaration->children.empty() || !parameter_clause ||
+				parameter_clause->children.size() != expected_parameters.size()) return false;
+			set<string> parameter_names;
+			for(size_t parameter = 0; parameter < candidate.definition->parameters.size();
+				++parameter)
+				if(!candidate.definition->parameters[parameter].name.empty())
+					parameter_names.insert(candidate.definition->parameters[parameter].name);
+			map<string, string> inferred;
+			const string result_pattern = NodeTypeSpelling(declaration->children[0]) +
+				DeclaratorSuffix(declarator);
+			if(!MatchTypePattern(result_pattern, expected_result, parameter_names,
+				&inferred, candidate.owner->context)) return false;
+			size_t expected_parameter = 0;
+			for(size_t parameter = 0; parameter < parameter_clause->children.size();
+				++parameter) {
+				const CPPGMAstNodePtr parameter_node = parameter_clause->children[parameter];
+				if(!parameter_node || parameter_node->kind != "parameter-declaration") continue;
+				if(!MatchTypePattern(ParameterTypeSpelling(parameter_node),
+					expected_parameters[expected_parameter++], parameter_names, &inferred,
+					candidate.owner->context)) return false;
+			}
+			for(map<string, string>::const_iterator binding = inferred.begin();
+				binding != inferred.end(); ++binding)
+				candidate.deduction_substitutions[binding->first] = binding->second;
+		}
+	}
 	BindExpectedMemberConversion(&candidate);
 	if(!DeduceMemberCandidate(&candidate)) {
 		return false;
@@ -1125,7 +1178,13 @@ bool PA18TemplateExpander::DeduceMemberCandidate(
 				}
 				if(explicit_index < explicit_arguments.size())
 					address_arguments.push_back(explicit_arguments[explicit_index++]);
-				else if(detail.default_type.empty()) viable = false;
+				else {
+					map<string, string>::const_iterator expected = deduction_substitutions.find(
+						detail.name);
+					if(expected != deduction_substitutions.end())
+						address_arguments.push_back(expected->second);
+					else if(detail.default_type.empty()) viable = false;
+				}
 			}
 			if(explicit_index != explicit_arguments.size()) viable = false;
 			if(viable) {
@@ -1133,6 +1192,16 @@ bool PA18TemplateExpander::DeduceMemberCandidate(
 				inferred = true;
 			}
 		}
+		if(inferred && address_replay && !expected_result.empty())
+			for(size_t parameter = member_arguments.size();
+				parameter < definition.parameters.size(); ++parameter) {
+				const TemplateParameter& detail = definition.parameters[parameter];
+				map<string, string>::const_iterator expected = deduction_substitutions.find(
+					detail.name);
+				if(expected != deduction_substitutions.end()) member_arguments.push_back(expected->second);
+				else if(!detail.default_type.empty()) member_arguments.push_back(detail.default_type);
+				else if(!detail.pack) { inferred = false; break; }
+			}
 		// The active enclosing pack is a typed replay fact for materialization.
 		// Leave deduction free to inspect the concrete call arguments first: an
 		// inner template may reuse the enclosing pack's spelling, while its own

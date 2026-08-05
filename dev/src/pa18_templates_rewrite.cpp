@@ -581,31 +581,8 @@ bool PA18TemplateExpander::TransformPackChild(
 			return true;
 		}
 	}
-	if(input->kind == "base-clause" && original_child &&
-		original_child->kind == "base-specifier" &&
-		ChildOfKindLocal(original_child, "pack-expansion")) {
-		const CPPGMAstNodePtr original_base = ChildOfKindLocal(original_child, "base-name");
-		const string pack_name = PackExpansionIdentifier(original_base);
-		map<string, vector<string> >::const_iterator pack =
-			active_pack_substitutions_.find(pack_name);
-		if(pack != active_pack_substitutions_.end()) {
-			const vector<string> pack_values = pack->second;
-			for(size_t element = 0; element < pack_values.size(); ++element) {
-				CPPGMAstNodePtr expanded = CloneNode(original_child);
-				RemoveParameterPackMarkers(expanded);
-				const CPPGMAstNodePtr base = ChildOfKindLocal(expanded, "base-name");
-				if(base && original_base) {
-					map<string, string> one = substitutions;
-					one[pack_name] = pack_values[element];
-					base->value = ReplaceIdentifiers(original_base->value, one);
-				}
-				CPPGMAstNodePtr child = TransformNode(expanded, child_context,
-					substitutions);
-				if(child) result->children.push_back(child);
-			}
-		}
-		return true;
-	}
+	if(TransformCorrelatedPackChild(input, original_child, child_context,
+		substitutions, result)) return true;
 	if(original_child && original_child->kind == "pack-expansion-expression") {
 		ExpandPackChild(input, original_child, child_context, substitutions,
 			local_substitutions, result);
@@ -1033,7 +1010,7 @@ CPPGMAstNodePtr PA18TemplateExpander::FinishRegularNode(
 		}
 		map<string, string> local_substitutions = substitutions; if(function_declaration) AddConcreteOwnerSubstitutions(PrefixComponent(function_context), context, &local_substitutions, true);
 		struct TypeOnlyScope { size_t& depth; const size_t saved; TypeOnlyScope(size_t& d, bool active) : depth(d), saved(d) { if(active) ++depth; } ~TypeOnlyScope() { depth = saved; } } type_only_scope(defer_type_only_class_definitions_, defer_type_only_classes);
-		TransformRegularChildren(input, child_context, function_context, substitutions, &local_substitutions, result);
+		TransformRegularChildrenWithInitializerType(input, child_context, function_context, context, substitutions, &local_substitutions, result);
 		if(input->kind == "simple-declaration" && !defer_type_only_classes) PromoteDeferredClassDeclarations(result, child_context);
 		RecoverDependentSizeofArrayType(input, result);
 		if(input->kind == "function-definition") MaterializeReturnConversions(input, result, context, function_context, local_substitutions);

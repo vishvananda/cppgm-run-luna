@@ -877,11 +877,8 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 		const map<string, string>& substitutions,
 		map<string, string>* local_substitutions,
 		const CPPGMAstNodePtr& result);
-	bool TransformPackChild(const CPPGMAstNodePtr& input,
-		const CPPGMAstNodePtr& original_child, const string& child_context,
-		const map<string, string>& substitutions,
-		map<string, string>* local_substitutions,
-		const CPPGMAstNodePtr& result);
+	bool TransformPackChild(const CPPGMAstNodePtr& input, const CPPGMAstNodePtr& original_child, const string& child_context, const map<string, string>& substitutions, map<string, string>* local_substitutions, const CPPGMAstNodePtr& result); bool TransformCorrelatedPackChild(const CPPGMAstNodePtr& input, const CPPGMAstNodePtr& original_child, const string& child_context, const map<string, string>& substitutions, const CPPGMAstNodePtr& result);
+	void TransformRegularChildrenWithInitializerType(const CPPGMAstNodePtr& input, const string& child_context, const string& function_context, const string& context, const map<string, string>& substitutions, map<string, string>* local_substitutions, const CPPGMAstNodePtr& result);
 		void RecordUsingDirective(const CPPGMAstNodePtr& original_child, map<string, string>* local_substitutions); bool TransformBinaryReceiverMember(const CPPGMAstNodePtr& input, const CPPGMAstNodePtr& original_child, const string& node_context, const map<string, string>& child_substitutions, const map<string, string>& substitutions, const CPPGMAstNodePtr& result, CPPGMAstNodePtr* child);
 	void RecordTypedefSubstitutions(const CPPGMAstNodePtr& original_child,
 		const string& child_context, map<string, string>* local_substitutions);

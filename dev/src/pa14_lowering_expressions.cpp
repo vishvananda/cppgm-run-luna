@@ -606,8 +606,29 @@ PA14Lowerer::Value PA14Lowerer::EmitBinary(const CPPGMAstNodePtr& node, Scope* s
          (!PA12SameType(object_type, member_pointer->member_owner, true) &&
           !IsDerivedFrom(object_type, member_pointer->member_owner)))
         throw logic_error("member pointer does not apply to object");
-      if(member_pointer->child && member_pointer->child->kind == TYPE_FUNCTION) {
-        Value pointer = EmitValue(node->children[1], scope);
+		if(member_pointer->child && member_pointer->child->kind == TYPE_FUNCTION) {
+			Value pointer;
+			const bool qualified_member_address = node->children[1] &&
+				((node->children[1]->kind == "unary-expression" &&
+				  PA12Operator(node->children[1]->value) == "&") ||
+				 (node->children[1]->kind == "id-expression" &&
+				  !node->children[1]->value.empty() && node->children[1]->value[0] == '&'));
+			if(qualified_member_address && right_info.binding &&
+			   right_info.binding->kind == BIND_FUNCTION &&
+			   right_info.binding->member_owner) {
+          FunctionRecord* function = RecordForBinding(right_info.binding);
+          if(!function) throw logic_error("member function pointer has no definition");
+          pointer.type = member_pointer;
+          pointer.operand = function_address(function);
+          pointer.function = true;
+        } else pointer = EmitValue(node->children[1], scope);
+        if(pointer.function) {
+          Value result;
+          result.type = member_pointer->child;
+          result.operand = pointer.operand;
+          result.function = true;
+          return result;
+        }
         const string raw_address = new_temp();
         AddInstruction(raw_address + " = convert trunc i64 i128 " + pointer.operand);
         Value result;
@@ -623,9 +644,30 @@ PA14Lowerer::Value PA14Lowerer::EmitBinary(const CPPGMAstNodePtr& node, Scope* s
       if(!PA12SameType(object_type, member_pointer->member_owner, true))
         object_address = AdjustBaseAddress(object_address, object_type,
           member_pointer->member_owner);
-      Value pointer = EmitValue(node->children[1], scope);
-      const string offset = new_temp();
-      AddInstruction(offset + " = binary sub i64 " + pointer.operand + ", 1");
+		Value pointer;
+		const bool qualified_data_address = node->children[1] &&
+			((node->children[1]->kind == "unary-expression" &&
+			  PA12Operator(node->children[1]->value) == "&") ||
+			 (node->children[1]->kind == "id-expression" &&
+			  !node->children[1]->value.empty() && node->children[1]->value[0] == '&'));
+		if(qualified_data_address && right_info.binding &&
+		   right_info.binding->is_member && !right_info.binding->is_static &&
+         right_info.binding->member_owner && member_pointer->child &&
+         member_pointer->child->kind != TYPE_FUNCTION) {
+        const TypePtr owner = type_value(right_info.binding->member_owner);
+        if(right_info.binding->member_index == static_cast<size_t>(-1) ||
+           right_info.binding->member_index >= owner->class_members.size())
+          throw logic_error("data member pointer has no layout record");
+        pointer.type = member_pointer;
+        pointer.known_constant = true;
+        pointer.constant = static_cast<long long>(owner->class_members[
+          right_info.binding->member_index].offset) + 1;
+        pointer.operand = integer_text(pointer.constant);
+      } else pointer = EmitValue(node->children[1], scope, member_pointer);
+	      const string pointer_operand = pointer.known_constant ?
+	        integer_text(pointer.constant) : pointer.operand;
+	      const string offset = new_temp();
+	      AddInstruction(offset + " = binary sub i64 " + pointer_operand + ", 1");
       const string address = new_temp();
       AddInstruction(address + " = index i8 [projection=field] " + object_address +
         ", " + offset);

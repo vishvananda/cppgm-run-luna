@@ -70,7 +70,16 @@ string PA14Lowerer::AdjustDerivedAddress(const string& base,
 PA14Lowerer::Value PA14Lowerer::EmitIdentifier(const CPPGMAstNodePtr& node, Scope* scope,
                        const TypePtr& expected)
 {
-    if(node && !node->value.empty() &&
+	// Match InferIdentifier's recovery for a member-pointer NTTP that PA18
+	// materialized as text inside an existing id-expression node.
+	if(node && node->value.size() > 3 && node->value[0] == '&' &&
+		node->value[1] != '&' && node->value.find("::", 1) != string::npos) {
+		CPPGMAstNodePtr address(new CPPGMAstNode("unary-expression", "OP_AMP:&"));
+		address->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
+			"id-expression", node->value.substr(1))));
+		return EmitUnary(address, scope, expected);
+	}
+	if(node && !node->value.empty() &&
        (isdigit(static_cast<unsigned char>(node->value[0])) ||
         ((node->value[0] == '-' || node->value[0] == '+') && node->value.size() > 1 &&
          isdigit(static_cast<unsigned char>(node->value[1]))))) {

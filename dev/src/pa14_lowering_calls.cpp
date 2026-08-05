@@ -544,7 +544,7 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
       return false;
     };
     bool polymorphic_choice_object = false;
-    if(choice.object) {
+    if(choice.member && choice.object) {
       try {
         const TypePtr object_value = expression_value_type(Infer(choice.object, scope));
         polymorphic_choice_object = object_value &&

@@ -32,7 +32,10 @@ CPPGMAstNodePtr Parser::ParseClassSpecifier(bool declaration_context,
 	string name;
 	if (Peek().kind == AST_IDENTIFIER || Is("~") || Is("::"))
 	{
-		if (!ParseName(&name, false))
+		// A class-specifier can name a partial specialization.  Keep its
+		// template-id together with the class name so the following base
+		// clause is parsed from the `:` rather than from the opening `<`.
+		if (!ParseName(&name, false, true))
 		{
 			Restore(mark);
 			return CPPGMAstNodePtr();
@@ -722,7 +725,9 @@ CPPGMAstNodePtr Parser::ParseMemInitializer()
 {
 	Mark mark = Save();
 	string name;
-	if (!ParseName(&name, false)) return CPPGMAstNodePtr();
+	// A mem-initializer may name a dependent base specialization, for
+	// example `store<I, T>(...)` in a pack-expanded constructor.
+	if (!ParseName(&name, false, true)) return CPPGMAstNodePtr();
 	CPPGMAstNodePtr result = Node("mem-initializer");
 	Add(result, Node("mem-initializer-id", name));
 	if (Is("("))
@@ -752,6 +757,10 @@ CPPGMAstNodePtr Parser::ParseMemInitializer()
 		if (!list) { Restore(mark); return CPPGMAstNodePtr(); }
 		Add(result, list);
 	}
+	// The ellipsis belongs to the mem-initializer, not to its final
+	// constructor argument.  Preserve it as a child so template replay can
+	// expand a pack of base/member initializers after parsing.
+	if (Take("...")) Add(result, Node("pack-expansion", "..."));
 	return result;
 }
 

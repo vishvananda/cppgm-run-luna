@@ -6,6 +6,17 @@ namespace cppgm_pa14_lowering {
 PA14Lowerer::ExprInfo PA14Lowerer::InferIdentifier(const CPPGMAstNodePtr& node, Scope* scope,
 	const TypePtr& expected) const
 {
+	// PA18 can substitute a non-type member-function argument into an already
+	// built expression node.  The replacement is text (`&Owner::member`) rather
+	// than a parser-created unary-expression, so recover the typed AST boundary
+	// before ordinary identifier lookup treats the leading ampersand as a name.
+	if(node && node->value.size() > 3 && node->value[0] == '&' &&
+		node->value[1] != '&' && node->value.find("::", 1) != string::npos) {
+		CPPGMAstNodePtr address(new CPPGMAstNode("unary-expression", "OP_AMP:&"));
+		address->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
+			"id-expression", node->value.substr(1))));
+		return const_cast<PA14Lowerer*>(this)->InferUnary(address, scope, expected);
+	}
 	if(node && !node->value.empty() &&
 		(isdigit(static_cast<unsigned char>(node->value[0])) ||
 		 ((node->value[0] == '-' || node->value[0] == '+') && node->value.size() > 1 &&

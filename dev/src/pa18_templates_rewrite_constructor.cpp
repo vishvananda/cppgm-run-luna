@@ -55,12 +55,19 @@ void PA18TemplateExpander::MaterializeInitializerConstructor(
 		const CPPGMAstNodePtr transformed_ctor = ChildOfKindLocal(constructor_result,
 			"ctor-initializer");
 		if(!original_ctor || !transformed_ctor) return;
-		for(size_t initializer = 0; initializer < original_ctor->children.size();
+		// Pack-expanded mem-initializers duplicate the transformed child while
+		// retaining one source child (`store<I,T>(...)...`).  Walk the concrete
+		// children and reuse that source node for each expanded initializer; a
+		// one-to-one index silently materializes only the first base constructor.
+		for(size_t initializer = 0; initializer < transformed_ctor->children.size();
 			++initializer) {
-			const CPPGMAstNodePtr original_member = original_ctor->children[initializer];
-			const CPPGMAstNodePtr transformed_member = initializer <
-				transformed_ctor->children.size() ? transformed_ctor->children[initializer] :
+			const size_t source_initializer = original_ctor->children.size() == 1 ? 0 :
+				initializer < original_ctor->children.size() ? initializer :
+				original_ctor->children.size();
+			const CPPGMAstNodePtr original_member = source_initializer <
+				original_ctor->children.size() ? original_ctor->children[source_initializer] :
 				CPPGMAstNodePtr();
+			const CPPGMAstNodePtr transformed_member = transformed_ctor->children[initializer];
 			if(!original_member || !transformed_member ||
 				original_member->kind != "mem-initializer" ||
 				transformed_member->kind != "mem-initializer") continue;
@@ -73,6 +80,32 @@ void PA18TemplateExpander::MaterializeInitializerConstructor(
 			string member_type;
 			set<string> active;
 			string constructor_member_name = LastComponent(member_id->value);
+			bool class_initializer = false;
+			// A base mem-initializer names the concrete base type itself, not a
+			// data member.  Its constructor template is otherwise invisible to
+			// replay because the source AST has no ordinary call-expression for
+			// `store<I, T>(...)...`.  Recover the typed target from the transformed
+			// initializer and replay it as a constructor member call below.
+			const CPPGMAstNodePtr transformed_id = ChildOfKindLocal(
+				transformed_member, "mem-initializer-id");
+			if(transformed_id && !transformed_id->value.empty()) {
+				string candidate_type = CanonicalSpelling(ResolveAlias(RewriteText(
+					transformed_id->value, context, substitutions, 0), context));
+				if(!candidate_type.empty() && (FindClassDeclaration(candidate_type, context) ||
+					specialization_bases_.find(LastComponent(candidate_type)) !=
+						specialization_bases_.end())) {
+					member_type = candidate_type;
+					class_initializer = true;
+					string source_constructor = candidate_type;
+					map<string, string>::const_iterator generated_base =
+						specialization_bases_.find(LastComponent(source_constructor));
+					if(generated_base != specialization_bases_.end())
+						source_constructor = generated_base->second;
+					const size_t angle = source_constructor.find('<');
+					if(angle != string::npos) source_constructor.erase(angle);
+					constructor_member_name = LastComponent(source_constructor);
+				}
+			}
 		const string current_constructor = CanonicalSpelling(RemoveMarker(
 			result->value));
 		const size_t current_separator = current_constructor.rfind("::");
@@ -98,12 +131,12 @@ void PA18TemplateExpander::MaterializeInitializerConstructor(
 					LastComponent(member_type));
 				constructor_member_name = base == specialization_bases_.end() ?
 					LastComponent(member_type) : LastComponent(base->second);
-			} else if(!FindClassMemberType(context, LastComponent(member_id->value),
+			} else if(!class_initializer && !FindClassMemberType(context, LastComponent(member_id->value),
 					substitutions, context, &member_type, &active)) continue;
 			member_type = CanonicalSpelling(ResolveAlias(RewriteText(member_type,
 				context, substitutions, 0), context));
 			if(member_type.empty() || (!delegating && !FindClassDeclaration(member_type, context))) continue;
-			if(!delegating) {
+			if(!delegating && !class_initializer) {
 				// The mem-initializer id names a field, not its constructor.  Use the
 				// resolved field type and its source specialization as the typed lookup
 				// owner instead of rediscovering that fact from generated spelling.
@@ -124,7 +157,7 @@ void PA18TemplateExpander::MaterializeInitializerConstructor(
 			arguments->children = transformed_arguments->children;
 			call->children.push_back(arguments);
 			InstantiateMemberCall(call, member, constructor_member_name, context,
-				substitutions, false, delegating);
+				substitutions, false, delegating || class_initializer);
 		}
 		return;
 	}

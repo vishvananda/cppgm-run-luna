@@ -154,12 +154,14 @@ string PA18TemplateExpander::FunctionTypeSpelling(const CPPGMAstNodePtr& paramet
 	if(!parameter || parameter->children.size() < 2 || !parameter->children[1])
 		return ParameterTypeSpelling(parameter);
 	const CPPGMAstNodePtr declarator = parameter->children[1];
-	const string base = NodeTypeSpelling(parameter->children[0]);
-	const bool member_pointer_type = DeclaratorSuffix(declarator).find("::*") != string::npos;
 	const CPPGMAstNodePtr nested = ChildOfKindLocal(declarator, "nested-declarator");
 	const CPPGMAstNodePtr clause = ChildOfKindLocal(declarator, "parameter-clause");
+	const CPPGMAstNodePtr inner = nested && !nested->children.empty() ?
+		nested->children[0] : CPPGMAstNodePtr();
+	const string base = NodeTypeSpelling(parameter->children[0]);
+	const bool member_pointer_type = DeclaratorSuffix(declarator).find("::*") != string::npos ||
+		DeclaratorSuffix(inner).find("::*") != string::npos;
 	if(!nested || !clause) return ParameterTypeSpelling(parameter);
-	const CPPGMAstNodePtr inner = nested->children.empty() ? CPPGMAstNodePtr() : nested->children[0];
 	const string outer_suffix = DeclaratorSuffix(declarator);
 	const string inner_suffix = DeclaratorSuffix(inner);
 	string result = base + (member_pointer_type ? " " : string()) + outer_suffix;
@@ -174,16 +176,17 @@ string PA18TemplateExpander::DeclaratorTypeSpelling(const string& base,
 	const CPPGMAstNodePtr& declarator) const
 {
 	if(!declarator) return base;
-	const bool member_pointer_type = DeclaratorSuffix(declarator).find("::*") != string::npos;
 	const CPPGMAstNodePtr nested = ChildOfKindLocal(declarator, "nested-declarator");
 	const CPPGMAstNodePtr clause = ChildOfKindLocal(declarator, "parameter-clause");
+	const CPPGMAstNodePtr inner = nested && !nested->children.empty() ?
+		nested->children[0] : CPPGMAstNodePtr();
+	const bool member_pointer_type = DeclaratorSuffix(declarator).find("::*") != string::npos ||
+		DeclaratorSuffix(inner).find("::*") != string::npos;
 	if(nested && !clause) {
 		// In `char (&name)[N]`, the reference operator belongs to the nested
 		// declarator while the array suffix belongs to the outer declarator.
 		// Keeping only the outer suffix silently turns the alias into `char[N]`
 		// (and, after alias lookup, often into just `char`).
-		const CPPGMAstNodePtr inner = nested->children.empty() ? CPPGMAstNodePtr() :
-			nested->children[0];
 		const string inner_suffix = DeclaratorSuffix(inner);
 		string result = base + DeclaratorSuffix(declarator);
 		if(!inner_suffix.empty()) result += "(" + inner_suffix + ")";
@@ -207,7 +210,6 @@ string PA18TemplateExpander::DeclaratorTypeSpelling(const string& base,
 		return CanonicalSpelling(base + " " + DeclaratorSuffix(declarator) +
 			DeclaratorArraySuffix(declarator));
 	}
-	const CPPGMAstNodePtr inner = nested->children.empty() ? CPPGMAstNodePtr() : nested->children[0];
 	const string outer_suffix = DeclaratorSuffix(declarator);
 	const string inner_suffix = DeclaratorSuffix(inner);
 	string result = base + (member_pointer_type ? " " : string()) + outer_suffix;

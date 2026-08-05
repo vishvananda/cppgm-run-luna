@@ -32,17 +32,20 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformUnaryExpression(
 			return result;
 		}
 	}
-	const bool preserve_qualified_template_address = operation == "&" &&
+	const bool member_pointer_template_address = operation == "&" &&
 		input->children[0] && input->children[0]->kind == "id-expression" &&
 		input->children[0]->value.find("::") != string::npos &&
-		input->children[0]->value.find('<') != string::npos;
+		input->children[0]->value.find('<') != string::npos &&
+		input->children[0]->value.find('&') != string::npos;
+	const bool preserve_qualified_template_address = member_pointer_template_address;
 	CPPGMAstNodePtr operand = preserve_qualified_template_address ?
 		CloneNode(input->children[0]) : TransformNode(input->children[0], context, substitutions);
 	if(!operand) return CPPGMAstNodePtr();
 	// Materialize qualified member-template addresses through owner-aware lookup.
 	if(operation == "&" && operand->kind == "id-expression") {
 		const string raw = RemoveMarker(operand->value);
-		const size_t separator = raw.rfind("::");
+		const size_t separator = member_pointer_template_address ?
+			TopLevelScopeSeparator(raw) : raw.rfind("::");
 		if(separator != string::npos) {
 			size_t member_begin = separator + 2;
 			while(member_begin < raw.size() && isspace(
@@ -71,6 +74,9 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformUnaryExpression(
 				synthetic_call->children.push_back(synthetic_member);
 				synthetic_call->children.push_back(CPPGMAstNodePtr(
 					new CPPGMAstNode("argument-list")));
+				if(member_pointer_template_address &&
+					!active_initializer_expected_type_.empty())
+					synthetic_call->inferred_type = active_initializer_expected_type_;
 				const bool instantiated = InstantiateMemberCall(synthetic_call, synthetic_member,
 					member_spelling, context, substitutions, false, false, true);
 				if(instantiated) {

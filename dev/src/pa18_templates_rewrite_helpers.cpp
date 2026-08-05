@@ -487,4 +487,135 @@ int PA18TemplateExpander::MatchGeneratedBaseTypePattern(
 	return -1;
 }
 
+void PA18TemplateExpander::TransformRegularChildrenWithInitializerType(
+	const CPPGMAstNodePtr& input, const string& child_context,
+	const string& function_context, const string& context,
+	const map<string, string>& substitutions,
+	map<string, string>* local_substitutions, const CPPGMAstNodePtr& result)
+{
+	string expected;
+	if(input->kind == "simple-declaration" && !input->children.empty() &&
+		input->children[0] && input->children[0]->kind == "decl-specifier-seq") {
+		const CPPGMAstNodePtr declarators = ChildOfKindLocal(input,
+			"init-declarator-list");
+		if(declarators) for(size_t item = 0; item < declarators->children.size(); ++item) {
+			const CPPGMAstNodePtr entry = declarators->children[item];
+			if(!entry || entry->children.size() < 2 || !entry->children[0] ||
+				!entry->children[1]) continue;
+			const string spelling = SpellNode(entry->children[1]);
+			if(spelling.find('&') == string::npos || spelling.find("::") == string::npos ||
+				spelling.find('<') == string::npos) continue;
+			expected = DeclaratorTypeSpelling(NodeTypeSpelling(input->children[0]),
+				entry->children[0]);
+			expected = RewriteText(expected, context, substitutions, 0, true, true,
+				defer_type_only_class_definitions_ != 0);
+			break;
+		}
+	}
+	const string saved = active_initializer_expected_type_;
+	if(input->kind == "simple-declaration") active_initializer_expected_type_ = expected;
+	try {
+		TransformRegularChildren(input, child_context, function_context, substitutions,
+			local_substitutions, result);
+	} catch(...) {
+		active_initializer_expected_type_ = saved;
+		throw;
+	}
+	active_initializer_expected_type_ = saved;
+}
+
+bool PA18TemplateExpander::TransformCorrelatedPackChild(
+	const CPPGMAstNodePtr& input, const CPPGMAstNodePtr& original_child,
+	const string& child_context, const map<string, string>& substitutions,
+	const CPPGMAstNodePtr& result)
+{
+	const bool base_pack = input && input->kind == "base-clause" &&
+		original_child && original_child->kind == "base-specifier" &&
+		ChildOfKindLocal(original_child, "pack-expansion");
+	const bool mem_pack = input && input->kind == "ctor-initializer" &&
+		original_child && original_child->kind == "mem-initializer" &&
+		ChildOfKindLocal(original_child, "pack-expansion");
+	if(!base_pack && !mem_pack) return false;
+	const string spelling = SpellNode(original_child);
+	vector<string> pack_names;
+	const auto collect = [&](const map<string, vector<string> >& packs) {
+		for(map<string, vector<string> >::const_iterator pack = packs.begin();
+			pack != packs.end(); ++pack) {
+			if(pack->first.empty()) continue;
+			for(size_t at = spelling.find(pack->first); at != string::npos;
+				at = spelling.find(pack->first, at + pack->first.size())) {
+				const bool left = at == 0 || !IsIdentifierCharacter(spelling[at - 1]);
+				const size_t end = at + pack->first.size();
+				const bool right = end == spelling.size() ||
+					!IsIdentifierCharacter(spelling[end]);
+				if(left && right) { pack_names.push_back(pack->first); break; }
+			}
+		}
+	};
+	collect(active_pack_substitutions_);
+	collect(active_pack_identifier_substitutions_);
+	if(pack_names.empty()) return true;
+	if(base_pack && pack_names.size() == 1) {
+		const CPPGMAstNodePtr original_base = ChildOfKindLocal(
+			original_child, "base-name");
+		const string pack_name = PackExpansionIdentifier(original_base);
+		map<string, vector<string> >::const_iterator pack =
+			active_pack_substitutions_.find(pack_name);
+		if(pack != active_pack_substitutions_.end()) {
+			for(size_t element = 0; element < pack->second.size(); ++element) {
+				CPPGMAstNodePtr expanded = CloneNode(original_child);
+				RemoveParameterPackMarkers(expanded);
+				const CPPGMAstNodePtr base = ChildOfKindLocal(expanded, "base-name");
+				map<string, string> one = substitutions;
+				one[pack_name] = pack->second[element];
+				if(base && original_base)
+					base->value = ReplaceIdentifiers(original_base->value, one);
+				CPPGMAstNodePtr child = TransformNode(expanded, child_context,
+					substitutions);
+				if(child) result->children.push_back(child);
+			}
+		}
+		return true;
+	}
+	const map<string, vector<string> >::const_iterator first_typed =
+		active_pack_substitutions_.find(pack_names[0]);
+	const vector<string>& first_values = first_typed !=
+		active_pack_substitutions_.end() ? first_typed->second :
+		active_pack_identifier_substitutions_.find(pack_names[0])->second;
+	for(size_t pack = 1; pack < pack_names.size(); ++pack) {
+		const map<string, vector<string> >::const_iterator typed =
+			active_pack_substitutions_.find(pack_names[pack]);
+		const map<string, vector<string> >::const_iterator named =
+			active_pack_identifier_substitutions_.find(pack_names[pack]);
+		const vector<string>& values = typed != active_pack_substitutions_.end() ?
+			typed->second : named->second;
+		if(values.size() != first_values.size())
+			throw PA18SubstitutionFailure("pack expansion length mismatch");
+	}
+	for(size_t element = 0; element < first_values.size(); ++element) {
+		map<string, string> one = substitutions;
+		for(size_t pack = 0; pack < pack_names.size(); ++pack) {
+			const map<string, vector<string> >::const_iterator typed =
+				active_pack_substitutions_.find(pack_names[pack]);
+			const map<string, vector<string> >::const_iterator named =
+				active_pack_identifier_substitutions_.find(pack_names[pack]);
+			const vector<string>& values = typed != active_pack_substitutions_.end() ?
+				typed->second : named->second;
+			one[pack_names[pack]] = values[element];
+		}
+		CPPGMAstNodePtr expanded = CloneNode(original_child);
+		RemoveParameterPackMarkers(expanded);
+		if(base_pack) {
+			const CPPGMAstNodePtr base = ChildOfKindLocal(expanded, "base-name");
+			const CPPGMAstNodePtr original_base = ChildOfKindLocal(
+				original_child, "base-name");
+			if(base && original_base) base->value = ReplaceIdentifiersPreservingPackSizes(
+				original_base->value, one);
+		}
+		CPPGMAstNodePtr child = TransformNode(expanded, child_context, one);
+		if(child) result->children.push_back(child);
+	}
+	return true;
+}
+
 } // namespace pa18_templates_internal

@@ -668,6 +668,35 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
     const vector<TypePtr> direct_bases = !owner->direct_bases.empty() ?
       owner->direct_bases : (owner->direct_base ?
         vector<TypePtr>(1, owner->direct_base) : vector<TypePtr>());
+    const auto matching_direct_base = [&](const string& spelling) {
+      for(size_t candidate = 0; candidate < direct_bases.size(); ++candidate) {
+        TypePtr current = type_value(direct_bases[candidate]);
+        if(!current) continue;
+        if(ConstructorInitializerNamesType(spelling, current, scope) ||
+           LastComponent(spelling) == LastComponent(current->name) ||
+           spelling == current->name)
+          return current;
+        Analyzer::PathTarget alias = analyzer_.ResolvePath(scope,
+          LastComponent(spelling));
+        if(!alias.binding || (alias.binding->kind != BIND_TYPE &&
+                              alias.binding->kind != BIND_TYPE_ALIAS))
+          continue;
+        TypePtr alias_type = alias.binding ? type_value(alias.binding->type) : TypePtr();
+        if(alias_type && alias_type == current) return current;
+      }
+      return TypePtr();
+    };
+    const auto has_explicit_direct_base = [&](const TypePtr& target) {
+      if(!target || !function.special_initializer) return false;
+      for(size_t initializer = 0;
+          initializer < function.special_initializer->children.size(); ++initializer) {
+        CPPGMAstNodePtr item = function.special_initializer->children[initializer];
+        if(!item || item->kind != "mem-initializer") continue;
+        CPPGMAstNodePtr id = ChildOfKind(item, "mem-initializer-id");
+        if(id && matching_direct_base(id->value) == target) return true;
+      }
+      return false;
+    };
     bool delegating = false;
     if(function.special_initializer) {
       for(size_t i = 0; i < function.special_initializer->children.size(); ++i) {
@@ -675,27 +704,6 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
         CPPGMAstNodePtr name_node = ChildOfKind(initializer, "mem-initializer-id");
         if(name_node && LastComponent(name_node->value) == LastComponent(owner->name)) {
           delegating = true;
-          break;
-        }
-      }
-    }
-    bool explicitly_initialized_base = false;
-    if(base && function.special_initializer) {
-      for(size_t i = 0; i < function.special_initializer->children.size(); ++i) {
-        CPPGMAstNodePtr initializer = function.special_initializer->children[i];
-        if(!initializer || initializer->kind != "mem-initializer") continue;
-        CPPGMAstNodePtr name_node = ChildOfKind(initializer, "mem-initializer-id");
-        bool matches_base = name_node &&
-          (ConstructorInitializerNamesType(name_node->value, base, scope) ||
-           LastComponent(name_node->value) == LastComponent(base->name) ||
-           name_node->value == base->name);
-        if(name_node && !matches_base) {
-          Analyzer::PathTarget alias = analyzer_.ResolvePath(scope, LastComponent(name_node->value));
-          TypePtr alias_type = alias.binding ? type_value(alias.binding->type) : TypePtr();
-          matches_base = alias_type && alias_type == base;
-        }
-        if(matches_base) {
-          explicitly_initialized_base = true;
           break;
         }
       }
@@ -736,8 +744,7 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
         TypePtr current_base = type_value(direct_bases[base_index]);
         if(!current_base) continue;
         const bool defer_current_base = current_base == base && defer_dependent_base;
-        const bool explicit_current_base = current_base == base &&
-          explicitly_initialized_base;
+        const bool explicit_current_base = has_explicit_direct_base(current_base);
         if(defer_current_base || explicit_current_base || !HasConstructor(current_base) ||
            (IsEmptyBaseStorage(current_base) &&
             !HasDefaultConstructionEffects(current_base) &&
@@ -755,8 +762,7 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
         CPPGMAstNodePtr initializer = function.special_initializer->children[i];
         if(!initializer || initializer->kind != "mem-initializer") continue;
         CPPGMAstNodePtr name_node = ChildOfKind(initializer, "mem-initializer-id");
-        const string name = name_node ? LastComponent(name_node->value) : string();
-        if(base && (name == LastComponent(base->name) || name == base->name)) {
+        if(name_node && matching_direct_base(name_node->value)) {
           ordered_initializers.push_back(initializer);
           used_initializers.insert(initializer.get());
         }
@@ -817,9 +823,8 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
       if(!argument_node) argument_node = ChildOfKind(initializer, "braced-init-list");
       vector<CPPGMAstNodePtr> arguments = argument_node ? argument_node->children :
         vector<CPPGMAstNodePtr>();
-      const bool is_base_initializer = base &&
-        ((name_node && ConstructorInitializerNamesType(name_node->value, base, scope)) ||
-         name == LastComponent(base->name) || name == base->name);
+      TypePtr named_direct_base = matching_direct_base(name_node->value);
+      const bool is_base_initializer = named_direct_base != TypePtr();
       if(owner->polymorphic && !vptr_stored && !delegating &&
          !is_base_initializer && name != LastComponent(owner->name)) {
         EmitVPointerStore(owner, EmitValue(this_node, scope).operand);
@@ -832,12 +837,16 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
         continue;
       }
       TypePtr named_base;
-      if(base && (is_base_initializer || name == LastComponent(base->name) ||
-                  name == base->name)) named_base = base;
-      if(base && !named_base) {
+      if(is_base_initializer) named_base = named_direct_base;
+      else if(base && (name == LastComponent(base->name) ||
+                       name == base->name)) named_base = base;
+      if(!named_base) {
         Analyzer::PathTarget alias = analyzer_.ResolvePath(scope, name);
-        TypePtr alias_type = alias.binding ? type_value(alias.binding->type) : TypePtr();
-        if(alias_type && alias_type == base) named_base = base;
+        if(alias.binding && (alias.binding->kind == BIND_TYPE ||
+                             alias.binding->kind == BIND_TYPE_ALIAS)) {
+          TypePtr alias_type = type_value(alias.binding->type);
+          if(alias_type) named_base = matching_direct_base(alias_type->name);
+        }
       }
       if(named_base) {
         if(arguments.empty() && IsEmptyBaseStorage(named_base) &&

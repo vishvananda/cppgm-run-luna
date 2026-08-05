@@ -47,7 +47,37 @@ bool PA18TemplateExpander::IsValidFunctionAddressTemplateArgument(
 		specialization_arguments_.find(LastComponent(owner));
 	string expected_result;
 	vector<string> expected_parameters;
-	if(!SplitFunctionPointerType(expected, &expected_result, &expected_parameters)) return false;
+	if(!SplitFunctionPointerType(expected, &expected_result, &expected_parameters)) {
+		// A member-function pointer argument can be replayed while the enclosing
+		// class specialization is still being recovered.  In that narrow window
+		// the formal type may still be the dependent identifier (`MFPT`) even
+		// though the owner and member are concrete.  Preserve the typed address
+		// rather than treating it as an integral expression.  The ordinary
+		// template-definition index does not contain non-template member functions,
+		// so inspect the typed class declaration as a second lookup source.
+		const vector<const TemplateDefinition*> dependent_candidates =
+			FindFunctionDefinitions(member, owner);
+		for(size_t candidate = 0; candidate < dependent_candidates.size(); ++candidate)
+			if(dependent_candidates[candidate] &&
+				!dependent_candidates[candidate]->class_template)
+				return true;
+		const CPPGMAstNodePtr declaration = FindClassDeclaration(owner, context);
+		if(declaration) for(size_t child = 0; child < declaration->children.size(); ++child) {
+			CPPGMAstNodePtr member_declaration = declaration->children[child];
+			if(member_declaration && member_declaration->kind == "template-declaration" &&
+				member_declaration->children.size() > 1)
+				member_declaration = member_declaration->children[1];
+			if(!member_declaration || (member_declaration->kind != "function-definition" &&
+				member_declaration->kind != "function-declaration" &&
+				member_declaration->kind != "simple-declaration")) continue;
+			if(DeclarationName(member_declaration) != member) continue;
+			if(member_declaration->kind == "simple-declaration") {
+				if(!FunctionDeclarator(member_declaration)) continue;
+			}
+			return true;
+		}
+		return false;
+	}
 	const vector<const TemplateDefinition*> candidates = FindFunctionDefinitions(member, owner);
 	for(size_t candidate = 0; candidate < candidates.size(); ++candidate) {
 		if(!candidates[candidate] || candidates[candidate]->class_template) continue;

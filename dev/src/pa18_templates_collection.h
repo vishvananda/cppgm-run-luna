@@ -543,7 +543,7 @@ private:
 	set<string> active_function_pointer_substitutions_, early_integral_members_;
 	set<IntegralEvaluationKey> active_integral_evaluations_;
 	size_t explicit_instantiation_visibility_ = static_cast<size_t>(-1);
-	string active_instantiation_name_; bool active_static_member_;
+	string active_instantiation_name_; bool active_static_member_; string active_initializer_expected_type_;
 	ConcreteOwnerContext active_concrete_owner_;
 	map<string, vector<string> > active_pack_substitutions_; map<string, vector<string> > active_pack_identifier_substitutions_;
 	map<string, vector<string> > active_function_pack_substitutions_;
