@@ -32,11 +32,8 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformUnaryExpression(
 			return result;
 		}
 	}
-	const bool member_pointer_template_address = operation == "&" &&
-		input->children[0] && input->children[0]->kind == "id-expression" &&
-		input->children[0]->value.find("::") != string::npos &&
-		input->children[0]->value.find('<') != string::npos &&
-		input->children[0]->value.find('&') != string::npos;
+	const bool member_pointer_template_address =
+		IsQualifiedTemplateAddressNode(input);
 	const bool preserve_qualified_template_address = member_pointer_template_address;
 	CPPGMAstNodePtr operand = preserve_qualified_template_address ?
 		CloneNode(input->children[0]) : TransformNode(input->children[0], context, substitutions);
@@ -74,9 +71,10 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformUnaryExpression(
 				synthetic_call->children.push_back(synthetic_member);
 				synthetic_call->children.push_back(CPPGMAstNodePtr(
 					new CPPGMAstNode("argument-list")));
-				if(member_pointer_template_address &&
-					!active_initializer_expected_type_.empty())
-					synthetic_call->inferred_type = active_initializer_expected_type_;
+				map<const CPPGMAstNode*, string>::const_iterator expected =
+					active_initializer_expected_types_.find(input.get());
+				if(expected != active_initializer_expected_types_.end())
+					synthetic_call->inferred_type = expected->second;
 				const bool instantiated = InstantiateMemberCall(synthetic_call, synthetic_member,
 					member_spelling, context, substitutions, false, false, true);
 				if(instantiated) {

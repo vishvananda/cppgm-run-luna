@@ -2,6 +2,46 @@
 #include "pa18_templates_rewrite.h"
 namespace pa18_templates_internal {
 
+bool PA18TemplateExpander::IsQualifiedTemplateAddressNode(
+	const CPPGMAstNodePtr& node) const
+{
+	if(!node || node->kind != "unary-expression" ||
+		RemoveMarker(node->value) != "&" || node->children.size() != 1 ||
+		!node->children[0] || node->children[0]->kind != "id-expression") return false;
+	const string raw = RemoveMarker(node->children[0]->value);
+	const size_t separator = TopLevelScopeSeparator(raw);
+	if(separator == string::npos || separator + 2 >= raw.size()) return false;
+	size_t member_begin = separator + 2;
+	if(raw.compare(member_begin, 8, "template") == 0 &&
+		(member_begin + 8 == raw.size() ||
+			!IsIdentifierCharacter(raw[member_begin + 8]))) {
+		member_begin += 8;
+		while(member_begin < raw.size() && isspace(
+			static_cast<unsigned char>(raw[member_begin]))) ++member_begin;
+	}
+	const size_t open = raw.find('<', member_begin);
+	if(open == string::npos) return false;
+	string base;
+	size_t base_begin = 0;
+	if(!TemplateBase(raw, open, &base_begin, &base)) return false;
+	string arguments;
+	size_t close = string::npos;
+	if(!TemplateRange(raw, open, &arguments, &close) || close + 1 != raw.size())
+		return false;
+	// The special replay path is only needed for a member-template address
+	// whose non-type argument names a member (`wrap<&T::call>`).  A qualified
+	// function-template address such as `create<Service, context>` is an
+	// ordinary function address and must remain on the normal path.
+	const vector<string> template_arguments = SplitTemplateArguments(arguments);
+	for(size_t argument = 0; argument < template_arguments.size(); ++argument) {
+		const string value = CanonicalSpelling(template_arguments[argument]);
+		if(value.size() < 3 || value[0] != '&' || value[1] == '&') continue;
+		if(TopLevelScopeSeparator(CanonicalSpelling(value.substr(1))) !=
+			string::npos) return true;
+	}
+	return false;
+}
+
 bool PA18TemplateExpander::MatchForwardingReferencePattern(const string& pattern,
 	const string& actual, const set<string>& parameter_names,
 	map<string, string>* inferred) const
@@ -494,6 +534,17 @@ void PA18TemplateExpander::TransformRegularChildrenWithInitializerType(
 	map<string, string>* local_substitutions, const CPPGMAstNodePtr& result)
 {
 	string expected;
+	map<const CPPGMAstNode*, string> saved_initializer_types;
+	bool initializer_type_scope = false;
+	const auto set_initializer_expected = [&](
+		const CPPGMAstNodePtr& address, const string& type) {
+		if(!initializer_type_scope) {
+			active_initializer_expected_types_.swap(saved_initializer_types);
+			initializer_type_scope = true;
+		}
+		active_initializer_expected_types_[address.get()] = type;
+	};
+	try {
 	if(input->kind == "simple-declaration" && !input->children.empty() &&
 		input->children[0] && input->children[0]->kind == "decl-specifier-seq") {
 		const CPPGMAstNodePtr declarators = ChildOfKindLocal(input,
@@ -502,46 +553,43 @@ void PA18TemplateExpander::TransformRegularChildrenWithInitializerType(
 			const CPPGMAstNodePtr entry = declarators->children[item];
 			if(!entry || entry->children.size() < 2 || !entry->children[0] ||
 				!entry->children[1]) continue;
-			const string spelling = SpellNode(entry->children[1]);
-			if(spelling.find('&') == string::npos || spelling.find("::") == string::npos ||
-				spelling.find('<') == string::npos) continue;
-			expected = DeclaratorTypeSpelling(NodeTypeSpelling(input->children[0]),
-				entry->children[0]);
-			expected = RewriteText(expected, context, substitutions, 0, true, true,
-				defer_type_only_class_definitions_ != 0);
-			break;
-		}
-	}
-	// A qualified member-template address in an aggregate initializer is
-	// selected by the type of the destination field, not by the aggregate's
-	// own class type.  Preserve that typed fact while replaying the initializer
-	// so an overloaded `wrap` template can be deduced from the field's function
-	// pointer signature.
-	if(!expected.empty() && input->kind == "simple-declaration") {
-		const CPPGMAstNodePtr declarators = ChildOfKindLocal(input,
-			"init-declarator-list");
-		if(declarators) for(size_t item = 0; item < declarators->children.size(); ++item) {
-			const CPPGMAstNodePtr entry = declarators->children[item];
-			if(!entry || entry->children.size() < 2 || !entry->children[1]) continue;
+			const string destination_type = DeclaratorTypeSpelling(
+				NodeTypeSpelling(input->children[0]), entry->children[0]);
 			CPPGMAstNodePtr initializer = entry->children[1];
 			if(initializer->kind == "initializer" && initializer->children.size() == 1)
 				initializer = initializer->children[0];
-			if(!initializer || initializer->kind != "braced-init-list" ||
-				initializer->children.empty()) continue;
-			string aggregate = CanonicalSpelling(expected);
-			while(aggregate.compare(0, 6, "const ") == 0 ||
-				aggregate.compare(0, 9, "volatile ") == 0)
-				aggregate = CanonicalSpelling(aggregate.substr(aggregate.find(' ') + 1));
-			while(aggregate.size() > 6 && aggregate.compare(aggregate.size() - 6,
+			if(!initializer) continue;
+			vector<CPPGMAstNodePtr> addresses;
+			if(initializer->kind == "braced-init-list") {
+				for(size_t element = 0; element < initializer->children.size(); ++element)
+					if(IsQualifiedTemplateAddressNode(initializer->children[element]))
+						addresses.push_back(initializer->children[element]);
+			} else if(IsQualifiedTemplateAddressNode(initializer)) {
+				addresses.push_back(initializer);
+			}
+			if(addresses.empty()) continue;
+			expected = destination_type;
+		if(initializer->kind != "braced-init-list") {
+			expected = RewriteText(expected, context, substitutions, 0, true, true,
+				defer_type_only_class_definitions_ != 0);
+			for(size_t address = 0; address < addresses.size(); ++address)
+				set_initializer_expected(addresses[address], expected);
+			continue;
+			}
+			string class_type = CanonicalSpelling(expected);
+			while(class_type.compare(0, 6, "const ") == 0 ||
+				class_type.compare(0, 9, "volatile ") == 0)
+				class_type = CanonicalSpelling(class_type.substr(class_type.find(' ') + 1));
+			while(class_type.size() > 6 && class_type.compare(class_type.size() - 6,
 				6, " const") == 0)
-				aggregate = CanonicalSpelling(aggregate.substr(0, aggregate.size() - 6));
-			while(aggregate.size() > 9 && aggregate.compare(aggregate.size() - 9,
+				class_type = CanonicalSpelling(class_type.substr(0, class_type.size() - 6));
+			while(class_type.size() > 9 && class_type.compare(class_type.size() - 9,
 				9, " volatile") == 0)
-				aggregate = CanonicalSpelling(aggregate.substr(0, aggregate.size() - 9));
-			aggregate = CanonicalSpelling(ResolveAlias(aggregate, context));
-			const CPPGMAstNodePtr declaration = FindClassDeclaration(aggregate, context);
+				class_type = CanonicalSpelling(class_type.substr(0, class_type.size() - 9));
+			class_type = CanonicalSpelling(ResolveAlias(class_type, context));
+			const CPPGMAstNodePtr declaration = FindClassDeclaration(class_type, context);
 			if(!declaration) continue;
-			bool aggregate_field_type = false;
+			vector<string> field_types;
 			for(size_t member_index = 0; member_index < declaration->children.size();
 				++member_index) {
 				const CPPGMAstNodePtr member = declaration->children[member_index];
@@ -557,38 +605,36 @@ void PA18TemplateExpander::TransformRegularChildrenWithInitializerType(
 					const CPPGMAstNodePtr member_entry = member_declarators->children[member_item];
 					if(!member_entry || member_entry->children.empty() ||
 						DescendantOfKind(member_entry->children[0], "parameter-clause")) continue;
-					const string member_name = LastComponent(FirstIdentifierLocal(
-						member_entry->children[0]));
-					if(member_name.empty()) continue;
-					string member_type;
-					set<string> active;
-					if(!FindClassMemberType(aggregate, member_name, substitutions, context,
-						&member_type, &active, false))
-						member_type = DeclaratorTypeSpelling(NodeTypeSpelling(member->children[0]),
-							member_entry->children[0]);
-					if(member_type.empty()) continue;
+					string member_type = DeclaratorTypeSpelling(
+						NodeTypeSpelling(member->children[0]), member_entry->children[0]);
 					member_type = RewriteText(member_type, context, substitutions, 0, true,
 						true, defer_type_only_class_definitions_ != 0);
-					if(!member_type.empty()) {
-						expected = CanonicalSpelling(ResolveAlias(member_type, context));
-						aggregate_field_type = !expected.empty();
+					if(member_type.empty()) {
+						const string member_name = LastComponent(FirstIdentifierLocal(
+							member_entry->children[0]));
+						set<string> active;
+						FindClassMemberType(class_type, member_name, substitutions, context,
+							&member_type, &active, false);
 					}
-					break;
+					if(!member_type.empty()) field_types.push_back(CanonicalSpelling(
+						ResolveAlias(member_type, context)));
 				}
-				if(aggregate_field_type) break;
 			}
+		for(size_t element = 0; element < initializer->children.size(); ++element)
+			if(IsQualifiedTemplateAddressNode(initializer->children[element]) &&
+				element < field_types.size())
+				set_initializer_expected(initializer->children[element], field_types[element]);
 		}
 	}
-	const string saved = active_initializer_expected_type_;
-	if(input->kind == "simple-declaration") active_initializer_expected_type_ = expected;
-	try {
 		TransformRegularChildren(input, child_context, function_context, substitutions,
 			local_substitutions, result);
 	} catch(...) {
-		active_initializer_expected_type_ = saved;
+		if(initializer_type_scope)
+			active_initializer_expected_types_.swap(saved_initializer_types);
 		throw;
 	}
-	active_initializer_expected_type_ = saved;
+	if(initializer_type_scope)
+		active_initializer_expected_types_.swap(saved_initializer_types);
 }
 
 bool PA18TemplateExpander::TransformCorrelatedPackChild(

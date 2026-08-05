@@ -543,7 +543,7 @@ private:
 	set<string> active_function_pointer_substitutions_, early_integral_members_;
 	set<IntegralEvaluationKey> active_integral_evaluations_;
 	size_t explicit_instantiation_visibility_ = static_cast<size_t>(-1);
-	string active_instantiation_name_; bool active_static_member_; string active_initializer_expected_type_;
+	string active_instantiation_name_; bool active_static_member_; map<const CPPGMAstNode*, string> active_initializer_expected_types_;
 	ConcreteOwnerContext active_concrete_owner_;
 	map<string, vector<string> > active_pack_substitutions_; map<string, vector<string> > active_pack_identifier_substitutions_;
 	map<string, vector<string> > active_function_pack_substitutions_;
@@ -619,7 +619,7 @@ private:
 		const CPPGMAstNodePtr& declarator) const;
 	void AppendFunctionParameters(const CPPGMAstNodePtr& clause, string* result, bool member_pointer_type) const; string TypeIdSpelling(const CPPGMAstNodePtr& type_id) const;
 	bool CollectImmediateReturnConstraint(const CPPGMAstNodePtr& declaration, string* condition) const; bool IsDirectCvQualifiedAliasTarget(const CPPGMAstNodePtr& declaration, const vector<TemplateParameter>& parameters) const;
-	string GeneratedOwner(const TemplateDefinition& definition) const; string QualifyAliasTarget(const string& target, const string& alias) const; void ResolveUsingDeclarationTargets(); bool HasUsingMemberTemplate(const string& context, const string& member) const; string GeneratedStaticOwner(const CPPGMAstNodePtr& generated, const TemplateDefinition& parent, bool static_data) const;
+	string GeneratedOwner(const TemplateDefinition& definition) const; string QualifyAliasTarget(const string& target, const string& alias) const; void ResolveUsingDeclarationTargets(); bool HasUsingMemberTemplate(const string& context, const string& member) const; string GeneratedStaticOwner(const CPPGMAstNodePtr& generated, const TemplateDefinition& parent, bool static_data) const; bool IsQualifiedTemplateAddressNode(const CPPGMAstNodePtr& node) const;
 	bool HasReplayContext(const map<string, string>& substitutions) const
 	{
 		return !substitutions.empty() || !active_concrete_owner_.name.empty();

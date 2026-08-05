@@ -568,6 +568,22 @@ sub parse_lowir_parameter_metadata_suffix
 	return (1, \%metadata);
 }
 
+sub split_lowir_metadata_items
+{
+	my ($group) = @_;
+	my @items;
+	pos($group) = 0;
+	while ($group =~ /\G(?:\s*,\s*)?([A-Za-z0-9_]+)\s*=\s*(.*?)(?=\s*,\s*[A-Za-z0-9_]+\s*=|\z)/gc)
+	{
+		my ($key, $value) = ($1, lowir_trim($2));
+		return (0, "invalid metadata item '$key='") if $value eq '';
+		push @items, [$key, $value];
+	}
+	my $rest = substr($group, pos($group) || 0);
+	return (0, "invalid metadata item '$rest'") if lowir_trim($rest) ne '';
+	return (1, \@items);
+}
+
 sub parse_lowir_symbol_metadata_suffix
 {
 	my ($suffix) = @_;
@@ -586,11 +602,13 @@ sub parse_lowir_symbol_metadata_suffix
 	while ($suffix =~ /\G\s+\[([^\]]+)\]/gc)
 	{
 		my $group = $1;
-		for my $item (split(/\s*,\s*/, $group))
+		my ($items_ok, $items_or_error) = split_lowir_metadata_items($group);
+		return (0, $items_or_error) if !$items_ok;
+		for my $item (@$items_or_error)
 		{
-			my ($key, $value) = ($item =~ /^([A-Za-z0-9_]+)\s*=\s*([^\],\s]+)$/);
-			return (0, "invalid symbol metadata item '$item'")
-				if !defined($key);
+			my ($key, $value) = @$item;
+			return (0, "invalid symbol metadata item '$key=$value'")
+				if $key ne 'object' && $value =~ /[\],\s]/;
 			return (0, "duplicate symbol metadata key '$key'")
 				if $saw{$key};
 			if ($key eq 'role')
@@ -673,11 +691,13 @@ sub parse_lowir_function_metadata_suffix
 	while ($suffix =~ /\G\s+\[([^\]]+)\]/gc)
 	{
 		my $group = $1;
-		for my $item (split(/\s*,\s*/, $group))
+		my ($items_ok, $items_or_error) = split_lowir_metadata_items($group);
+		return (0, $items_or_error) if !$items_ok;
+		for my $item (@$items_or_error)
 		{
-			my ($key, $value) = ($item =~ /^([A-Za-z0-9_]+)\s*=\s*([^\],\s]+)$/);
-			return (0, "invalid function metadata item '$item'")
-				if !defined($key);
+			my ($key, $value) = @$item;
+			return (0, "invalid function metadata item '$key=$value'")
+				if $key ne 'object' && $value =~ /[\],\s]/;
 			return (0, "duplicate function metadata key '$key'")
 				if $saw{$key};
 			if ($key eq 'arity')
@@ -1069,6 +1089,11 @@ sub validate_lowir_instruction
 		if (exists($state->{function_symbols}{$callee}))
 		{
 			my $sig = $state->{signatures}{$callee};
+			if (!defined($sig))
+			{
+				push @$errors, "$context call \@$callee has no collected function signature";
+				return 0;
+			}
 			push @$errors, "$context call \@$callee expects return type $sig->{ret}, got $ret_type"
 				if $sig->{ret} ne $ret_type;
 			if ($sig->{arity} eq 'variadic' || $sig->{arity} eq 'prototype_relaxed')
@@ -1925,46 +1950,54 @@ sub validate_lowir_text
 	my %signatures;
 	while ($data =~ /^function @([A-Za-z0-9_]+)\((.*?)\) -> ($type_pattern)((?:\s+\[[^\]]+\])*) \{$/gm)
 	{
-		$all_symbols{$1} = 1;
-		$function_symbols{$1} = 1;
-		my ($ok, $params_or_error) = parse_lowir_param_list($2);
+		# The nested parameter and metadata parsers use regular-expression
+		# captures themselves.  Save the enclosing declaration captures before
+		# calling them; otherwise a valid direct call can be looked up under an
+		# inner parameter name and the real signature is lost.
+		my ($function_name, $parameter_text, $return_type, $metadata_suffix) =
+			($1, $2, $3, $4);
+		$all_symbols{$function_name} = 1;
+		$function_symbols{$function_name} = 1;
+		my ($ok, $params_or_error) = parse_lowir_param_list($parameter_text);
 		if (!$ok)
 		{
-			push @errors, "function \@$1 has invalid parameter list: $params_or_error";
+			push @errors, "function \@$function_name has invalid parameter list: $params_or_error";
 			next;
 		}
 		my ($metadata_ok, $metadata_or_error) =
-			parse_lowir_function_metadata_suffix($4);
+			parse_lowir_function_metadata_suffix($metadata_suffix);
 		if (!$metadata_ok)
 		{
-			push @errors, "function \@$1 has invalid metadata: $metadata_or_error";
+			push @errors, "function \@$function_name has invalid metadata: $metadata_or_error";
 			next;
 		}
-		$signatures{$1} = {
-			ret => $3,
+		$signatures{$function_name} = {
+			ret => $return_type,
 			params => $params_or_error,
 			arity => $metadata_or_error->{arity},
 		};
 	}
 	while ($data =~ /^declare function @([A-Za-z0-9_]+)\((.*?)\) -> ($type_pattern)((?:\s+\[[^\]]+\])*)$/gm)
 	{
-		$all_symbols{$1} = 1;
-		$function_symbols{$1} = 1;
-		my ($ok, $params_or_error) = parse_lowir_param_list($2);
+		my ($function_name, $parameter_text, $return_type, $metadata_suffix) =
+			($1, $2, $3, $4);
+		$all_symbols{$function_name} = 1;
+		$function_symbols{$function_name} = 1;
+		my ($ok, $params_or_error) = parse_lowir_param_list($parameter_text);
 		if (!$ok)
 		{
-			push @errors, "declare function \@$1 has invalid parameter list: $params_or_error";
+			push @errors, "declare function \@$function_name has invalid parameter list: $params_or_error";
 			next;
 		}
 		my ($metadata_ok, $metadata_or_error) =
-			parse_lowir_function_metadata_suffix($4);
+			parse_lowir_function_metadata_suffix($metadata_suffix);
 		if (!$metadata_ok)
 		{
-			push @errors, "declare function \@$1 has invalid metadata: $metadata_or_error";
+			push @errors, "declare function \@$function_name has invalid metadata: $metadata_or_error";
 			next;
 		}
-		$signatures{$1} = {
-			ret => $3,
+		$signatures{$function_name} = {
+			ret => $return_type,
 			params => $params_or_error,
 			arity => $metadata_or_error->{arity},
 		};
@@ -2028,11 +2061,13 @@ sub canonicalize_lowir_metadata_group_for_compare
 {
 	my ($group) = @_;
 	my @kept;
-	for my $item (split(/\s*,\s*/, $group))
+	my ($items_ok, $items_or_error) = split_lowir_metadata_items($group);
+	return ' [' . $group . ']' if !$items_ok;
+	for my $item (@$items_or_error)
 	{
-		my ($key, $value) = ($item =~ /^([A-Za-z0-9_]+)\s*=\s*([^\],\s]+)$/);
-		next if defined($key) && lowir_metadata_item_ignored_for_compare($key, $value);
-		push @kept, $item;
+		my ($key, $value) = @$item;
+		next if lowir_metadata_item_ignored_for_compare($key, $value);
+		push @kept, $key . '=' . $value;
 	}
 	return scalar(@kept) == 0 ? '' : ' [' . join(', ', @kept) . ']';
 }
