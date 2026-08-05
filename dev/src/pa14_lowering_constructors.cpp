@@ -28,9 +28,7 @@ bool PA14Lowerer::HasDefaultInitializationEffects(const TypePtr& raw_type) const
         return true;
       }
     }
-    const vector<TypePtr> direct_bases = !type->direct_bases.empty() ?
-      type->direct_bases : (type->direct_base ?
-        vector<TypePtr>(1, type->direct_base) : vector<TypePtr>());
+    const vector<TypePtr> direct_bases = DirectBaseTypes(type);
     for(size_t base = 0; base < direct_bases.size(); ++base)
       if(HasDefaultInitializationEffects(direct_bases[base])) return true;
     for(size_t i = 0; i < type->class_members.size(); ++i) {
@@ -227,7 +225,7 @@ string PA14Lowerer::EmitTemporaryObjectAddress(const CPPGMAstNodePtr& node,
        !pending_constructor_context &&
        !state_->constructor_unwind_active &&
        !state_->suppress_constructor_unwind && HasDestructor(object_type) &&
-       (!construction_no_throw || object_type->direct_base)) {
+       (!construction_no_throw || !DirectBaseTypes(object_type).empty())) {
       BeginConstructorUnwind(CaptureLiveCleanupObjects(), false);
       preopened_constructor_unwind = true;
     }
@@ -424,9 +422,7 @@ bool PA14Lowerer::EmitValueSpecialMemberBody(FunctionRecord& function, Scope* sc
     const string source_storage = "$" + names[source_index];
     const bool assignment = function.copy_assignment || function.move_assignment;
     const bool move = function.move_constructor || function.move_assignment;
-    const vector<TypePtr> direct_bases = !owner->direct_bases.empty() ?
-      owner->direct_bases : (owner->direct_base ?
-        vector<TypePtr>(1, owner->direct_base) : vector<TypePtr>());
+    const vector<TypePtr> direct_bases = DirectBaseTypes(owner);
     bool has_empty_direct_base = false;
     for(size_t base = 0; base < direct_bases.size(); ++base)
       if(IsEmptyBaseStorage(direct_bases[base])) {
@@ -664,10 +660,8 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
     if(!owner) return;
     CPPGMAstNodePtr this_node(new CPPGMAstNode("keyword-literal", "KW_THIS:this"));
     set<string> initialized_members;
-    TypePtr base = type_value(owner->direct_base);
-    const vector<TypePtr> direct_bases = !owner->direct_bases.empty() ?
-      owner->direct_bases : (owner->direct_base ?
-        vector<TypePtr>(1, owner->direct_base) : vector<TypePtr>());
+    const vector<TypePtr> direct_bases = DirectBaseTypes(owner);
+    TypePtr base = direct_bases.empty() ? TypePtr() : type_value(direct_bases[0]);
     const auto matching_direct_base = [&](const string& spelling) {
       for(size_t candidate = 0; candidate < direct_bases.size(); ++candidate) {
         TypePtr current = type_value(direct_bases[candidate]);
@@ -980,9 +974,15 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
           if(EmitConstructorAt(field_type, address, arguments, scope)) continue;
         }
         CPPGMAstNodePtr empty(new CPPGMAstNode("braced-init-list"));
-        TypePtr nested_base = type_value(field_type->direct_base);
-        if(nested_base) {
-          const string base_address = address;
+        const vector<TypePtr> nested_bases = DirectBaseTypes(field_type);
+        for(size_t base_index = 0; base_index < nested_bases.size(); ++base_index) {
+          TypePtr nested_base = type_value(nested_bases[base_index]);
+          if(!nested_base) continue;
+          const size_t base_offset = base_index < field_type->direct_base_offsets.size() ?
+            field_type->direct_base_offsets[base_index] :
+            (base_index == 0 ? field_type->direct_base_offset : 0);
+          const string base_address = base_offset == 0 ? address :
+            AdjustBaseAddress(address, field_type, nested_base);
           const vector<Binding*> base_constructors =
             MemberBindings(nested_base, LastComponent(nested_base->name));
           if(!base_constructors.empty() && EmitConstructorAt(nested_base,
@@ -1223,7 +1223,7 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
         if(!element_type || element_type->kind != TYPE_CLASS || member_type->bound < 0) continue;
         if(!HasDefaultConstructionEffects(element_type) &&
            !HasExplicitConstructor(element_type)) continue;
-        if(element_type->class_members.empty() && !element_type->direct_base &&
+        if(element_type->class_members.empty() && DirectBaseTypes(element_type).empty() &&
            MemberBindings(element_type, LastComponent(element_type->name)).empty())
           continue;
         CPPGMAstNodePtr member(new CPPGMAstNode("member-expression", "OP_ARROW:->"));
@@ -1265,7 +1265,7 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
         }
         if(!HasDefaultConstructionEffects(member_type) &&
            !HasExplicitConstructor(member_type)) continue;
-        if(member_type->class_members.empty() && !member_type->direct_base &&
+        if(member_type->class_members.empty() && DirectBaseTypes(member_type).empty() &&
            MemberBindings(member_type, LastComponent(member_type->name)).empty())
           continue;
         CPPGMAstNodePtr member(new CPPGMAstNode("member-expression", "OP_ARROW:->"));

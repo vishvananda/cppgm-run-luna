@@ -921,6 +921,30 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
 	} else {
 	  Value callee_value = EmitValue(callee_node, scope);
 	  callee = callee_value.operand;
+	  if(choice.member && !choice.static_member && state_ && callee_node) {
+	    CPPGMAstNodePtr adjustment_node = callee_node;
+	    while(adjustment_node && adjustment_node->kind == "parenthesized-expression" &&
+	      adjustment_node->children.size() == 1 && adjustment_node->children[0])
+	      adjustment_node = adjustment_node->children[0];
+	    map<const CPPGMAstNode*, string>::const_iterator adjustment =
+	      state_->member_pointer_adjustments.find(adjustment_node.get());
+	    if(adjustment != state_->member_pointer_adjustments.end()) {
+	      const size_t object_index = function_record && function_record->indirect_result ? 1 : 0;
+	      if(object_index >= operands.size())
+	        throw logic_error("member-pointer call has no receiver operand");
+	      const string adjusted_object = new_temp();
+	      AddInstruction(adjusted_object +
+	        " = index i8 [projection=base_subobject] " +
+	        operands[object_index] + ", " + adjustment->second);
+	      operands[object_index] = adjusted_object;
+	      arguments_text.str(string());
+	      arguments_text.clear();
+	      for(size_t operand = 0; operand < operands.size(); ++operand) {
+	        if(operand != 0) arguments_text << ", ";
+	        arguments_text << operands[operand];
+	      }
+	    }
+	  }
 	  const bool lambda_callee = callee_node &&
 	    (callee_node->kind == "lambda-expression" ||
 	     (callee_node->kind == "parenthesized-expression" &&

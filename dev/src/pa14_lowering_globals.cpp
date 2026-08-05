@@ -87,6 +87,7 @@ bool IntegralConstantValue(Analyzer& analyzer, const CPPGMAstNodePtr& expression
     return true;
   }
 } // namespace
+
 PA14Lowerer::Value PA14Lowerer::ConvertValue(Value value, const TypePtr& target,
                      bool immediate_return, bool adjust_derived_pointer)
 {
@@ -113,36 +114,8 @@ PA14Lowerer::Value PA14Lowerer::ConvertValue(Value value, const TypePtr& target,
       return value;
     }
     if(target_value->kind == TYPE_MEMBER_POINTER) {
-      const TypePtr source_value = type_value(value.type);
-      if(source_value && source_value->kind == TYPE_FUNDAMENTAL &&
-         source_value->name == "nullptr_t") {
-        Value result = value;
-        result.type = target_value;
-        // Keep LowIR's typed null spelling when the source is nullptr.  An
-        // integral null pointer constant is represented by the integer zero
-        // instead; both are semantically null but the distinction is useful
-        // to the typed object representation.
-        result.operand = value.operand.empty() ? "nullptr" : value.operand;
-        result.known_constant = false;
-        result.constant = 0;
-        return result;
-      }
-      if(value.known_constant && value.constant == 0 &&
-         is_integral_type(source_value)) {
-        Value result = value;
-        result.type = target_value;
-        result.operand = "0";
-        return result;
-      }
-      if(source_value && source_value->kind == TYPE_MEMBER_POINTER) {
-        Value result = value;
-        result.type = target_value;
-        // A base-to-derived member-pointer conversion is representation
-        // preserving for the primary/non-virtual base layout used here.
-        // Data-member offset adjustment for a non-primary base is applied by
-        // the address operation once its complete-object path is known.
-        return result;
-      }
+      Value result;
+      if(TryConvertMemberPointerValue(value, target_value, &result)) return result;
     }
     if(target_value->kind == TYPE_POINTER && value.type->kind == TYPE_POINTER &&
        value.type->child && target_value->child &&

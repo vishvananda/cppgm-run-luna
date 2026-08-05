@@ -163,7 +163,9 @@ void PA14Lowerer::IndexFriendOwners()
     const TypePtr friend_owner = type_value(it->second);
     if(!friend_owner || friend_owner->kind != TYPE_CLASS ||
        friend_owner->friend_access.empty()) continue;
-    for(TypePtr owner = friend_owner; owner; owner = type_value(owner->direct_base)) {
+	    const vector<TypePtr> owners = BaseTypeClosure(friend_owner);
+	    for(size_t owner_index = 0; owner_index < owners.size(); ++owner_index) {
+	      TypePtr owner = owners[owner_index];
       vector<TypePtr>& entries = friend_owner_index_[owner.get()];
       if(find(entries.begin(), entries.end(), friend_owner) == entries.end())
         entries.push_back(friend_owner);

@@ -92,6 +92,30 @@ string StripTypeMarker(const string& name)
 	return name;
 }
 
+vector<TypePtr> DirectBaseTypes(const TypePtr& type)
+{
+	if (!type) return vector<TypePtr>();
+	if (!type->direct_bases.empty()) return type->direct_bases;
+	return type->direct_base ? vector<TypePtr>(1, type->direct_base) :
+		vector<TypePtr>();
+}
+
+vector<TypePtr> BaseTypeClosure(const TypePtr& type)
+{
+	vector<TypePtr> result;
+	if (!type) return result;
+	vector<TypePtr> pending(1, type);
+	set<const Type*> visited;
+	for (size_t i = 0; i < pending.size(); ++i) {
+		const TypePtr current = pending[i];
+		if (!current || !visited.insert(current.get()).second) continue;
+		result.push_back(current);
+		const vector<TypePtr> bases = DirectBaseTypes(current);
+		pending.insert(pending.end(), bases.begin(), bases.end());
+	}
+	return result;
+}
+
 TypePtr Fundamental(const string& name)
 {
 	return TypePtr(new Type(TYPE_FUNDAMENTAL, name));

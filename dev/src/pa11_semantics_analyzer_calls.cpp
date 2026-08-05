@@ -157,9 +157,11 @@ TypePtr Analyzer::ExpressionCallType(const CPPGMAstNodePtr& expression,
 			source->child && target->child) {
 			if (target->child->kind == TYPE_FUNDAMENTAL && target->child->name == "void") return true;
 			if (SameTypeIgnoringTopCv(source->child, target->child)) return true;
-			if (source->child->kind == TYPE_CLASS && target->child->kind == TYPE_CLASS)
-				for (TypePtr base = source->child->direct_base; base; base = base->direct_base)
-					if (SameTypeIgnoringTopCv(base, target->child)) return true;
+			if (source->child->kind == TYPE_CLASS && target->child->kind == TYPE_CLASS) {
+				const vector<TypePtr> bases = BaseTypeClosure(source->child);
+				for (size_t base = 1; base < bases.size(); ++base)
+					if (SameTypeIgnoringTopCv(bases[base], target->child)) return true;
+			}
 			return false;
 		}
 		return source->kind == TYPE_FUNDAMENTAL && target->kind == TYPE_FUNDAMENTAL;

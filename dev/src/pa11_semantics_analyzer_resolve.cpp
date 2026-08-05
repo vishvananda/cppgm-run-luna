@@ -1,5 +1,20 @@
 #include "pa11_semantics_analyzer.h"
 
+namespace {
+vector<string> ResolveTypeWords(const string& name)
+{
+	vector<string> words;
+	string word;
+	for (size_t i = 0; i <= name.size(); ++i) {
+		const char character = i < name.size() ? name[i] : ' ';
+		if (isspace(static_cast<unsigned char>(character))) {
+			if (!word.empty()) { words.push_back(word); word.clear(); }
+		} else word += character;
+	}
+	return words;
+}
+}
+
 vector<string> Analyzer::SplitPath(const string& raw, bool* absolute) const
 {
 	string path = raw;
@@ -60,15 +75,17 @@ Analyzer::PathTarget Analyzer::ResolvePath(Scope* from, const string& raw) const
 		Binding* binding = (i == 0 && !absolute) ?
 			LookupUnqualified(current_scope, part) : LookupInNamespace(current_scope, part);
 		if(!binding && current_scope && current_scope->kind == SCOPE_CLASS &&
-			current_scope->owner_type)
-			for(TypePtr base = current_scope->owner_type->direct_base; base;
-				base = base->direct_base) {
+			current_scope->owner_type) {
+			const vector<TypePtr> bases = BaseTypeClosure(current_scope->owner_type);
+			for(size_t base_index = 1; base_index < bases.size(); ++base_index) {
+				TypePtr base = bases[base_index];
 				if(LastComponent(base->name) == part && base->owned_scope &&
 					base->owned_scope->parent)
 					binding = base->owned_scope->parent->local(part);
 				if(!binding && base->owned_scope) binding = base->owned_scope->local(part);
 				if(binding) break;
 			}
+		}
 		if(!binding) return PathTarget();
 		if(i + 1 == parts.size()) return PathTarget(0, binding);
 		current_binding = binding;
@@ -89,13 +106,7 @@ Binding* Analyzer::ResolveBinding(Scope* from, const string& raw) const
 TypePtr Analyzer::ResolveType(Scope* from, const string& raw) const
 {
 	const string name = StripTypeMarker(raw);
-	vector<string> words;
-	string word;
-	for (size_t i = 0; i <= name.size(); ++i) {
-		const char character = i < name.size() ? name[i] : ' ';
-		if (isspace(static_cast<unsigned char>(character))) { if (!word.empty()) { words.push_back(word); word.clear(); } }
-		else word += character;
-	}
+	const vector<string> words = ResolveTypeWords(name);
 	bool add_const = false, add_volatile = false, fundamental = !words.empty();
 	vector<string> fundamental_words;
 	for (size_t i = 0; i < words.size(); ++i) {
@@ -165,10 +176,10 @@ TypePtr Analyzer::ResolveType(Scope* from, const string& raw) const
 					return candidate.type;
 			}
 		for (Scope* current = from; current; current = current->parent)
-			if (current->kind == SCOPE_CLASS && current->owner_type)
-				for (TypePtr base = current->owner_type->direct_base; base;
-					base = base->direct_base)
-				{
+			if (current->kind == SCOPE_CLASS && current->owner_type) {
+				const vector<TypePtr> bases = BaseTypeClosure(current->owner_type);
+				for (size_t base_index = 1; base_index < bases.size(); ++base_index) {
+					TypePtr base = bases[base_index];
 					if (LastComponent(base->name) == name) return base;
 					if (!base->owned_scope) continue;
 					for (size_t i = base->owned_scope->bindings.size(); i > 0; --i)
@@ -179,6 +190,7 @@ TypePtr Analyzer::ResolveType(Scope* from, const string& raw) const
 							return candidate.type;
 					}
 				}
+			}
 	}
 	Binding* binding = ResolveBinding(from, name);
 	if (!binding && name.find("::") == string::npos && name.find('_') != string::npos) { TypePtr generated = ResolveGeneratedSpecializationType(name); if (generated) return generated; }

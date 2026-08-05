@@ -738,7 +738,7 @@ void PA14Lowerer::CollectClassMembers(const CPPGMAstNodePtr& node, Scope* scope)
 	  type_found->second->has_deferred_constructor =
 	    type_found->second->has_deferred_constructor || node->has_deferred_constructor;
     Scope* class_scope = type_found->second->owned_scope;
-    bool has_inheriting_constructor_using = false;
+	vector<TypePtr> inheriting_constructor_bases;
     for(size_t i = 0; i < node->children.size(); ++i) {
       const CPPGMAstNodePtr child = node->children[i];
       if(!child) continue;
@@ -772,18 +772,29 @@ void PA14Lowerer::CollectClassMembers(const CPPGMAstNodePtr& node, Scope* scope)
           child->kind == "special-member-definition" || defaulted, false);
         continue;
       }
-      if(child->kind == "using-declaration") {
-        const CPPGMAstNodePtr target = ChildOfKind(child, "target");
-        TypePtr direct_base = type_value(type_found->second->direct_base);
-        const string direct_base_primary = direct_base &&
-          !direct_base->template_primary.empty() ?
-          LastComponent(direct_base->template_primary) : string();
-        if(target && direct_base && (LastComponent(target->value) ==
-           LastComponent(direct_base->name) || (!direct_base_primary.empty() &&
-           LastComponent(target->value) == direct_base_primary)))
-          has_inheriting_constructor_using = true;
-        continue;
-      }
+	  if(child->kind == "using-declaration") {
+	    const CPPGMAstNodePtr target = ChildOfKind(child, "target");
+	    const vector<TypePtr> direct_bases = DirectBaseTypes(type_found->second);
+	    if(target) for(size_t base_index = 0; base_index < direct_bases.size();
+	                   ++base_index) {
+	      TypePtr direct_base = type_value(direct_bases[base_index]);
+	      const string direct_base_primary = direct_base &&
+	        !direct_base->template_primary.empty() ?
+        LastComponent(direct_base->template_primary) : string();
+	      if(!direct_base || (LastComponent(target->value) !=
+         LastComponent(direct_base->name) && (direct_base_primary.empty() ||
+         LastComponent(target->value) != direct_base_primary))) continue;
+	      bool already_recorded = false;
+	      for(size_t recorded = 0; recorded < inheriting_constructor_bases.size();
+          ++recorded)
+	        if(inheriting_constructor_bases[recorded] == direct_base) {
+	          already_recorded = true;
+	          break;
+	        }
+	      if(!already_recorded) inheriting_constructor_bases.push_back(direct_base);
+	    }
+	    continue;
+	  }
 		if(child->kind != "simple-declaration") continue;
       if(child->children.empty()) continue;
       Analyzer::SpecFacts facts;
@@ -823,8 +834,9 @@ void PA14Lowerer::CollectClassMembers(const CPPGMAstNodePtr& node, Scope* scope)
     }
     CollectImplicitConstructor(type_found->second, class_scope);
     CollectImplicitDestructor(type_found->second, class_scope);
-    if(has_inheriting_constructor_using)
-      CollectInheritedConstructors(type_found->second, class_scope);
+	if(!inheriting_constructor_bases.empty())
+	  CollectInheritedConstructors(type_found->second, class_scope,
+	                                inheriting_constructor_bases);
     (void)scope;
   }
 
@@ -894,9 +906,7 @@ void PA14Lowerer::CollectImplicitConstructor(const TypePtr& owner, Scope* scope,
       if(constructors[i]->kind == BIND_FUNCTION) { has_constructor = true; break; }
     if(has_constructor) return;
     bool needed = false;
-    const vector<TypePtr> direct_bases = !owner->direct_bases.empty() ?
-      owner->direct_bases : (owner->direct_base ?
-        vector<TypePtr>(1, owner->direct_base) : vector<TypePtr>());
+	    const vector<TypePtr> direct_bases = DirectBaseTypes(owner);
     for(size_t base_index = 0; base_index < direct_bases.size() && !needed;
         ++base_index) {
       TypePtr base = type_value(direct_bases[base_index]);
@@ -994,9 +1004,7 @@ void PA14Lowerer::CollectImplicitDestructor(const TypePtr& owner, Scope* scope)
       if(destructors[i]->kind == BIND_FUNCTION) { has_destructor = true; break; }
     if(has_destructor) return;
     bool needed = false;
-    const vector<TypePtr> direct_bases = !owner->direct_bases.empty() ?
-      owner->direct_bases : (owner->direct_base ?
-        vector<TypePtr>(1, owner->direct_base) : vector<TypePtr>());
+	    const vector<TypePtr> direct_bases = DirectBaseTypes(owner);
     for(size_t base_index = 0; base_index < direct_bases.size() && !needed;
         ++base_index) {
       TypePtr base = type_value(direct_bases[base_index]);
@@ -1187,21 +1195,17 @@ int PA14Lowerer::BaseDistance(const TypePtr& raw_derived, const TypePtr& raw_bas
       return -1;
     vector<pair<TypePtr, int> > pending;
     set<const Type*> visited;
-    if(!derived->direct_bases.empty())
-      for(size_t i = 0; i < derived->direct_bases.size(); ++i)
-        pending.push_back(make_pair(type_value(derived->direct_bases[i]), 1));
-    else if(derived->direct_base)
-      pending.push_back(make_pair(type_value(derived->direct_base), 1));
+	    const vector<TypePtr> direct_bases = DirectBaseTypes(derived);
+	    for(size_t i = 0; i < direct_bases.size(); ++i)
+	      pending.push_back(make_pair(type_value(direct_bases[i]), 1));
     for(size_t next = 0; next < pending.size(); ++next) {
       TypePtr current = pending[next].first;
       const int distance = pending[next].second;
       if(!current || !visited.insert(current.get()).second) continue;
       if(PA12SameType(current, base, true)) return distance;
-      if(!current->direct_bases.empty())
-        for(size_t i = 0; i < current->direct_bases.size(); ++i)
-          pending.push_back(make_pair(type_value(current->direct_bases[i]), distance + 1));
-      else if(current->direct_base)
-        pending.push_back(make_pair(type_value(current->direct_base), distance + 1));
+	      const vector<TypePtr> current_bases = DirectBaseTypes(current);
+	      for(size_t i = 0; i < current_bases.size(); ++i)
+	        pending.push_back(make_pair(type_value(current_bases[i]), distance + 1));
     }
     return -1;
   }

@@ -367,7 +367,7 @@ bool PA14Lowerer::EmitObjectTransferDerived(const TypePtr& target,
         source_address + ", " + destination);
       return true;
     }
-    bool empty_target = !target->direct_base;
+    bool empty_target = DirectBaseTypes(target).empty();
     for(size_t member_index = 0; member_index < target->class_members.size();
         ++member_index)
       if(!target->class_members[member_index].is_static &&

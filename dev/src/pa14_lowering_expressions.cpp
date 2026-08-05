@@ -631,6 +631,13 @@ PA14Lowerer::Value PA14Lowerer::EmitBinary(const CPPGMAstNodePtr& node, Scope* s
         }
         const string raw_address = new_temp();
         AddInstruction(raw_address + " = convert trunc i64 i128 " + pointer.operand);
+        if(state_ && DirectBaseTypes(object_type).size() > 1) {
+          const string high = new_temp();
+          AddInstruction(high + " = binary ushr i128 " + pointer.operand + ", 64");
+          const string adjustment = new_temp();
+          AddInstruction(adjustment + " = convert trunc i64 i128 " + high);
+          state_->member_pointer_adjustments[node.get()] = adjustment;
+        }
         Value result;
         result.type = member_pointer->child;
         result.operand = new_temp();

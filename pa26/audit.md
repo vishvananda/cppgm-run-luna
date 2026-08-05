@@ -1,99 +1,110 @@
-# PA26 Checkpoint Audit
+# PA26 Final Stage Audit
 
-## Checkpoint
+## Stage
 
-This audit covers the latest PA26 checkpoint scope landed by `814aafc`
-(`Complete PA26 template replay increment`) together with its preceding
-member-pointer replay commits `21f80f9`, `e4c1f96`, and `0a80a4f`.  It was
-performed on 2026-08-05 against the checkpoint state reported in
+This is the final full-stage audit for `pa26 full-stage`, performed on
+2026-08-05.  It consolidates the checkpoint audit recorded in this file with
+the complete PA26 implementation and the cleanup performed during this audit.
+The required stage gate is `make test-report-through-pa26`; the primary log
+under review is
 `/home/vishvananda/work/.ralph/luna-gpt-5.6-luna-ultra/last-test.log`.
 
-## Scope Reviewed
+The review preserved PA11-PA25 behavior and covered the checkpoint commits
+`21f80f9`, `e4c1f96`, `0a80a4f`, and `814aafc`, the checkpoint audit
+`d013cf2`, and the integrated changes since the PA25 audit `d98f3ca`.
 
-- `pa26/README.md`, the latest `Checkpoint Scope` and `Remaining Work Map` in
-  `pa26/plan.md`, the PA26 tests and checked-in LowIR fixtures.
-- The recent commit chain, all source files changed by the checkpoint, the
-  frontend source-set ownership, and the PA26 file-audit result.
-- PA11-PA25 preservation, including member-pointer formation/application,
-  friend ADL, dependent `sizeof`, nested static-data replay, anonymous
-  namespace identity, and the PA26 single-vptr `dynamic_cast<void*>` boundary.
-- Shortcut and architecture checks for skipped phases, fabricated success or
-  output, host/reference execution, interpreters/VMs/trampolines, timeout
-  workarounds, stringly semantic facts, ownership duplication, reparsing,
-  repeated scans, copying, and unchecked/file-audit paths.
+## Audit Plan
+
+1. Read `TESTING_AND_REFERENCES.md`, `pa26/README.md`,
+   `pa26/plan.md`, the PA26 tests and earlier through-stage test contract.
+2. Review the recent commit chain, every changed implementation source,
+   `dev/frontend_source_sets.mk`, and all checkpoint findings.
+3. Trace actual ownership and data flow for canonical direct-base layout,
+   inherited lookup/access, receiver adjustment, generated special members,
+   member-pointer formation/conversion/application, constant evaluation,
+   template replay, and the PA27 RTTI boundary.
+4. Look for shortcut behavior, duplicated semantic facts, first-base regressions,
+   ambiguous-resolution leaks, lifetime/unwind omissions, avoidable copying or
+   repeated scans, and source-set/file-audit gaps.
+5. Run the focused PA26 suite, the required file audit, and the required root
+   through-stage report; leave a cohesive commit and a clean worktree.
 
 ## Findings
 
-- No compiler phase is skipped.  No reference binary, host compiler,
-  interpreter, VM, trampoline, embedded payload, timeout workaround, or
-  source/test-specific acceptance gate is used by the PA26 compiler path.
-  Unsupported or failed semantic cases still fail; they are not converted to
-  successful LowIR or dummy output.
-- The checkpoint's aggregate replay used one mutable expected-type string and
-  selected the first non-static field, while the downstream unary rewrite
-  recognized qualified template addresses from emitted spelling.  That was a
-  real stringly fact and ownership/field-selection blocker: later aggregate
-  elements could be assigned the wrong overload destination, and ordinary
-  qualified function-template addresses could enter the member-template path.
-- The final PA26 failure was in the shared comparison parser, not in sidecar
-  generation.  Nested parameter/metadata parsing clobbered the enclosing
-  regular-expression captures, and comma-bearing `object=` metadata was split
-  as separate fields.  This caused a valid LowIR comparison to abort with an
-  undefined signature/sidecar error.  It was fixed and is no longer a current
-  failure.
-- The replay fix performs one declaration-order field walk per relevant
-  aggregate and stores expected types by AST node identity.  The binding scope
-  swaps maps only when a declaration contributes a binding, then restores it
-  across recursive transforms and setup-time exceptions; this keeps scope
-  management O(1) rather than copying the active map at every AST node.  No
-  new full-suite walk, repeated cast evaluation, avoidable quadratic lookup,
-  or unbounded copying was introduced.
-- The generated static-data owner path preserves namespace and anonymous
-  namespace identity while queuing replayed definitions at namespace scope.
-  The focused static-table and unnamed-namespace regressions pass, and the
-  generated owners remain deterministic.  PA26's single-vptr RTTI boundary
-  remains explicit; virtual inheritance and multi-vtable RTTI are PA27's
-  assignment boundary, not hidden PA26 success paths.
-- The file audit has no fatal finding, no hidden implementation fragment, no
-  weakened check, and no unchecked source path.  The collection header remains
-  at the 1200-line limit after the new declaration was folded into its
-  existing compact declaration line.  The 12 remaining audit messages are
-  warning-level existing header-division/catch-all/complexity advisories.
+- PA26's intended architecture is present.  PA11 owns typed classes, ordered
+  `direct_bases`, direct-base offsets, stable member ownership/index facts,
+  access, constant evaluation, and class layout.  PA14 consumes those facts
+  for lookup, base-path adjustment, LowIR addresses, method receivers, and
+  generated lifetime operations.  PA25 transfer/constructor paths use the
+  same direct-base helpers.
+- The original first-base assumptions that affected the PA26 contract were
+  corrected across semantic queries, pointer conversions, using/access paths,
+  constants, empty-base/triviality checks, default construction, copy/assignment,
+  and destruction.  Generated base lifetime actions use declaration order for
+  construction/copy/assignment and reverse order for destruction.
+- Member lookup does not silently choose one of multiple inherited candidates.
+  Direct declarations hide inherited declarations, using-declarations are
+  explicit, and distinct base paths remain distinguishable.  Base adjustment
+  enumerates typed paths and rejects missing or ambiguous member-pointer owner
+  conversions.
+- The non-primary member-pointer conversion gap found during this audit was a
+  real correctness issue not covered by the checked-in PA26 primary suite.
+  Data-member conversion now adds the non-primary base offset while preserving
+  null.  Member-function conversion carries the adjustment in the high half of
+  the existing i128 representation; `.*`/`->*` decodes it and the call
+  emitter adjusts the receiver.  A temporary focused LowIR probe confirmed the
+  generated non-primary data and function paths carry the expected offset.
+- The first full through-stage run exposed one PA15 preservation mismatch: the
+  new nested-base constructor loop projected a zero-offset primary base.  The
+  adjustment is now emitted only for a nonzero base offset, preserving the
+  established PA15 LowIR shape while retaining non-primary PA26 adjustment.
+- The checkpoint's template replay changes use AST-node identity and structural
+  predicates rather than a mutable expected-type string or broad spelling gate.
+  Nested static-data replay preserves namespace/anonymous-namespace ownership.
+  The shared comparator preserves outer captures and parses comma-bearing
+  metadata without weakening the semantic comparison.
+- The file audit initially exposed five fatal size/function-size thresholds
+  after full-stage growth.  They were resolved by moving member-pointer
+  conversion, inherited-constructor synthesis, and constant-call noexcept
+  analysis into responsibility-named translation units, adding both to the
+  cppgm++ source set, and reducing one resolver's oversized body.  The final
+  audit has no fatal finding; its twelve remaining messages are warning-level
+  pre-existing ownership/complexity advisories.
+- No compiler stage is skipped and no reference binary, host compiler,
+  interpreter, VM, trampoline, embedded answer, timeout workaround, or
+  source/test-specific acceptance gate is used.  No tests or `.ref` files
+  were changed.  The only intentional deferrals are the PA27 virtual/RTTI
+  cases explicitly listed by the README: virtual inheritance, polymorphic
+  multiple inheritance, and RTTI requiring multiple vtable views.
 
 ## Changes Made
 
-- In `dev/src/pa18_templates_collection.h`, replaced the single mutable
-  initializer expected type with a scoped AST-node-to-type map and declared a
-  structural qualified member-template-address predicate.
-- In `dev/src/pa18_templates_rewrite_helpers.cpp`, replaced the broad spelling
-  gate with a parsed template-range check that only selects a non-type
-  qualified member address such as `wrap<&T::call>`.  Aggregate replay now
-  resolves each non-static field in declaration order and associates that
-  field's rewritten type with the corresponding address node.
-- In `dev/src/pa18_templates_rewrite_expressions.cpp`, use the AST predicate
-  and node-specific expected type when materializing the synthetic member
-  call.  Ordinary addresses such as `create<Service, context>` stay on the
-  established function-address path.
-- In `scripts/compare_results_common.pl`, preserve outer declaration captures
-  across nested parsers, parse metadata values containing commas, canonicalize
-  those groups consistently, and report missing signatures as a comparison
-  error instead of dereferencing an undefined value.
-- Refreshed `pa26/plan.md` from the complete zero-failure PA26 set and selected
-  the PA27 virtual/RTTI ABI group as the next checkpoint.  No tests or `.ref`
-  fixtures were edited.
+- Centralized all-base compatibility and closure traversal in
+  `DirectBaseTypes` and `BaseTypeClosure`, and updated PA11 semantic,
+  lookup, access, constant, and layout queries to use the canonical model.
+- Updated PA14 member collection, inherited constructors, base distance/path
+  adjustment, empty-base handling, constructor/copy/assignment/destructor
+  emission, and friend/access ownership for non-virtual multiple inheritance.
+- Kept zero-offset primary nested-base construction on its established direct
+  address path; only nonzero nested-base offsets request a projection.
+- Added typed non-primary member-pointer conversion and call-receiver
+  adjustment while preserving primary/single-inheritance output.
+- Split `pa14_lowering_member_pointer.cpp`,
+  `pa14_lowering_inherited_constructors.cpp`, and
+  `pa11_semantics_constants_calls.cpp` into the frontend source set so
+  implementation ownership matches responsibility and file-audit limits.
+- Retained the PA18 typed replay and comparator fixes from the checkpoint and
+  documented the final architecture in `pa26/plan.md`.
+- Did not modify tests, checked-in references, or handout files.
 
 ## Validation
 
 - `make -C dev cppgm++`: pass.
-- Focused PA21 regressions (2), PA23 explicit-pack replay (1), and PA26
-  friend-ADL, using-directive, pack/decltype, and anonymous-namespace replay
-  cases: pass.
+- `make test-pa15`: **200/200** pass after the preservation fix.
 - `make test-pa26`: **66/66** pass.
-- Required `make test-report ACTIVE_TEST_REPORT_PAS='pa26'`: **66/66** pass.
-- Required prior-through command (`n=26; ... make test-report-through-pa25`):
-  **2669/2669** pass.
-- Standard root `make test-report-through-pa26`: **2735/2735** pass.
-- `perl scripts/cppgm_file_audit.pl --stage pa26 --paths dev/src`: pass with
-  12 warning-level findings and no fatal findings.
-- `git diff --check`: pass.  The final commit leaves `git status --short`
-  empty.
+- `perl scripts/cppgm_file_audit.pl --stage pa26 --paths dev/src`:
+  pass with 12 warning-level findings and no fatal findings.
+- `make test-report-through-pa26`: **2735/2735** pass.
+- `git diff --check`: pass.
+- Final exit condition: commit the cohesive cleanup and confirm
+  `git status --short` is empty.

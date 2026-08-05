@@ -46,7 +46,9 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
         if(!member_type) return false;
         if(member_type->kind == TYPE_ARRAY) return has_unavailable_default(member_type->child);
         if(member_type->kind != TYPE_CLASS) return false;
-        if(member_type->direct_base && has_unavailable_default(member_type->direct_base)) return true;
+        const vector<TypePtr> direct_bases = DirectBaseTypes(member_type);
+        for(size_t base = 0; base < direct_bases.size(); ++base)
+          if(has_unavailable_default(direct_bases[base])) return true;
         for(size_t field = 0; field < member_type->class_members.size(); ++field)
           if(!member_type->class_members[field].is_static &&
              has_unavailable_default(member_type->class_members[field].type)) return true;
@@ -303,7 +305,7 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
          raw_arguments.empty() && IsEmptyBaseStorage(object_type) &&
          !object_type->polymorphic && !record->member_template &&
          HasUserProvidedConstructor(object_type) &&
-         (!record->template_instantiation || !object_type->direct_base))
+         (!record->template_instantiation || DirectBaseTypes(object_type).empty()))
         demand_complete_record = true;
       const TypePtr first_parameter = record->source_type && !record->source_type->parameters.empty() ? record->source_type->parameters[0] : TypePtr();
       const bool inherited_constructor_wrapper = state_ && state_->record &&

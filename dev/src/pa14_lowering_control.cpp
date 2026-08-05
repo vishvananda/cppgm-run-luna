@@ -49,20 +49,26 @@ bool PA14Lowerer::EmitObjectConstructor(VariablePlan* variable,
     if(candidates.empty() && object_type->template_specialization &&
        !object_type->template_primary.empty())
       candidates = MemberBindings(object_type, LastComponent(object_type->template_primary));
-    const bool empty_base_only_default = object_type->direct_base &&
-      IsEmptyBaseStorage(object_type->direct_base) &&
+    const vector<TypePtr> direct_bases = DirectBaseTypes(object_type);
+    bool empty_base_only_default = !direct_bases.empty() &&
       !HasDefaultConstructionEffects(object_type);
+    for(size_t base_index = 0; empty_base_only_default &&
+        base_index < direct_bases.size(); ++base_index)
+      if(!IsEmptyBaseStorage(direct_bases[base_index]))
+        empty_base_only_default = false;
     if(empty_base_only_default) {
-      const vector<Binding*> base_constructors = MemberBindings(
-        type_value(object_type->direct_base),
-        LastComponent(type_value(object_type->direct_base)->name));
-      for(size_t i = 0; i < base_constructors.size(); ++i) {
-        FunctionRecord* base_record = RecordForBinding(base_constructors[i]);
-        if(!base_record || !base_record->constructor || base_record->copy_constructor ||
-           base_record->move_constructor || base_record->implicit_constructor) continue;
-        TypePtr base_function = function_target_type(base_constructors[i]->type);
-        if(base_function && base_function->parameters.empty()) {
-          MarkFunctionNeeded(base_record);
+      for(size_t base_index = 0; base_index < direct_bases.size(); ++base_index) {
+        TypePtr direct_base = type_value(direct_bases[base_index]);
+        if(!direct_base) continue;
+        const vector<Binding*> base_constructors = MemberBindings(
+          direct_base, LastComponent(direct_base->name));
+        for(size_t i = 0; i < base_constructors.size(); ++i) {
+          FunctionRecord* base_record = RecordForBinding(base_constructors[i]);
+          if(!base_record || !base_record->constructor || base_record->copy_constructor ||
+             base_record->move_constructor || base_record->implicit_constructor) continue;
+          TypePtr base_function = function_target_type(base_constructors[i]->type);
+          if(base_function && base_function->parameters.empty())
+            MarkFunctionNeeded(base_record);
         }
       }
     }

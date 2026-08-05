@@ -147,9 +147,11 @@ public:
 		for(Scope* current = from; current; current = current->parent)
 			if(current->kind == SCOPE_CLASS && current->owner_type) {
 				if(current->owner_type == binding.member_owner) return true;
-				if(binding.access == "protected")
-					for(TypePtr base = current->owner_type->direct_base; base; base = base->direct_base)
-						if(base == binding.member_owner) return true;
+				if(binding.access == "protected") {
+					const vector<TypePtr> bases = BaseTypeClosure(current->owner_type);
+					for(size_t base = 1; base < bases.size(); ++base)
+						if(bases[base] == binding.member_owner) return true;
+				}
 			}
 		return false;
 	}
@@ -610,8 +612,10 @@ public:
 			const string member_name = expression->children[1]->value;
 			Binding* selected = 0;
 			size_t selected_score = static_cast<size_t>(-1);
-			for (TypePtr current = object; current; current = current->direct_base)
+			const vector<TypePtr> object_bases = BaseTypeClosure(object);
+			for (size_t current_index = 0; current_index < object_bases.size(); ++current_index)
 			{
+				TypePtr current = object_bases[current_index];
 				Scope* owner = ScopeForType(current);
 				if (!owner) continue;
 				for (size_t i = 0; i < owner->bindings.size(); ++i)

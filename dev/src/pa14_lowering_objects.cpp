@@ -980,7 +980,7 @@ void PA14Lowerer::EmitAggregateClassDefaults(const string& base, const TypePtr& 
       if(injected_member) continue;
       TypePtr member_type = type_value(member.type);
       if(!member.initializer && member_type && member_type->kind == TYPE_CLASS &&
-         member_type->class_members.empty() && !member_type->direct_base &&
+         member_type->class_members.empty() && DirectBaseTypes(member_type).empty() &&
          MemberBindings(member_type, LastComponent(member_type->name)).empty()) continue;
       const string field_base = refresh_node ? EmitAddress(refresh_node, scope) : base;
       string field;
@@ -1121,8 +1121,13 @@ void PA14Lowerer::EmitDestructorBody(FunctionRecord& function, Scope* scope)
         (void)EmitDestructorAt(member_type, address, scope);
       }
     }
-    TypePtr base = type_value(owner->direct_base);
-    if(base && DestructorHasEffects(base)) {
+    const vector<TypePtr> direct_bases = DirectBaseTypes(owner);
+    // C++ destroys direct bases in reverse declaration order.  Keep the
+    // projection typed so a later non-primary base is adjusted before its
+    // destructor entry is called.
+    for(size_t base_index = direct_bases.size(); base_index > 0; --base_index) {
+      TypePtr base = type_value(direct_bases[base_index - 1]);
+      if(!base || !DestructorHasEffects(base)) continue;
       const string this_address = EmitValue(this_node, scope).operand;
       const string base_address = AdjustBaseAddress(this_address, owner, base);
       // A virtual base destructor still has to run when its body is empty;

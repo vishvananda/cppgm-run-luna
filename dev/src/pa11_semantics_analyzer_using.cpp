@@ -160,15 +160,18 @@ void Analyzer::ProcessUsingDeclaration(const CPPGMAstNodePtr& node, Scope* scope
 		// Generated template classes commonly spell this through the concrete
 		// derived owner (`relay_int_::get`) even though the declaration is retained
 		// in `base_impl_false__int_`'s typed scope.
-		if (targets.empty() && owner_scope && owner_scope->owner_type)
-			for (TypePtr base = owner_scope->owner_type->direct_base; base &&
-				targets.empty(); base = base->direct_base)
+		if (targets.empty() && owner_scope && owner_scope->owner_type) {
+			const vector<TypePtr> bases = BaseTypeClosure(owner_scope->owner_type);
+			for (size_t base_index = 1; base_index < bases.size() && targets.empty(); ++base_index) {
+				TypePtr base = bases[base_index];
 				if (base->owned_scope)
 					for (size_t i = 0; i < base->owned_scope->bindings.size(); ++i)
 						if (base->owned_scope->bindings[i].name == LastComponent(target_name)) {
 							targets.push_back(&base->owned_scope->bindings[i]);
 							break;
 						}
+			}
+		}
 	}
 	if (targets.empty()) {
 		Binding* target = ResolveBinding(scope, target_name);

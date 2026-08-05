@@ -250,12 +250,11 @@ bool Analyzer::IsDependentTemplateName(Scope* scope, const string& raw) const
 						if (left && right) return true;
 					}
 				}
-			if (current->kind == SCOPE_CLASS && current->owner_type)
-				for (TypePtr base = current->owner_type->direct_base; base;
-					base = base->direct_base)
-					if (base->kind == TYPE_TEMPLATE_PARAMETER ||
-						base->kind == TYPE_TEMPLATE_TEMPLATE_PARAMETER ||
-						base->dependent_base_lookup) return true;
+			if (current->kind == SCOPE_CLASS && current->owner_type) {
+				const vector<TypePtr> bases = BaseTypeClosure(current->owner_type);
+				for (size_t base = 1; base < bases.size(); ++base)
+					if (bases[base]->kind == TYPE_TEMPLATE_PARAMETER || bases[base]->kind == TYPE_TEMPLATE_TEMPLATE_PARAMETER || bases[base]->dependent_base_lookup) return true;
+			}
 		}
 		return false;
 	}
@@ -378,7 +377,9 @@ bool EmptyBaseStorage(const TypePtr& raw_type)
 		const ClassMemberInfo& member = raw_type->class_members[i];
 		if (!member.is_static && !member.name.empty()) return false;
 	}
-	return !raw_type->direct_base || EmptyBaseStorage(raw_type->direct_base);
+	const vector<TypePtr> direct_bases = DirectBaseTypes(raw_type);
+	for (size_t base = 0; base < direct_bases.size(); ++base) if (!EmptyBaseStorage(direct_bases[base])) return false;
+	return true;
 }
 
 bool IsValidAlignment(size_t alignment)
@@ -408,9 +409,8 @@ bool SameVirtualParameters(const TypePtr& left, const TypePtr& right)
 
 bool IsDerivedClass(const TypePtr& derived, const TypePtr& base)
 {
-	for (TypePtr current = derived ? derived->direct_base : TypePtr(); current;
-		current = current->direct_base)
-		if (SameLayoutType(current, base)) return true;
+	const vector<TypePtr> bases = BaseTypeClosure(derived);
+	for (size_t current = 1; current < bases.size(); ++current) if (SameLayoutType(bases[current], base)) return true;
 	return false;
 }
 

@@ -9,3 +9,6 @@ TypePtr PA11FindMemberObjectType(Analyzer* analyzer,
 	 const CPPGMAstNodePtr& object, const ConstantValue& receiver, Scope* scope);
 TypePtr PA11FindGeneratedConstructorOwner(Analyzer* analyzer, Binding* function,
 	 Scope* scope);
+
+bool PA11NoexceptCall(Analyzer& analyzer, const CPPGMAstNodePtr& call,
+	Scope* scope);

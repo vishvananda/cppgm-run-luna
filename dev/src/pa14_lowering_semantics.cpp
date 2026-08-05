@@ -294,12 +294,9 @@ void PA14Lowerer::AppendAssociatedOperatorBindings(const TypePtr& raw_type,
               result.end()) continue;
           result.push_back(binding);
         }
-		if(!type->direct_bases.empty())
-			for(size_t base = 0; base < type->direct_bases.size(); ++base)
-				AppendAssociatedOperatorBindings(type->direct_bases[base], name, result,
-					visited_types, visited_scopes);
-		else
-			AppendAssociatedOperatorBindings(type->direct_base, name, result,
+		const vector<TypePtr> direct_bases = DirectBaseTypes(type);
+		for(size_t base = 0; base < direct_bases.size(); ++base)
+			AppendAssociatedOperatorBindings(direct_bases[base], name, result,
 				visited_types, visited_scopes);
     }
     Scope* associated = owner_scope;
@@ -416,11 +413,12 @@ bool PA14Lowerer::IsAccessible(Binding* binding, Scope* scope) const
     for(TypePtr current = context; current; current = type_value(current->enclosing_type))
       if(current == owner) return true;
     if(binding->access == "private") return false;
-    for(TypePtr enclosing = context; enclosing;
-        enclosing = type_value(enclosing->enclosing_type))
-      for(TypePtr current = enclosing; current;
-          current = type_value(current->direct_base))
-        if(current == owner) return true;
+	for(TypePtr enclosing = context; enclosing;
+	    enclosing = type_value(enclosing->enclosing_type)) {
+	  const vector<TypePtr> bases = BaseTypeClosure(enclosing);
+	  for(size_t current = 1; current < bases.size(); ++current)
+	    if(bases[current] == owner) return true;
+	}
     return false;
   }
 void PA14Lowerer::CheckTypeAccess(const CPPGMAstNodePtr& declaration,

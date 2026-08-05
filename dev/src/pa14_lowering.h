@@ -314,6 +314,7 @@ class PA14Lowerer
     set<string> reserved_value_names;
     map<string, string> stable_member_addresses;
     map<const CPPGMAstNode*, Value> aggregate_precomputed_values;
+    map<const CPPGMAstNode*, string> member_pointer_adjustments;
     map<const CPPGMAstNode*, string> case_labels;
     set<const CPPGMAstNode*> emitted_cases;
     map<string, string> named_labels;
@@ -365,6 +366,7 @@ class PA14Lowerer
         next_special(1), environments(), return_slot_plan(0), return_object_slot(),
         variable_name_counts(),
         reserved_value_names(), stable_member_addresses(), aggregate_precomputed_values(),
+        member_pointer_adjustments(),
         case_labels(), emitted_cases(), named_labels(),
         switch_end_targets(), break_targets(), continue_targets(),
         unevaluated_context(false), defer_temporary_cleanup(false),
@@ -502,7 +504,8 @@ void CollectLocalStatics(const CPPGMAstNodePtr& node, Scope* scope,
                             bool definition, bool out_of_class_member);
 void MarkHiddenFriendDependencies();
 void MarkHiddenFriendDependencyNodes(const CPPGMAstNodePtr& node, Scope* scope);
-void CollectInheritedConstructors(const TypePtr& owner, Scope* scope);
+void CollectInheritedConstructors(const TypePtr& owner, Scope* scope,
+                                  const vector<TypePtr>& bases);
 void EnsureConstructorBaseEntry(FunctionRecord* function);
 void CollectImplicitConstructor(const TypePtr& owner, Scope* scope,
                                 bool force = false);
@@ -788,6 +791,8 @@ Value ConvertValue(Value value, const TypePtr& target,
                    bool immediate_return = false,
                    bool adjust_derived_pointer = false);
 
+bool TryConvertMemberPointerValue(Value value, const TypePtr& target, Value* result);
+
 Value EmitConversionOperator(const CPPGMAstNodePtr& node, Scope* scope,
                              const TypePtr& target, bool allow_explicit);
 
@@ -874,6 +879,9 @@ string StableMemberAddressKey(const CPPGMAstNodePtr& node, Binding* member,
 string AdjustBaseAddress(const string& base, const TypePtr& derived,
                          const TypePtr& target,
                          bool project_base_path = false);
+
+bool UniqueBaseOffset(const TypePtr& derived, const TypePtr& target,
+                      size_t* offset);
 
 string AdjustDerivedAddress(const string& base, const TypePtr& derived,
                             const TypePtr& base_type);

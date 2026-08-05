@@ -299,6 +299,12 @@ string LastComponent(const string& name);
 string StripTypeMarker(const string& name);
 string TypeText(const TypePtr& type, bool extended = false);
 bool SameTypeIgnoringTopCv(const TypePtr& left, const TypePtr& right);
+// Keep the multi-base representation in one place.  `direct_base` remains a
+// compatibility field for the single-inheritance consumers from earlier PAs,
+// while these helpers make new semantic/lowering code consume every direct
+// base and retain the old representation as a fallback for materialized types.
+vector<TypePtr> DirectBaseTypes(const TypePtr& type);
+vector<TypePtr> BaseTypeClosure(const TypePtr& type);
 TypePtr Fundamental(const string& name);
 TypePtr CloneWithCv(const TypePtr& original, bool add_const, bool add_volatile);
 TypePtr PointerTo(const TypePtr& pointee);
