@@ -189,3 +189,54 @@ report, and the PA25 file audit.
 The focused replay cases pass; `make test-report-through-pa24` passes 2600/2600;
 `make test-report ACTIVE_TEST_REPORT_PAS='pa25'` passes 69/69; and the file
 audit passes with only the repository's existing warnings.
+
+## Architecture Review — final PA25 stage audit — 2026-08-05
+
+The completed PA25 stage preserves the staged compiler architecture and adds
+the new language behavior at the existing typed seams:
+
+- The shared source grammar and PA10 AST remain the syntax boundary.  PA25
+  does not parse or manufacture LowIR answers in the frontend.
+- PA11/PA12 continue to own typed expression categories, conversions, class
+  layout, access, polymorphism, and declaration facts.  PA18 owns template
+  replay and generated closure-class identity, using source spans and replay
+  maps across AST rebuilding.  `pa25_templates_rewrite_callable.cpp` extends
+  callable result deduction at that template seam.
+- PA14 remains the single source-to-LowIR backend.  Capturing closures use
+  generated class fields and the ordinary member-call/object paths;
+  initializer lists use typed element conversion, backing storage, and hidden
+  begin/size facts; RTTI uses demand-driven typed globals and ordinary
+  address/load/branch/call instructions; and source exceptions use typed EH
+  routes, runtime declarations, and cleanup blocks.
+- The final checkpoint's object-transfer split keeps special forms,
+  indirect-result calls, conversion results, derived-to-base transfers, and
+  same-type copy/move operations responsibility-specific while retaining one
+  class ABI and lifetime model.  `FunctionState` records temporary objects,
+  live variables, exception routes, constructor-unwind contexts, deferred
+  call completion, and shared dispatch with stable `deque`-backed ownership.
+- Demand and ordering are compiler state: RTTI and closure helpers are
+  materialized only when source use requires them, emitted functions and
+  globals are ordered through the existing demand passes, and order-sensitive
+  LowIR blocks/actions remain in source/semantic order.  The reentrant
+  static-member replay fix avoids recursive probe evaluation without changing
+  ordinary earlier-stage lowering.
+- `dev/frontend_source_sets.mk` registers every new PA25 implementation
+  unit.  The file audit has no fatal or PA25-specific finding; its 12 warnings
+  are inherited shared-header/helper advisories recorded by earlier stages.
+
+## Final Architecture Review
+
+The final checkpoint is `b50789b` (`Implement PA25 full stage`), preceded by
+`42314fe` and `bd025c2`, and integrated with `23d34ce` (`Fix recursive
+static-member replay`).  The review covered the complete PA25 fixture surface:
+capturing/default/reference/`this` lambdas, initializer-list deduction and
+range lowering, static and polymorphic `typeid`, supported pointer-form
+`dynamic_cast`, source exceptions, temporary and constructor unwind cleanup,
+template replay, indirect class-parameter ABI, and the negative semantic
+cases.
+
+Final conclusion: PA25 is a monotonic, demand-driven extension over PA24.
+Its semantic ownership, stable lowering pointers, class/object lifetime
+records, deterministic LowIR emission, and template/RTTI boundaries are
+grounded in the current implementation and preserve all earlier assignments.
+The exact final audit and gate evidence are recorded in `pa25/audit.md`.
