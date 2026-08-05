@@ -4,6 +4,19 @@
 
 using namespace std;
 namespace pa18_templates_internal {
+string PA18TemplateExpander::GeneratedStaticOwner(const CPPGMAstNodePtr& generated,
+	const TemplateDefinition& parent, bool static_data) const
+{
+	const string scope = GeneratedOwner(parent);
+	if(!static_data) return scope;
+	const CPPGMAstNodePtr identifier = DescendantOfKind(generated, "identifier"); const string prefix =
+		identifier ? PrefixComponent(identifier->value) : string();
+	const bool scope_qualified = scope.empty() || prefix == scope ||
+		(prefix.size() > scope.size() && prefix.compare(0, scope.size(), scope) == 0 && prefix[scope.size()] == ':');
+	// Keep relative replay in its lexical namespace, including anonymous scopes.
+	return !scope_qualified && class_contexts_.find(scope) == class_contexts_.end() ?
+		scope : PrefixComponent(scope);
+}
 
 CPPGMAstNodePtr PA18TemplateExpander::TransformInstantiatedNode(
 	const TemplateDefinition& definition, const string& context,

@@ -211,7 +211,11 @@ bool PA18TemplateExpander::TryMemberCandidate(MemberCallState* state,
 			map<string, string> inferred;
 			const string result_pattern = NodeTypeSpelling(declaration->children[0]) +
 				DeclaratorSuffix(declarator);
-			if(!MatchTypePattern(result_pattern, expected_result, parameter_names,
+			const string rewritten_result_pattern = CanonicalSpelling(ResolveAlias(
+				ReplaceIdentifiers(RewriteText(result_pattern, candidate.owner->context,
+					candidate.candidate_substitutions, 0), candidate.candidate_substitutions),
+				candidate.owner->context));
+			if(!MatchTypePattern(rewritten_result_pattern, expected_result, parameter_names,
 				&inferred, candidate.owner->context)) return false;
 			size_t expected_parameter = 0;
 			for(size_t parameter = 0; parameter < parameter_clause->children.size();

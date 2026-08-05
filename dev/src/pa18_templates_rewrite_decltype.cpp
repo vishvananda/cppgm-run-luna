@@ -281,6 +281,11 @@ string PA18TemplateExpander::FunctionArgumentObjectType(string raw,
 		raw = CanonicalSpelling(raw.substr(0, raw.size() - 6));
 	while(raw.size() > 9 && raw.compare(raw.size() - 9, 9, " volatile") == 0)
 		raw = CanonicalSpelling(raw.substr(0, raw.size() - 9));
+	// Resolve aliases after reference/cv transport has been removed.  A
+	// parameter such as `file_info const&` cannot be looked up as an alias
+	// while the suffix is still attached; leaving the alias spelling here makes
+	// unrelated concrete class specializations look convertible.
+	raw = CanonicalSpelling(ResolveAlias(raw, context));
 	return raw;
 }
 string PA18TemplateExpander::FunctionLookupContext(const string& context) const

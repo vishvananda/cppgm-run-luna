@@ -1329,11 +1329,15 @@ PA14Lowerer::Value PA14Lowerer::EmitValue(const CPPGMAstNodePtr& node, Scope* sc
     }
     if(node->kind == "cast-expression") {
       TypePtr target = analyzer_.TypeFromTypeId(node->children[0], scope);
+      Value cast_value;
+      bool cast_value_emitted = false;
       if(target && PA12Operator(node->value) == "dynamic_cast")
         return EmitDynamicCast(node, scope, target);
       if(target && type_value(target) && type_value(target)->kind == TYPE_POINTER &&
          PA12Operator(node->value) == "reinterpret_cast") {
-        Value source = EmitValue(node->children[1], scope);
+        cast_value = EmitValue(node->children[1], scope);
+        cast_value_emitted = true;
+        Value& source = cast_value;
         if(source.type && is_integral_type(source.type)) {
           Value result;
           result.type = target;
@@ -1374,7 +1378,8 @@ PA14Lowerer::Value PA14Lowerer::EmitValue(const CPPGMAstNodePtr& node, Scope* sc
 		// expected target passed into EmitValue can normalize a same-width signed
 		// operand before ConvertValue sees the cast boundary, losing the required
 		// signed-to-unsigned value copy.
-		Value value = EmitValue(node->children[1], scope);
+		Value value = cast_value_emitted ? cast_value :
+			EmitValue(node->children[1], scope);
 		if(state_ && state_->record && state_->record->constructor &&
 		   value.known_constant && is_integral_type(value.type) &&
 		   is_integral_type(target) &&

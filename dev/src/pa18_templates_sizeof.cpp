@@ -37,6 +37,24 @@ bool PA18TemplateExpander::EvaluateExpandedSizeofText(const string& raw,
 				call_type = CanonicalSpelling(call_type.substr(0, call_type.size() - 1));
 			size = EstimateTypeSize(call_type, context);
 		}
+		if(!size) {
+			// `sizeof` may contain an overloaded operator expression rather
+			// than a call-expression.  The typed expression rewriter already
+			// resolves that operator result (including using-directive lookup),
+			// so use its object type before treating the operand as dependent.
+			const string expression_type = ExpressionTypeSpelling(operand, context,
+				substitutions);
+			if(!expression_type.empty()) {
+				string resolved_expression_type = ResolveAlias(
+					CanonicalSpelling(expression_type), context);
+				while(resolved_expression_type.size() > 1 &&
+					(resolved_expression_type[resolved_expression_type.size() - 1] == '&' ||
+					 resolved_expression_type[resolved_expression_type.size() - 1] == '*'))
+					resolved_expression_type = CanonicalSpelling(
+						resolved_expression_type.substr(0, resolved_expression_type.size() - 1));
+				size = EstimateTypeSize(resolved_expression_type, context);
+			}
+		}
 		if(size) {
 			const string replacement = IntegralValueSpelling(PA19IntegralValue::Unsigned(
 				static_cast<unsigned long long>(size), "unsigned long", 64));

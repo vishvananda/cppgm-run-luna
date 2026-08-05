@@ -619,7 +619,7 @@ private:
 		const CPPGMAstNodePtr& declarator) const;
 	void AppendFunctionParameters(const CPPGMAstNodePtr& clause, string* result, bool member_pointer_type) const; string TypeIdSpelling(const CPPGMAstNodePtr& type_id) const;
 	bool CollectImmediateReturnConstraint(const CPPGMAstNodePtr& declaration, string* condition) const; bool IsDirectCvQualifiedAliasTarget(const CPPGMAstNodePtr& declaration, const vector<TemplateParameter>& parameters) const;
-	string GeneratedOwner(const TemplateDefinition& definition) const; string QualifyAliasTarget(const string& target, const string& alias) const; void ResolveUsingDeclarationTargets(); bool HasUsingMemberTemplate(const string& context, const string& member) const;
+	string GeneratedOwner(const TemplateDefinition& definition) const; string QualifyAliasTarget(const string& target, const string& alias) const; void ResolveUsingDeclarationTargets(); bool HasUsingMemberTemplate(const string& context, const string& member) const; string GeneratedStaticOwner(const CPPGMAstNodePtr& generated, const TemplateDefinition& parent, bool static_data) const;
 	bool HasReplayContext(const map<string, string>& substitutions) const
 	{
 		return !substitutions.empty() || !active_concrete_owner_.name.empty();

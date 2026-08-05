@@ -441,8 +441,8 @@
 			}
 			MarkGeneratedNode(generated, parent.qualified_name, parent_args,
 				explicit_instantiation);
-				(void)generated_static_data;
-				generated_by_owner_[GeneratedOwner(parent)].push_back(generated);
+			generated_by_owner_[GeneratedStaticOwner(generated, parent,
+				generated_static_data)].push_back(generated);
 		}
 	}
 	void InstantiateNestedClass(const TemplateDefinition& parent,

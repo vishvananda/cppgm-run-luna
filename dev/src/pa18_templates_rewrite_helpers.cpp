@@ -512,6 +512,73 @@ void PA18TemplateExpander::TransformRegularChildrenWithInitializerType(
 			break;
 		}
 	}
+	// A qualified member-template address in an aggregate initializer is
+	// selected by the type of the destination field, not by the aggregate's
+	// own class type.  Preserve that typed fact while replaying the initializer
+	// so an overloaded `wrap` template can be deduced from the field's function
+	// pointer signature.
+	if(!expected.empty() && input->kind == "simple-declaration") {
+		const CPPGMAstNodePtr declarators = ChildOfKindLocal(input,
+			"init-declarator-list");
+		if(declarators) for(size_t item = 0; item < declarators->children.size(); ++item) {
+			const CPPGMAstNodePtr entry = declarators->children[item];
+			if(!entry || entry->children.size() < 2 || !entry->children[1]) continue;
+			CPPGMAstNodePtr initializer = entry->children[1];
+			if(initializer->kind == "initializer" && initializer->children.size() == 1)
+				initializer = initializer->children[0];
+			if(!initializer || initializer->kind != "braced-init-list" ||
+				initializer->children.empty()) continue;
+			string aggregate = CanonicalSpelling(expected);
+			while(aggregate.compare(0, 6, "const ") == 0 ||
+				aggregate.compare(0, 9, "volatile ") == 0)
+				aggregate = CanonicalSpelling(aggregate.substr(aggregate.find(' ') + 1));
+			while(aggregate.size() > 6 && aggregate.compare(aggregate.size() - 6,
+				6, " const") == 0)
+				aggregate = CanonicalSpelling(aggregate.substr(0, aggregate.size() - 6));
+			while(aggregate.size() > 9 && aggregate.compare(aggregate.size() - 9,
+				9, " volatile") == 0)
+				aggregate = CanonicalSpelling(aggregate.substr(0, aggregate.size() - 9));
+			aggregate = CanonicalSpelling(ResolveAlias(aggregate, context));
+			const CPPGMAstNodePtr declaration = FindClassDeclaration(aggregate, context);
+			if(!declaration) continue;
+			bool aggregate_field_type = false;
+			for(size_t member_index = 0; member_index < declaration->children.size();
+				++member_index) {
+				const CPPGMAstNodePtr member = declaration->children[member_index];
+				if(!member || member->kind != "simple-declaration" ||
+					member->children.empty() || HasDeclarationSpecifier(
+					member->children[0], "typedef") || HasDeclarationSpecifier(
+					member->children[0], "static")) continue;
+				const CPPGMAstNodePtr member_declarators = ChildOfKindLocal(member,
+					"init-declarator-list");
+				if(!member_declarators) continue;
+				for(size_t member_item = 0; member_item < member_declarators->children.size();
+					++member_item) {
+					const CPPGMAstNodePtr member_entry = member_declarators->children[member_item];
+					if(!member_entry || member_entry->children.empty() ||
+						DescendantOfKind(member_entry->children[0], "parameter-clause")) continue;
+					const string member_name = LastComponent(FirstIdentifierLocal(
+						member_entry->children[0]));
+					if(member_name.empty()) continue;
+					string member_type;
+					set<string> active;
+					if(!FindClassMemberType(aggregate, member_name, substitutions, context,
+						&member_type, &active, false))
+						member_type = DeclaratorTypeSpelling(NodeTypeSpelling(member->children[0]),
+							member_entry->children[0]);
+					if(member_type.empty()) continue;
+					member_type = RewriteText(member_type, context, substitutions, 0, true,
+						true, defer_type_only_class_definitions_ != 0);
+					if(!member_type.empty()) {
+						expected = CanonicalSpelling(ResolveAlias(member_type, context));
+						aggregate_field_type = !expected.empty();
+					}
+					break;
+				}
+				if(aggregate_field_type) break;
+			}
+		}
+	}
 	const string saved = active_initializer_expected_type_;
 	if(input->kind == "simple-declaration") active_initializer_expected_type_ = expected;
 	try {

@@ -128,6 +128,12 @@ bool PA18TemplateExpander::FunctionArgumentViable(const string& parameter,
 					}
 				}
 				if(same_specialization) return true;
+				// The generated object is a concrete specialization of the same
+				// primary.  A different argument list is a distinct class object;
+				// do not fall through to the broad user-conversion probe, which can
+				// mistake an unrelated converting constructor parameter for a
+				// conversion between sibling specializations.
+				return false;
 			}
 		}
 	}
