@@ -772,8 +772,17 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
         object_operand = new_temp();
         AddInstruction(object_operand + " = addr $" + slot);
       }
+      if(choice.project_base_type && object_type &&
+         !PA12SameType(object_type, choice.project_base_type, true)) {
+        object_operand = AdjustBaseAddress(object_operand, object_type,
+          choice.project_base_type, true);
+        object_type = choice.project_base_type;
+      }
+      const TypePtr receiver_owner = choice.member_pointer_owner ?
+        choice.member_pointer_owner :
+        (choice.binding ? choice.binding->member_owner : TypePtr());
       object_operand = AdjustBaseAddress(object_operand, object_type,
-        choice.binding ? choice.binding->member_owner : TypePtr(),
+        receiver_owner,
         choice.project_base_path);
       operands.push_back(object_operand);
       if(choice.virtual_dispatch) virtual_object_operand = object_operand;
@@ -944,9 +953,15 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
 		}
 	  }
 	  signature << " as (";
-      for(size_t i = 0; i < choice.function->parameters.size(); ++i) {
+      const bool synthetic_member_pointer_call = choice.member &&
+        !choice.static_member && !function_record;
+      const size_t signature_parameters = choice.function->parameters.size() +
+        (synthetic_member_pointer_call ? 1 : 0);
+      for(size_t i = 0; i < signature_parameters; ++i) {
         if(i != 0) signature << ", ";
-        const TypePtr parameter = choice.function->parameters[i];
+        const TypePtr parameter = synthetic_member_pointer_call && i == 0 ?
+          PointerTo(choice.member_pointer_owner) :
+          choice.function->parameters[i - (synthetic_member_pointer_call ? 1 : 0)];
         const bool by_address = parameter && !type_is_reference(parameter) &&
           type_value(parameter) && type_value(parameter)->kind == TYPE_CLASS &&
           !function_record && ClassValueNeedsIndirect(parameter);

@@ -225,6 +225,12 @@ bool PA18TemplateExpander::ResolvePointerOrReferenceArgument(
 		&function_result, &function_parameters, &function_qualifiers);
 	const bool function_pointer_parameter = SplitFunctionPointerType(declared_type,
 		&function_result, &function_parameters);
+	string member_result, member_owner, member_qualifiers;
+	vector<string> member_parameters;
+	bool member_function = false;
+	const bool member_pointer_parameter = SplitMemberPointerType(declared_type,
+		&member_result, &member_owner, &member_parameters, &member_qualifiers,
+		&member_function);
 	string source_function_result, source_function_qualifiers;
 	vector<string> source_function_parameters;
 	const bool source_direct_function_parameter = SplitDirectFunctionType(
@@ -250,7 +256,8 @@ bool PA18TemplateExpander::ResolvePointerOrReferenceArgument(
 	// language, but its source spelling may still be either `R(Args...)` or
 	// `R (*)(Args...)`.  The pointer is nested in the declarator parentheses in
 	// the latter form, so the top-level scan above deliberately cannot find it.
-	if(source_direct_function_parameter || source_function_pointer_parameter)
+	if(source_direct_function_parameter || source_function_pointer_parameter ||
+		member_pointer_parameter)
 		pointer_or_reference = true;
 	if(!pointer_or_reference) return false;
 	const bool source_explicit_pointer = parameter.non_type_type.find('*') != string::npos ||
@@ -258,6 +265,17 @@ bool PA18TemplateExpander::ResolvePointerOrReferenceArgument(
 	string raw_shape = CanonicalSpelling(RemoveMarker(raw));
 	while(!raw_shape.empty() && raw_shape[0] == '=')
 		raw_shape = CanonicalSpelling(raw_shape.substr(1));
+	// A non-type parameter whose declared type is itself a member-pointer type
+	// is often forwarded through another non-type parameter (`Callee` in
+	// `fast_mem_fn<MFPT, Callee>`).  Classify the forwarded value after applying
+	// that typed substitution; otherwise the intermediate identifier looks like
+	// an integral constant and the member-pointer address is rejected before
+	// TransformInstantiatedNode can replay its value.
+	if(member_pointer_parameter) {
+		const string substituted_shape = CanonicalSpelling(ReplaceIdentifiers(
+			raw_shape, substitutions));
+		if(!substituted_shape.empty()) raw_shape = substituted_shape;
+	}
 	bool raw_identifier = !raw_shape.empty() &&
 		(isalpha(static_cast<unsigned char>(raw_shape[0])) || raw_shape[0] == '_');
 	for(size_t position = 1; raw_identifier && position < raw_shape.size(); ++position)
@@ -281,6 +299,31 @@ bool PA18TemplateExpander::ResolvePointerOrReferenceArgument(
 		if(!rewritten.empty()) pointer_argument = CanonicalSpelling(rewritten);
 	} catch(const PA18SubstitutionFailure&) {
 	}
+	// A member-pointer non-type argument may name the owner through a typedef
+	// declared in the enclosing class (`&self::on`).  That alias is not visible
+	// from the detached nested-class replay context, but the declared member
+	// pointer type carries the concrete owner after substitution.  Resolve the
+	// owner from that typed fact before replaying the value into the generated
+	// body; leaving the alias spelling behind turns a valid address constant into
+	// an unresolved expression in the materialized class.
+	if(member_pointer_parameter && pointer_argument.size() > 1 &&
+		pointer_argument[0] == '&') {
+		const string target = pointer_argument.substr(1);
+		const size_t separator = target.rfind("::");
+		if(separator != string::npos) {
+			const string source_owner = target.substr(0, separator);
+			const string member_name = target.substr(separator + 2);
+			string resolved_owner = ResolveAlias(source_owner, context);
+			if(resolved_owner.empty() || resolved_owner == source_owner) {
+				const bool known_source = class_contexts_.find(source_owner) !=
+					class_contexts_.end() || FindClassDeclaration(source_owner, context) !=
+					CPPGMAstNodePtr();
+				if(!known_source && !member_owner.empty()) resolved_owner = member_owner;
+			}
+			if(!resolved_owner.empty() && resolved_owner != source_owner)
+				pointer_argument = "&" + resolved_owner + "::" + member_name;
+		}
+	}
 	if(raw_identifier) {
 		map<string, string>::const_iterator qualified = variable_qualified_names_.find(raw_shape);
 		if(qualified != variable_qualified_names_.end()) pointer_argument = qualified->second;
@@ -294,7 +337,7 @@ bool PA18TemplateExpander::ResolvePointerOrReferenceArgument(
 	// instantiated call body names the adjusted function-pointer value.  Keep
 	// the callable identity in the AST and let PA18's typed call fact preserve
 	// the required indirect address/decay sequence in PA14.
-	if(pointer_argument.size() > 1 && pointer_argument[0] == '&' &&
+	if(!member_pointer_parameter && pointer_argument.size() > 1 && pointer_argument[0] == '&' &&
 		FindFunctionSignature(pointer_argument.substr(1), context))
 		pointer_argument.erase(0, 1);
 	const bool null_pointer_constant = raw_shape == "0" || raw_shape == "nullptr" ||

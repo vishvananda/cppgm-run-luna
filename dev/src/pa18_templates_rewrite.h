@@ -163,65 +163,9 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 				declarator->children[child]->kind == "parameter-pack") return true;
 		return false;
 	}
-	string FunctionSignatureType(const FunctionSignature& signature) const
-	{
-		if(!signature.result_specifiers || !signature.parameters) return string();
-		string result = NodeTypeSpelling(signature.result_specifiers) + "(*) (";
-		for(size_t i = 0; i < signature.parameters->children.size(); ++i) {
-			const CPPGMAstNodePtr parameter = signature.parameters->children[i];
-			if(!parameter || parameter->kind != "parameter-declaration") continue;
-			if(result[result.size() - 1] != '(') result += ',';
-			const bool function_parameter = parameter->children.size() > 1 &&
-				parameter->children[1] &&
-				ChildOfKindLocal(parameter->children[1], "nested-declarator") &&
-				ChildOfKindLocal(parameter->children[1], "parameter-clause");
-			result += function_parameter ? FunctionTypeSpelling(parameter) :
-				ParameterTypeSpelling(parameter);
-		}
-		result += ')';
-		return CanonicalSpelling(result);
-	}
+	string FunctionSignatureType(const FunctionSignature& signature) const;
 	vector<string> FunctionExpressionTypes(const CPPGMAstNodePtr& expression,
-		const string& context) const
-	{
-		vector<string> result;
-		CPPGMAstNodePtr function = expression;
-		if(function && function->kind == "unary-expression" &&
-			RemoveMarker(function->value) == "&" && !function->children.empty())
-			function = function->children[0];
-		if(!function || function->kind != "id-expression") return result;
-		const string name = LastComponent(function->value);
-		map<string, vector<string> >::const_iterator names =
-			function_signatures_by_name_.find(name);
-		if(names != function_signatures_by_name_.end()) {
-			for(size_t i = 0; i < names->second.size(); ++i) {
-				map<string, vector<FunctionSignature> >::const_iterator overloads =
-					function_overloads_.find(names->second[i]);
-				if(overloads != function_overloads_.end())
-					for(size_t overload = 0; overload < overloads->second.size(); ++overload) {
-						const string type = FunctionSignatureType(overloads->second[overload]);
-						if(!type.empty() && find(result.begin(), result.end(), type) == result.end())
-							result.push_back(type);
-					}
-				else {
-					map<string, FunctionSignature>::const_iterator signature =
-						function_signatures_.find(names->second[i]);
-					if(signature == function_signatures_.end()) continue;
-					const string type = FunctionSignatureType(signature->second);
-					if(!type.empty() && find(result.begin(), result.end(), type) == result.end())
-						result.push_back(type);
-				}
-			}
-		}
-		if(result.empty()) {
-			const FunctionSignature* signature = FindFunctionSignature(function->value, context);
-			if(signature) {
-				const string type = FunctionSignatureType(*signature);
-				if(!type.empty()) result.push_back(type);
-			}
-		}
-		return result;
-	}
+		const string& context) const;
 	bool InferFunctionArguments(const TemplateDefinition& definition,
 		const CPPGMAstNodePtr& call, vector<string>* result,
 		const map<string, string>& substitutions, const string& context,
@@ -273,6 +217,13 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 			raw.size() - separator - 3));
 		return result_type == 0 || !result_type->empty();
 	}
+	bool SplitMemberPointerType(string raw, string* result_type,
+		string* owner_type, vector<string>* parameters,
+		string* qualifiers, bool* function_type) const;
+	int MatchTypePatternMemberPointerCases(const string& pattern,
+		const string& actual, const set<string>& parameter_names,
+		map<string, string>* inferred, const string& context,
+		bool class_pattern) const;
 	bool InferFunctionFromExpected(const TemplateDefinition& definition,
 		string expected, vector<string>* result, const string& context) const
 	{
@@ -581,6 +532,7 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 	void ExpandNestedTemplateArgumentPacks(vector<string>* arguments,
 		string* arguments_text);
 	string RewriteText(string raw, const string& context, const map<string, string>& substitutions, bool* template_replaced, bool resolve_alias = true, bool resolve_member = true, bool defer_class_definition = false); DeferredTemplateSummary AnalyzeDeferredTemplate(const TemplateDefinition* source_definition, const vector<string>& current_arguments, bool defer_class_definition) const; string BuildDeferredTemplateSpelling(const string& lookup_base, const string& base, const vector<string>& args, const vector<string>& raw_template_args, const string& context, const map<string, string>& substitutions, const DeferredTemplateSummary& summary) const; bool RewriteDeferredTemplate(string* raw, size_t begin, size_t close, const string& base, const string& lookup_base, const vector<string>& args, const vector<string>& raw_template_args, const string& context, const map<string, string>& substitutions, bool class_template, const DeferredTemplateSummary& summary, bool defer_class_definition, bool* template_replaced, size_t* search) const;
+	map<string, string> SeedTemplateArgumentSubstitutions(const TemplateDefinition& definition, size_t index, const vector<string>& arguments, const map<string, string>& substitutions) const;
 	void ResolveBareGeneratedMemberAlias(string* raw, const string& context) const;
 	void StripStaleGeneratedArguments(string* text) const; void RebindGeneratedOwnerMembers(string* raw, const string& context, const map<string, string>& substitutions, bool* template_replaced);
 	bool RewriteOwnerBoundNestedSpecialization(string* raw, size_t begin, size_t close, const string& base, const vector<string>& current_arguments, const string& context, const map<string, string>& substitutions, bool* template_replaced, size_t* search); bool RewriteUnqualifiedGeneratedSpecialization(string* raw, size_t begin, size_t close, const string& base, const vector<string>& current_arguments, const string& context, const map<string, string>& substitutions, bool* template_replaced, size_t* search);
@@ -588,6 +540,7 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 	string RewriteTextMemberSuffix(string raw, const string& source_spelling, const string& context, const map<string, string>& substitutions, bool* template_replaced, bool materialized_member_type, bool preserved_static_member, bool resolve_alias, bool resolve_member);
 	bool RewriteConcreteNestedMember(string* raw, size_t begin, size_t close, const string& base, const string& context, const map<string, string>& substitutions, bool* template_replaced, size_t* search);
 	bool RewriteGeneratedOwnerNestedMember(string* raw, size_t begin, size_t close, const string& base, const string& context, const map<string, string>& substitutions, bool* template_replaced, size_t* search);
+	string RecoverGeneratedNestedOwner(const TemplateDefinition& definition, const string& local_name, size_t close, const string& raw) const;
 	const TemplateDefinition* SelectFunctionTemplateOverload(const string& raw, const string& lookup_base, const vector<string>& explicit_arguments, const string& context, const map<string, string>& substitutions, const vector<const TemplateDefinition*>& overloads);
 	void ProtectMaterializedSubstitutions(const string& source_spelling, const string& raw, const string& context, const map<string, string>& substitutions, bool materialized_member_type, map<string, string>* final_substitutions) const;
 	void ProtectMaterializedTemplateBases(const string& raw, const string& context, const map<string, string>& substitutions, map<string, string>* protected_substitutions) const;

@@ -21,6 +21,27 @@ const TemplateDefinition* PA18TemplateExpander::SelectClassTemplateDefinition(
 		const map<string, string> no_substitutions;
 		const auto dependent_argument = [this, &context, &no_substitutions](const string& raw) {
 		const string dependency_spelling = CanonicalSpelling(raw);
+		// A member-pointer non-type argument is an address constant, not a
+		// dependent identifier expression.  The generic token scan below sees the
+		// member name (`id`) without a standalone typed entry and would therefore
+		// force the primary template, skipping a partial specialization such as
+		// `fast_mem_fn<MFPT, MemberFunction, 1>`.
+		if(dependency_spelling.size() > 3 && dependency_spelling[0] == '&') {
+			const size_t separator = dependency_spelling.rfind("::");
+			if(separator > 1 && separator + 2 < dependency_spelling.size()) {
+				const string owner = CanonicalSpelling(ResolveAlias(
+					dependency_spelling.substr(1, separator - 1), context));
+				const string member = LastComponent(dependency_spelling.substr(separator + 2));
+				if(!owner.empty() && !member.empty()) {
+					if(!FindFunctionDefinitions(member, owner).empty()) return false;
+					string member_type;
+					set<string> active_members;
+					if(FindClassMemberType(owner, member, no_substitutions, context,
+						&member_type, &active_members, false) && !member_type.empty())
+						return false;
+				}
+			}
+		}
 		const size_t qualified_value_separator = dependency_spelling.rfind("::");
 		if(qualified_value_separator != string::npos &&
 			dependency_spelling.substr(qualified_value_separator + 2) == "value") {

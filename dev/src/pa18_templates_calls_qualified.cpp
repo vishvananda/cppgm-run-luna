@@ -199,7 +199,15 @@ bool PA18TemplateExpander::TransformQualifiedMemberTemplateCall(
 		throw;
 	}
 	active_concrete_owner_ = previous_owner;
-	if(!instantiated) return false;
+	if(!instantiated) {
+		// The ordinary call transform will retry a qualified member-template
+		// candidate when this typed owner probe is not viable.  Do not leave the
+		// synthetic receiver and its arguments attached to `result`; otherwise
+		// the fallback appends a second callee and PA14 later diagnoses the empty
+		// receiver as an expression name.
+		result->children.clear();
+		return false;
+	}
 	result->template_instantiation = true;
 	const string emitted_member = member->children.size() > 1 &&
 		member->children[1] ? LastComponent(member->children[1]->value) :

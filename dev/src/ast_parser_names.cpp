@@ -48,14 +48,21 @@ bool Parser::ParseTemplateSuffix(string* value)
 	string raw;
 	for (size_t i = raw_begin; i < position_; ++i)
 	{
-		if (i != raw_begin && (tokens_[i - 1].text == "const" ||
-			tokens_[i - 1].text == "volatile" ||
-			tokens_[i - 1].text == "typename" ||
-			tokens_[i - 1].text == "template" ||
-			tokens_[i - 1].text == "class" ||
-			tokens_[i - 1].text == "struct" ||
-			tokens_[i - 1].text == "union" ||
-			tokens_[i - 1].text == "enum")) raw += " ";
+		const bool adjacent_words = i != raw_begin &&
+			!tokens_[i - 1].text.empty() && !tokens_[i].text.empty() &&
+			(isalnum(static_cast<unsigned char>(tokens_[i - 1].text[tokens_[i - 1].text.size() - 1])) ||
+			 tokens_[i - 1].text[tokens_[i - 1].text.size() - 1] == '_') &&
+			(isalnum(static_cast<unsigned char>(tokens_[i].text[0])) ||
+			 tokens_[i].text[0] == '_');
+		if (i != raw_begin && (adjacent_words ||
+			(tokens_[i - 1].text == "const" ||
+				tokens_[i - 1].text == "volatile" ||
+			 tokens_[i - 1].text == "typename" ||
+			 tokens_[i - 1].text == "template" ||
+			 tokens_[i - 1].text == "class" ||
+			 tokens_[i - 1].text == "struct" ||
+			 tokens_[i - 1].text == "union" ||
+			 tokens_[i - 1].text == "enum"))) raw += " ";
 		raw += tokens_[i].text;
 	}
 	// A class or namespace member declaration can legitimately use a boolean

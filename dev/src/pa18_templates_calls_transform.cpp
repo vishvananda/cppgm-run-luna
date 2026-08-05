@@ -1236,9 +1236,11 @@ void PA18TemplateExpander::MaterializeFreeFunctionCall(
 		if(!HasMaterializedMemberFunction(callee_name, context) &&
 			(!HasExactOrdinaryMatch(result, callee_name, substitutions, context) ||
 				inline_template_candidate || extern_template_candidate))
+		{
 			MaterializeFreeFunctionCandidates(definitions, result, result_callee,
 				callee_name, qualified_callee_owner, context, substitutions,
 				inherited_owners);
+		}
 		if(definitions.empty()) {
 			const FunctionSignature* signature = FindFunctionSignature(callee_name, context);
 			if(signature && callee_name.find("::") == string::npos &&

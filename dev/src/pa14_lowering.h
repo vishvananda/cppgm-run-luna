@@ -224,6 +224,7 @@ class PA14Lowerer
 	// Qualified base calls retain each semantic base step in LowIR.  Ordinary
 	// member lookup still uses the canonical aggregate adjustment.
 	bool project_base_path;
+	TypePtr project_base_type; TypePtr member_pointer_owner;
 	bool virtual_dispatch;
 	size_t virtual_slot;
 	TypePtr virtual_owner;
@@ -233,6 +234,7 @@ class PA14Lowerer
     CallChoice()
       : binding(), function(), object(), direct(false), member(false),
 		static_member(false), conversion(false), project_base_path(false),
+		project_base_type(), member_pointer_owner(),
 		virtual_dispatch(false),
 		virtual_slot(0), virtual_owner(), user_defined(1000000),
         worst(1000000), total(1000000) {}
@@ -424,6 +426,7 @@ class PA14Lowerer
 	map<string, TypePtr> demanded_exception_types_;
 	map<string, TypePtr> demanded_thrown_types_;
 	bool has_rtti_syntax_;
+	bool has_dynamic_cast_void_;
 	map<string, vector<TypePtr> > class_types_by_name_;
 	FunctionState* state_;
 	size_t next_needed_order_;
@@ -678,36 +681,24 @@ bool EmitValueSpecialMemberBody(FunctionRecord& function, Scope* scope);
 TypePtr SourceReturnType(const FunctionRecord& function) const;
 
 bool LowParameterIsByAddress(const FunctionRecord& function, size_t index) const;
-
 TypePtr LowParameterSourceType(const FunctionRecord& function, size_t index) const;
-
 void BuildFunctionABI(FunctionRecord& function);
 
 bool HasDefaultArgument(Binding* binding, size_t index) const;
-
 bool HasConstructor(const TypePtr& type) const;
 bool IsInitializerListType(const TypePtr& type) const; void EnsureInitializerListType(const TypePtr& type) const;
 TypePtr InitializerListElementType(const TypePtr& type, Scope* scope) const; TypePtr MakeInitializerListType(const TypePtr& element, Scope* scope) const;
 bool HasInitializerListConstructor(const TypePtr& type) const; bool InitializerListArgumentViable(const CPPGMAstNodePtr& node, const TypePtr& parameter, Scope* scope);
 
 bool HasExplicitConstructor(const TypePtr& type) const;
-
 bool HasUserProvidedConstructor(const TypePtr& type) const;
-
 bool HasDefaultInitializationEffects(const TypePtr& type) const;
-
 bool HasElidedTemplateInitialization(const TypePtr& type) const;
-
 bool HasDefaultConstructionEffects(const TypePtr& type) const;
-
 bool HasClassArrayMember(const TypePtr& type) const;
-
 bool HasNonstaticMemberFunction(const TypePtr& type) const;
-
 bool TemplatePrimaryHasNonstaticMemberFunction(const TypePtr& type) const;
-
 bool HasDestructor(const TypePtr& type) const;
-
 bool DestructorHasEffects(const TypePtr& type) const;
 
 bool IsBitField(Binding* binding, long long* bit_offset = 0,
@@ -862,16 +853,15 @@ string global_address(GlobalRecord* global);
 string function_address(FunctionRecord* function);
 
 string EmitArrayDecay(const CPPGMAstNodePtr& node, Scope* scope);
-
 string EmitSubscriptAddress(const CPPGMAstNodePtr& node, Scope* scope);
-
 string EmitPointerOffset(const CPPGMAstNodePtr& node, Scope* scope);
 
 string EmitAddress(const CPPGMAstNodePtr& node, Scope* scope);
+string EmitReferenceCastAddress(const CPPGMAstNodePtr& node, Scope* scope);
 bool EmitInitializerListAddress(const CPPGMAstNodePtr& node, Scope* scope, string* address);
 
 string EmitOperatorAddress(const CPPGMAstNodePtr& node, Scope* scope);
-
+string EmitMemberPointerAddress(const CPPGMAstNodePtr& node, Scope* scope);
 string EmitCallAddress(const CPPGMAstNodePtr& node, Scope* scope);
 
 string EmitLiteralAddress(const CPPGMAstNodePtr& node);
@@ -1172,7 +1162,8 @@ TypePtr ConstructorObjectType(const CPPGMAstNodePtr& callee, Scope* scope) const
 
 TypePtr BuiltinCastType(const CPPGMAstNodePtr& callee, Scope* scope) const;
 
-ExprInfo InferUnary(const CPPGMAstNodePtr& node, Scope* scope);
+ExprInfo InferUnary(const CPPGMAstNodePtr& node, Scope* scope,
+                    const TypePtr& expected = TypePtr());
 
 ExprInfo InferBinary(const CPPGMAstNodePtr& node, Scope* scope);
 

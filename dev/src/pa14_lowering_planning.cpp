@@ -223,8 +223,49 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
           total += object_rank;
         }
 		for(size_t a = 0; a < arguments.size(); ++a) {
+			ExprInfo conversion_argument = arguments[a];
+			if(a < function->parameters.size() && argument_nodes[a] &&
+				argument_nodes[a]->kind == "unary-expression" &&
+				PA12Operator(argument_nodes[a]->value) == "&" &&
+				!argument_nodes[a]->children.empty() &&
+				argument_nodes[a]->children[0] &&
+				argument_nodes[a]->children[0]->kind == "id-expression") {
+				const TypePtr expected_member = type_value(function->parameters[a]);
+				if(expected_member && expected_member->kind == TYPE_MEMBER_POINTER &&
+					argument_nodes[a]->children[0]->value.find("::") != string::npos) {
+					const ExprInfo address_info = Infer(argument_nodes[a]->children[0], scope);
+					Binding* selected_member = 0;
+					vector<Binding*> address_candidates = address_info.candidates;
+					if(address_info.binding && find(address_candidates.begin(),
+						address_candidates.end(), address_info.binding) == address_candidates.end())
+						address_candidates.push_back(address_info.binding);
+					for(size_t candidate = 0; candidate < address_candidates.size(); ++candidate) {
+						Binding* binding = address_candidates[candidate];
+						if(!binding || !binding->is_member || binding->is_static ||
+							!binding->member_owner || !PA12SameType(
+								type_value(binding->member_owner), expected_member->member_owner, true))
+							continue;
+						const TypePtr candidate_function = function_target_type(binding->type);
+						const bool function_match = expected_member->child &&
+							expected_member->child->kind == TYPE_FUNCTION && candidate_function &&
+							PA12SameType(candidate_function, expected_member->child, false);
+						const bool data_match = expected_member->child &&
+							expected_member->child->kind != TYPE_FUNCTION &&
+							PA12SameType(type_value(binding->type), expected_member->child, true);
+						if(!function_match && !data_match) continue;
+						if(selected_member && !PA12SameType(binding->type,
+							selected_member->type, false))
+							throw logic_error("ambiguous member function address");
+						selected_member = binding;
+					}
+					if(selected_member) {
+						conversion_argument.type = function->parameters[a];
+						conversion_argument.category = "prvalue";
+					}
+				}
+			}
 			int rank = a < function->parameters.size() ?
-				ConversionRank(arguments[a], function->parameters[a]) : 2;
+				ConversionRank(conversion_argument, function->parameters[a]) : 2;
 			// Empty braced-init-lists have no standalone expression type.  Their
 			// target is the parameter being considered: class parameters use the
 			// aggregate-construction path, and an array reference can bind the
@@ -319,6 +360,15 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
         lookup_callee->kind == "id-expression" &&
         lookup_callee->value.find("::") != string::npos;
       best.project_base_path = qualified_member_id;
+      if(qualified_member_id) {
+        const size_t qualifier_separator = lookup_callee->value.rfind("::");
+        const string qualifier = lookup_callee->value.substr(0, qualifier_separator);
+        Analyzer::PathTarget qualifier_target = analyzer_.ResolvePath(scope, qualifier);
+        if(qualifier_target.binding &&
+           (qualifier_target.binding->kind == BIND_TYPE ||
+            qualifier_target.binding->kind == BIND_TYPE_ALIAS))
+          best.project_base_type = type_value(qualifier_target.binding->type);
+      }
       const bool destructor_call = selected && selected->destructor;
       if(best.member && !best.static_member && !qualified_member_id &&
          !destructor_call) {
@@ -363,6 +413,37 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
 		if(!best.function) throw logic_error("expression is not callable");
 		best.direct = false;
 		return best;
+	}
+	CPPGMAstNodePtr effective_callee = callee_node;
+	while(effective_callee && effective_callee->kind == "parenthesized-expression" &&
+	      effective_callee->children.size() == 1 && effective_callee->children[0])
+		effective_callee = effective_callee->children[0];
+	if(effective_callee && effective_callee->kind == "binary-expression" &&
+	   (PA12Operator(effective_callee->value) == ".*" ||
+	    PA12Operator(effective_callee->value) == "->*")) {
+		// An overloaded .* / ->* expression is an ordinary callable object
+		// expression.  Only the built-in member-pointer form is lowered through
+		// the synthetic receiver path below.
+		const ExprInfo effective_info = Infer(effective_callee, scope);
+		if(effective_info.binding) {
+			// Fall through to normal indirect/function-object call selection.
+		} else {
+		const ExprInfo member_info = Infer(effective_callee->children[1], scope);
+		const TypePtr member_pointer = expression_value_type(member_info);
+		if(!member_pointer || member_pointer->kind != TYPE_MEMBER_POINTER ||
+		   !member_pointer->child || member_pointer->child->kind != TYPE_FUNCTION)
+			throw logic_error("member pointer call target is not a function");
+		best.function = member_pointer->child;
+		best.object = effective_callee->children[0];
+		best.member = true;
+		best.static_member = false;
+		best.member_pointer_owner = type_value(member_pointer->member_owner);
+		best.direct = false;
+		best.user_defined = 0;
+		best.worst = 0;
+		best.total = 0;
+		return best;
+		}
 	}
 	ExprInfo callee = Infer(callee_node, scope);
     best.function = function_target_type(callee.type);
@@ -1318,92 +1399,6 @@ void PA14Lowerer::ResolveAutoFunctionReturn(FunctionRecord& record)
     adjusted_source->child = result_type;
     ApplyAutoFunctionReturn(record, old_source, source_function, result_type);
     (void)adjusted_source;
-  }
-TypePtr PA14Lowerer::DeduceAutoFunctionReturn(FunctionRecord& record,
-    const TypePtr& source_function, const CPPGMAstNodePtr& body,
-    const vector<CPPGMAstNodePtr>& returns)
-{
-    FunctionState* saved_state = state_;
-    FunctionState scratch(this, &record);
-    state_ = &scratch;
-    scratch.environments.push_back(map<string, VariablePlan*>());
-    if(record.member && !record.static_member && record.member_owner) {
-      TypePtr this_type = CloneWithCv(type_value(record.member_owner),
-        source_function->function_const, source_function->function_volatile);
-      VariablePlan* this_plan = AddVariablePlan("this", PointerTo(this_type),
-        CPPGMAstNodePtr(), CPPGMAstNodePtr());
-      if(this_plan) scratch.environments.back()["this"] = this_plan;
-    }
-    if(record.lambda_function || IsLambdaOperator(record)) {
-      // The normal auto-return pass runs before a local lambda is emitted, so
-      // its body has not gone through PlanFunction yet.  Plan it here to make
-      // local declarations available to return-expression inference; the
-      // final emission pass replans the body in its ordinary state.
-      PlanFunction(scratch);
-      map<string, VariablePlan*> planned;
-      for(size_t variable = 0; variable < scratch.variables.size(); ++variable)
-        planned[scratch.variables[variable].source_name] = &scratch.variables[variable];
-      scratch.environments.push_back(planned);
-    }
-    Scope* expression_scope = record.scope;
-    map<const CPPGMAstNode*, Scope*>::const_iterator function_scope =
-      analyzer_.function_scopes_.find(record.node.get());
-    if(function_scope != analyzer_.function_scopes_.end()) expression_scope = function_scope->second;
-    map<const CPPGMAstNode*, Scope*>::const_iterator body_scope =
-      analyzer_.compound_scopes_.find(body.get());
-    if(body_scope != analyzer_.compound_scopes_.end()) expression_scope = body_scope->second;
-    TypePtr deduced;
-    string category;
-    for(size_t result_index = 0; result_index < returns.size(); ++result_index) {
-      ExprInfo info = Infer(returns[result_index], expression_scope);
-      TypePtr value = expression_value_type(info);
-      if(!value) throw logic_error("auto return expression has no type");
-      if(!deduced) {
-        deduced = value;
-        category = info.category;
-        if(info.type && info.type->kind == TYPE_LVALUE_REFERENCE) category = "lvalue";
-        else if(info.type && info.type->kind == TYPE_RVALUE_REFERENCE) category = "xvalue";
-      } else if(!PA12SameType(deduced, value, false) || category != info.category) {
-        if(!PA12SameType(deduced, value, false) ||
-           (source_function->child->kind == TYPE_LVALUE_REFERENCE ||
-            source_function->child->kind == TYPE_RVALUE_REFERENCE) &&
-           category != info.category)
-          throw logic_error("inconsistent auto return deduction");
-      }
-    }
-    const auto without_top_cv = [](const TypePtr& original) -> TypePtr {
-      if(!original) return original;
-      TypePtr result(new Type(*original));
-      result->is_const = false;
-      result->is_volatile = false;
-      return result;
-    };
-    function<TypePtr(const TypePtr&, const TypePtr&)> substitute;
-    substitute = [&](const TypePtr& pattern, const TypePtr& value) -> TypePtr {
-      if(!pattern) return value;
-      if(pattern->kind == TYPE_FUNDAMENTAL && pattern->name == "auto")
-        return CloneWithCv(value, pattern->is_const, pattern->is_volatile);
-      if(pattern->kind == TYPE_POINTER) {
-        if(!value || value->kind != TYPE_POINTER)
-          throw logic_error("auto return pointer has incompatible type");
-        return PointerTo(substitute(pattern->child, value->child));
-      }
-      if(pattern->kind == TYPE_ARRAY) {
-        if(!value || value->kind != TYPE_ARRAY)
-          throw logic_error("auto return array has incompatible type");
-        return ArrayOf(pattern->bound, substitute(pattern->child, value->child));
-      }
-      return pattern;
-    };
-    TypePtr result_type;
-    if(source_function->child->kind == TYPE_LVALUE_REFERENCE ||
-       source_function->child->kind == TYPE_RVALUE_REFERENCE) {
-      const TypeKind kind = source_function->child->kind == TYPE_LVALUE_REFERENCE ||
-        category == "lvalue" ? TYPE_LVALUE_REFERENCE : TYPE_RVALUE_REFERENCE;
-      result_type = ReferenceTo(kind, substitute(source_function->child->child, deduced));
-    } else result_type = substitute(source_function->child, without_top_cv(deduced));
-    state_ = saved_state;
-    return result_type;
   }
 void PA14Lowerer::ApplyAutoFunctionReturn(FunctionRecord& record,
     const TypePtr& old_source, const TypePtr& source_function,

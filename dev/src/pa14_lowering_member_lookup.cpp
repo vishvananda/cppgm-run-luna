@@ -11,10 +11,31 @@ vector<Binding*> PA14Lowerer::MemberBindings(const TypePtr& raw_object,
     if(object && object->kind == TYPE_POINTER) object = type_value(object->child);
     if(!object || object->kind != TYPE_CLASS || !object->owned_scope)
       return vector<Binding*>();
+    const auto deduplicate = [](const vector<Binding*>& input) {
+      vector<Binding*> result;
+      for(size_t candidate = 0; candidate < input.size(); ++candidate) {
+        Binding* current = input[candidate];
+        bool repeated = false;
+        for(size_t existing = 0; existing < result.size(); ++existing) {
+          Binding* prior = result[existing];
+          if(!current || !prior || current->kind != prior->kind ||
+             current->name != prior->name || current->member_index != prior->member_index ||
+             current->type.get() != prior->type.get()) continue;
+          if(current->member_owner && prior->member_owner &&
+             current->member_owner->name == prior->member_owner->name)
+            repeated = true;
+          else if(!current->member_owner && !prior->member_owner)
+            repeated = true;
+          if(repeated) break;
+        }
+        if(!repeated) result.push_back(current);
+      }
+      return result;
+    };
     vector<Binding*> direct;
     const vector<Binding*> all_direct = DirectBindings(object->owned_scope, last_component(name));
-    for(size_t i = 0; i < all_direct.size(); ++i)
-      if(!all_direct[i]->hidden_friend) direct.push_back(all_direct[i]);
+	for(size_t i = 0; i < all_direct.size(); ++i)
+	  if(!all_direct[i]->hidden_friend) direct.push_back(all_direct[i]);
     if(direct.empty() && name.size() > 1 && name[0] == '~') {
       const string actual = "~" + LastComponent(object->name);
       if(actual != last_component(name)) {
@@ -37,10 +58,18 @@ vector<Binding*> PA14Lowerer::MemberBindings(const TypePtr& raw_object,
         if(!imported_owner->owned_scope) continue;
         const vector<Binding*> base_bindings = DirectBindings(
           imported_owner->owned_scope, last_component(name));
-        for(size_t base = 0; base < base_bindings.size(); ++base)
-          if(!base_bindings[base]->hidden_friend &&
-             find(imported.begin(), imported.end(), base_bindings[base]) == imported.end())
-            imported.push_back(base_bindings[base]);
+		for(size_t base = 0; base < base_bindings.size(); ++base) {
+			if(base_bindings[base]->hidden_friend ||
+				find(imported.begin(), imported.end(), base_bindings[base]) != imported.end()) continue;
+			bool same_import = false;
+			for(size_t existing = 0; existing < direct.size(); ++existing)
+				if(direct[existing]->kind == base_bindings[base]->kind &&
+					direct[existing]->type.get() == base_bindings[base]->type.get()) {
+					same_import = true;
+					break;
+				}
+			if(!same_import) imported.push_back(base_bindings[base]);
+		}
       }
       if(!imported.empty()) {
         // Keep the imported declaration first: a public using-declaration may
@@ -51,13 +80,18 @@ vector<Binding*> PA14Lowerer::MemberBindings(const TypePtr& raw_object,
           if(find(direct.begin(), direct.end(), imported[base]) == direct.end())
             direct.push_back(imported[base]);
       }
-      return direct;
+      return deduplicate(direct);
     }
-    if(object->direct_base) {
-      vector<Binding*> inherited = MemberBindings(object->direct_base, name);
-      if(!inherited.empty()) return inherited;
-      const TypePtr malformed_base = type_value(object->direct_base);
-      if(malformed_base && malformed_base->template_specialization &&
+    const vector<TypePtr> bases = !object->direct_bases.empty() ?
+      object->direct_bases : (object->direct_base ?
+        vector<TypePtr>(1, object->direct_base) : vector<TypePtr>());
+    vector<Binding*> inherited;
+    for(size_t base_index = 0; base_index < bases.size(); ++base_index) {
+      const TypePtr direct_base = type_value(bases[base_index]);
+      vector<Binding*> from_base = MemberBindings(direct_base, name);
+      inherited.insert(inherited.end(), from_base.begin(), from_base.end());
+      const TypePtr malformed_base = direct_base;
+      if(from_base.empty() && malformed_base && malformed_base->template_specialization &&
          !malformed_base->template_primary.empty()) {
         bool has_pack_marker = false;
         for(size_t argument = 0; argument < malformed_base->template_arguments.size(); ++argument)
@@ -65,7 +99,7 @@ vector<Binding*> PA14Lowerer::MemberBindings(const TypePtr& raw_object,
             has_pack_marker = true;
             break;
           }
-        if(!has_pack_marker) return vector<Binding*>();
+        if(!has_pack_marker) continue;
         const string primary = LastComponent(malformed_base->template_primary);
         map<string, vector<TypePtr> >::const_iterator candidates =
           class_types_by_name_.find(primary);
@@ -92,13 +126,17 @@ vector<Binding*> PA14Lowerer::MemberBindings(const TypePtr& raw_object,
                 break;
               }
             if(!same) continue;
-            inherited = MemberBindings(specialization, name);
-            if(!inherited.empty()) return inherited;
+            vector<Binding*> materialized = MemberBindings(specialization, name);
+            if(!materialized.empty()) {
+              inherited.insert(inherited.end(), materialized.begin(), materialized.end());
+              break;
+            }
           }
         }
       }
     }
+    if(!inherited.empty()) return deduplicate(inherited);
     return vector<Binding*>();
-  }
+}
 
 } // namespace cppgm_pa14_lowering

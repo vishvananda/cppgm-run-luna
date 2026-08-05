@@ -112,6 +112,38 @@ PA14Lowerer::Value PA14Lowerer::ConvertValue(Value value, const TypePtr& target,
     if(target_value->kind == TYPE_POINTER && value.type->kind == TYPE_ARRAY) {
       return value;
     }
+    if(target_value->kind == TYPE_MEMBER_POINTER) {
+      const TypePtr source_value = type_value(value.type);
+      if(source_value && source_value->kind == TYPE_FUNDAMENTAL &&
+         source_value->name == "nullptr_t") {
+        Value result = value;
+        result.type = target_value;
+        // Keep LowIR's typed null spelling when the source is nullptr.  An
+        // integral null pointer constant is represented by the integer zero
+        // instead; both are semantically null but the distinction is useful
+        // to the typed object representation.
+        result.operand = value.operand.empty() ? "nullptr" : value.operand;
+        result.known_constant = false;
+        result.constant = 0;
+        return result;
+      }
+      if(value.known_constant && value.constant == 0 &&
+         is_integral_type(source_value)) {
+        Value result = value;
+        result.type = target_value;
+        result.operand = "0";
+        return result;
+      }
+      if(source_value && source_value->kind == TYPE_MEMBER_POINTER) {
+        Value result = value;
+        result.type = target_value;
+        // A base-to-derived member-pointer conversion is representation
+        // preserving for the primary/non-virtual base layout used here.
+        // Data-member offset adjustment for a non-primary base is applied by
+        // the address operation once its complete-object path is known.
+        return result;
+      }
+    }
     if(target_value->kind == TYPE_POINTER && value.type->kind == TYPE_POINTER &&
        value.type->child && target_value->child &&
        adjust_derived_pointer && IsDerivedFrom(value.type->child, target_value->child)) {
@@ -1100,13 +1132,6 @@ string PA14Lowerer::EmitPointerOffset(const CPPGMAstNodePtr& node, Scope* scope)
     AddInstruction(result + " = index i8 " + base + ", " + scaled);
     return result;
   }
-string PA14Lowerer::EmitLiteralAddress(const CPPGMAstNodePtr& node)
-{
-    const string symbol = InternString(node->value);
-    const string temp = new_temp();
-    AddInstruction(temp + " = addr @" + symbol);
-    return temp;
-}
 string PA14Lowerer::EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
 {
     if(!node) throw logic_error("missing lvalue"); string initializer_list_address;
@@ -1184,6 +1209,10 @@ string PA14Lowerer::EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
       const string operator_address = EmitOperatorAddress(node, scope);
       if(!operator_address.empty()) return operator_address;
     }
+    if(node->kind == "binary-expression" &&
+       (PA12Operator(node->value) == ".*" || PA12Operator(node->value) == "->*")) {
+      return EmitMemberPointerAddress(node, scope);
+    }
     if(node->kind == "unary-expression") {
       const string op = PA12Operator(node->value);
       if(op == "*") return EmitValue(node->children[0], scope).operand;
@@ -1202,28 +1231,8 @@ string PA14Lowerer::EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
       return EmitAddress(node->children[0], scope);
     }
     if(node->kind == "cast-expression" && node->children.size() > 1) {
-      TypePtr target = analyzer_.TypeFromTypeId(node->children[0], scope);
-      if(PA12Operator(node->value) == "dynamic_cast" && type_is_reference(target)) return EmitDynamicCast(node, scope, target).operand;
-      if(type_is_reference(target)) {
-        TypePtr target_value = type_value(target);
-        ExprInfo source_info = Infer(node->children[1], scope); TypePtr source_value = expression_value_type(source_info);
-        if(target_value && target_value->kind == TYPE_CLASS && source_value && source_value->kind == TYPE_CLASS && !PA12SameType(target_value, source_value, true)) {
-          if(IsDerivedFrom(source_value, target_value))
-            return AdjustBaseAddress(EmitAddress(node->children[1], scope), source_value, target_value);
-          if(IsDerivedFrom(target_value, source_value))
-            return AdjustDerivedAddress(EmitAddress(node->children[1], scope), target_value,
-                                        source_value);
-          const string slot = new_special_slot("tmpobj", low_type(target_value));
-          const string address = new_temp();
-          AddInstruction(address + " = addr $" + slot);
-          vector<CPPGMAstNodePtr> arguments(1, node->children[1]);
-          if(!EmitConstructorAt(target_value, address, arguments, scope, true))
-            throw logic_error("class reference cast has no viable constructor");
-          RegisterTemporaryObject(target_value, address);
-          return address;
-        }
-        return EmitAddress(node->children[1], scope);
-      }
+      const string cast_address = EmitReferenceCastAddress(node, scope);
+      if(!cast_address.empty()) return cast_address;
     }
     if(node->kind == "call-expression") return EmitCallAddress(node, scope);
     throw logic_error("expression is not addressable");

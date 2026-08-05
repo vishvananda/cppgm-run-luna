@@ -5,6 +5,33 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
+string PA18TemplateExpander::RecoverNestedConcreteOwner(
+	const TemplateDefinition& definition, const string& context) const
+{
+	const string nested_parent = PrefixComponent(definition.owner);
+	const string parent_base = LastComponent(nested_parent.empty() ?
+		definition.owner : nested_parent);
+	map<string, vector<string> >::const_iterator candidates =
+		specialization_names_by_base_.find(parent_base);
+	string fallback;
+	if(candidates == specialization_names_by_base_.end()) return fallback;
+	for(size_t candidate = 0; candidate < candidates->second.size(); ++candidate) {
+		const string& name = candidates->second[candidate];
+		map<string, string>::const_iterator base = specialization_bases_.find(name);
+		if(base == specialization_bases_.end() || LastComponent(base->second) != parent_base ||
+			(class_contexts_.find(name) == class_contexts_.end() &&
+			 class_declarations_.find(name) == class_declarations_.end())) continue;
+		if(fallback.empty()) fallback = name;
+		map<string, vector<string> >::const_iterator arguments =
+			specialization_arguments_.find(name);
+		if(arguments != specialization_arguments_.end())
+			for(size_t argument = 0; argument < arguments->second.size(); ++argument)
+				if(LastComponent(arguments->second[argument]) == LastComponent(context))
+					return name;
+	}
+	return fallback;
+}
+
 void PA18TemplateExpander::RebindGeneratedOwnerTypes(const TemplateDefinition& definition,
 	const string& concrete_owner, const CPPGMAstNodePtr& generated) const
 {

@@ -63,6 +63,34 @@ CPPGMAstNodePtr PA18TemplateExpander::RewriteRegularNodeValue(
 		if(!preserved.empty()) result->value = preserved;
 	}
 	if(input->kind == "id-expression") {
+		map<string, string>::const_iterator member_pointer =
+			active_member_pointer_substitutions_.find(RemoveMarker(input->value));
+		string member_pointer_value;
+		bool has_member_pointer = member_pointer != active_member_pointer_substitutions_.end();
+		if(has_member_pointer) member_pointer_value = member_pointer->second;
+		// A generated class can be replayed from the cached owner queue after its
+		// original TransformInstantiatedNode scope has ended.  Its ordinary
+		// substitution map still carries the typed member-pointer value even
+		// though the active replay side map no longer does; preserve the address
+		// expression as a unary `&` node in that second pass as well.
+		if(member_pointer == active_member_pointer_substitutions_.end()) {
+			map<string, string>::const_iterator substituted = substitutions.find(
+				RemoveMarker(input->value));
+			if(substituted != substitutions.end() && substituted->second.size() > 1 &&
+				substituted->second[0] == '&' && substituted->second.find("::") != string::npos) {
+				has_member_pointer = true;
+				member_pointer_value = substituted->second;
+			}
+		}
+		if(has_member_pointer) {
+			const string pointer = CanonicalSpelling(member_pointer_value);
+			if(pointer.size() > 1 && pointer[0] == '&') {
+				CPPGMAstNodePtr address(new CPPGMAstNode("unary-expression", "OP_AMP:&"));
+				address->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
+					"id-expression", pointer.substr(1))));
+				return address;
+			}
+		}
 		map<string, PA19IntegralValue>::const_iterator typed =
 			active_integral_substitutions_.find(RemoveMarker(input->value));
 		if(typed != active_integral_substitutions_.end() && typed->second.known) {

@@ -1,9 +1,7 @@
 #include <functional>
 #include "pa18_templates_collection.h"
 #include "pa18_templates_rewrite.h"
-
 using namespace pa18_templates_internal;
-
 namespace {
 string OrderingDeclaredName(const CPPGMAstNodePtr& node)
 {
@@ -17,7 +15,6 @@ string OrderingDeclaredName(const CPPGMAstNodePtr& node)
 		list->children[0]->children.empty()) return string();
 	return LastComponent(FirstIdentifierLocal(list->children[0]->children[0]));
 }
-
 bool OrderingTypeDeclaration(const CPPGMAstNodePtr& node)
 {
 	if(!node) return false;
@@ -26,7 +23,6 @@ bool OrderingTypeDeclaration(const CPPGMAstNodePtr& node)
 	return node->kind == "simple-declaration" && !node->children.empty() &&
 		SpellNode(node->children[0]).find("typedef") != string::npos;
 }
-
 bool MentionsQualifiedGeneratedType(const CPPGMAstNodePtr& node,
 	const string& type_name)
 {
@@ -61,7 +57,6 @@ bool ContainsStaticAssert(const CPPGMAstNodePtr& node)
 }
 
 }
-
 namespace pa18_templates_internal {
 
 string PA18TemplateExpander::NormalizeElaboratedSpelling(string raw,
@@ -588,7 +583,10 @@ string PA18TemplateExpander::DeclaratorSuffix(const CPPGMAstNodePtr& declarator)
 		const CPPGMAstNodePtr child = declarator->children[i];
 		if(!child) continue;
 		if(child->kind == "ptr-operator") {
-			if(child->value.find("&&") != string::npos) result += "&&";
+			const size_t member_scope = child->value.find("::*");
+			if(member_scope != string::npos)
+				result += child->value.substr(0, member_scope + 3);
+			else if(child->value.find("&&") != string::npos) result += "&&";
 			else if(child->value.find('&') != string::npos) result += '&';
 			else result += '*';
 		} else if(child->kind == "cv-qualifier") result += RemoveMarker(child->value);
@@ -603,7 +601,10 @@ string PA18TemplateExpander::ReturnDeclaratorSuffix(const CPPGMAstNodePtr& decla
 		const CPPGMAstNodePtr child = declarator->children[i];
 		if(!child) continue;
 		if(child->kind == "ptr-operator") {
-			if(child->value.find("&&") != string::npos) result += "&&";
+			const size_t member_scope = child->value.find("::*");
+			if(member_scope != string::npos)
+				result += child->value.substr(0, member_scope + 3);
+			else if(child->value.find("&&") != string::npos) result += "&&";
 			else if(child->value.find('&') != string::npos) result += '&';
 			else result += '*';
 		} else if(child->kind == "nested-declarator")
@@ -637,8 +638,10 @@ string PA18TemplateExpander::TypeIdSpelling(const CPPGMAstNodePtr& type_id) cons
 	if(nested && clause) {
 		const CPPGMAstNodePtr inner = nested->children.empty() ? CPPGMAstNodePtr() :
 			ChildOfKindLocal(nested, "abstract-declarator");
+		const string inner_suffix = DeclaratorSuffix(inner);
 		string result = base;
-		result += inner && DeclaratorSuffix(inner).find('&') != string::npos ? "(&)(" : "(*)(";
+		if(inner_suffix.find("::*") != string::npos) result += "(" + inner_suffix + ")(";
+		else result += inner && inner_suffix.find('&') != string::npos ? "(&)(" : "(*)(";
 		for(size_t i = 0; i < clause->children.size(); ++i) {
 			const CPPGMAstNodePtr parameter = clause->children[i];
 			if(!parameter || parameter->kind != "parameter-declaration") continue;

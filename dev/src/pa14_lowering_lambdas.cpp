@@ -293,6 +293,7 @@ void PA14Lowerer::IndexLambdaClosures()
   lambda_closure_types_.clear();
   lambda_closure_nodes_.clear();
   has_rtti_syntax_ = false;
+  has_dynamic_cast_void_ = false;
   function<void(const CPPGMAstNodePtr&)> visit;
   visit = [&](const CPPGMAstNodePtr& node) {
     if(!node) return;

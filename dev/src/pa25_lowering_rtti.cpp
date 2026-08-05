@@ -62,9 +62,13 @@ PA14Lowerer::Value PA14Lowerer::EmitDynamicCast(
   const bool reference_target = type_is_reference(target);
   const TypePtr target_value = reference_target ? type_value(target->child) :
     type_value(target);
-  const TypePtr target_class = target_value && target_value->kind == TYPE_POINTER ?
-    RttiValueType(target_value->child) : RttiValueType(target_value);
-  if(!target_class || target_class->kind != TYPE_CLASS)
+  const bool void_pointer_target = target_value && target_value->kind == TYPE_POINTER &&
+    target_value->child && type_value(target_value->child)->kind == TYPE_FUNDAMENTAL &&
+    trim_type_name(type_value(target_value->child)->name) == "void";
+  const TypePtr target_class = target_value && target_value->kind == TYPE_POINTER &&
+    !void_pointer_target ? RttiValueType(target_value->child) :
+    RttiValueType(target_value);
+  if(!void_pointer_target && (!target_class || target_class->kind != TYPE_CLASS))
     throw logic_error("unsupported dynamic_cast target");
   const ExprInfo source_info = Infer(node->children[1], scope);
   const TypePtr source = expression_value_type(source_info);
@@ -75,7 +79,7 @@ PA14Lowerer::Value PA14Lowerer::EmitDynamicCast(
      !source_class->polymorphic || (!source_pointer && !reference_target))
     throw logic_error("dynamic_cast source is not polymorphic");
   EnsureRttiType(source_class);
-  EnsureRttiType(target_class);
+  if(!void_pointer_target) EnsureRttiType(target_class);
 
   Value source_value;
   if(!source_pointer) {
@@ -99,6 +103,52 @@ PA14Lowerer::Value PA14Lowerer::EmitDynamicCast(
   Terminate("branch " + null_source + ", ^" + end_label + ", ^" + scan_label);
 
   AddBlock(scan_label);
+  if(void_pointer_target) {
+    const string vtable = emit_load(source_value.operand,
+      PointerTo(Fundamental("char")));
+    const string offset_address = new_temp();
+    AddInstruction(offset_address + " = index i8 " + vtable + ", -16");
+    const string offset = emit_load(offset_address, Fundamental("long int"));
+    const string complete_object = new_temp();
+    AddInstruction(complete_object + " = index i8 " + source_value.operand + ", " +
+      offset);
+    emit_store(PointerTo(Fundamental("char")), complete_object, "$" + slot);
+    Terminate("jump ^" + end_label);
+
+    // Keep the ABI fallback block materialized for the runtime's ambiguous
+    // or non-public path.  The single-vptr fast path above is the only
+    // reachable path for the current object model.
+    const string block_label = new_label("block");
+    AddBlock(block_label);
+    vector<TypePtr> parameters;
+    parameters.push_back(PointerTo(Fundamental("void")));
+    parameters.push_back(PointerTo(Fundamental("void")));
+    parameters.push_back(PointerTo(Fundamental("void")));
+    parameters.push_back(Fundamental("long int"));
+    const TypePtr dynamic_cast_type = FunctionOf(parameters, false,
+      PointerTo(Fundamental("void")), false);
+    FunctionRecord* dynamic_cast_function = FindFunction(
+      "__external_runtime____dynamic_cast", dynamic_cast_type);
+    if(!dynamic_cast_function)
+      throw logic_error("missing __dynamic_cast runtime declaration");
+    MarkFunctionNeeded(dynamic_cast_function);
+    const string source_rtti = new_temp();
+    AddInstruction(source_rtti + " = addr @" + RttiSymbol(source_class));
+    const string target_rtti = new_temp();
+    AddInstruction(target_rtti + " = addr @__external_rtti__void");
+    const string converted = new_temp();
+    AddInstruction(converted + " = call ptr @" + dynamic_cast_function->symbol +
+      "(" + source_value.operand + ", " + source_rtti + ", " + target_rtti + ", -2)");
+    emit_store(PointerTo(Fundamental("char")), converted, "$" + slot);
+    Terminate("jump ^" + end_label);
+
+    AddBlock(end_label);
+    Value result;
+    result.type = target;
+    result.operand = emit_load("$" + slot, result.type);
+    result.lvalue = false;
+    return result;
+  }
   vector<TypePtr> parameters;
   parameters.push_back(PointerTo(Fundamental("void")));
   parameters.push_back(PointerTo(Fundamental("void")));

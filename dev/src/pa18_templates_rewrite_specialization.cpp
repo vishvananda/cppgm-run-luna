@@ -1,5 +1,6 @@
 #include "pa18_templates_collection.h"
 #include "pa18_templates_rewrite.h"
+
 using namespace std;
 
 namespace pa18_templates_internal {
@@ -93,11 +94,33 @@ bool PA18TemplateExpander::MatchOrderingTypePattern(const string& raw_pattern,
 {
 	string pattern = CanonicalSpelling(raw_pattern);
 	string actual = CanonicalSpelling(raw_actual);
-	string pattern_result, actual_result, pattern_qualifiers, actual_qualifiers;
+	string pattern_result, pattern_owner, pattern_qualifiers;
+	string actual_result, actual_owner, actual_qualifiers;
 	vector<string> pattern_parameters, actual_parameters;
-	const bool pattern_function = SplitDirectFunctionType(pattern, &pattern_result,
+	bool pattern_function = false, actual_function = false;
+	const bool pattern_member = SplitMemberPointerType(pattern, &pattern_result,
+		&pattern_owner, &pattern_parameters, &pattern_qualifiers, &pattern_function);
+	const bool actual_member = SplitMemberPointerType(actual, &actual_result,
+		&actual_owner, &actual_parameters, &actual_qualifiers, &actual_function);
+	if(pattern_member || actual_member) {
+		if(!pattern_member || !actual_member || pattern_function != actual_function)
+			return false;
+		if(!MatchOrderingTypePattern(pattern_owner, actual_owner, parameter_names, inferred) ||
+			!MatchOrderingTypePattern(pattern_result, actual_result, parameter_names, inferred))
+			return false;
+		if(!pattern_function) return true;
+		if(CanonicalSpelling(pattern_qualifiers) != CanonicalSpelling(actual_qualifiers))
+			return false;
+		if(pattern_parameters.size() == 1 &&
+			CanonicalSpelling(pattern_parameters[0]) == "void") pattern_parameters.clear();
+		if(actual_parameters.size() == 1 &&
+			CanonicalSpelling(actual_parameters[0]) == "void") actual_parameters.clear();
+		return MatchOrderingPatternList(pattern_parameters, actual_parameters,
+			parameter_names, inferred);
+	}
+	pattern_function = SplitDirectFunctionType(pattern, &pattern_result,
 		&pattern_parameters, &pattern_qualifiers);
-	const bool actual_function = SplitDirectFunctionType(actual, &actual_result,
+	actual_function = SplitDirectFunctionType(actual, &actual_result,
 		&actual_parameters, &actual_qualifiers);
 	if(pattern_function) {
 		if(!actual_function || pattern_qualifiers != actual_qualifiers ||
@@ -938,9 +961,9 @@ bool PA18TemplateExpander::MatchClassSpecializationPattern(
 					// argument that still carries its ordinary template-id.
 					reduced_pattern = CanonicalSpelling(RestoreSpecializationSpelling(
 						reduced_pattern));
-			const bool matched_pattern = template_template_argument_matches(reduced_pattern, actual) &&
-				(reduced_pattern == actual || MatchTypePattern(reduced_pattern, actual,
-					parameter_names, &local, context, true));
+		const bool matched_pattern = template_template_argument_matches(reduced_pattern, actual) &&
+			(reduced_pattern == actual || MatchTypePattern(reduced_pattern, actual,
+				parameter_names, &local, context, true));
 			if(!matched_pattern) return false;
 		}
 	}

@@ -4,6 +4,90 @@
 using namespace std;
 namespace pa18_templates_internal {
 
+string PA18TemplateExpander::FunctionSignatureType(
+	const FunctionSignature& signature) const
+{
+	if(!signature.result_specifiers || !signature.parameters) return string();
+	string result = NodeTypeSpelling(signature.result_specifiers) + "(*) (";
+	for(size_t i = 0; i < signature.parameters->children.size(); ++i) {
+		const CPPGMAstNodePtr parameter = signature.parameters->children[i];
+		if(!parameter || parameter->kind != "parameter-declaration") continue;
+		if(result[result.size() - 1] != '(') result += ',';
+		const bool function_parameter = parameter->children.size() > 1 &&
+			parameter->children[1] && ChildOfKindLocal(parameter->children[1],
+			"nested-declarator") && ChildOfKindLocal(parameter->children[1],
+			"parameter-clause");
+		result += function_parameter ? FunctionTypeSpelling(parameter) :
+			ParameterTypeSpelling(parameter);
+	}
+	result += ')';
+	return CanonicalSpelling(result);
+}
+
+vector<string> PA18TemplateExpander::FunctionExpressionTypes(
+	const CPPGMAstNodePtr& expression, const string& context) const
+{
+	vector<string> result;
+	const auto member_function_signature_type = [this](const string& qualified_name,
+		const FunctionSignature& signature) {
+		const string owner = PrefixComponent(qualified_name);
+		const bool class_owner = !owner.empty() &&
+			(class_contexts_.find(owner) != class_contexts_.end() ||
+			 class_declarations_.find(owner) != class_declarations_.end());
+		if(!class_owner || !signature.result_specifiers || !signature.parameters)
+			return FunctionSignatureType(signature);
+		string value = NodeTypeSpelling(signature.result_specifiers) + "(" + owner + "::*)(";
+		for(size_t parameter = 0; parameter < signature.parameters->children.size(); ++parameter) {
+			const CPPGMAstNodePtr item = signature.parameters->children[parameter];
+			if(!item || item->kind != "parameter-declaration") continue;
+			if(value[value.size() - 1] != '(') value += ',';
+			const bool function_parameter = item->children.size() > 1 && item->children[1] &&
+				ChildOfKindLocal(item->children[1], "nested-declarator") &&
+				ChildOfKindLocal(item->children[1], "parameter-clause");
+			value += function_parameter ? FunctionTypeSpelling(item) : ParameterTypeSpelling(item);
+		}
+		value += ")" + DeclaratorSuffix(signature.declarator);
+		return CanonicalSpelling(value);
+	};
+	CPPGMAstNodePtr function = expression;
+	if(function && function->kind == "unary-expression" &&
+		RemoveMarker(function->value) == "&" && !function->children.empty())
+		function = function->children[0];
+	if(!function || function->kind != "id-expression") return result;
+	const string name = LastComponent(function->value);
+	map<string, vector<string> >::const_iterator names = function_signatures_by_name_.find(name);
+	if(names != function_signatures_by_name_.end()) {
+		for(size_t i = 0; i < names->second.size(); ++i) {
+			map<string, vector<FunctionSignature> >::const_iterator overloads =
+				function_overloads_.find(names->second[i]);
+			if(overloads != function_overloads_.end())
+				for(size_t overload = 0; overload < overloads->second.size(); ++overload) {
+					const string type = member_function_signature_type(names->second[i],
+						overloads->second[overload]);
+					if(!type.empty() && find(result.begin(), result.end(), type) == result.end())
+						result.push_back(type);
+				}
+			else {
+				map<string, FunctionSignature>::const_iterator signature =
+					function_signatures_.find(names->second[i]);
+				if(signature == function_signatures_.end()) continue;
+				const string type = member_function_signature_type(names->second[i],
+					signature->second);
+				if(!type.empty() && find(result.begin(), result.end(), type) == result.end())
+					result.push_back(type);
+			}
+		}
+	}
+	if(result.empty()) {
+		const FunctionSignature* signature = FindFunctionSignature(function->value, context);
+		if(signature) {
+			const string type = member_function_signature_type(function->value, *signature);
+			if(!type.empty()) result.push_back(type);
+		}
+	}
+	return result;
+}
+
 bool PA18TemplateExpander::IsKnownTypeSpelling(string raw, const string& context) const
 {
 	raw = CanonicalSpelling(raw);
@@ -772,9 +856,19 @@ bool PA18TemplateExpander::InferArgument(const CPPGMAstNodePtr& expression,
 		if(expression->kind == "binary-expression" &&
 			InferBinaryArgument(expression, result, substitutions, context)) return true;
 		if(expression->kind == "unary-expression" && !expression->children.empty()) {
-			const string op = RemoveMarker(expression->value);
-			if(op == "&") {
-				FunctionSignature child_signature;
+		const string op = RemoveMarker(expression->value);
+		if(op == "&") {
+			// A qualified member-function address has a distinct pointer type.  When
+			// the surrounding template parameter is unconstrained (`F f`), there is
+			// no expected member-pointer pattern to recover that owner later, so use
+			// the unique typed address candidate during deduction.  Leave overload
+			// sets to the existing expected-pattern/deferred deduction path.
+			const vector<string> address_types = FunctionExpressionTypes(expression, context);
+			if(address_types.size() == 1) {
+				*result = address_types[0];
+				return true;
+			}
+			FunctionSignature child_signature;
 				if(!InferArgument(expression->children[0], result, substitutions, context,
 					&child_signature)) return false;
 				// InferIdentifierArgument already models a named function as its

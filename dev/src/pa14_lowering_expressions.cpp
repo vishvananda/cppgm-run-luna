@@ -38,87 +38,6 @@ void PA14Lowerer::InferLocalIdentifierConstant(const TypePtr& type,
   }
 }
 
-PA14Lowerer::Value PA14Lowerer::EmitUnary(const CPPGMAstNodePtr& node, Scope* scope,
-                  const TypePtr& expected)
-{
-    const string op = PA12Operator(node->value);
-    if(op == "&" && !node->children.empty() &&
-       IsTypeidExpression(node->children[0])) {
-      Value type_info = EmitValue(node->children[0], scope);
-      // `typeid` is represented internally by the address of its lvalue
-      // result.  Taking its address therefore preserves that same pointer.
-      type_info.lvalue = false;
-      return type_info;
-    }
-    vector<CPPGMAstNodePtr> operator_arguments;
-    operator_arguments.push_back(node->children[0]);
-    if(ChooseOperatorCall(OperatorFunctionName(op), operator_arguments, scope).binding)
-      return EmitOperatorCall(OperatorFunctionName(op), operator_arguments, scope);
-    if(op == "&") {
-      Value result;
-      result.type = PointerTo(expression_value_type(Infer(node->children[0], scope)));
-      result.operand = EmitAddress(node->children[0], scope);
-      return result;
-    }
-    if(op == "*") {
-      Value result;
-      ExprInfo child_info = Infer(node->children[0], scope);
-      TypePtr child_type = expression_value_type(child_info);
-      if(!child_type || (child_type->kind != TYPE_POINTER && child_type->kind != TYPE_ARRAY))
-        throw logic_error("invalid dereference");
-      result.type = child_type->child;
-      result.operand = emit_load(EmitAddress(node, scope), result.type);
-      return result;
-    }
-    if(op == "++" || op == "--") return EmitUpdate(node, scope, false);
-    const bool boolean_context = op == "!";
-    ExprInfo child_info = Infer(node->children[0], scope);
-    TypePtr child_type = expression_value_type(child_info);
-    Value child;
-    if(child_type && child_type->kind == TYPE_CLASS &&
-       FindContextConversionOperator(child_type, boolean_context, boolean_context)) {
-      child = EmitContextConversion(node->children[0], scope, boolean_context,
-        boolean_context);
-      if(child.lvalue && child.type) {
-        child.operand = emit_load(child.operand, child.type);
-        child.lvalue = false;
-      }
-    } else child = EmitValue(node->children[0], scope);
-    Value result;
-    if(op == "+") {
-      if(child.type && type_value(child.type)->kind == TYPE_ARRAY) {
-        result.type = PointerTo(type_value(child.type)->child);
-        result.operand = child.operand;
-        return result;
-      }
-      result.type = IntegralPromotion(child.type);
-      return ConvertValue(child, result.type);
-    }
-    result.type = op == "!" ? Fundamental("bool") : IntegralPromotion(child.type);
-    if(op == "!") {
-      TypePtr type = type_value(child.type);
-      string compare_type = low_type(type);
-      string zero = compare_type == "ptr" ? "nullptr" :
-        is_floating_type(type) ? (compare_type == "f80" ? "0.0L" : compare_type == "f32" ? "0.0f" : "0.0") : "0";
-      string operand = child.operand;
-      if(type && type->kind == TYPE_FUNDAMENTAL && type->name == "bool") {
-        compare_type = "i64";
-      } else if(is_integral_type(type) && compare_type != "i64" &&
-                compare_type != "u64") {
-        // The canonical LowIR form compares an ordinary narrow integral
-        // value directly against the i64 zero literal.
-        compare_type = "i64";
-      }
-      result.operand = new_temp();
-      AddInstruction(result.operand + " = cmp eq " + compare_type + " " + operand + ", " + zero);
-      return result;
-    }
-    result.operand = new_temp();
-    const string unary = op == "-" ? "neg" : op == "~" ? "bitnot" : op;
-    AddInstruction(result.operand + " = unary " + unary + " " + low_type(result.type) + " " + child.operand);
-    return result;
-  }
-
 PA14Lowerer::Value PA14Lowerer::EmitBitFieldLoad(Binding* binding, const string& address,
                                       const TypePtr& type, bool copy_result)
 {
@@ -425,7 +344,11 @@ PA14Lowerer::Value PA14Lowerer::EmitAssignment(const CPPGMAstNodePtr& node, Scop
       const bool target_integral = target_type &&
         (is_integral_type(target_type) ||
          (target_type->kind == TYPE_FUNDAMENTAL && target_type->name == "bool"));
+      const bool preserve_size_expression = node->children[1] &&
+        (node->children[1]->kind == "sizeof-expression" ||
+         node->children[1]->kind == "sizeof-pack-expression");
       if((template_assignment || union_member || byte_array_element) &&
+         !preserve_size_expression &&
          right.known_constant && right_integral && target_integral) {
         right.type = left_type;
         right.operand = integer_text(right.constant);
@@ -569,7 +492,12 @@ PA14Lowerer::Value PA14Lowerer::EmitCompare(const CPPGMAstNodePtr& node, Scope* 
     ExprInfo right_info = Infer(node->children[1], scope);
     TypePtr left_type = expression_value_type(left_info);
     TypePtr right_type = expression_value_type(right_info);
-    TypePtr common = ArithmeticCommonType(left_type, right_type,
+    TypePtr common;
+    if(left_type && left_type->kind == TYPE_MEMBER_POINTER)
+      common = left_type;
+    else if(right_type && right_type->kind == TYPE_MEMBER_POINTER)
+      common = right_type;
+    else common = ArithmeticCommonType(left_type, right_type,
       PA12Operator(node->value));
     if(left_type && right_type && left_type->kind == TYPE_POINTER && right_type->kind == TYPE_POINTER)
       common = left_type;
@@ -659,6 +587,54 @@ PA14Lowerer::Value PA14Lowerer::EmitBinary(const CPPGMAstNodePtr& node, Scope* s
     vector<CPPGMAstNodePtr> operator_arguments;
     operator_arguments.push_back(node->children[0]);
     operator_arguments.push_back(node->children[1]);
+    if(op == ".*" || op == "->*") {
+      CallChoice overloaded = ChooseOperatorCall(OperatorFunctionName(op),
+        operator_arguments, scope);
+      if(overloaded.binding)
+        return EmitOperatorCall(OperatorFunctionName(op), operator_arguments, scope);
+      ExprInfo left_info = Infer(node->children[0], scope);
+      ExprInfo right_info = Infer(node->children[1], scope);
+      TypePtr object_type = expression_value_type(left_info);
+      const TypePtr member_pointer = expression_value_type(right_info);
+      if(op == "->*") {
+        if(!object_type || object_type->kind != TYPE_POINTER)
+          throw logic_error("arrow-star requires a pointer to class");
+        object_type = type_value(object_type->child);
+      }
+      if(!member_pointer || member_pointer->kind != TYPE_MEMBER_POINTER ||
+         !member_pointer->member_owner || !object_type || object_type->kind != TYPE_CLASS ||
+         (!PA12SameType(object_type, member_pointer->member_owner, true) &&
+          !IsDerivedFrom(object_type, member_pointer->member_owner)))
+        throw logic_error("member pointer does not apply to object");
+      if(member_pointer->child && member_pointer->child->kind == TYPE_FUNCTION) {
+        Value pointer = EmitValue(node->children[1], scope);
+        const string raw_address = new_temp();
+        AddInstruction(raw_address + " = convert trunc i64 i128 " + pointer.operand);
+        Value result;
+        result.type = member_pointer->child;
+        result.operand = new_temp();
+        AddInstruction(result.operand + " = copy ptr " + raw_address);
+        result.function = true;
+        return result;
+      }
+      string object_address;
+      if(op == "->*") object_address = EmitValue(node->children[0], scope).operand;
+      else object_address = EmitAddress(node->children[0], scope);
+      if(!PA12SameType(object_type, member_pointer->member_owner, true))
+        object_address = AdjustBaseAddress(object_address, object_type,
+          member_pointer->member_owner);
+      Value pointer = EmitValue(node->children[1], scope);
+      const string offset = new_temp();
+      AddInstruction(offset + " = binary sub i64 " + pointer.operand + ", 1");
+      const string address = new_temp();
+      AddInstruction(address + " = index i8 [projection=field] " + object_address +
+        ", " + offset);
+      Value result;
+      result.type = member_pointer->child;
+      result.operand = emit_load(address, result.type);
+      result.lvalue = false;
+      return result;
+    }
     if(op == "==" || op == "!=" || op == "not_eq" || op == "<" ||
        op == ">" || op == "<=" || op == ">=") return EmitCompare(node, scope);
     const TypePtr left_operator_type = expression_value_type(Infer(node->children[0], scope));

@@ -5,6 +5,40 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
+map<string, string> PA18TemplateExpander::SeedTemplateArgumentSubstitutions(
+	const TemplateDefinition& definition, size_t index,
+	const vector<string>& arguments, const map<string, string>& substitutions) const
+{
+	map<string, string> result = substitutions;
+	for(size_t prior = 0; prior < index && prior < definition.parameters.size(); ++prior)
+		if(!definition.parameters[prior].name.empty())
+			result[definition.parameters[prior].name] = arguments[prior];
+	return result;
+}
+
+string PA18TemplateExpander::RecoverGeneratedNestedOwner(
+	const TemplateDefinition& definition, const string& local_name, size_t close,
+	const string& raw) const
+{
+	if(!definition.class_template || close + 2 >= raw.size() ||
+		raw.compare(close + 1, 2, "::") != 0) return string();
+	const string source_parent = LastComponent(PrefixComponent(definition.owner));
+	for(map<string, string>::const_iterator owner = specialization_bases_by_owner_.begin();
+		owner != specialization_bases_by_owner_.end(); ++owner) {
+		if(LastComponent(owner->first) != local_name ||
+			(owner->second != definition.qualified_name &&
+			 LastComponent(owner->second) != LastComponent(definition.qualified_name))) continue;
+		const string candidate_owner = PrefixComponent(owner->first);
+		if(candidate_owner.empty() || class_contexts_.find(candidate_owner) == class_contexts_.end()) continue;
+		map<string, string>::const_iterator candidate_base =
+			specialization_bases_.find(LastComponent(candidate_owner));
+		if(!source_parent.empty() && (candidate_base == specialization_bases_.end() ||
+			LastComponent(candidate_base->second) != source_parent)) continue;
+		return candidate_owner;
+	}
+	return string();
+}
+
 void PA18TemplateExpander::ResolveBareGeneratedMemberAlias(
 	string* raw, const string& context) const
 {

@@ -154,6 +154,8 @@ public:
 		return false;
 	}
 	TypePtr ResolveType(Scope* from, const string& raw) const;
+	TypePtr ResolveMemberPointerSpelling(Scope* from, const string& name) const;
+	TypePtr ResolveDeclaratorSpelling(Scope* from, string name) const;
 	static bool IsFundamentalWord(const string& word)
 	{
 		return word == "bool" || word == "char" || word == "char16_t" ||

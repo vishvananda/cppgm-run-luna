@@ -106,37 +106,47 @@ string PA18TemplateExpander::FunctionTypeSpelling(const CPPGMAstNodePtr& paramet
 		return ParameterTypeSpelling(parameter);
 	const CPPGMAstNodePtr declarator = parameter->children[1];
 	const string base = NodeTypeSpelling(parameter->children[0]);
-	const auto append_parameters = [this](const CPPGMAstNodePtr& clause,
+	const bool member_pointer_type = DeclaratorSuffix(declarator).find("::*") != string::npos;
+	const auto append_parameters = [this, member_pointer_type](const CPPGMAstNodePtr& clause,
 		string* result) {
 		if(!clause || !result) return;
 		for(size_t i = 0; i < clause->children.size(); ++i) {
 			const CPPGMAstNodePtr item = clause->children[i];
 			if(!item || item->kind != "parameter-declaration") continue;
-			const string pack_name = IsFunctionParameterPack(item) ?
+			const string pack_name_source = IsFunctionParameterPack(item) ?
 				PackExpansionIdentifier(item) : string();
+			string pack_name = pack_name_source;
+			if(member_pointer_type && pack_name.empty() && IsFunctionParameterPack(item) &&
+				!item->children.empty())
+				pack_name = RemoveMarker(NodeTypeSpelling(item->children[0]));
 			map<string, vector<string> >::const_iterator pack =
 				active_pack_substitutions_.find(pack_name);
 			vector<string> values;
 			if(!pack_name.empty() && pack != active_pack_substitutions_.end())
 				values = pack->second;
 			if(values.empty() && (pack_name.empty() ||
-				pack == active_pack_substitutions_.end()))
-				values.push_back(ParameterTypeSpelling(item));
+				pack == active_pack_substitutions_.end())) {
+				string spelling = ParameterTypeSpelling(item);
+				if(member_pointer_type && !pack_name.empty() && spelling.find("...") == string::npos)
+					spelling += "...";
+				values.push_back(spelling);
+			}
 			for(size_t value = 0; value < values.size(); ++value) {
 				string spelling = values[value];
-				if(!pack_name.empty()) {
+				if(member_pointer_type && !pack_name.empty() &&
+					pack != active_pack_substitutions_.end()) {
 					map<string, string> one;
 					one[pack_name] = spelling;
 					spelling = ReplaceIdentifiersPreservingPackSizes(
 						ParameterTypeSpelling(item), one);
-					// Each value is one element of the parameter pack.  The
-					// declarator spelling still carries the source expansion marker
-					// (`T...`), but retaining it after substituting one element turns
-					// a function type such as `R(T...)` into `R(U...)` instead of
-					// `R(U)`.  The marker has already been consumed by this loop.
 					if(spelling.size() >= 3 &&
 						spelling.compare(spelling.size() - 3, 3, "...") == 0)
 						spelling.erase(spelling.size() - 3);
+				} else if(!member_pointer_type && !pack_name.empty()) {
+					map<string, string> one;
+					one[pack_name] = spelling;
+					spelling = ReplaceIdentifiersPreservingPackSizes(
+						ParameterTypeSpelling(item), one);
 				}
 				if(result->size() > 0 && result->at(result->size() - 1) != '(')
 					*result += ',';
@@ -148,8 +158,12 @@ string PA18TemplateExpander::FunctionTypeSpelling(const CPPGMAstNodePtr& paramet
 	const CPPGMAstNodePtr clause = ChildOfKindLocal(declarator, "parameter-clause");
 	if(!nested || !clause) return ParameterTypeSpelling(parameter);
 	const CPPGMAstNodePtr inner = nested->children.empty() ? CPPGMAstNodePtr() : nested->children[0];
-	string result = base + DeclaratorSuffix(declarator);
-	result += inner && DeclaratorSuffix(inner).find('&') != string::npos ? "(&)(" : "(*)(";
+	const string outer_suffix = DeclaratorSuffix(declarator);
+	const string inner_suffix = DeclaratorSuffix(inner);
+	string result = base + (member_pointer_type ? " " : string()) + outer_suffix;
+	if(member_pointer_type && inner_suffix.find("::*") != string::npos)
+		result += "(" + inner_suffix + ")(";
+	else result += inner && inner_suffix.find('&') != string::npos ? "(&)(" : "(*)(";
 	append_parameters(clause, &result);
 	result += ')';
 	return CanonicalSpelling(result);
@@ -158,34 +172,47 @@ string PA18TemplateExpander::DeclaratorTypeSpelling(const string& base,
 	const CPPGMAstNodePtr& declarator) const
 {
 	if(!declarator) return base;
-	const auto append_parameters = [this](const CPPGMAstNodePtr& clause,
+	const bool member_pointer_type = DeclaratorSuffix(declarator).find("::*") != string::npos;
+	const auto append_parameters = [this, member_pointer_type](const CPPGMAstNodePtr& clause,
 		string* result) {
 		if(!clause || !result) return;
 		for(size_t i = 0; i < clause->children.size(); ++i) {
 			const CPPGMAstNodePtr item = clause->children[i];
 			if(!item || item->kind != "parameter-declaration") continue;
-			const string pack_name = IsFunctionParameterPack(item) ?
+			const string pack_name_source = IsFunctionParameterPack(item) ?
 				PackExpansionIdentifier(item) : string();
+			string pack_name = pack_name_source;
+			if(member_pointer_type && pack_name.empty() && IsFunctionParameterPack(item) &&
+				!item->children.empty())
+				pack_name = RemoveMarker(NodeTypeSpelling(item->children[0]));
 			map<string, vector<string> >::const_iterator pack =
 				active_pack_substitutions_.find(pack_name);
 			vector<string> values;
 			if(!pack_name.empty() && pack != active_pack_substitutions_.end())
 				values = pack->second;
 			if(values.empty() && (pack_name.empty() ||
-				pack == active_pack_substitutions_.end()))
-				values.push_back(ParameterTypeSpelling(item));
+				pack == active_pack_substitutions_.end())) {
+				string spelling = ParameterTypeSpelling(item);
+				if(member_pointer_type && !pack_name.empty() && spelling.find("...") == string::npos)
+					spelling += "...";
+				values.push_back(spelling);
+			}
 			for(size_t value = 0; value < values.size(); ++value) {
 				string spelling = values[value];
-				if(!pack_name.empty()) {
+				if(member_pointer_type && !pack_name.empty() &&
+					pack != active_pack_substitutions_.end()) {
 					map<string, string> one;
 					one[pack_name] = spelling;
 					spelling = ReplaceIdentifiersPreservingPackSizes(
 						ParameterTypeSpelling(item), one);
-					// The active pack supplies a single declarator here; do not
-					// carry the source pack-expansion marker into that element.
 					if(spelling.size() >= 3 &&
 						spelling.compare(spelling.size() - 3, 3, "...") == 0)
 						spelling.erase(spelling.size() - 3);
+				} else if(!member_pointer_type && !pack_name.empty()) {
+					map<string, string> one;
+					one[pack_name] = spelling;
+					spelling = ReplaceIdentifiersPreservingPackSizes(
+						ParameterTypeSpelling(item), one);
 				}
 				if(result->size() > 0 && result->at(result->size() - 1) != '(')
 					*result += ',';
@@ -219,11 +246,19 @@ string PA18TemplateExpander::DeclaratorTypeSpelling(const string& base,
 		result += ')';
 		return CanonicalSpelling(result);
 	}
-	if(!nested || !clause) return CanonicalSpelling(base + DeclaratorSuffix(declarator) +
-		DeclaratorArraySuffix(declarator));
+	if(!nested || !clause) {
+		if(!member_pointer_type) return CanonicalSpelling(base + DeclaratorSuffix(declarator) +
+			DeclaratorArraySuffix(declarator));
+		return CanonicalSpelling(base + " " + DeclaratorSuffix(declarator) +
+			DeclaratorArraySuffix(declarator));
+	}
 	const CPPGMAstNodePtr inner = nested->children.empty() ? CPPGMAstNodePtr() : nested->children[0];
-	string result = base + DeclaratorSuffix(declarator);
-	result += inner && DeclaratorSuffix(inner).find('&') != string::npos ? "(&)(" : "(*)(";
+	const string outer_suffix = DeclaratorSuffix(declarator);
+	const string inner_suffix = DeclaratorSuffix(inner);
+	string result = base + (member_pointer_type ? " " : string()) + outer_suffix;
+	if(member_pointer_type && inner_suffix.find("::*") != string::npos)
+		result += "(" + inner_suffix + ")(";
+	else result += inner && inner_suffix.find('&') != string::npos ? "(&)(" : "(*)(";
 	append_parameters(clause, &result);
 	result += ')';
 	return CanonicalSpelling(result);

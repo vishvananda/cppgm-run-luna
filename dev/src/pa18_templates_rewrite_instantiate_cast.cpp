@@ -6,6 +6,38 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
+void PA18TemplateExpander::InstallMemberPointerSubstitutions(
+	const TemplateDefinition& definition, const string& context,
+	const map<string, string>& substitutions)
+{
+	active_member_pointer_substitutions_.clear();
+	for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter) {
+		const TemplateParameter& item = definition.parameters[parameter];
+		if(item.type || item.name.empty()) continue;
+		map<string, string>::const_iterator value = substitutions.find(item.name);
+		if(value == substitutions.end() || value->second.empty()) continue;
+		string member_result, member_owner, member_qualifiers;
+		vector<string> member_parameters; bool member_function = false;
+		string declared_member_type = ReplaceIdentifiersPreservingPackSizes(
+			item.non_type_type, substitutions);
+		try {
+			const string rewritten = const_cast<PA18TemplateExpander*>(this)->RewriteText(
+				declared_member_type, context, substitutions, 0);
+			if(!rewritten.empty()) declared_member_type = rewritten;
+		} catch(const PA18SubstitutionFailure&) {}
+		declared_member_type = CanonicalSpelling(ResolveAlias(declared_member_type, context));
+		if(!SplitMemberPointerType(declared_member_type, &member_result, &member_owner,
+			&member_parameters, &member_qualifiers, &member_function)) continue;
+		string pointer = value->second;
+		try {
+			const string rewritten = const_cast<PA18TemplateExpander*>(this)->RewriteText(
+				pointer, context, substitutions, 0);
+			if(!rewritten.empty()) pointer = CanonicalSpelling(rewritten);
+		} catch(const PA18SubstitutionFailure&) {}
+		active_member_pointer_substitutions_[item.name] = pointer;
+	}
+}
+
 bool PA18TemplateExpander::EvaluateIntegralTextCStyleCast(const string& raw,
 	const string& context, const map<string, string>& substitutions,
 	PA19IntegralValue* result)

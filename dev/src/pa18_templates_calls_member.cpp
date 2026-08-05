@@ -1195,7 +1195,9 @@ bool PA18TemplateExpander::DeduceMemberCandidate(
 		// boundary.
 		const bool constructor_template = !definition.owner.empty() &&
 			LastComponent(definition.name) == LastComponent(definition.owner);
-		if(dependent_member_arguments && !constructor_template) return false;
+		if(dependent_member_arguments && !constructor_template) {
+			return false;
+		}
 		vector<string>& instantiation_member_arguments = candidate->instantiation_member_arguments;
 	instantiation_member_arguments = member_arguments;
 		if(constructor_template && explicit_arguments.empty() &&
@@ -1308,7 +1310,7 @@ bool PA18TemplateExpander::EmitMemberCandidate(
 			generated_name = Instantiate(restored_function_defaults ? materialization_definition :
 				inference_definition, raw_instantiation_arguments, context,
 				 explicit_instantiation, &instantiation_pack_hints, &candidate_substitutions,
-				 requested_owner_pointer, &inferred_function_values,
+					 requested_owner_pointer, &inferred_function_values,
 					 &forwarding_pack_values);
 		} catch(const logic_error&) {
 			active_concrete_owner_ = previous_concrete_owner;

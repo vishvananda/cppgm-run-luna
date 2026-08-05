@@ -203,7 +203,7 @@ bool PA18TemplateExpander::MergeInferredFunctionArgument(
 	// so recover the direct function spelling only at this reference boundary.
 	string deduction_type = type;
 	if(ReferenceParameterPattern(pattern) && signature.result_specifiers &&
-		signature.parameters) {
+		signature.parameters && type.find("::*") == string::npos) {
 		deduction_type = NodeTypeSpelling(signature.result_specifiers) + "(";
 		for(size_t parameter = 0; parameter < signature.parameters->children.size(); ++parameter) {
 			const CPPGMAstNodePtr item = signature.parameters->children[parameter];
@@ -363,8 +363,25 @@ bool PA18TemplateExpander::MergeInferredFunctionArgument(
 				map<string, string>{{"size_t", size_type}});
 	} catch(const PA18SubstitutionFailure&) {}
 	const string completed_type = complete_class_template_type(deduction_type);
-	const bool matched = MatchTypePattern(matching_pattern, completed_type,
+	bool matched = MatchTypePattern(matching_pattern, completed_type,
 		matching_parameter_names, &one, context);
+	// Some typed expression forms (notably cv-qualified member-function
+	// pointers) are richer than the compact type-pattern matcher.  A plain
+	// reference to one template type parameter is still unambiguous: strip the
+	// expression's lvalue-reference layer and bind that parameter to the full
+	// typed member-pointer spelling.
+	if(!matched && matching_pattern.size() > 1 &&
+		matching_pattern[matching_pattern.size() - 1] == '&') {
+		const string reference_name = CanonicalSpelling(matching_pattern.substr(
+			0, matching_pattern.size() - 1));
+		if(matching_parameter_names.find(reference_name) !=
+			matching_parameter_names.end() && completed_type.size() > 1 &&
+			completed_type[completed_type.size() - 1] == '&') {
+			one[reference_name] = CanonicalSpelling(completed_type.substr(0,
+				completed_type.size() - 1));
+			matched = true;
+		}
+	}
 	if(!matched) {
 		const bool lvalue = match_pattern.size() > 0 && match_pattern[match_pattern.size() - 1] == '&' &&
 			(match_pattern.size() < 2 || match_pattern[match_pattern.size() - 2] != '&');
@@ -863,7 +880,7 @@ bool PA18TemplateExpander::InferFunctionParameter(
 					deduction_type, signature, parameter_substitutions, context, parameter_names,
 					inferred, inferred_packs, inferred_functions, bound_pack_values,
 					fixed_template_parameters);
-				if(!merged) return false;
+					if(!merged) return false;
 		}
 		++*argument_index;
 	}

@@ -678,6 +678,7 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 		const map<string, string>& substitutions)
 	{
 		expression = StripTextParentheses(CanonicalSpelling(expression));
+		const string member_address = MemberAddressExpressionType(expression, context, substitutions); if(!member_address.empty()) return member_address;
 		const string aggregate = AggregateExpressionType(expression, context, substitutions);
 		if(!aggregate.empty()) return aggregate;
 		string cast_type, cast_operand;
@@ -898,7 +899,7 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 		return string();
 	}
 	bool EvaluateNewExpression(const string& expression, const string& context,
-		const map<string, string>& substitutions, string* result); bool IsDeletedFunctionCall(const string& callee, const string& context) const;
+		const map<string, string>& substitutions, string* result); bool IsDeletedFunctionCall(const string& callee, const string& context) const; string MemberAddressExpressionType(const string& expression, const string& context, const map<string, string>& substitutions) const; bool EvaluateMemberPointerStaticCast(const string& expression, const string& context, const map<string, string>& substitutions, string* result);
 	bool EvaluateDecltypeExpression(const string& expression, const string& context,
 		const map<string, string>& substitutions, string* result)
 	{
@@ -934,7 +935,7 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 			return !result->empty();
 		}
 		string normalized = stripped;
-		if(normalized.size() > 1 && normalized[0] == '&' && normalized[1] != '&') {
+		if(normalized.size() > 1 && normalized[0] == '&' && normalized[1] != '&') { const string address_type = ExpressionTypeSpelling(normalized, context, substitutions); if(address_type.find("::*") != string::npos) { *result = address_type; return true; }
 			const string inner = ExpressionTypeSpelling(normalized.substr(1),
 				context, substitutions);
 			if(inner.empty()) return false;
@@ -985,7 +986,7 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 			*result = "void";
 			return true;
 		}
-		if(EvaluateNewExpression(normalized, context, substitutions, result)) return true;
+		if(EvaluateNewExpression(normalized, context, substitutions, result)) return true; if(normalized.compare(0, 12, "static_cast<") == 0 && EvaluateMemberPointerStaticCast(normalized, context, substitutions, result)) return true;
 		const size_t direct_open = normalized.find('(');
 		size_t direct_close = string::npos;
 		if(direct_open != string::npos) {

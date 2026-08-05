@@ -108,14 +108,16 @@ TypePtr Analyzer::ResolveType(Scope* from, const string& raw) const
 			if (!IsFundamentalWord(words[i])) fundamental = false;
 		}
 	}
-	if ((add_const || add_volatile) && fundamental && !fundamental_words.empty())
+	if (fundamental && !fundamental_words.empty())
 		return CloneWithCv(Fundamental(FundamentalName(fundamental_words)),
 			add_const, add_volatile);
-	if (from && name.find("::") != string::npos &&
-		IsDependentTemplateName(from, name))
+	TypePtr member_pointer = ResolveMemberPointerSpelling(from, name);
+	if(member_pointer) return member_pointer;
+	TypePtr declarator = ResolveDeclaratorSpelling(from, name);
+	if(declarator) return declarator;
+	if (from && name.find("::") != string::npos && IsDependentTemplateName(from, name))
 		return TypePtr(new Type(TYPE_TEMPLATE_PARAMETER, name));
-	const size_t template_open = name.find('<');
-	if (template_open != string::npos && name.size() > template_open + 1 &&
+	const size_t template_open = name.find('<'); if (template_open != string::npos && name.size() > template_open + 1 &&
 		name[name.size() - 1] == '>')
 	{
 		const string primary_name = name.substr(0, template_open);

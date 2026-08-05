@@ -12,6 +12,7 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformInstantiatedNode(
 	const map<string, FunctionSignature>& function_substitutions)
 {
 	const map<string, PA19IntegralValue> previous = active_integral_substitutions_;
+	const map<string, string> previous_member_pointers = active_member_pointer_substitutions_;
 	const map<string, vector<string> > previous_packs = active_pack_substitutions_;
 	const map<string, vector<string> > previous_pack_identifiers = active_pack_identifier_substitutions_, previous_function_packs = active_function_pack_substitutions_;
 	const map<pair<size_t, size_t>, string> previous_lambda_replay_names =
@@ -22,6 +23,7 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformInstantiatedNode(
 	set<string> previous_early_integral_members;
 	previous_early_integral_members.swap(early_integral_members_);
 	active_integral_substitutions_ = integral_substitutions;
+	InstallMemberPointerSubstitutions(definition, context, substitutions);
 	active_function_substitutions_ = function_substitutions;
 	active_function_pointer_substitutions_.clear();
 	for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter) {
@@ -84,6 +86,7 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformInstantiatedNode(
 				substitutions);
 		CPPGMAstNodePtr result = TransformNode(definition.declaration, context, substitutions);
 		active_integral_substitutions_ = previous;
+		active_member_pointer_substitutions_ = previous_member_pointers;
 		active_pack_substitutions_ = previous_packs;
 		active_pack_identifier_substitutions_ = previous_pack_identifiers; active_function_pack_substitutions_ = previous_function_packs;
 		active_lambda_replay_names_ = previous_lambda_replay_names;
@@ -93,6 +96,7 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformInstantiatedNode(
 		return result;
 	} catch(...) {
 		active_integral_substitutions_ = previous;
+		active_member_pointer_substitutions_ = previous_member_pointers;
 		active_pack_substitutions_ = previous_packs;
 		active_pack_identifier_substitutions_ = previous_pack_identifiers; active_function_pack_substitutions_ = previous_function_packs;
 		active_lambda_replay_names_ = previous_lambda_replay_names;

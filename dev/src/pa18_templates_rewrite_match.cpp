@@ -2,6 +2,63 @@
 #include "pa18_templates_rewrite.h"
 using namespace std;
 namespace pa18_templates_internal {
+
+bool PA18TemplateExpander::SplitMemberPointerType(string raw, string* result_type,
+	string* owner_type, vector<string>* parameters, string* qualifiers,
+	bool* function_type) const
+{
+	raw = CanonicalSpelling(raw);
+	const size_t marker = raw.find("::*");
+	if(marker == string::npos) return false;
+	if(result_type) result_type->clear();
+	if(owner_type) owner_type->clear();
+	if(parameters) parameters->clear();
+	if(qualifiers) qualifiers->clear();
+	if(function_type) *function_type = false;
+	const size_t open = raw.rfind('(', marker);
+	if(open != string::npos) {
+		const string owner = Trim(raw.substr(open + 1, marker - open - 1));
+		const string result = Trim(raw.substr(0, open));
+		size_t suffix_begin = marker + 3;
+		const size_t owner_close = raw.find(')', suffix_begin);
+		if(owner_close == string::npos) return false;
+		for(size_t position = suffix_begin; position < owner_close; ++position) {
+			if(isspace(static_cast<unsigned char>(raw[position]))) continue;
+			if(raw.compare(position, 5, "const") == 0) { position += 4; continue; }
+			if(raw.compare(position, 7, "volatile") == 0) { position += 6; continue; }
+			return false;
+		}
+		suffix_begin = owner_close + 1;
+		const string suffix = raw.substr(suffix_begin);
+		if(owner.empty() || result.empty() || suffix.empty() || suffix[0] != '(')
+			return false;
+		int depth = 0;
+		size_t close = string::npos;
+		for(size_t position = 0; position < suffix.size(); ++position) {
+			if(suffix[position] == '(') ++depth;
+			else if(suffix[position] == ')' && --depth == 0) {
+				close = position;
+				break;
+			}
+		}
+		if(close == string::npos) return false;
+		if(result_type) *result_type = CanonicalSpelling(result);
+		if(owner_type) *owner_type = CanonicalSpelling(owner);
+		if(parameters) *parameters = SplitTemplateArguments(suffix.substr(1, close - 1));
+		if(qualifiers) *qualifiers = CanonicalSpelling(suffix.substr(close + 1));
+		if(function_type) *function_type = true;
+		return true;
+	}
+	const size_t separator = raw.rfind(' ', marker);
+	const size_t owner_begin = separator == string::npos ? 0 : separator + 1;
+	const string owner = Trim(raw.substr(owner_begin, marker - owner_begin));
+	const string result = Trim(raw.substr(0, owner_begin));
+	if(owner.empty() || result.empty()) return false;
+	if(result_type) *result_type = CanonicalSpelling(result);
+	if(owner_type) *owner_type = CanonicalSpelling(owner);
+	return true;
+}
+
 namespace {
 size_t MatchPatternPointerDepth(const string& spelling)
 {
@@ -227,6 +284,70 @@ bool PA18TemplateExpander::MatchTypePattern(string pattern, string actual,
 		context, class_pattern) != 0;
 }
 
+int PA18TemplateExpander::MatchTypePatternMemberPointerCases(
+	const string& pattern, const string& actual,
+	const set<string>& parameter_names, map<string, string>* inferred,
+	const string& context, bool class_pattern) const
+{
+	string pattern_result, pattern_owner, pattern_qualifiers;
+	string actual_result, actual_owner, actual_qualifiers;
+	vector<string> pattern_parameters, actual_parameters;
+	bool pattern_function = false, actual_function = false;
+	const bool pattern_member = SplitMemberPointerType(pattern, &pattern_result,
+		&pattern_owner, &pattern_parameters, &pattern_qualifiers, &pattern_function);
+	const bool actual_member = SplitMemberPointerType(actual, &actual_result,
+		&actual_owner, &actual_parameters, &actual_qualifiers, &actual_function);
+	if(!pattern_member && !actual_member) return -1;
+	if(!pattern_member || !actual_member || pattern_function != actual_function)
+		return 0;
+	if(!MatchTypePattern(pattern_owner, actual_owner, parameter_names, inferred,
+		context, class_pattern) ||
+		!MatchTypePattern(pattern_result, actual_result, parameter_names, inferred,
+			context, class_pattern)) return 0;
+	if(!pattern_function) return 1;
+	if(CanonicalSpelling(pattern_qualifiers) != CanonicalSpelling(actual_qualifiers))
+		return 0;
+	const auto void_parameter_list = [](vector<string>* parameters) {
+		if(parameters && parameters->size() == 1 &&
+			CanonicalSpelling((*parameters)[0]) == "void") parameters->clear();
+	};
+	void_parameter_list(&pattern_parameters);
+	void_parameter_list(&actual_parameters);
+	const bool parameter_pack = !pattern_parameters.empty() &&
+		pattern_parameters.back().size() > 3 &&
+		pattern_parameters.back().compare(pattern_parameters.back().size() - 3, 3, "...") == 0;
+	if(parameter_pack) {
+		const size_t fixed = pattern_parameters.size() - 1;
+		if(actual_parameters.size() < fixed) return 0;
+		for(size_t parameter = 0; parameter < fixed; ++parameter)
+			if(!MatchTypePattern(pattern_parameters[parameter], actual_parameters[parameter],
+				parameter_names, inferred, context, class_pattern)) return 0;
+		const string pack_name = CanonicalSpelling(pattern_parameters.back().substr(
+			0, pattern_parameters.back().size() - 3));
+		if(parameter_names.find(pack_name) == parameter_names.end()) return 0;
+		string combined;
+		for(size_t parameter = fixed; parameter < actual_parameters.size(); ++parameter) {
+			map<string, string> one;
+			if(!MatchTypePattern(pack_name, actual_parameters[parameter], parameter_names,
+				&one, context, class_pattern)) return 0;
+			map<string, string>::const_iterator value = one.find(pack_name);
+			if(value == one.end()) return 0;
+			if(!combined.empty()) combined += ",";
+			combined += CanonicalSpelling(value->second);
+		}
+		map<string, string>::const_iterator prior = inferred->find(pack_name);
+		if(prior != inferred->end() && CanonicalSpelling(prior->second) !=
+			CanonicalSpelling(combined)) return 0;
+		(*inferred)[pack_name] = combined;
+		return 1;
+	}
+	if(pattern_parameters.size() != actual_parameters.size()) return 0;
+	for(size_t parameter = 0; parameter < pattern_parameters.size(); ++parameter)
+		if(!MatchTypePattern(pattern_parameters[parameter], actual_parameters[parameter],
+			parameter_names, inferred, context, class_pattern)) return 0;
+	return 1;
+}
+
 int PA18TemplateExpander::MatchTypePatternNormalized(string pattern, string actual,
 	const set<string>& parameter_names, map<string, string>* inferred,
 	const string& context, bool class_pattern) const
@@ -248,6 +369,9 @@ int PA18TemplateExpander::MatchTypePatternNormalized(string pattern, string actu
 	}
 	pattern = CanonicalSpelling(pattern);
 	int result = MatchTypePatternSimpleCases(pattern, actual, parameter_names,
+		inferred, context, class_pattern);
+	if(result >= 0) return result;
+	result = MatchTypePatternMemberPointerCases(pattern, actual, parameter_names,
 		inferred, context, class_pattern);
 	if(result >= 0) return result;
 	result = MatchTypePatternFunctionCases(pattern, &actual, parameter_names,

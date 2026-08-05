@@ -102,7 +102,7 @@ bool LooksLikeRelationalLessThan(const string& raw, size_t position);
 size_t TopLevelScopeSeparator(const string& raw);
 inline string LastComponent(const string& raw)
 {
-	const size_t separator = TopLevelScopeSeparator(raw);
+	if(raw.find("::*") != string::npos && raw.find('<') == string::npos) return raw; const size_t separator = TopLevelScopeSeparator(raw);
 	return separator == string::npos ? raw : raw.substr(separator + 2);
 }
 inline string PrefixComponent(const string& raw)
@@ -539,7 +539,7 @@ private:
 	map<string, map<string, string> > function_parameter_types_;
 	map<string, PA19IntegralValue> constant_values_;
 	map<string, vector<PA19IntegralValue> > constant_arrays_; map<string, size_t> constant_type_sizes_, constant_type_alignments_;
-	map<string, PA19IntegralValue> active_integral_substitutions_;
+	map<string, PA19IntegralValue> active_integral_substitutions_; map<string, string> active_member_pointer_substitutions_;
 	set<string> active_function_pointer_substitutions_, early_integral_members_;
 	set<IntegralEvaluationKey> active_integral_evaluations_;
 	size_t explicit_instantiation_visibility_ = static_cast<size_t>(-1);

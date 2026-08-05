@@ -1408,6 +1408,8 @@ string PA18TemplateExpander::Instantiate(const TemplateDefinition& definition,
 		*function_hints : map<string, FunctionSignature>();
 	string concrete_owner = requested_owner ? *requested_owner :
 		active_concrete_owner_.name;
+	if(definition.class_template && concrete_owner.empty())
+		concrete_owner = RecoverNestedConcreteOwner(definition, context);
 	if(!ConcreteOwnerMatches(definition, concrete_owner)) concrete_owner.clear();
 	// A template-template argument can name a member alias on a concrete
 	// specialization (for example `quote_X_::fn`).  Recover the outer class's

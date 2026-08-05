@@ -562,14 +562,21 @@ void PA14Lowerer::IndexRttiUses(const CPPGMAstNodePtr& node, Scope* scope)
     const bool reference_target = type_is_reference(target);
     const TypePtr target_value = reference_target ? type_value(target->child) :
       type_value(target);
+    const bool void_pointer_target = target_value &&
+      target_value->kind == TYPE_POINTER && target_value->child &&
+      type_value(target_value->child)->kind == TYPE_FUNDAMENTAL &&
+      trim_type_name(type_value(target_value->child)->name) == "void";
     if(!target_value || (target_value->kind != TYPE_POINTER &&
        target_value->kind != TYPE_CLASS) ||
        (target_value->kind == TYPE_POINTER && (!target_value->child ||
-         type_value(target_value->child)->kind != TYPE_CLASS)))
+         (!void_pointer_target &&
+          type_value(target_value->child)->kind != TYPE_CLASS))))
       throw logic_error("unsupported dynamic_cast target");
-    const TypePtr target_class = target_value->kind == TYPE_POINTER ?
+    const TypePtr target_class = target_value->kind == TYPE_POINTER &&
+      !void_pointer_target ?
       type_value(target_value->child) : target_value;
-    EnsureRttiType(target_class);
+    if(void_pointer_target) has_dynamic_cast_void_ = true;
+    else EnsureRttiType(target_class);
     if(target_class && target_class->kind == TYPE_CLASS && target_class->polymorphic) {
       if(ShouldUseExternalVtable(target_class)) external_vtables_.insert(target_class.get());
       else emitted_vtables_.insert(target_class.get());
@@ -1146,9 +1153,9 @@ void PA14Lowerer::EmitVPointerStore(const TypePtr& owner, const string& address)
 
 void PA14Lowerer::EmitPolymorphicGlobals(vector<string>& entries)
 {
-  for(set<const Type*>::const_iterator it = emitted_vtables_.begin(); it != emitted_vtables_.end(); ++it) EnsureRttiType(SemanticType(*it));
-  for(set<const Type*>::const_iterator it = external_vtables_.begin(); it != external_vtables_.end(); ++it) EnsureRttiType(SemanticType(*it));
-  if (emitted_vtables_.empty() && external_vtables_.empty() && demanded_rtti_types_.empty() && demanded_exception_types_.empty()) return;
+	for(set<const Type*>::const_iterator it = emitted_vtables_.begin(); it != emitted_vtables_.end(); ++it) EnsureRttiType(SemanticType(*it)); for(set<const Type*>::const_iterator it = external_vtables_.begin(); it != external_vtables_.end(); ++it) EnsureRttiType(SemanticType(*it));
+  if (emitted_vtables_.empty() && external_vtables_.empty() && demanded_rtti_types_.empty() &&
+      demanded_exception_types_.empty() && !has_dynamic_cast_void_) return;
   bool has_class = false, has_fundamental = false, has_pointer = false, has_si = false;
   for(map<string, TypePtr>::const_iterator it = demanded_rtti_types_.begin(); it != demanded_rtti_types_.end(); ++it) {
     const TypePtr type = RttiValueType(it->second);
@@ -1158,6 +1165,7 @@ void PA14Lowerer::EmitPolymorphicGlobals(vector<string>& entries)
     else if(type->kind == TYPE_CLASS || type->kind == TYPE_ENUM) { has_class = true; if(type->kind == TYPE_CLASS && type->direct_base) has_si = true; }
   }
   EmitExceptionRttiDeclarations(entries, &has_fundamental, &has_pointer, &has_class, &has_si);
+	if(has_dynamic_cast_void_) entries.push_back("declare global @__external_rtti__void [binding=strong, object=_ZTIv]");
   if(has_fundamental)
     entries.push_back("declare global @__external_rtti_vtable____fundamental_type_info [binding=strong, object=_ZTVN10__cxxabiv123__fundamental_type_infoE]");
   if(has_pointer)

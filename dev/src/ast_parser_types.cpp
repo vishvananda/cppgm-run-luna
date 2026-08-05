@@ -111,8 +111,14 @@ CPPGMAstNodePtr Parser::ParseDeclSpecifier(bool type_id_context)
 	}
 	if (IsNamedTypeStart())
 	{
+		Mark mark = Save();
 		string name;
 		if (!ParseName(&name, false)) return CPPGMAstNodePtr();
+		if (name.size() >= 2 && name.compare(name.size() - 2, 2, "::") == 0 &&
+			Is("*")) {
+			Restore(mark);
+			return CPPGMAstNodePtr();
+		}
 		const bool bare = name.find("::") == string::npos &&
 			name.find('<') == string::npos;
 		const string value = bare ? "TT_IDENTIFIER:" + name : name;
@@ -185,8 +191,18 @@ CPPGMAstNodePtr Parser::ParseTypeSpecifier()
 	}
 	if (IsNamedTypeStart())
 	{
+		Mark mark = Save();
 		string name;
 		if (!ParseName(&name, false)) return CPPGMAstNodePtr();
+		// In `int C::*`, the scoped name belongs to the member-pointer
+		// declarator, not to the type-specifier sequence.  ParseName quite
+		// correctly accepts the trailing `::`, so leave this token sequence for
+		// ParsePtrOperator instead of manufacturing a type named `C::`.
+		if (name.size() >= 2 && name.compare(name.size() - 2, 2, "::") == 0 &&
+			Is("*")) {
+			Restore(mark);
+			return CPPGMAstNodePtr();
+		}
 		return Node("type-name", name);
 	}
 	return CPPGMAstNodePtr();

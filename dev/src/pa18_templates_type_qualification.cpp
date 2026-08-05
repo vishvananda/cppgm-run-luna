@@ -68,6 +68,48 @@ string PA18TemplateExpander::QualifyTypeArgument(string spelling, const string& 
 	while(spelling.compare(0, 8, "typename") == 0 &&
 		(spelling.size() == 8 || isspace(static_cast<unsigned char>(spelling[8]))))
 		spelling = CanonicalSpelling(spelling.substr(8));
+	// `C::*` is part of the declarator, not an ordinary pointer suffix.  Split
+	// it before the general `*`/`&` handling below, which would otherwise turn
+	// `R(C::*)(Args...)` into `R(*) (Args...)` and discard the owning class.
+	string member_result;
+	string member_owner;
+	string member_qualifiers;
+	vector<string> member_parameters;
+	bool member_function = false;
+	if(SplitMemberPointerType(spelling, &member_result, &member_owner,
+		&member_parameters, &member_qualifiers, &member_function)) {
+		const string qualified_result = QualifyTypeArgument(member_result, context,
+			template_owner, preserve_nested_namespace);
+		const string qualified_owner = QualifyTypeArgument(member_owner, context,
+			template_owner, preserve_nested_namespace);
+		vector<string> qualified_parameters;
+		for(size_t parameter = 0; parameter < member_parameters.size(); ++parameter) {
+			const string raw_parameter = CanonicalSpelling(member_parameters[parameter]);
+			if(raw_parameter.size() >= 3 && raw_parameter.compare(
+				raw_parameter.size() - 3, 3, "...") == 0) {
+				const string pack_parameter = raw_parameter.substr(0, raw_parameter.size() - 3);
+				qualified_parameters.push_back(QualifyTypeArgument(pack_parameter, context,
+					template_owner, preserve_nested_namespace) + "...");
+			} else qualified_parameters.push_back(QualifyTypeArgument(raw_parameter, context,
+				template_owner, preserve_nested_namespace));
+		}
+		const size_t marker = spelling.find("::*");
+		if(member_function) {
+			const size_t owner_close = spelling.find(')', marker + 3);
+			const string pointer_qualifiers = owner_close == string::npos ? string() :
+				spelling.substr(marker + 3, owner_close - marker - 3);
+			string rebuilt = qualified_result + "(" + qualified_owner + "::*" +
+				pointer_qualifiers + ")(";
+			for(size_t parameter = 0; parameter < qualified_parameters.size(); ++parameter) {
+				if(parameter) rebuilt += ",";
+				rebuilt += qualified_parameters[parameter];
+			}
+			rebuilt += ")" + member_qualifiers;
+			return CanonicalSpelling(rebuilt);
+		}
+		return CanonicalSpelling(qualified_result + " " + qualified_owner + "::*" +
+			spelling.substr(marker + 3));
+	}
 	// Declaration specifiers are visited through the same type-spelling path as
 	// user types.  They are not class members, so trying `MemberAliasType` on a
 	// generated class for `typedef` (or a storage/function specifier) can

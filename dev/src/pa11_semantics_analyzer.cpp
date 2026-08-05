@@ -73,8 +73,12 @@ size_t Analyzer::TypeSize(const TypePtr& type) const
 	case TYPE_FUNDAMENTAL: return FundamentalSize(type->name);
 	case TYPE_POINTER:
 	case TYPE_LVALUE_REFERENCE:
-	case TYPE_RVALUE_REFERENCE:
-	case TYPE_MEMBER_POINTER: return 8;
+	case TYPE_RVALUE_REFERENCE: return 8;
+	case TYPE_MEMBER_POINTER:
+		// The Itanium representation is one word for a data-member pointer and
+		// two words (function address plus this-adjustment) for a member-function
+		// pointer.  PA26 currently lowers the non-virtual form of both.
+		return type->child && type->child->kind == TYPE_FUNCTION ? 16 : 8;
 	case TYPE_FUNCTION: return 4;
 	case TYPE_ARRAY: return type->bound < 0 ? 0 : static_cast<size_t>(type->bound) * TypeSize(type->child);
 	case TYPE_ENUM:
@@ -108,6 +112,7 @@ size_t Analyzer::TypeAlignment(const TypePtr& type) const
 	if (type->kind == TYPE_CLASS && type->layout_complete)
 		return type->object_alignment;
 	if (type->kind == TYPE_ENUM && type->underlying) return TypeAlignment(type->underlying);
+	if (type->kind == TYPE_MEMBER_POINTER) return 8;
 	return TypeSize(type);
 }
 

@@ -28,7 +28,11 @@ bool PA14Lowerer::HasDefaultInitializationEffects(const TypePtr& raw_type) const
         return true;
       }
     }
-    if(type->direct_base && HasDefaultInitializationEffects(type->direct_base)) return true;
+    const vector<TypePtr> direct_bases = !type->direct_bases.empty() ?
+      type->direct_bases : (type->direct_base ?
+        vector<TypePtr>(1, type->direct_base) : vector<TypePtr>());
+    for(size_t base = 0; base < direct_bases.size(); ++base)
+      if(HasDefaultInitializationEffects(direct_bases[base])) return true;
     for(size_t i = 0; i < type->class_members.size(); ++i) {
       const ClassMemberInfo& member = type->class_members[i];
       if(member.is_static || !member.type) continue;
@@ -420,6 +424,15 @@ bool PA14Lowerer::EmitValueSpecialMemberBody(FunctionRecord& function, Scope* sc
     const string source_storage = "$" + names[source_index];
     const bool assignment = function.copy_assignment || function.move_assignment;
     const bool move = function.move_constructor || function.move_assignment;
+    const vector<TypePtr> direct_bases = !owner->direct_bases.empty() ?
+      owner->direct_bases : (owner->direct_base ?
+        vector<TypePtr>(1, owner->direct_base) : vector<TypePtr>());
+    bool has_empty_direct_base = false;
+    for(size_t base = 0; base < direct_bases.size(); ++base)
+      if(IsEmptyBaseStorage(direct_bases[base])) {
+        has_empty_direct_base = true;
+        break;
+      }
     bool has_bit_field = false;
     bool has_reference_member = false;
     for(size_t i = 0; i < owner->class_members.size(); ++i)
@@ -427,8 +440,7 @@ bool PA14Lowerer::EmitValueSpecialMemberBody(FunctionRecord& function, Scope* sc
       else if(owner->class_members[i].type &&
               type_is_reference(owner->class_members[i].type))
         has_reference_member = true;
-    const bool defer_destination = assignment && owner->direct_base &&
-      IsEmptyBaseStorage(owner->direct_base);
+    const bool defer_destination = assignment && has_empty_direct_base;
     const bool defer_bit_field_destination = assignment && has_bit_field;
     string destination;
     string source;
@@ -445,7 +457,7 @@ bool PA14Lowerer::EmitValueSpecialMemberBody(FunctionRecord& function, Scope* sc
     if(!defer_destination && !defer_bit_field_destination)
       destination = EmitValue(this_node, scope).operand;
     bool defaulted_copy_storage = function.copy_assignment && function.defaulted &&
-      !owner->direct_base;
+      direct_bases.empty();
     if(defaulted_copy_storage) {
       for(size_t i = 0; i < owner->class_members.size(); ++i) {
         const ClassMemberInfo& member = owner->class_members[i];
@@ -460,7 +472,7 @@ bool PA14Lowerer::EmitValueSpecialMemberBody(FunctionRecord& function, Scope* sc
     // its destructor is user-declared.  Its implicit copy constructor may
     // copy that payload as one object, while nested class members must retain
     // their own typed copy-constructor boundaries.
-    bool byte_copyable_owner = !owner->direct_base && !owner->polymorphic &&
+    bool byte_copyable_owner = direct_bases.empty() && !owner->polymorphic &&
       !has_bit_field && !has_reference_member;
     for(size_t i = 0; byte_copyable_owner && i < owner->class_members.size(); ++i) {
       const ClassMemberInfo& member = owner->class_members[i];
@@ -476,41 +488,41 @@ bool PA14Lowerer::EmitValueSpecialMemberBody(FunctionRecord& function, Scope* sc
         "x" + integer_text(static_cast<long long>(type_alignment(owner))) + " " +
         source + ", " + destination);
     } else {
-      if(owner->direct_base) {
-        TypePtr base = type_value(owner->direct_base);
-        if(!IsEmptyBaseStorage(base)) {
-          const string destination_base = AdjustBaseAddress(destination, owner, base);
-          source = emit_load(source_storage, PointerTo(Fundamental("char")));
-          const string source_base = AdjustBaseAddress(source, owner, base);
-          if(IsTrivialValueStorage(base)) {
+      for(size_t base_index = 0; base_index < direct_bases.size(); ++base_index) {
+        TypePtr base = type_value(direct_bases[base_index]);
+        if(!base || IsEmptyBaseStorage(base)) continue;
+        if(destination.empty()) destination = EmitValue(this_node, scope).operand;
+        const string destination_base = AdjustBaseAddress(destination, owner, base);
+        source = emit_load(source_storage, PointerTo(Fundamental("char")));
+        const string source_base = AdjustBaseAddress(source, owner, base);
+        if(IsTrivialValueStorage(base)) {
           AddInstruction("copyobj " + integer_text(static_cast<long long>(type_size(base))) +
             "x" + integer_text(static_cast<long long>(type_alignment(base))) + " " +
             source_base + ", " + destination_base);
-          } else {
-            FunctionRecord* base_record = assignment ?
-              EnsureImplicitAssignment(base, move) : EnsureImplicitCopyConstructor(base, move);
-            if(!base_record || base_record->deleted)
-              throw logic_error("value member has deleted base operation");
-            // A defaulted special member invokes the base-subobject
-            // constructor entry.  User-written constructors use the normal
-            // complete-object entry, even when they happen to initialize a
-            // base by delegation.
-            if(!assignment && function.defaulted &&
-               (function.copy_constructor || function.move_constructor) &&
-               !BaseEntryFor(base_record))
-              EnsureConstructorBaseEntry(base_record);
-            MarkFunctionNeeded(base_record);
-            FunctionRecord* base_call = BaseEntryFor(base_record);
-            if(base_call) MarkFunctionNeeded(base_call);
-            if(!base_call) base_call = base_record;
-            const string base_arguments = destination_base + ", " + source_base;
-            if(assignment) {
-              const string result = new_temp();
-              AddInstruction(result + " = call ptr @" + base_call->symbol + "(" +
-                base_arguments + ")");
-            } else AddInstruction("call void @" + base_call->symbol + "(" +
+        } else {
+          FunctionRecord* base_record = assignment ?
+            EnsureImplicitAssignment(base, move) : EnsureImplicitCopyConstructor(base, move);
+          if(!base_record || base_record->deleted)
+            throw logic_error("value member has deleted base operation");
+          // A defaulted special member invokes the base-subobject
+          // constructor entry.  User-written constructors use the normal
+          // complete-object entry, even when they happen to initialize a
+          // base by delegation.
+          if(!assignment && function.defaulted &&
+             (function.copy_constructor || function.move_constructor) &&
+             !BaseEntryFor(base_record))
+            EnsureConstructorBaseEntry(base_record);
+          MarkFunctionNeeded(base_record);
+          FunctionRecord* base_call = BaseEntryFor(base_record);
+          if(base_call) MarkFunctionNeeded(base_call);
+          if(!base_call) base_call = base_record;
+          const string base_arguments = destination_base + ", " + source_base;
+          if(assignment) {
+            const string result = new_temp();
+            AddInstruction(result + " = call ptr @" + base_call->symbol + "(" +
               base_arguments + ")");
-          }
+          } else AddInstruction("call void @" + base_call->symbol + "(" +
+            base_arguments + ")");
         }
       }
       long long trivial_prefix_size = 0;
@@ -557,8 +569,7 @@ bool PA14Lowerer::EmitValueSpecialMemberBody(FunctionRecord& function, Scope* sc
           emit_store(member.type, loaded, destination_member);
           continue;
         }
-        if(assignment && owner->direct_base &&
-           IsEmptyBaseStorage(owner->direct_base) && member_type &&
+        if(assignment && has_empty_direct_base && member_type &&
            member_type->kind != TYPE_CLASS && member_type->kind != TYPE_ARRAY) {
           if(source.empty())
             source = emit_load(source_storage, PointerTo(Fundamental("char")));
@@ -633,7 +644,7 @@ bool PA14Lowerer::EmitValueSpecialMemberBody(FunctionRecord& function, Scope* sc
       }
     }
     if(owner->polymorphic) {
-      const string vptr_destination = destination.empty() || owner->direct_base ?
+      const string vptr_destination = destination.empty() || !direct_bases.empty() ?
         EmitValue(this_node, scope).operand : destination;
       EmitVPointerStore(owner, vptr_destination);
     }
@@ -654,6 +665,9 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
     CPPGMAstNodePtr this_node(new CPPGMAstNode("keyword-literal", "KW_THIS:this"));
     set<string> initialized_members;
     TypePtr base = type_value(owner->direct_base);
+    const vector<TypePtr> direct_bases = !owner->direct_bases.empty() ?
+      owner->direct_bases : (owner->direct_base ?
+        vector<TypePtr>(1, owner->direct_base) : vector<TypePtr>());
     bool delegating = false;
     if(function.special_initializer) {
       for(size_t i = 0; i < function.special_initializer->children.size(); ++i) {
@@ -717,14 +731,22 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
         }
       }
     }
-	if(base && !defer_dependent_base && !delegating &&
-       !explicitly_initialized_base && HasConstructor(base) &&
-       (!IsEmptyBaseStorage(base) || HasDefaultConstructionEffects(base) ||
-        HasUserProvidedConstructor(base))) {
-      const string this_address = EmitValue(this_node, scope).operand;
-      const string base_address = AdjustBaseAddress(this_address, owner, base);
-      (void)EmitConstructorAt(base, base_address, vector<CPPGMAstNodePtr>(), scope,
-        true, true);
+	if(!delegating) {
+      for(size_t base_index = 0; base_index < direct_bases.size(); ++base_index) {
+        TypePtr current_base = type_value(direct_bases[base_index]);
+        if(!current_base) continue;
+        const bool defer_current_base = current_base == base && defer_dependent_base;
+        const bool explicit_current_base = current_base == base &&
+          explicitly_initialized_base;
+        if(defer_current_base || explicit_current_base || !HasConstructor(current_base) ||
+           (IsEmptyBaseStorage(current_base) &&
+            !HasDefaultConstructionEffects(current_base) &&
+            !HasUserProvidedConstructor(current_base))) continue;
+        const string this_address = EmitValue(this_node, scope).operand;
+        const string base_address = AdjustBaseAddress(this_address, owner, current_base);
+        (void)EmitConstructorAt(current_base, base_address,
+          vector<CPPGMAstNodePtr>(), scope, true, true);
+      }
     }
     vector<CPPGMAstNodePtr> ordered_initializers;
     set<const CPPGMAstNode*> used_initializers;

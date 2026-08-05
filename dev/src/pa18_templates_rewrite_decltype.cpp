@@ -5,6 +5,59 @@ using namespace std;
 
 namespace pa18_templates_internal {
 
+string PA18TemplateExpander::MemberAddressExpressionType(const string& expression,
+	const string& context, const map<string, string>& substitutions) const
+{
+	if(expression.size() <= 1 || expression[0] != '&') return string();
+	const string target = Trim(expression.substr(1));
+	const size_t separator = TopLevelScopeSeparator(target);
+	if(separator == string::npos) return string();
+	string owner = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(
+		target.substr(0, separator), substitutions));
+	try {
+		owner = CanonicalSpelling(ResolveAlias(const_cast<PA18TemplateExpander*>(this)->RewriteText(
+			owner, context, substitutions, 0), context));
+	} catch(const PA18SubstitutionFailure&) {}
+	if(owner.empty()) return string();
+	CPPGMAstNodePtr member(new CPPGMAstNode("id-expression",
+		JoinPath(owner, target.substr(separator + 2))));
+	CPPGMAstNodePtr address(new CPPGMAstNode("unary-expression", "OP_AMP:&"));
+	address->children.push_back(member);
+	const vector<string> candidates = FunctionExpressionTypes(address, context);
+	string selected;
+	for(size_t candidate = 0; candidate < candidates.size(); ++candidate) {
+		string result_type, candidate_owner, qualifiers;
+		vector<string> parameters;
+		if(!SplitMemberPointerType(candidates[candidate], &result_type, &candidate_owner,
+			&parameters, &qualifiers, 0)) continue;
+		candidate_owner = CanonicalSpelling(ResolveAlias(candidate_owner, context));
+		if(candidate_owner != owner) continue;
+		if(!selected.empty() && selected != candidates[candidate]) return string();
+		selected = candidates[candidate];
+	}
+	return selected;
+}
+
+bool PA18TemplateExpander::EvaluateMemberPointerStaticCast(const string& expression,
+	const string& context, const map<string, string>& substitutions, string* result)
+{
+	string expanded = ExpandPackCallText(expression, active_pack_substitutions_);
+	string cast_type, cast_operand;
+	if(!SplitStaticCast(expanded, &cast_type, &cast_operand)) return false;
+	string resolved = NormalizeTypeArgument(ReplaceIdentifiers(cast_type, substitutions));
+	try { resolved = NormalizeTypeArgument(RewriteText(resolved, context, substitutions, 0)); }
+	catch(const PA18SubstitutionFailure&) {}
+	resolved = NormalizeTypeArgument(ResolveAlias(resolved, context));
+	if(resolved.empty() || HasUnresolvedTemplateParameter(resolved, context, substitutions))
+		return false;
+	string member_result, member_owner, member_qualifiers;
+	vector<string> member_parameters;
+	if(!SplitMemberPointerType(resolved, &member_result, &member_owner,
+		&member_parameters, &member_qualifiers, 0)) return false;
+	if(result) *result = resolved;
+	return true;
+}
+
 bool PA18TemplateExpander::GeneratedFunctionCallResultType(
 	const string& callee, const string& function_context,
 	const map<string, string>& substitutions,

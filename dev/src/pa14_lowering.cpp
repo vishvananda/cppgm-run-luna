@@ -368,6 +368,7 @@ PA14Lowerer::PA14Lowerer(const vector<CPPGMAstNodePtr>& trees)
       emitted_rtti_(), demanded_rtti_types_(), demanded_exception_types_(),
       demanded_thrown_types_(),
       has_rtti_syntax_(false),
+      has_dynamic_cast_void_(false),
       class_types_by_name_(), state_(), next_needed_order_(0),
       infer_cache_(), friend_owner_index_(), hidden_friend_binding_index_(),
       hidden_friend_binding_index_ready_(false)
@@ -388,8 +389,9 @@ string PA14Lowerer::low_type(const TypePtr& raw) const
     if(type_is_reference(raw)) return "ptr";
     TypePtr type = type_value(raw);
     if(!type) throw logic_error("missing type during LowIR lowering");
-    if(type->kind == TYPE_POINTER || type->kind == TYPE_FUNCTION ||
-       type->kind == TYPE_MEMBER_POINTER) return "ptr";
+    if(type->kind == TYPE_POINTER || type->kind == TYPE_FUNCTION) return "ptr";
+    if(type->kind == TYPE_MEMBER_POINTER)
+      return type->child && type->child->kind == TYPE_FUNCTION ? "i128" : "i64";
 	if(type->kind == TYPE_ARRAY) {
 		const size_t size = type_size(type);
 	  ostringstream result;
@@ -892,8 +894,13 @@ void PA14Lowerer::CollectImplicitConstructor(const TypePtr& owner, Scope* scope,
       if(constructors[i]->kind == BIND_FUNCTION) { has_constructor = true; break; }
     if(has_constructor) return;
     bool needed = false;
-    if(owner->direct_base) {
-      TypePtr base = type_value(owner->direct_base);
+    const vector<TypePtr> direct_bases = !owner->direct_bases.empty() ?
+      owner->direct_bases : (owner->direct_base ?
+        vector<TypePtr>(1, owner->direct_base) : vector<TypePtr>());
+    for(size_t base_index = 0; base_index < direct_bases.size() && !needed;
+        ++base_index) {
+      TypePtr base = type_value(direct_bases[base_index]);
+      if(!base) continue;
       vector<Binding*> base_constructors = MemberBindings(base, LastComponent(base->name));
       for(size_t i = 0; i < base_constructors.size(); ++i)
         if(base_constructors[i]->kind == BIND_FUNCTION) { needed = true; break; }
@@ -987,8 +994,13 @@ void PA14Lowerer::CollectImplicitDestructor(const TypePtr& owner, Scope* scope)
       if(destructors[i]->kind == BIND_FUNCTION) { has_destructor = true; break; }
     if(has_destructor) return;
     bool needed = false;
-    TypePtr base = type_value(owner->direct_base);
-    if(base) {
+    const vector<TypePtr> direct_bases = !owner->direct_bases.empty() ?
+      owner->direct_bases : (owner->direct_base ?
+        vector<TypePtr>(1, owner->direct_base) : vector<TypePtr>());
+    for(size_t base_index = 0; base_index < direct_bases.size() && !needed;
+        ++base_index) {
+      TypePtr base = type_value(direct_bases[base_index]);
+      if(!base) continue;
       vector<Binding*> base_destructors = MemberBindings(base, "~" + LastComponent(base->name));
       for(size_t i = 0; i < base_destructors.size(); ++i)
         if(base_destructors[i]->kind == BIND_FUNCTION) { needed = true; break; }
@@ -1367,7 +1379,11 @@ bool PA14Lowerer::HasDefaultConstructionEffects(const TypePtr& raw_type) const
           return true;
       }
     }
-    if(type->direct_base && HasDefaultConstructionEffects(type->direct_base)) return true;
+    const vector<TypePtr> direct_bases = !type->direct_bases.empty() ?
+      type->direct_bases : (type->direct_base ?
+        vector<TypePtr>(1, type->direct_base) : vector<TypePtr>());
+    for(size_t base = 0; base < direct_bases.size(); ++base)
+      if(HasDefaultConstructionEffects(direct_bases[base])) return true;
     for(size_t i = 0; i < type->class_members.size(); ++i) {
       const ClassMemberInfo& member = type->class_members[i];
       if(member.is_static || !member.type) continue;
@@ -1388,7 +1404,11 @@ bool PA14Lowerer::HasDestructor(const TypePtr& raw_type) const
       if(binding->kind == BIND_FUNCTION && binding->is_member && !binding->is_static &&
          record && record->destructor) return true;
     }
-    if(type->direct_base && HasDestructor(type->direct_base)) return true;
+    const vector<TypePtr> direct_bases = !type->direct_bases.empty() ?
+      type->direct_bases : (type->direct_base ?
+        vector<TypePtr>(1, type->direct_base) : vector<TypePtr>());
+    for(size_t base = 0; base < direct_bases.size(); ++base)
+      if(HasDestructor(direct_bases[base])) return true;
     for(size_t i = 0; i < type->class_members.size(); ++i) {
       const ClassMemberInfo& member = type->class_members[i];
       if(member.is_static || !member.type || type_is_reference(member.type)) continue;
@@ -1415,7 +1435,11 @@ bool PA14Lowerer::DestructorHasEffects(const TypePtr& raw_type) const
       }
     }
     if(!destructor) {
-      if(type->direct_base && DestructorHasEffects(type->direct_base)) return true;
+      const vector<TypePtr> direct_bases = !type->direct_bases.empty() ?
+        type->direct_bases : (type->direct_base ?
+          vector<TypePtr>(1, type->direct_base) : vector<TypePtr>());
+      for(size_t base = 0; base < direct_bases.size(); ++base)
+        if(DestructorHasEffects(direct_bases[base])) return true;
       for(size_t i = 0; i < type->class_members.size(); ++i) {
         const ClassMemberInfo& member = type->class_members[i];
         if(member.is_static || !member.type || type_is_reference(member.type)) continue;
@@ -1439,7 +1463,11 @@ bool PA14Lowerer::DestructorHasEffects(const TypePtr& raw_type) const
       if(member_type && member_type->kind == TYPE_ARRAY && member_type->child &&
          DestructorHasEffects(member_type->child)) return true;
     }
-    if(type->direct_base && DestructorHasEffects(type->direct_base)) return true;
+    const vector<TypePtr> direct_bases = !type->direct_bases.empty() ?
+      type->direct_bases : (type->direct_base ?
+        vector<TypePtr>(1, type->direct_base) : vector<TypePtr>());
+    for(size_t base = 0; base < direct_bases.size(); ++base)
+      if(DestructorHasEffects(direct_bases[base])) return true;
     return false;
   }
 

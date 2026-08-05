@@ -702,7 +702,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 				CollapseRepeatedQualifiedPath(CollapseRepeatedQualifier(
 					ReplaceIdentifiersPreservingPackSizes(source_argument,
 						*argument_substitutions))));
-				const string rewrite_source = CanonicalSpelling(CollapseRepeatedQualifiedPath(CollapseRepeatedQualifier(argument_substitutions == &substitutions ? args[i] : substituted_source_argument)));
+			const string rewrite_source = CanonicalSpelling(CollapseRepeatedQualifiedPath(CollapseRepeatedQualifier(argument_substitutions == &substitutions ? args[i] : substituted_source_argument)));
 					if(i < definition->parameters.size() &&
 						definition->parameters[i].template_template) {
 						string normalized;
@@ -902,7 +902,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 					PA19IntegralValue value;
 				try {
 					args[i] = ResolveIntegralArgument(definition->parameters[i],
-						args[i], context, substitutions, &value);
+					args[i], context, substitutions, &value);
 				} catch(const PA18SubstitutionFailure& error) {
 					throw PA18SubstitutionFailure("definition=" + definition->qualified_name +
 								" " + error.what());
@@ -1445,9 +1445,9 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 			definition->owner.find("<unnamed>") == string::npos &&
 			class_contexts_.find(definition->owner) == class_contexts_.end())
 			generated_qualifier = definition->owner;
-		if(!generated_qualifier.empty()) {
-			replacement = generated_qualifier + "::" + local_name;
-		}
+		if(generated_qualifier.empty() && definition->class_template && close + 2 < raw.size() && raw.compare(close + 1, 2, "::") == 0)
+			generated_qualifier = RecoverGeneratedNestedOwner(*definition, local_name, close, raw);
+		if(!generated_qualifier.empty()) replacement = generated_qualifier + "::" + local_name;
 		if(definition->alias_template) {
 				// Alias-template instantiation is a type substitution, not a new
 				// nominal type.  Keep the generated alias declaration registered for

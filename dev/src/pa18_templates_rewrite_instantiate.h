@@ -771,6 +771,8 @@
 		const map<string, PA19IntegralValue>& integral_substitutions,
 		const map<string, vector<string> >& pack_substitutions,
 		const map<string, FunctionSignature>& function_substitutions);
+	void InstallMemberPointerSubstitutions(const TemplateDefinition& definition,
+		const string& context, const map<string, string>& substitutions);
 	bool DeferIncompleteAliasClass(const TemplateDefinition& definition,
 		const vector<string>& arguments, const string& context) const
 	{
@@ -1170,6 +1172,8 @@
 	void InstallConcreteOwnerPacks(const string& concrete_owner, const string& context,
 		map<string, string>* substitutions,
 		map<string, vector<string> >* pack_substitutions, bool bind_source_owner);
+	string RecoverNestedConcreteOwner(const TemplateDefinition& definition,
+		const string& context) const;
 	bool ConcreteOwnerMatches(const TemplateDefinition& definition,
 		const string& concrete_owner) const;
 	string FindConcreteInstantiationOwner(const TemplateDefinition& definition,

@@ -465,8 +465,13 @@ bool PA14Lowerer::ValueOperationDeleted(const TypePtr& raw_type, bool move,
       }
       if(!move && declared_move) return true;
     }
-    if(assignment && type->direct_base &&
-       ValueOperationDeleted(type->direct_base, move, true)) return true;
+    if(assignment) {
+      const vector<TypePtr> direct_bases = !type->direct_bases.empty() ?
+        type->direct_bases : (type->direct_base ?
+          vector<TypePtr>(1, type->direct_base) : vector<TypePtr>());
+      for(size_t base = 0; base < direct_bases.size(); ++base)
+        if(ValueOperationDeleted(direct_bases[base], move, true)) return true;
+    }
     for(size_t i = 0; i < type->class_members.size(); ++i) {
       const ClassMemberInfo& member = type->class_members[i];
       if(member.is_static || !member.type) continue;
@@ -498,7 +503,11 @@ bool PA14Lowerer::IsTrivialValueStorage(const TypePtr& raw_type) const
     // separately; special-member lowering must still preserve the object
     // boundary for a class with a destructor.
     if(HasDestructor(type)) return false;
-    if(type->direct_base && !IsTrivialValueStorage(type->direct_base)) return false;
+    const vector<TypePtr> direct_bases = !type->direct_bases.empty() ?
+      type->direct_bases : (type->direct_base ?
+        vector<TypePtr>(1, type->direct_base) : vector<TypePtr>());
+    for(size_t base = 0; base < direct_bases.size(); ++base)
+      if(!IsTrivialValueStorage(direct_bases[base])) return false;
     for(size_t i = 0; i < type->class_members.size(); ++i) {
       const ClassMemberInfo& member = type->class_members[i];
       if(member.is_static || !member.type) continue;
@@ -529,7 +538,12 @@ bool PA14Lowerer::IsEmptyBaseStorage(const TypePtr& raw_type) const
       const ClassMemberInfo& member = type->class_members[i];
       if(!member.is_static && member.type) return false;
     }
-    return !type->direct_base || IsEmptyBaseStorage(type->direct_base);
+    const vector<TypePtr> direct_bases = !type->direct_bases.empty() ?
+      type->direct_bases : (type->direct_base ?
+        vector<TypePtr>(1, type->direct_base) : vector<TypePtr>());
+    for(size_t base = 0; base < direct_bases.size(); ++base)
+      if(!IsEmptyBaseStorage(direct_bases[base])) return false;
+    return true;
   }
 
 bool PA14Lowerer::ClassValueNeedsIndirect(const TypePtr& raw_type) const
@@ -592,14 +606,18 @@ bool PA14Lowerer::ClassValueNeedsIndirect(const TypePtr& raw_type) const
     if(has_move_constructor_template && has_nonstatic_data_member &&
        ClassHasDeclaredMoveMember(type)) return true;
     if(type_size(type) > 16) return true;
-    bool base_only = type->direct_base != 0;
+    const vector<TypePtr> direct_bases = !type->direct_bases.empty() ?
+      type->direct_bases : (type->direct_base ?
+        vector<TypePtr>(1, type->direct_base) : vector<TypePtr>());
+    bool base_only = !direct_bases.empty();
     for(size_t i = 0; i < type->class_members.size(); ++i) {
       const ClassMemberInfo& member = type->class_members[i];
       if(!member.is_static && member.type) { base_only = false; break; }
     }
     if(!IsTrivialValueStorage(type) &&
        !(base_only && !ClassHasDeclaredMoveMember(type))) return true;
-    if(type->direct_base && ClassValueNeedsIndirect(type->direct_base)) return true;
+    for(size_t base = 0; base < direct_bases.size(); ++base)
+      if(ClassValueNeedsIndirect(direct_bases[base])) return true;
     for(size_t i = 0; i < type->class_members.size(); ++i) {
       const ClassMemberInfo& member = type->class_members[i];
       if(member.is_static || !member.type) continue;
@@ -876,25 +894,35 @@ vector<Binding*> PA14Lowerer::ConversionBindings(const TypePtr& raw_source) cons
     vector<Binding*> result;
     set<Binding*> seen;
     TypePtr source = type_value(raw_source);
-    for(TypePtr current = source; current && current->kind == TYPE_CLASS;
-        current = type_value(current->direct_base)) {
-      if(!current->owned_scope) continue;
-      for(size_t i = 0; i < current->owned_scope->bindings.size(); ++i) {
-        Binding* binding = const_cast<Binding*>(&current->owned_scope->bindings[i]);
-        if(!binding || binding->kind != BIND_FUNCTION || !binding->is_member ||
-           binding->is_static || !seen.insert(binding).second) continue;
-        if(binding->name.compare(0, 8, "operator") != 0) continue;
-        const string suffix = binding->name.substr(8);
-        if(suffix.empty() || string("+-*/%^&|=!<>~[],()").find(suffix[0]) != string::npos)
-          continue;
-      TypePtr function = function_target_type(binding->type);
-      if(!function || !function->parameters.empty()) continue;
-      FunctionRecord* record = RecordForBinding(binding);
-      if(!record || !record->member || record->static_member || record->deleted) continue;
-      if(source->is_const && !function->function_const) continue;
-      if(source->is_volatile && !function->function_volatile) continue;
-        result.push_back(binding);
-      }
+    vector<TypePtr> pending;
+    if(source) pending.push_back(source);
+    set<const Type*> visited;
+    for(size_t pending_index = 0; pending_index < pending.size(); ++pending_index) {
+      TypePtr current = type_value(pending[pending_index]);
+      if(!current || current->kind != TYPE_CLASS ||
+         !visited.insert(current.get()).second) continue;
+      if(current->owned_scope)
+        for(size_t i = 0; i < current->owned_scope->bindings.size(); ++i) {
+          Binding* binding = const_cast<Binding*>(&current->owned_scope->bindings[i]);
+          if(!binding || binding->kind != BIND_FUNCTION || !binding->is_member ||
+             binding->is_static || !seen.insert(binding).second) continue;
+          if(binding->name.compare(0, 8, "operator") != 0) continue;
+          const string suffix = binding->name.substr(8);
+          if(suffix.empty() || string("+-*/%^&|=!<>~[],()").find(suffix[0]) != string::npos)
+            continue;
+          TypePtr function = function_target_type(binding->type);
+          if(!function || !function->parameters.empty()) continue;
+          FunctionRecord* record = RecordForBinding(binding);
+          if(!record || !record->member || record->static_member || record->deleted) continue;
+          if(source->is_const && !function->function_const) continue;
+          if(source->is_volatile && !function->function_volatile) continue;
+          result.push_back(binding);
+        }
+      const vector<TypePtr> bases = !current->direct_bases.empty() ?
+        current->direct_bases : (current->direct_base ?
+          vector<TypePtr>(1, current->direct_base) : vector<TypePtr>());
+      for(size_t base = 0; base < bases.size(); ++base)
+        pending.push_back(type_value(bases[base]));
     }
     return result;
   }
@@ -998,8 +1026,10 @@ Binding* PA14Lowerer::FindContextConversionOperator(const TypePtr& raw_source,
       TypePtr result = function ? type_value(function->child) : TypePtr();
       if(!record || !function || (!allow_explicit && record->explicit_constructor) || !result)
         continue;
-      if((boolean_context && !is_arithmetic_type(result) && result->kind != TYPE_POINTER) ||
-         (!boolean_context && !is_arithmetic_type(result) && result->kind != TYPE_POINTER) ||
+      const bool boolean_like = is_arithmetic_type(result) ||
+        result->kind == TYPE_POINTER ||
+        (boolean_context && result->kind == TYPE_MEMBER_POINTER);
+      if(!boolean_like ||
          (source->is_const && !function->function_const)) continue;
       if(!best) best = binding;
     }
@@ -1142,6 +1172,20 @@ int PA14Lowerer::ConversionRank(const ExprInfo& source, const TypePtr& target) c
       return 0;
     if(target->kind == TYPE_RVALUE_REFERENCE && source.category == "lvalue" &&
        is_arithmetic_type(source_value) && is_arithmetic_type(target_value)) return 2;
+    if(target_value->kind == TYPE_MEMBER_POINTER) {
+      if(source.null_pointer_constant ||
+         (source_value->kind == TYPE_FUNDAMENTAL && source_value->name == "nullptr_t"))
+        return 2;
+      if(source_value->kind != TYPE_MEMBER_POINTER) return -1;
+      if(PA12SameType(source_value, target_value, false)) return 0;
+      if(PA12SameType(source_value, target_value, true)) return 1;
+      if(source_value->child && target_value->child &&
+         PA12SameType(source_value->child, target_value->child, true) &&
+         source_value->member_owner && target_value->member_owner &&
+         IsDerivedFrom(target_value->member_owner, source_value->member_owner))
+        return BaseDistance(target_value->member_owner, source_value->member_owner);
+      return -1;
+    }
     if(source_value->kind == TYPE_CLASS) {
       int conversion_rank = -1;
       if(FindConversionOperator(source_value, target, false, &conversion_rank))
