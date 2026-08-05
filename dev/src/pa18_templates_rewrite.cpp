@@ -4,6 +4,32 @@
 using namespace std;
 namespace pa18_templates_internal {
 
+CPPGMAstNodePtr PA18TemplateExpander::FindUsingDirectiveClassDeclaration(
+	const string& raw_class, const string& context) const
+{
+	const size_t separator = TopLevelScopeSeparator(raw_class);
+	if(separator == string::npos) return CPPGMAstNodePtr();
+	const string owner = raw_class.substr(0, separator);
+	const string name = raw_class.substr(separator + 2);
+	map<string, vector<string> >::const_iterator directives =
+		using_namespace_directives_.find(owner);
+	if(directives == using_namespace_directives_.end()) return CPPGMAstNodePtr();
+	for(size_t directive = 0; directive < directives->second.size(); ++directive) {
+		const string imported_name = JoinPath(directives->second[directive], name);
+		map<string, CPPGMAstNodePtr>::const_iterator imported =
+			class_declarations_.find(imported_name);
+		if(imported != class_declarations_.end()) return imported->second;
+		const size_t imported_open = imported_name.find('<');
+		if(imported_open != string::npos) {
+			const TemplateDefinition* definition = FindDefinition(
+				imported_name.substr(0, imported_open), owner);
+			if(definition && definition->class_template) return definition->declaration;
+		}
+	}
+	(void)context;
+	return CPPGMAstNodePtr();
+}
+
 string PA18TemplateExpander::AssignmentExpressionType(
 	const string& expression, const string& context,
 	const map<string, string>& substitutions, bool* handled)
@@ -30,6 +56,14 @@ string PA18TemplateExpander::AssignmentExpressionType(
 			}
 		}
 		if(operation.empty()) continue;
+		// A comparison token contains the assignment character as a suffix or
+		// prefix (`==`, `!=`, `<=`, `>=`).  It is not an assignment expression;
+		// recognizing the embedded `=` first incorrectly turns an overloaded
+		// comparison into an lvalue result.
+		if(operation == "=" && ((position > 0 &&
+			string("=!<>").find(expression[position - 1]) != string::npos) ||
+			(position + 1 < expression.size() && expression[position + 1] == '=')))
+			continue;
 		if(handled) *handled = true;
 		const string left = ExpressionTypeSpelling(expression.substr(0, position),
 			context, substitutions);
@@ -253,6 +287,28 @@ bool PA18TemplateExpander::SplitDirectFunctionType(const string& raw,
 		const bool lhs_const_pointer = !lhs.specialization_pattern.empty() && CanonicalSpelling(lhs.specialization_pattern[0]).find("const ") == 0;
 		const bool rhs_const_pointer = !rhs.specialization_pattern.empty() && CanonicalSpelling(rhs.specialization_pattern[0]).find("const ") == 0;
 		if(lhs_const_pointer != rhs_const_pointer) return lhs_const_pointer;
+		const auto top_level_cv_wrapper = [](const TemplateDefinition& definition) {
+			if(definition.specialization_pattern.size() != 1) return false;
+			const string pattern = CanonicalSpelling(definition.specialization_pattern[0]);
+			if(pattern.find("::*") != string::npos || pattern.find('(') != string::npos ||
+				pattern.find('*') != string::npos) return false;
+			return pattern.size() > 6 && pattern.compare(pattern.size() - 6, 6,
+				" const") == 0 || pattern.size() > 9 && pattern.compare(pattern.size() - 9,
+				9, " volatile") == 0 || pattern.size() > 15 &&
+				pattern.compare(pattern.size() - 15, 15, " const volatile") == 0;
+		};
+		const auto member_function_pointer = [](const TemplateDefinition& definition) {
+			for(size_t pattern = 0; pattern < definition.specialization_pattern.size(); ++pattern)
+				if(definition.specialization_pattern[pattern].find("::*") != string::npos)
+					return true;
+			return false;
+		};
+		const bool lhs_cv_wrapper = top_level_cv_wrapper(lhs);
+		const bool rhs_cv_wrapper = top_level_cv_wrapper(rhs);
+		const bool lhs_member_function_pointer = member_function_pointer(lhs);
+		const bool rhs_member_function_pointer = member_function_pointer(rhs);
+		if(lhs_cv_wrapper && rhs_member_function_pointer) return true;
+		if(rhs_cv_wrapper && lhs_member_function_pointer) return false;
 		const auto reference_cv = [](const TemplateDefinition& definition) {
 			int mask = 0;
 			for(size_t i = 0; i < definition.specialization_pattern.size(); ++i) {

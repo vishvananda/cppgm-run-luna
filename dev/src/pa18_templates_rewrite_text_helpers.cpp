@@ -283,9 +283,9 @@ const TemplateDefinition* PA18TemplateExpander::SelectFunctionTemplateOverload(
             if(candidate->parameters[parameter].pack) candidate_has_pack = true;
         if(explicit_arguments.size() > candidate->parameters.size() && !candidate_has_pack)
             continue;
-        try {
-            if(!FunctionArgumentsViable(*candidate, explicit_arguments, actual_types, context))
-                continue;
+		try {
+			if(!FunctionArgumentsViable(*candidate, explicit_arguments, actual_types, context))
+				continue;
         } catch(const PA18SubstitutionFailure&) { continue; }
         if(!viable || FunctionTemplateMoreSpecialized(*candidate, *viable, context))
             viable = candidate;

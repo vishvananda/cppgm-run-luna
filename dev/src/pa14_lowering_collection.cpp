@@ -581,7 +581,7 @@ void PA14Lowerer::CollectLocalStatics(const CPPGMAstNodePtr& node, Scope* scope,
           const string local_name = "__local_static__" + LastComponent(function_name) +
             "__" + name + "__tokens" + integer_text(static_cast<long long>(begin)) +
             "_" + integer_text(static_cast<long long>(end));
-          GlobalRecord record;
+	GlobalRecord record;
           record.node = node;
           record.scope = scope;
           record.type = type;
@@ -1254,10 +1254,11 @@ void PA14Lowerer::CollectGlobalDeclaration(const CPPGMAstNodePtr& node,
                                            const string& name,
                                            const TypePtr& type)
 {
-    (void)item;
-    GlobalRecord record;
-    if(PrepareGlobalDeclaration(node, scope, facts, initializer, name, type, &record))
-      return;
+	(void)item;
+	GlobalRecord record;
+	if(PrepareGlobalDeclaration(node, scope, facts, initializer, name, type, &record)) {
+		return;
+	}
     if(!record.initializer && record.template_owner && record.template_owner->owned_scope) {
       const string member_name = name.substr(name.rfind("::") + 2);
       for(size_t member = 0; member < record.template_owner->class_members.size(); ++member)
@@ -1397,8 +1398,8 @@ void PA14Lowerer::CollectClassStaticMember(const CPPGMAstNodePtr& child,
       child->template_instantiation;
     record.explicit_specialization = child->explicit_specialization;
     record.weak_binding = record.template_instantiation;
-    record.initializer = item->children.size() > 1 ? item->children[1] :
-      CPPGMAstNodePtr();
+	record.initializer = item->children.size() > 1 ? item->children[1] :
+		CPPGMAstNodePtr();
     // A replayed variable-template member is itself a definition.  Its
     // initializer lives in the class specialization, so retaining the
     // declaration-only marker would discard both storage initialization and

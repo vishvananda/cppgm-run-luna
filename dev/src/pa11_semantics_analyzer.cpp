@@ -1085,6 +1085,7 @@ void Analyzer::RecordClassDeclaration(const CPPGMAstNodePtr& child, const TypePt
 		if (!item || item->children.empty()) continue;
 		const CPPGMAstNodePtr declarator = item->children[0];
 		const string name = FirstIdentifier(declarator);
+		if (!ShouldRecordQualifiedClassMember(name, type, class_scope)) continue;
 		TypePtr field_type = BuildDeclarator(declarator, base, class_scope);
 		if (facts.is_friend)
 		{
@@ -1287,8 +1288,7 @@ void Analyzer::PredeclareMaterializedNestedClasses(const CPPGMAstNodePtr& node,
 			nested->name = class_scope->qualified_prefix + "::" + nested_name;
 		AddTypeBinding(class_scope, nested_name, nested);
 	}
-}
-
+	}
 TypePtr Analyzer::ProcessAnonymousClass(const CPPGMAstNodePtr& node, Scope* scope,
 	const string& tag)
 {
@@ -1312,7 +1312,6 @@ TypePtr Analyzer::ProcessAnonymousClass(const CPPGMAstNodePtr& node, Scope* scop
 			}
 	return type;
 }
-
 TypePtr Analyzer::ProcessClass(const CPPGMAstNodePtr& node, Scope* scope)
 {
 	map<const CPPGMAstNode*, TypePtr>::const_iterator cached = class_types_.find(node.get());
@@ -1389,12 +1388,14 @@ TypePtr Analyzer::ProcessClass(const CPPGMAstNodePtr& node, Scope* scope)
 			const CPPGMAstNodePtr base_name = ChildOfKind(base, "base-name");
 			if (!base_name) continue;
 			TypePtr resolved_base = ResolveType(owner, base_name->value);
-			if (!resolved_base) continue;
-			type->direct_bases.push_back(resolved_base);
-			if (!type->direct_base) type->direct_base = resolved_base;
+		if (!resolved_base) continue;
+		type->direct_bases.push_back(resolved_base);
+		if (!type->direct_base) type->direct_base = resolved_base;
 		}
 		break;
 	}
+	if (node->template_instantiation && !type->template_primary.empty())
+		RebindGeneratedClassMembers(type, owner, class_scope);
 	// Generated class specializations can contain a member function before the
 	// copied field declarations that function uses.  Populate those specialized
 	// scopes first; retain the established source-order processing for ordinary
@@ -1431,7 +1432,6 @@ TypePtr Analyzer::ProcessClass(const CPPGMAstNodePtr& node, Scope* scope)
 	class_types_[node.get()] = type;
 	return type;
 }
-
 TypePtr Analyzer::ProcessForwardClass(const CPPGMAstNodePtr& node, Scope* scope)
 {
 	const string raw_name = node->value;
@@ -1465,6 +1465,7 @@ TypePtr Analyzer::ProcessForwardClass(const CPPGMAstNodePtr& node, Scope* scope)
 				existing->type->template_specialization = true;
 				existing->type->template_primary = node->template_primary;
 				existing->type->template_arguments = node->template_arguments;
+				SeedGeneratedTemplateScope(node, existing->type, owner, name);
 			}
 			ApplyClassAttributes(node, existing->type, scope);
 		}
@@ -1478,6 +1479,7 @@ TypePtr Analyzer::ProcessForwardClass(const CPPGMAstNodePtr& node, Scope* scope)
 			existing->type->template_specialization = true;
 			existing->type->template_primary = node->template_primary;
 			existing->type->template_arguments = node->template_arguments;
+			SeedGeneratedTemplateScope(node, existing->type, owner, name);
 		}
 		ApplyClassAttributes(node, existing->type, scope);
 		return existing->type;
@@ -1489,6 +1491,7 @@ TypePtr Analyzer::ProcessForwardClass(const CPPGMAstNodePtr& node, Scope* scope)
 		type->template_specialization = true;
 		type->template_primary = node->template_primary;
 		type->template_arguments = node->template_arguments;
+		SeedGeneratedTemplateScope(node, type, owner, name);
 	}
 	ApplyClassAttributes(node, type, scope);
 	if (!owner->qualified_prefix.empty()) type->name = owner->qualified_prefix + "::" + name;

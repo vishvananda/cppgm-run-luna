@@ -253,7 +253,8 @@ string PA18TemplateExpander::FunctionResultType(const TemplateDefinition& defini
 	result = CollapseReferenceSpelling(ReplaceIdentifiers(result, local));
 	result = ResolveDecltypeTypeName(result, result_context, local);
 	active_pack_substitutions_ = previous_packs;
-	return NormalizeTypeArgument(result);
+	const string normalized_result = NormalizeTypeArgument(result);
+	return normalized_result;
 }
 
 bool PA18TemplateExpander::ImmediateReturnConstraintDisabled(
@@ -451,8 +452,17 @@ bool PA18TemplateExpander::InferFunctionTypeArguments(const TemplateDefinition& 
 			// that is a failed candidate, not a hard error in the surrounding
 			// expression (the usual detection-idiom/SFINAE boundary).
 			try {
-					const string rewritten_default = RewriteText(definition.parameters[i].default_type,
+					string rewritten_default = RewriteText(definition.parameters[i].default_type,
 						context, inferred, 0);
+					rewritten_default = NormalizeTypeArgument(ReplaceIdentifiers(
+						rewritten_default, inferred));
+					const bool unavailable_default = rewritten_default.find("::") != string::npos &&
+						!IsKnownTypeSpelling(rewritten_default, context) &&
+						HasUnavailableGeneratedMemberType(rewritten_default, context, inferred);
+					if(rewritten_default.empty() || unavailable_default) {
+						result->clear();
+						return false;
+					}
 					result->push_back(rewritten_default);
 			} catch(const PA18SubstitutionFailure&) {
 				result->clear();

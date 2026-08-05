@@ -36,12 +36,157 @@ bool PA18TemplateExpander::IsValidFunctionAddressTemplateArgument(
 	const string& raw, const string& expected, const string& context,
 	const map<string, string>& substitutions) const
 {
+	const auto unqualified_owner = [](string value) {
+		value = CanonicalSpelling(value);
+		for(;;) {
+			if(value.compare(0, 6, "const ") == 0) {
+				value = CanonicalSpelling(value.substr(6));
+				continue;
+			}
+			if(value.compare(0, 9, "volatile ") == 0) {
+				value = CanonicalSpelling(value.substr(9));
+				continue;
+			}
+			if(value.size() > 6 && value.compare(value.size() - 6, 6, " const") == 0) {
+				value = CanonicalSpelling(value.substr(0, value.size() - 6));
+				continue;
+			}
+			if(value.size() > 9 && value.compare(value.size() - 9, 9, " volatile") == 0) {
+				value = CanonicalSpelling(value.substr(0, value.size() - 9));
+				continue;
+			}
+			break;
+		}
+		return value;
+	};
 	string address = CanonicalSpelling(ReplaceIdentifiers(raw, substitutions));
 	if(address.size() < 4 || address[0] != '&') return false;
 	const size_t separator = address.rfind("::");
 	if(separator == string::npos || separator + 2 >= address.size()) return false;
-	string owner = CanonicalSpelling(ResolveAlias(address.substr(1, separator - 1), context));
+	string owner = unqualified_owner(ResolveAlias(address.substr(1, separator - 1), context));
 	const string member = LastComponent(address.substr(separator + 2));
+	// An address formed through a dependent class template is subject to the
+	// same unqualified member lookup as an ordinary `&Base::member`.  In
+	// particular, two different bases can contribute a type and a value with
+	// that name.  The lookup is then ambiguous, so a member-pointer non-type
+	// argument must fail substitution.  FindClassMemberType intentionally
+	// returns the first matching type; that is useful for replay, but cannot
+	// distinguish this collision.  Preserve the lookup rule here by walking
+	// direct members first and merging only the visible results from bases.
+	struct MemberNameKinds {
+		bool type;
+		bool value;
+		int type_sources;
+		int value_sources;
+		MemberNameKinds() : type(false), value(false), type_sources(0), value_sources(0) {}
+	};
+	std::function<MemberNameKinds(const string&, set<string>&)> collect_member_kinds =
+		[&](const string& raw_owner, set<string>& active) {
+			MemberNameKinds kinds;
+			string class_name = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(
+				raw_owner, substitutions));
+			try {
+				class_name = CanonicalSpelling(RemoveMarker(const_cast<PA18TemplateExpander*>(this)->RewriteText(
+					class_name, context, substitutions, 0)));
+			} catch(const PA18SubstitutionFailure&) {}
+			class_name = unqualified_owner(ResolveAlias(class_name, context));
+			while(!class_name.empty() && (class_name[class_name.size() - 1] == '&' ||
+				class_name[class_name.size() - 1] == '*')) class_name.erase(class_name.size() - 1);
+			class_name = CanonicalSpelling(class_name);
+			if(class_name.empty() || class_name.find("...") != string::npos) return kinds;
+			if(!active.insert(class_name).second) return kinds;
+			const CPPGMAstNodePtr declaration = FindClassDeclaration(class_name, context);
+			if(!declaration) {
+				active.erase(class_name);
+				return kinds;
+			}
+			for(size_t child = 0; child < declaration->children.size(); ++child) {
+				CPPGMAstNodePtr member_declaration = declaration->children[child];
+				if(!member_declaration) continue;
+				while(member_declaration->kind == "template-declaration" &&
+					member_declaration->children.size() > 1)
+					member_declaration = member_declaration->children[1];
+				if((member_declaration->kind == "class-specifier" ||
+					member_declaration->kind == "class-forward-declaration" ||
+					member_declaration->kind == "enum-specifier") &&
+					LastComponent(RemoveMarker(member_declaration->value)) == member) {
+					kinds.type = true;
+					continue;
+				}
+				if(member_declaration->kind == "alias-declaration" &&
+					LastComponent(RemoveMarker(member_declaration->value)) == member) {
+					kinds.type = true;
+					continue;
+				}
+				if(member_declaration->kind == "function-definition" ||
+					member_declaration->kind == "function-declaration" ||
+					member_declaration->kind == "special-member-declaration") {
+					if(DeclarationName(member_declaration) == member) kinds.value = true;
+					continue;
+				}
+				if(member_declaration->kind != "simple-declaration" ||
+					member_declaration->children.empty()) continue;
+				const CPPGMAstNodePtr list = ChildOfKindLocal(member_declaration,
+					"init-declarator-list");
+				if(!list) continue;
+				for(size_t item = 0; item < list->children.size(); ++item) {
+					const CPPGMAstNodePtr init = list->children[item];
+					if(!init || init->children.empty() ||
+						LastComponent(FirstIdentifierLocal(init->children[0])) != member) continue;
+					if(HasDeclarationSpecifier(member_declaration->children[0], "typedef"))
+						kinds.type = true;
+					else kinds.value = true;
+				}
+			}
+			if(kinds.type || kinds.value) {
+				kinds.type_sources = kinds.type ? 1 : 0;
+				kinds.value_sources = kinds.value ? 1 : 0;
+				active.erase(class_name);
+				return kinds;
+			}
+			for(size_t child = 0; child < declaration->children.size(); ++child) {
+				const CPPGMAstNodePtr clause = declaration->children[child];
+				if(!clause || clause->kind != "base-clause") continue;
+				for(size_t base = 0; base < clause->children.size(); ++base) {
+					const CPPGMAstNodePtr base_name = ChildOfKindLocal(
+						clause->children[base], "base-name");
+					if(!base_name) continue;
+					string base_spelling = CanonicalSpelling(ReplaceIdentifiersPreservingPackSizes(
+						base_name->value, substitutions));
+					try {
+						base_spelling = CanonicalSpelling(RemoveMarker(
+							const_cast<PA18TemplateExpander*>(this)->RewriteText(
+								base_spelling, context, substitutions, 0)));
+					} catch(const PA18SubstitutionFailure&) { continue; }
+					base_spelling = CanonicalSpelling(ResolveAlias(base_spelling, context));
+					const MemberNameKinds inherited = collect_member_kinds(base_spelling, active);
+					kinds.type = kinds.type || inherited.type;
+					kinds.value = kinds.value || inherited.value;
+					kinds.type_sources += inherited.type_sources;
+					kinds.value_sources += inherited.value_sources;
+				}
+			}
+			active.erase(class_name);
+			return kinds;
+		};
+	set<string> member_lookup_active;
+	const MemberNameKinds member_kinds = collect_member_kinds(owner, member_lookup_active);
+	if((member_kinds.type && member_kinds.value) ||
+		member_kinds.type_sources > 1 || member_kinds.value_sources > 1) return false;
+	bool unresolved_owner_base = false;
+	owner = unqualified_owner(owner);
+	const CPPGMAstNodePtr owner_declaration = FindClassDeclaration(owner, context);
+	if(owner_declaration) for(size_t child = 0; child < owner_declaration->children.size(); ++child) {
+		const CPPGMAstNodePtr clause = owner_declaration->children[child];
+		if(!clause || clause->kind != "base-clause") continue;
+		for(size_t base = 0; base < clause->children.size(); ++base) {
+			const CPPGMAstNodePtr base_name = ChildOfKindLocal(clause->children[base], "base-name");
+			if(base_name && HasUnresolvedTemplateParameter(base_name->value, context, substitutions))
+				unresolved_owner_base = true;
+		}
+	}
+	if(member_kinds.value && !unresolved_owner_base &&
+		!SplitFunctionPointerType(expected, 0, 0)) return true;
 	map<string, string>::const_iterator owner_base = specialization_bases_.find(LastComponent(owner));
 	map<string, vector<string> >::const_iterator owner_arguments =
 		specialization_arguments_.find(LastComponent(owner));

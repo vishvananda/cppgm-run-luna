@@ -77,6 +77,8 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 	const TemplateDefinition* SelectClassTemplateDefinition(
 		const TemplateDefinition* primary, const vector<string>& arguments,
 		const string& context) const;
+	CPPGMAstNodePtr FindUsingDirectiveClassDeclaration(const string& raw_class,
+		const string& context) const;
 	bool ResolveMaterializedClassOwner(const string& source_base,
 		const vector<string>& requested_arguments, const string& context,
 		string* resolved_owner) const;
@@ -89,6 +91,8 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 		if(SplitDirectFunctionType(raw_class, 0, 0, 0)) return CPPGMAstNodePtr();
 		map<string, CPPGMAstNodePtr>::const_iterator concrete = class_declarations_.find(raw_class);
 		if(concrete != class_declarations_.end()) return concrete->second;
+		CPPGMAstNodePtr imported = FindUsingDirectiveClassDeclaration(raw_class, context);
+		if(imported) return imported;
 		const size_t template_open = raw_class.find('<');
 		if(template_open != string::npos) {
 			const TemplateDefinition* template_definition = FindDefinition(
@@ -350,7 +354,7 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 	{
 		if(!expression || expression->children.size() < 2) return;
 		const string operation = RemoveMarker(expression->value);
-		if(operation.empty() || operation == ",") return;
+		if(operation.empty()) return;
 		if((operation == "&&" || operation == "||") && expression->children.size() >= 2) {
 			string left, right;
 			if(InferArgument(expression->children[0], &left, substitutions, context) &&
@@ -372,6 +376,16 @@ void RewriteInlineGeneratedNames(const CPPGMAstNodePtr& node,
 		if(InstantiateMemberCall(member_call, member, "operator" + operation,
 			context, substitutions)) {
 			expression->inferred_type = member_call->inferred_type; expression->template_primary = member_call->template_primary; expression->template_arguments = member_call->template_arguments;
+			// PA14's ordinary binary lookup cannot see a member template that was
+			// selected from a dependent using-declaration.  Preserve that concrete
+			// selection in the replayed AST for overloaded comma expressions; other
+			// binary operators continue through the typed PA14 operator path because
+			// their source expression can participate in assignment semantics.
+			if(operation == "," && defer_operator_template_materialization_ == 0) {
+				expression->kind = "call-expression";
+				expression->value.clear();
+				expression->children = member_call->children;
+			}
 			return;
 		}
 		vector<const TemplateDefinition*> candidates = FindFunctionDefinitions(
@@ -1092,7 +1106,7 @@ void TransformRegularChildren(const CPPGMAstNodePtr& input,
 			}
 			if(input->children.size() > 1 && input->children[1] &&
 				(input->children[1]->kind == "class-specifier" ||
-				 input->children[1]->kind == "class-forward-declaration"))
+				input->children[1]->kind == "class-forward-declaration"))
 				return PrefixComponent(input->children[1]->value).find('<') == string::npos ?
 					MakeClassShell(LastComponent(input->children[1]->value).substr(0,
 						LastComponent(input->children[1]->value).find('<'))) :

@@ -1385,7 +1385,7 @@ string PA18TemplateExpander::RewriteText(string raw, const string& context,
 							active_concrete_owner_ = previous_concrete_owner;
 							throw;
 						}
-		active_concrete_owner_ = previous_concrete_owner;
+						active_concrete_owner_ = previous_concrete_owner;
 		bool explicit_class_specialization = definition->explicit_specialization &&
 			(!definition->declaration ||
 			 !DescendantOfKind(definition->declaration, "parameter-clause"));

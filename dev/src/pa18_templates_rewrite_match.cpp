@@ -3,6 +3,144 @@
 using namespace std;
 namespace pa18_templates_internal {
 
+namespace {
+
+int PointerObjectCv(const string& raw)
+{
+	const string spelling = CanonicalSpelling(raw);
+	size_t marker = spelling.find("::*");
+	if(marker != string::npos) {
+		const size_t close = spelling.find(')', marker + 3);
+		if(close != string::npos) {
+			const string qualifiers = spelling.substr(marker + 3, close - marker - 3);
+			int result = 0;
+			if(qualifiers.find("const") != string::npos) result |= 1;
+			if(qualifiers.find("volatile") != string::npos) result |= 2;
+			if(result) return result;
+		}
+	}
+	marker = spelling.find("(*");
+	if(marker != string::npos) {
+		const size_t close = spelling.find(')', marker + 2);
+		if(close != string::npos && spelling.find(")(", close) == close) {
+			const string qualifiers = spelling.substr(marker + 2, close - marker - 2);
+			int result = 0;
+			if(qualifiers.find("const") != string::npos) result |= 1;
+			if(qualifiers.find("volatile") != string::npos) result |= 2;
+			if(result) return result;
+		}
+	}
+	if(spelling.find('*') == string::npos) return 0;
+	const size_t function_close = spelling.rfind(')');
+	if(function_close != string::npos) {
+		const string suffix = Trim(spelling.substr(function_close + 1));
+		if(suffix == "const") return 1;
+		if(suffix == "volatile") return 2;
+		if(suffix == "const volatile" || suffix == "volatile const" ||
+			suffix == "constvolatile" || suffix == "volatileconst") return 3;
+	}
+	const size_t star = spelling.rfind('*');
+	if(star == string::npos) return 0;
+	const string suffix = Trim(spelling.substr(star + 1));
+	if(suffix == "const") return 1;
+	if(suffix == "volatile") return 2;
+	if(suffix == "const volatile" || suffix == "volatile const" ||
+		suffix == "constvolatile" || suffix == "volatileconst") return 3;
+	return 0;
+}
+
+string WithoutPointerObjectCv(const string& raw)
+{
+	string spelling = CanonicalSpelling(raw);
+	size_t marker = spelling.find("::*");
+	if(marker != string::npos) {
+		const size_t close = spelling.find(')', marker + 3);
+		if(close != string::npos) {
+			const string qualifiers = spelling.substr(marker + 3, close - marker - 3);
+			if(!Trim(qualifiers).empty()) {
+				spelling.erase(marker + 3, close - marker - 3);
+				return CanonicalSpelling(spelling);
+			}
+		}
+	}
+	marker = spelling.find("(*");
+	if(marker != string::npos) {
+		const size_t close = spelling.find(')', marker + 2);
+		if(close != string::npos && spelling.find(")(", close) == close) {
+			const string qualifiers = spelling.substr(marker + 2, close - marker - 2);
+			if(!Trim(qualifiers).empty()) {
+				spelling.erase(marker + 2, close - marker - 2);
+				return CanonicalSpelling(spelling);
+			}
+		}
+	}
+	const size_t function_close = spelling.rfind(')');
+	if(function_close != string::npos) {
+		const string suffix = Trim(spelling.substr(function_close + 1));
+		if(suffix == "const" || suffix == "volatile" ||
+			suffix == "const volatile" || suffix == "volatile const" ||
+			suffix == "constvolatile" || suffix == "volatileconst") {
+			spelling.erase(function_close + 1);
+			return CanonicalSpelling(spelling);
+		}
+	}
+	const size_t star = spelling.rfind('*');
+	if(star != string::npos) {
+		string suffix = Trim(spelling.substr(star + 1));
+		if(suffix == "const" || suffix == "volatile" ||
+			suffix == "const volatile" || suffix == "volatile const" ||
+			suffix == "constvolatile" || suffix == "volatileconst")
+			spelling.erase(star + 1);
+	}
+	return CanonicalSpelling(spelling);
+}
+
+bool CvWrappedParameter(const string& raw, const set<string>& parameter_names,
+	int* cv, string* parameter)
+{
+	if(cv) *cv = 0;
+	if(parameter) parameter->clear();
+	string spelling = CanonicalSpelling(raw);
+	int mask = 0;
+	for(;;) {
+		if(spelling.compare(0, 14, "constvolatile ") == 0) {
+			mask |= 3; spelling = CanonicalSpelling(spelling.substr(14)); continue;
+		}
+		if(spelling.compare(0, 14, "volatileconst ") == 0) {
+			mask |= 3; spelling = CanonicalSpelling(spelling.substr(14)); continue;
+		}
+		if(spelling.compare(0, 6, "const ") == 0) {
+			mask |= 1; spelling = CanonicalSpelling(spelling.substr(6)); continue;
+		}
+		if(spelling.compare(0, 9, "volatile ") == 0) {
+			mask |= 2; spelling = CanonicalSpelling(spelling.substr(9)); continue;
+		}
+		if(spelling.size() > 6 && spelling.compare(spelling.size() - 6, 6,
+			" const") == 0) {
+			mask |= 1; spelling = CanonicalSpelling(spelling.substr(0, spelling.size() - 6)); continue;
+		}
+		if(spelling.size() > 14 && spelling.compare(spelling.size() - 14, 14,
+			" constvolatile") == 0) {
+			mask |= 3; spelling = CanonicalSpelling(spelling.substr(0, spelling.size() - 14)); continue;
+		}
+		if(spelling.size() > 14 && spelling.compare(spelling.size() - 14, 14,
+			" volatileconst") == 0) {
+			mask |= 3; spelling = CanonicalSpelling(spelling.substr(0, spelling.size() - 14)); continue;
+		}
+		if(spelling.size() > 9 && spelling.compare(spelling.size() - 9, 9,
+			" volatile") == 0) {
+			mask |= 2; spelling = CanonicalSpelling(spelling.substr(0, spelling.size() - 9)); continue;
+		}
+		break;
+	}
+	if(!mask || parameter_names.find(spelling) == parameter_names.end()) return false;
+	if(cv) *cv = mask;
+	if(parameter) *parameter = spelling;
+	return true;
+}
+
+} // namespace
+
 bool PA18TemplateExpander::SplitMemberPointerType(string raw, string* result_type,
 	string* owner_type, vector<string>* parameters, string* qualifiers,
 	bool* function_type) const
@@ -366,6 +504,71 @@ int PA18TemplateExpander::MatchTypePatternNormalized(string pattern, string actu
 	if(CanonicalBuiltinScalarSpelling(pattern) ==
 		CanonicalBuiltinScalarSpelling(actual)) {
 		return 1;
+	}
+	string member_pattern_result, member_pattern_owner, member_pattern_cv;
+	string member_actual_result, member_actual_owner, member_actual_cv;
+	vector<string> member_pattern_parameters, member_actual_parameters;
+	bool member_pattern_function = false, member_actual_function = false;
+	const bool has_member_pattern = SplitMemberPointerType(pattern,
+		&member_pattern_result, &member_pattern_owner, &member_pattern_parameters,
+		&member_pattern_cv, &member_pattern_function);
+	const bool has_member_actual = SplitMemberPointerType(actual,
+		&member_actual_result, &member_actual_owner, &member_actual_parameters,
+		&member_actual_cv, &member_actual_function);
+	// The compact type spelling can move cv from `Object::* const` to the
+	// function suffix (`Object::*)() const`).  A structured member-pointer
+	// pattern must compare that suffix as part of the member-function type;
+	// only a cv wrapper such as `T const` should enter the generic pointer-cv
+	// branch below.
+	if(has_member_pattern && has_member_actual)
+	{
+		return MatchTypePatternMemberPointerCases(pattern, actual, parameter_names,
+			inferred, context, class_pattern);
+	}
+	const int actual_pointer_cv = PointerObjectCv(actual);
+
+	if(actual_pointer_cv) {
+		int wrapper_cv = 0;
+		string wrapper_parameter;
+		const bool wrapped = CvWrappedParameter(pattern, parameter_names, &wrapper_cv,
+			&wrapper_parameter);
+		if(wrapped) {
+			if(wrapper_cv != actual_pointer_cv) return 0;
+			string unqualified = WithoutPointerObjectCv(actual);
+			const int remaining = actual_pointer_cv & ~wrapper_cv;
+			if(remaining & 2) unqualified = "volatile " + unqualified;
+			if(remaining & 1) unqualified = "const " + unqualified;
+			(*inferred)[wrapper_parameter] = CanonicalSpelling(unqualified);
+			return 1;
+		}
+		const int pattern_pointer_cv = PointerObjectCv(pattern);
+		if(!pattern_pointer_cv || pattern_pointer_cv != actual_pointer_cv) return 0;
+		string unqualified_pattern = WithoutPointerObjectCv(pattern);
+		string unqualified_actual = WithoutPointerObjectCv(actual);
+		string actual_result;
+		vector<string> actual_parameters;
+		if(SplitFunctionPointerType(unqualified_actual, &actual_result,
+			&actual_parameters)) {
+			string actual_function = actual_result + "(";
+			for(size_t parameter = 0; parameter < actual_parameters.size(); ++parameter) {
+				if(parameter) actual_function += ',';
+				actual_function += actual_parameters[parameter];
+			}
+			actual_function += ')';
+			if(unqualified_pattern.size() > 1 &&
+				unqualified_pattern[unqualified_pattern.size() - 1] == '*')
+				unqualified_pattern.erase(unqualified_pattern.size() - 1);
+			return MatchTypePattern(unqualified_pattern, actual_function,
+				parameter_names, inferred, context, class_pattern) ? 1 : 0;
+		}
+		if(!unqualified_pattern.empty() && unqualified_pattern[unqualified_pattern.size() - 1] == '*' &&
+			!unqualified_actual.empty() && unqualified_actual[unqualified_actual.size() - 1] == '*') {
+			unqualified_pattern.erase(unqualified_pattern.size() - 1);
+			unqualified_actual.erase(unqualified_actual.size() - 1);
+			return MatchTypePattern(unqualified_pattern, unqualified_actual,
+				parameter_names, inferred, context, class_pattern) ? 1 : 0;
+		}
+		return 0;
 	}
 	pattern = CanonicalSpelling(pattern);
 	int result = MatchTypePatternSimpleCases(pattern, actual, parameter_names,

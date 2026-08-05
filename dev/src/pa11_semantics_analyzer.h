@@ -154,6 +154,8 @@ public:
 		return false;
 	}
 	TypePtr ResolveType(Scope* from, const string& raw) const;
+	TypePtr ResolveGeneratedSpecializationType(const string& name) const;
+	TypePtr ResolveQualifiedNestedType(Scope* from, const string& name) const;
 	TypePtr ResolveMemberPointerSpelling(Scope* from, const string& name) const;
 	TypePtr ResolveDeclaratorSpelling(Scope* from, string name) const;
 	static bool IsFundamentalWord(const string& word)
@@ -894,6 +896,12 @@ public:
 	void RecordClassDeclaration(const CPPGMAstNodePtr& child, const TypePtr& type,
 		Scope* class_scope, const string& access)
 	;
+	bool ShouldRecordQualifiedClassMember(const string& name, const TypePtr& type,
+		Scope* class_scope) const;
+	void RebindGeneratedClassMembers(const TypePtr& type, Scope* owner,
+		Scope* class_scope);
+	void SeedGeneratedTemplateScope(const CPPGMAstNodePtr& node,
+		const TypePtr& generated, Scope* owner, const string& name);
 	TypePtr ProcessClass(const CPPGMAstNodePtr& node, Scope* scope);
 	TypePtr ProcessAnonymousClass(const CPPGMAstNodePtr& node, Scope* scope,
 		const string& tag);
@@ -1126,6 +1134,8 @@ public:
 	void ValidateNondependentTemplateNode(const CPPGMAstNodePtr& node,
 		Scope* scope, const CPPGMAstNodePtr& parent = CPPGMAstNodePtr(),
 		size_t child_index = static_cast<size_t>(-1));
+	void SeedTemplateParameterBindings(const CPPGMAstNodePtr& node, Scope* scope,
+		Scope* parameters);
 	void ProcessTemplate(const CPPGMAstNodePtr& node, Scope* scope);
 	void ProcessTemplateFriendAccess(const CPPGMAstNodePtr& node, Scope* scope,
 		Scope* parameters);

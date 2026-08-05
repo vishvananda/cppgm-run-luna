@@ -1,7 +1,6 @@
 #include <functional>
 #include "pa18_templates_collection.h"
 #include "pa18_templates_rewrite.h"
-
 using namespace std;
 
 namespace pa18_templates_internal {
@@ -366,8 +365,9 @@ bool PA18TemplateExpander::HasUnavailableGeneratedMemberType(string raw,
 	// reference spelling, a qualified member lookup cannot be deferred as a
 	// dependent type.  It is a candidate-local substitution failure.  Keep
 	// namespace-qualified names on the ordinary lookup path below.
-	if(HasTopLevelIndirection(owner))
+	if(HasTopLevelIndirection(owner)) {
 		return true;
+	}
 	// Only a qualified member of a known type can be a dependent member probe.
 	// Namespace-qualified ordinary types such as `regex_constants::enum_value`
 	// must remain on the normal function-template path.

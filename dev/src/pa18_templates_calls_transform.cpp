@@ -1044,6 +1044,8 @@ bool PA18TemplateExpander::MaterializeFreeFunctionCandidate(
 		candidate_substitutions)) {
 		return false;
 	}
+	if(!ValidateMaterializedFreeFunctionCandidate(*definition, result,
+		candidate_substitutions, context)) return false;
 	// Deleted declarations and immediate return constraints are collected as
 	// typed candidate facts.  Do not recover either fact from a materialized
 	// return spelling on this hot path.

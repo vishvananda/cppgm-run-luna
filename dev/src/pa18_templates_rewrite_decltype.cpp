@@ -58,6 +58,60 @@ bool PA18TemplateExpander::EvaluateMemberPointerStaticCast(const string& express
 	return true;
 }
 
+void PA18TemplateExpander::BindFunctionOwnerSubstitutions(
+	const string& context, map<string, string>* local) const
+{
+	if(!local) return;
+	string owner_context = context;
+	vector<string> owner_arguments;
+	const size_t owner_open = owner_context.find('<');
+	if(owner_open != string::npos) {
+		string owner_argument_text; size_t owner_close = string::npos;
+		if(TemplateRange(owner_context, owner_open, &owner_argument_text, &owner_close)) {
+			owner_arguments = SplitTemplateArguments(owner_argument_text);
+			owner_context = CanonicalSpelling(owner_context.substr(0, owner_open));
+		}
+	} else {
+		map<string, vector<string> >::const_iterator recorded_arguments =
+			specialization_arguments_.find(LastComponent(owner_context));
+		map<string, string>::const_iterator recorded_base =
+			specialization_bases_.find(LastComponent(owner_context));
+		if(recorded_arguments != specialization_arguments_.end())
+			owner_arguments = recorded_arguments->second;
+		if(recorded_base != specialization_bases_.end()) owner_context = recorded_base->second;
+	}
+	const size_t owner_scope = TopLevelScopeSeparator(owner_context);
+	if(owner_scope != string::npos) owner_context.erase(owner_scope);
+	const TemplateDefinition* owner_definition = FindDefinition(owner_context, context);
+	if(!owner_definition) owner_definition = FindDefinition(LastComponent(owner_context), context);
+	if(owner_definition && owner_definition->class_template)
+		for(size_t parameter = 0; parameter < owner_definition->parameters.size() &&
+			parameter < owner_arguments.size(); ++parameter)
+			if(!owner_definition->parameters[parameter].name.empty() &&
+				local->find(owner_definition->parameters[parameter].name) == local->end())
+				(*local)[owner_definition->parameters[parameter].name] =
+					ReplaceIdentifiers(owner_arguments[parameter], *local);
+}
+
+bool PA18TemplateExpander::ValidateDefaultMemberAddress(
+	const string& declared, const string& context,
+	const map<string, string>& substitutions) const
+{
+	const size_t address_begin = declared.find('&');
+	if(address_begin == string::npos) return true;
+	size_t address_end = address_begin + 1;
+	while(address_end < declared.size() &&
+		(IsIdentifierCharacter(declared[address_end]) || declared[address_end] == ':'))
+		++address_end;
+	const string address = declared.substr(address_begin, address_end - address_begin);
+	if(address.find("::") == string::npos) return true;
+	try {
+		return IsValidFunctionAddressTemplateArgument(address, "T", context, substitutions);
+	} catch(const PA18SubstitutionFailure&) {
+		return false;
+	}
+}
+
 bool PA18TemplateExpander::GeneratedFunctionCallResultType(
 	const string& callee, const string& function_context,
 	const map<string, string>& substitutions,
@@ -167,7 +221,7 @@ bool PA18TemplateExpander::GeneratedFunctionCallResultType(
 				}
 			}
 			continue;
-		}
+			}
 			string generated_result = NodeTypeSpelling(declaration->children.empty() ?
 				CPPGMAstNodePtr() : declaration->children[0]) + DeclaratorSuffix(declarator);
 			// The generated declaration's return type is written relative to its
@@ -215,6 +269,7 @@ string PA18TemplateExpander::FunctionArgumentObjectType(string raw,
 		raw = CanonicalSpelling(raw.substr(0, raw.size() - 6));
 	while(raw.size() > 9 && raw.compare(raw.size() - 9, 9, " volatile") == 0)
 		raw = CanonicalSpelling(raw.substr(0, raw.size() - 9));
+	raw = CanonicalSpelling(ResolveAlias(raw, context));
 	while(raw.size() >= 2 && raw.compare(raw.size() - 2, 2, "&&") == 0)
 		raw = CanonicalSpelling(raw.substr(0, raw.size() - 2));
 	while(!raw.empty() && raw[raw.size() - 1] == '&')

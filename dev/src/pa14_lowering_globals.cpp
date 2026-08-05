@@ -267,10 +267,12 @@ string PA14Lowerer::EmitTruthValue(const Value& value)
     string zero = low == "ptr" ? "0" :
       (is_floating_type(type) ? (low == "f32" ? "0.0f" : low == "f80" ? "0.0L" : "0.0") : "0");
     string compare_type = low;
-    if(is_integral_type(type) && low != "i32" && low != "i64" && low != "u64")
+    if((is_integral_type(type) || type->kind == TYPE_MEMBER_POINTER) &&
+       low != "i32" && low != "i64" && low != "u64")
       compare_type = "i64";
     string operand = value.operand;
-    if(compare_type != low && low != "ptr" && !is_floating_type(type)) {
+	if(compare_type != low && low != "ptr" && !is_floating_type(type) &&
+		type->kind != TYPE_MEMBER_POINTER) {
       Value widened = ConvertValue(value, Fundamental(is_unsigned_type(type) ? "unsigned long int" : "long int"));
       operand = widened.operand;
       compare_type = "i64";

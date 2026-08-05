@@ -255,6 +255,8 @@ bool PA18TemplateExpander::EvaluateIntegralTextSpecialForms(const string& raw,
 			string resolved = CanonicalSpelling(RemoveMarker(RewriteText(
 				call_type, context, substitutions, 0)));
 		resolved = ResolveAlias(resolved, context);
+			while(resolved.size() > 1 && resolved[resolved.size() - 1] == '&')
+				resolved = CanonicalSpelling(resolved.substr(0, resolved.size() - 1));
 			const size_t size = EstimateTypeSize(resolved, context);
 			if(size) {
 				*result = PA19IntegralValue::Unsigned(
@@ -324,11 +326,14 @@ bool PA18TemplateExpander::EvaluateIntegralTextSpecialForms(const string& raw,
 		const size_t open = functional_cast ? functional_open : braced_open;
 		const string target = ResolveAlias(CanonicalSpelling(raw.substr(0, open)), context);
 		const PA19IntegralType target_type = PA19Type(target);
-		if(target_type.integral) {
+		const bool enum_target = IsKnownEnumType(target, context);
+		if(target_type.integral || enum_target) {
 			const string operand = raw.substr(open + 1, raw.size() - open - 2);
 			PA19IntegralValue converted;
 			if(EvaluateIntegralText(operand, context, substitutions, &converted)) {
-				*result = PA19Convert(converted, target_type); return result->known;
+				*result = target_type.integral ? PA19Convert(converted, target_type) :
+					PA19IntegralValue::Signed(PA19Signed(converted), "int", 32);
+				return result->known;
 			}
 		}
 	}
@@ -533,7 +538,12 @@ void PA18TemplateExpander::RecordConstantDeclaration(
 		// phase needs the typed constant when a later constexpr condition reads
 		// that member through a generated specialization (for example
 		// `call_traits::overload != ill_formed`).
-		if((size_expression || enum_constant) && initializer->kind == "initializer" &&
+		const bool generated_owner_context =
+			specialization_bases_.find(LastComponent(context)) != specialization_bases_.end() ||
+			(!active_instantiation_name_.empty() && specialization_bases_.find(
+				LastComponent(active_instantiation_name_)) != specialization_bases_.end());
+		if(generated_owner_context && (size_expression || enum_constant) &&
+			initializer->kind == "initializer" &&
 			initializer->children.size() == 1)
 			initializer->children[0] = CPPGMAstNodePtr(new CPPGMAstNode("literal",
 				TemplateIntegralValueSpelling(value)));

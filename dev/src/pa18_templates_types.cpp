@@ -167,7 +167,17 @@ string PA18TemplateExpander::FunctionTypeSpelling(const CPPGMAstNodePtr& paramet
 	string result = base + (member_pointer_type ? " " : string()) + outer_suffix;
 	if(member_pointer_type && inner_suffix.find("::*") != string::npos)
 		result += "(" + inner_suffix + ")(";
-	else result += inner && inner_suffix.find('&') != string::npos ? "(&)(" : "(*)(";
+	else if(inner && inner_suffix.find('&') != string::npos)
+		result += "(&)(";
+	else {
+		// Qualifiers on the nested pointer belong to the pointer object, not to
+		// the pointed-to function.  Preserve them in aliases such as
+		// `void (*const)()` so class partial specialization can distinguish the
+		// top-level cv wrapper from the unqualified function-pointer pattern.
+		string pointer_cv = inner_suffix;
+		if(!pointer_cv.empty() && pointer_cv[0] == '*') pointer_cv.erase(0, 1);
+		result += "(*" + pointer_cv + ")(";
+	}
 	AppendFunctionParameters(clause, &result, member_pointer_type);
 	result += ')';
 	return CanonicalSpelling(result);
@@ -215,7 +225,13 @@ string PA18TemplateExpander::DeclaratorTypeSpelling(const string& base,
 	string result = base + (member_pointer_type ? " " : string()) + outer_suffix;
 	if(member_pointer_type && inner_suffix.find("::*") != string::npos)
 		result += "(" + inner_suffix + ")(";
-	else result += inner && inner_suffix.find('&') != string::npos ? "(&)(" : "(*)(";
+	else if(inner && inner_suffix.find('&') != string::npos)
+		result += "(&)(";
+	else {
+		string pointer_cv = inner_suffix;
+		if(!pointer_cv.empty() && pointer_cv[0] == '*') pointer_cv.erase(0, 1);
+		result += "(*" + pointer_cv + ")(";
+	}
 	AppendFunctionParameters(clause, &result, member_pointer_type);
 	result += ')';
 	return CanonicalSpelling(result);

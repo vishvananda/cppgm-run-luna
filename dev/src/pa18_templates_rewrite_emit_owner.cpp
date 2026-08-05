@@ -126,7 +126,17 @@ string PA18TemplateExpander::ReuseMaterializedClassInstantiation(
 						break;
 					}
 				if(!same_arguments) continue;
-				map<string, CPPGMAstNodePtr>::const_iterator declaration =
+			map<string, const TemplateDefinition*>::const_iterator candidate_definition =
+				specialization_definitions_.find(candidate);
+			// A partial-specialization request must not reuse a provisional
+			// primary fallback with the same nominal argument spelling.  The
+			// reverse reuse is intentional: a later primary lookup may reuse the
+			// complete selected partial entity.
+			if(candidate_definition != specialization_definitions_.end() &&
+				candidate_definition->second != &definition &&
+				(definition.partial_specialization || !candidate_definition->second ||
+					!candidate_definition->second->partial_specialization)) continue;
+			map<string, CPPGMAstNodePtr>::const_iterator declaration =
 					class_declarations_.find(candidate);
 				if(declaration == class_declarations_.end() || !declaration->second ||
 					declaration->second->kind != "class-specifier" ||

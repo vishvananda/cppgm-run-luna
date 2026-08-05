@@ -886,9 +886,10 @@ PA14Lowerer::Value PA14Lowerer::EmitConditionalValue(const CPPGMAstNodePtr& node
     // the conditional expression.  A local integral-constant object is the
     // direct value-context case that must be folded (notably an aliased
     // bool_constant result).
-    const bool local_constant = condition_info.known_constant &&
-      node->children[0] && node->children[0]->kind == "id-expression" &&
-      node->children[0]->value.find("::") == string::npos;
+	const bool local_constant = condition_info.known_constant && node->children[0] &&
+		(node->children[0]->kind == "call-expression" ||
+		 (node->children[0]->kind == "id-expression" &&
+			node->children[0]->value.find("::") == string::npos));
     if(local_constant) {
       const CPPGMAstNodePtr selected = condition_info.constant != 0 ?
         node->children[1] : node->children[2];

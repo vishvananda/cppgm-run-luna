@@ -155,7 +155,8 @@ const TemplateDefinition* PA18TemplateExpander::SelectClassTemplateDefinition(
 						}
 					}
 				}
-				const bool known = word == "typename" || word == "const" || word == "volatile" ||
+			const bool known = word == "typename" || word == "const" || word == "volatile" ||
+				word == "constvolatile" || word == "volatileconst" ||
 					word == "true" || word == "false" || word == "void" || word == "bool" ||
 					word == "char" || word == "short" || word == "int" || word == "long" ||
 					word == "wchar_t" || word == "char16_t" || word == "char32_t" ||

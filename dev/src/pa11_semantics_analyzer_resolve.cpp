@@ -85,8 +85,7 @@ Scope* Analyzer::ResolveNamespace(Scope* from, const string& raw) const
 Binding* Analyzer::ResolveBinding(Scope* from, const string& raw) const
 {
 	return ResolvePath(from, raw).binding;
-}
-
+	}
 TypePtr Analyzer::ResolveType(Scope* from, const string& raw) const
 {
 	const string name = StripTypeMarker(raw);
@@ -94,9 +93,8 @@ TypePtr Analyzer::ResolveType(Scope* from, const string& raw) const
 	string word;
 	for (size_t i = 0; i <= name.size(); ++i) {
 		const char character = i < name.size() ? name[i] : ' ';
-		if (isspace(static_cast<unsigned char>(character))) {
-			if (!word.empty()) { words.push_back(word); word.clear(); }
-		} else word += character;
+		if (isspace(static_cast<unsigned char>(character))) { if (!word.empty()) { words.push_back(word); word.clear(); } }
+		else word += character;
 	}
 	bool add_const = false, add_volatile = false, fundamental = !words.empty();
 	vector<string> fundamental_words;
@@ -108,9 +106,8 @@ TypePtr Analyzer::ResolveType(Scope* from, const string& raw) const
 			if (!IsFundamentalWord(words[i])) fundamental = false;
 		}
 	}
-	if (fundamental && !fundamental_words.empty())
-		return CloneWithCv(Fundamental(FundamentalName(fundamental_words)),
-			add_const, add_volatile);
+	if (fundamental && !fundamental_words.empty()) return CloneWithCv(
+		Fundamental(FundamentalName(fundamental_words)), add_const, add_volatile);
 	TypePtr member_pointer = ResolveMemberPointerSpelling(from, name);
 	if(member_pointer) return member_pointer;
 	TypePtr declarator = ResolveDeclaratorSpelling(from, name);
@@ -184,6 +181,8 @@ TypePtr Analyzer::ResolveType(Scope* from, const string& raw) const
 				}
 	}
 	Binding* binding = ResolveBinding(from, name);
+	if (!binding && name.find("::") == string::npos && name.find('_') != string::npos) { TypePtr generated = ResolveGeneratedSpecializationType(name); if (generated) return generated; }
+	if ((!binding || (binding->kind != BIND_TYPE && binding->kind != BIND_TYPE_ALIAS)) && name.find("::") != string::npos) { TypePtr nested = ResolveQualifiedNestedType(from, name); if (nested) return nested; }
 	if (!binding || (binding->kind != BIND_TYPE &&
 		binding->kind != BIND_TYPE_ALIAS) || !AccessibleType(*binding, from))
 	{

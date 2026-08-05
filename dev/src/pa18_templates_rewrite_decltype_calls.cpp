@@ -98,6 +98,39 @@ bool PA18TemplateExpander::FunctionArgumentViable(const string& parameter,
 	const string received = FunctionArgumentObjectType(actual, context);
 	if(expected.empty() || received.empty()) return false;
 	if(expected == received) return true;
+	const size_t expected_open = expected.find('<');
+	map<string, string>::const_iterator generated_base =
+		specialization_bases_.find(LastComponent(received));
+	map<string, vector<string> >::const_iterator generated_arguments =
+		specialization_arguments_.find(LastComponent(received));
+	if(expected_open != string::npos && generated_base != specialization_bases_.end() &&
+		generated_arguments != specialization_arguments_.end() &&
+		CanonicalSpelling(expected.substr(0, expected_open)) ==
+		CanonicalSpelling(generated_base->second)) {
+		string expected_argument_text;
+		size_t expected_close = string::npos;
+		if(TemplateRange(expected, expected_open, &expected_argument_text,
+			&expected_close)) {
+			const vector<string> source_arguments = SplitTemplateArguments(
+				expected_argument_text);
+			if(source_arguments.size() == generated_arguments->second.size()) {
+				bool same_specialization = true;
+				for(size_t argument_index = 0; argument_index < source_arguments.size();
+					++argument_index) {
+					const string source_argument = CanonicalSpelling(QualifyTypeArgument(
+						ResolveAlias(source_arguments[argument_index], context), context));
+					const string generated_argument = CanonicalSpelling(QualifyTypeArgument(
+						ResolveAlias(generated_arguments->second[argument_index], context),
+						context));
+					if(source_argument != generated_argument) {
+						same_specialization = false;
+						break;
+					}
+				}
+				if(same_specialization) return true;
+			}
+		}
+	}
 	// A declaration can spell a class parameter relative to its owning
 	// template while the inferred argument carries the qualified owner.  Use
 	// the typed name resolver before treating the two class objects as
@@ -111,7 +144,25 @@ bool PA18TemplateExpander::FunctionArgumentViable(const string& parameter,
 	if(expected.find('<') == string::npos && received.find('<') == string::npos) {
 		const CPPGMAstNodePtr expected_declaration = FindClassDeclaration(expected, context);
 		const CPPGMAstNodePtr received_declaration = FindClassDeclaration(received, context);
-		if(expected_declaration && expected_declaration == received_declaration) return true;
+		if(expected_declaration && expected_declaration == received_declaration) {
+			map<string, vector<string> >::const_iterator expected_arguments =
+				specialization_arguments_.find(LastComponent(expected));
+			map<string, vector<string> >::const_iterator received_arguments =
+				specialization_arguments_.find(LastComponent(received));
+			map<string, string>::const_iterator expected_base =
+				specialization_bases_.find(LastComponent(expected));
+			map<string, string>::const_iterator received_base =
+				specialization_bases_.find(LastComponent(received));
+			if(expected_arguments != specialization_arguments_.end() ||
+				received_arguments != specialization_arguments_.end() ||
+				expected_base != specialization_bases_.end() ||
+				received_base != specialization_bases_.end()) {
+				return expected_arguments != specialization_arguments_.end() &&
+					received_arguments != specialization_arguments_.end() &&
+					expected_arguments->second == received_arguments->second;
+			}
+			return true;
+		}
 	}
 	if(IsBuiltinArithmeticType(expected) && IsBuiltinArithmeticType(received))
 		return true;
@@ -178,6 +229,30 @@ bool PA18TemplateExpander::FunctionArgumentViable(const string& parameter,
 	// received class; both are user-defined conversions in the candidate probe.
 	const CPPGMAstNodePtr expected_class = FindClassDeclaration(expected, context);
 	if(expected_class) {
+		map<string, string> class_substitutions;
+		const size_t expected_open = expected.find('<');
+		if(expected_open != string::npos) {
+			string expected_arguments_text;
+			size_t expected_close = string::npos;
+			if(TemplateRange(expected, expected_open, &expected_arguments_text,
+				&expected_close)) {
+				const string expected_primary = CanonicalSpelling(expected.substr(0,
+					expected_open));
+				const TemplateDefinition* expected_definition = FindDefinition(
+					expected_primary, context);
+				if(!expected_definition)
+					expected_definition = FindDefinition(LastComponent(expected_primary),
+						context);
+				const vector<string> expected_arguments = SplitTemplateArguments(
+					expected_arguments_text);
+				if(expected_definition) for(size_t parameter = 0;
+					parameter < expected_definition->parameters.size() &&
+					parameter < expected_arguments.size(); ++parameter)
+					if(!expected_definition->parameters[parameter].name.empty())
+						class_substitutions[expected_definition->parameters[parameter].name] =
+							expected_arguments[parameter];
+			}
+		}
 		const string expected_name = LastComponent(expected);
 		for(size_t child = 0; child < expected_class->children.size(); ++child) {
 			const CPPGMAstNodePtr member = expected_class->children[child];
@@ -188,8 +263,18 @@ bool PA18TemplateExpander::FunctionArgumentViable(const string& parameter,
 				FunctionDeclarator(member), "parameter-clause");
 			if(!parameters || parameters->children.empty()) continue;
 			const CPPGMAstNodePtr first = parameters->children[0];
-			if(first && first->kind == "parameter-declaration" &&
-				FunctionArgumentViable(ParameterTypeSpelling(first), received, context)) return true;
+			if(first && first->kind == "parameter-declaration") {
+				string constructor_parameter = ParameterTypeSpelling(first);
+				if(!class_substitutions.empty()) {
+					constructor_parameter = ReplaceIdentifiersPreservingPackSizes(
+						constructor_parameter, class_substitutions);
+					try {
+						constructor_parameter = const_cast<PA18TemplateExpander*>(this)->RewriteText(
+							constructor_parameter, context, class_substitutions, 0);
+					} catch(const PA18SubstitutionFailure&) {}
+				}
+				if(FunctionArgumentViable(constructor_parameter, received, context)) return true;
+			}
 		}
 	}
 	// Expression-SFINAE needs to reject an attempted conversion between two
@@ -287,9 +372,9 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 		string callee, argument_text;
 		if(!SplitTextCall(expression, &callee, &argument_text)) return false;
 		callee = StripTextParentheses(callee);
-		if(callee.empty()) {
-			return false;
-		}
+	if(callee.empty()) {
+		return false;
+	}
 		// The declval helper is intentionally declaration-only.  Its only
 		// semantic effect in an unevaluated operand is to transport the requested
 		// type as an xvalue (with the usual reference collapsing), so do not make
@@ -746,7 +831,7 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 					function_context, &candidate_substitutions,
 					explicit_definition ? &explicit_arguments : 0);
 				} catch(const PA18SubstitutionFailure&) {
-					continue;
+				continue;
 				}
 			if(candidate_result.empty()) continue;
 			bool candidate_ellipsis = false;
@@ -898,7 +983,7 @@ void PA18TemplateExpander::ApplyFriendClassSubstitutions(
 					try {
 						ordinary_result = NormalizeTypeArgument(ResolveAlias(RewriteText(
 							ordinary_result, function_context, generated_owner_substitutions, 0),
-							function_context));
+						function_context));
 					} catch(const PA18SubstitutionFailure&) { ordinary_result.clear(); }
 					if(ordinary_result.empty()) continue;
 					if(!selected_any || candidate_score > selected_score ||

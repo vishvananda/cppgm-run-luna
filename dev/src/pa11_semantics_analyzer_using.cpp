@@ -31,7 +31,7 @@ void Analyzer::ProcessUsingDeclaration(const CPPGMAstNodePtr& node, Scope* scope
 		Scope* owner_scope = owner.scope;
 		if (!owner_scope && owner.binding) owner_scope = ScopeForType(owner.binding->type);
 		TypePtr requested_owner;
-		if (!owner_scope && !operator_name) {
+		if (!owner_scope) {
 			try {
 				requested_owner = ResolveType(scope, target_name.substr(0, target_separator));
 			} catch (const logic_error&) {
@@ -41,6 +41,18 @@ void Analyzer::ProcessUsingDeclaration(const CPPGMAstNodePtr& node, Scope* scope
 			}
 		}
 		if (!owner_scope) owner_scope = ScopeForType(requested_owner);
+		// A generated specialization may intentionally be emitted as a class
+		// shell while its primary still owns the dependent member-template
+		// declarations.  Use that typed primary scope for a using-id lookup;
+		// the concrete call is still replayed against the generated owner later.
+		if (owner_scope && owner_scope->bindings.empty() && owner_scope->owner_type &&
+			!owner_scope->owner_type->template_primary.empty()) {
+			TypePtr primary;
+			try { primary = ResolveType(scope, owner_scope->owner_type->template_primary); }
+			catch (const logic_error&) {}
+			Scope* primary_scope = ScopeForType(primary);
+			if (primary_scope && !primary_scope->bindings.empty()) owner_scope = primary_scope;
+		}
 		if (owner_scope && owner_scope->bindings.empty()) owner_scope = 0;
 		// A dependent constructor using-declaration can retain the source
 		// template-id while PA18 has already materialized the concrete base under
@@ -101,6 +113,24 @@ void Analyzer::ProcessUsingDeclaration(const CPPGMAstNodePtr& node, Scope* scope
 				if (owner_scope->bindings[i].kind == BIND_FUNCTION &&
 					owner_scope->bindings[i].name.compare(0, generated_prefix.size(), generated_prefix) == 0)
 					targets.push_back(&owner_scope->bindings[i]);
+		}
+		// A generated class shell can contain replay bookkeeping bindings (for
+		// example the synthetic `Derived` type) while its source member-template
+		// declarations remain on the primary class scope.  Recover that typed
+		// declaration scope for a using-id such as `operator,`.
+		if (targets.empty() && owner_scope && owner_scope->owner_type &&
+			!owner_scope->owner_type->template_primary.empty()) {
+			TypePtr primary_type;
+			try { primary_type = ResolveType(scope,
+				owner_scope->owner_type->template_primary); }
+			catch (const logic_error&) {}
+			Scope* primary_scope = ScopeForType(primary_type);
+			if (primary_scope) {
+				for (size_t i = 0; i < primary_scope->bindings.size(); ++i)
+					if (primary_scope->bindings[i].name == LastComponent(target_name))
+						targets.push_back(&primary_scope->bindings[i]);
+				if (!targets.empty()) operator_owner_scope = primary_scope;
+			}
 		}
 		// PA18 renames a materialized class and its constructor together.  The
 		// source using-id still names the primary constructor (`Base::Base`),

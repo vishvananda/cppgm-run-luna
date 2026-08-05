@@ -4,6 +4,7 @@
 
 using namespace std;
 namespace pa18_templates_internal {
+
 CPPGMAstNodePtr PA18TemplateExpander::TransformInstantiatedNode(
 	const TemplateDefinition& definition, const string& context,
 	const map<string, string>& substitutions,

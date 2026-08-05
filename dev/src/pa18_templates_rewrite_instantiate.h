@@ -669,6 +669,7 @@
 		if(typed_result) *typed_result = value;
 		return TemplateIntegralValueSpelling(value);
 	}
+	bool IsKnownEnumTypeFallback(const string& raw, const string& context) const;
 	bool IsKnownEnumType(string raw, const string& context) const
 	{
 		raw = CanonicalSpelling(RemoveMarker(raw));
@@ -683,7 +684,7 @@
 			if(separator == string::npos) current.clear();
 			else current.erase(separator);
 		}
-		return false;
+		return IsKnownEnumTypeFallback(raw, context);
 	}
 	string TemplateArgumentMetadata(const TemplateParameter& parameter,
 		const string& argument, const PA19IntegralValue& value,

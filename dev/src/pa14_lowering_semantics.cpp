@@ -294,8 +294,13 @@ void PA14Lowerer::AppendAssociatedOperatorBindings(const TypePtr& raw_type,
               result.end()) continue;
           result.push_back(binding);
         }
-      AppendAssociatedOperatorBindings(type->direct_base, name, result,
-        visited_types, visited_scopes);
+		if(!type->direct_bases.empty())
+			for(size_t base = 0; base < type->direct_bases.size(); ++base)
+				AppendAssociatedOperatorBindings(type->direct_bases[base], name, result,
+					visited_types, visited_scopes);
+		else
+			AppendAssociatedOperatorBindings(type->direct_base, name, result,
+				visited_types, visited_scopes);
     }
     Scope* associated = owner_scope;
     while(associated && associated->kind != SCOPE_NAMESPACE)
@@ -750,11 +755,12 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferCall(const CPPGMAstNodePtr& node, Scope*
     }
     TypePtr constructor_type = ConstructorObjectType(
       node && !node->children.empty() ? node->children[0] : CPPGMAstNodePtr(), scope);
-    if(constructor_type) {
-      result.type = constructor_type;
-      result.category = "prvalue";
-      return result;
-    }
+	if(constructor_type) {
+		result.type = constructor_type;
+		result.category = "prvalue";
+		InferLocalIdentifierConstant(constructor_type, &result);
+		return result;
+	}
     TypePtr builtin_type = BuiltinCastType(
       node && !node->children.empty() ? node->children[0] : CPPGMAstNodePtr(), scope);
     if(builtin_type) {

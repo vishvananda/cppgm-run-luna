@@ -502,6 +502,7 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 		}
 		return true;
 	}
+	void BindFunctionOwnerSubstitutions(const string& context, map<string, string>* local) const; bool ValidateDefaultMemberAddress(const string& declared, const string& context, const map<string, string>& substitutions) const;
 	bool FunctionArgumentsViable(const TemplateDefinition& definition,
 		const vector<string>& arguments, const vector<string>& actual_types,
 		const string& context, const map<string, string>* outer_substitutions = 0,
@@ -516,6 +517,7 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 		if(!parameters) return false;
 		map<string, string> local = outer_substitutions ? *outer_substitutions :
 			map<string, string>();
+		BindFunctionOwnerSubstitutions(context, &local);
 		map<string, vector<string> > pack_arguments;
 		map<string, size_t> explicit_pack_counts;
 		if(explicit_prefix) {
@@ -567,12 +569,12 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 				}
 				for(size_t value = 0; value < count; ++value)
 					pack_arguments[detail.name].push_back(arguments[template_argument + value]);
-				template_argument += count;
-			} else {
-				if(template_argument < arguments.size() && !detail.name.empty())
-					local[detail.name] = arguments[template_argument];
-				if(template_argument < arguments.size()) ++template_argument;
-			}
+				template_argument += count; } else {
+						if(template_argument < arguments.size()) { if(!detail.name.empty()) local[detail.name] = arguments[template_argument]; ++template_argument; } else {
+							if(detail.default_type.empty()) return false; const string default_context = definition.owner.empty() ? context : definition.owner; string formed;
+							try { formed = RewriteText(detail.default_type, default_context, local, 0); } catch(const PA18SubstitutionFailure&) { return false; }
+							formed = NormalizeTypeArgument(ReplaceIdentifiers(formed, local)); if(formed.empty() || HasUnavailableGeneratedMemberType(formed, default_context, local)) return false;
+							if(!detail.name.empty()) local[detail.name] = formed; } }
 		}
 		map<string, map<string, vector<string> > >::const_iterator cached_packs = inferred_function_pack_substitutions_.find(FunctionPackKey(definition, arguments, context, explicit_prefix));
 		if(cached_packs != inferred_function_pack_substitutions_.end()) for(map<string, vector<string> >::const_iterator pack = cached_packs->second.begin(); pack != cached_packs->second.end(); ++pack) pack_arguments[pack->first] = pack->second;
@@ -653,6 +655,7 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 						const vector<string> default_parts = SplitTemplateArguments(default_arguments); PA19IntegralValue enabled;
 						if(!default_parts.empty() && EvaluateIntegralText(default_parts[0], default_context, local, &enabled) && enabled.known && PA19Raw(enabled) == 0) return false;
 					}
+					if(!ValidateDefaultMemberAddress(declared, default_context, local)) return false;
 					string formed;
 					try {
 						formed = RewriteText(ParameterTypeSpelling(node), default_context, local, 0);
@@ -667,9 +670,7 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 			}
 				string expected = RewriteText(ParameterTypeSpelling(node), context, local, 0);
 				expected = NormalizeTypeArgument(ReplaceIdentifiers(expected, local)); if(HasUnavailableGeneratedMemberType(expected, context, local)) return false;
-					if(!FunctionArgumentViable(expected, actual_types[actual], context)) {
-					return false;
-				}
+				if(!FunctionArgumentViable(expected, actual_types[actual], context)) return false;
 			++actual;
 		}
 		return has_ellipsis || actual == actual_types.size();
@@ -734,12 +735,10 @@ bool FunctionCallResultType(string expression, const string& context, const map<
 				substitutions).empty()) return string();
 			return ExpressionTypeSpelling(comma_tail, context, substitutions);
 		}
-		// A qualified variable-template id is an expression even though its
-		// spelling contains no call parentheses (`Property::value<T>`).  Resolve
-		// its declared type through the owning class's typed member definition
-		// before the ordinary identifier and function-template fallbacks.
+		// Resolve qualified variable-template ids through typed member lookup.
 		const size_t qualified_variable_separator = TopLevelScopeSeparator(expression);
-		if(qualified_variable_separator != string::npos) {
+		const bool qualified_variable_expression = expression.find("==") == string::npos && expression.find("!=") == string::npos && expression.find("<=") == string::npos && expression.find(">=") == string::npos && expression.find("&&") == string::npos && expression.find("||") == string::npos;
+		if(qualified_variable_separator != string::npos && qualified_variable_expression) {
 			const string qualified_owner = expression.substr(0, qualified_variable_separator); const string qualified_member = expression.substr(qualified_variable_separator + 2); string variable_type;
 			if(FindVariableTemplateMemberType(qualified_owner, qualified_member,
 				substitutions, context, &variable_type) && !variable_type.empty())
