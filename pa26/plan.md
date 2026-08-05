@@ -2,8 +2,10 @@
 
 ## Baseline and latest validation
 
-The turn-start PA26 report passed 14 of 66 tests.  The latest clean report
-passes 41 of 66.  The required through-PA25 report passes all 2669 tests.
+The implementation checkpoint started at 14/66 and landed at 41/66.  The
+checkpoint-audit baseline and post-audit PA26 reports both pass 41/66, with
+the same complete set of 25 current-PA failures.  The required through-PA25
+report passes all 2669 tests.
 
 ## Remaining Work Map
 
@@ -75,17 +77,22 @@ earlier-stage compatibility boundary:
    member-pointer types, preserving ordinary function-pointer call results and
    SFINAE behavior in PA22/PA23.
 
-Validation covers the clean PA26 report and the complete through-PA25 report.
+Validation covers the PA26 checkpoint floor and the complete through-PA25
+report; the current-PA failure set remains explicitly mapped above.
 
 ## Checkpoint Result
 
-Completed: PA26 improved from 14/66 to 41/66, and through-PA25 is 2669/2669.
-The three earlier decltype/trailing-pack regressions were isolated to the
-over-broad member-pointer cast probe and now pass.  Temporary diagnostics were
-removed.
+Completed: the checkpoint landed at 41/66 from the 14/66 implementation
+baseline, and the audit fixes preserve 41/66.  Through-PA25 remains
+2669/2669.  The three earlier decltype/trailing-pack regressions were isolated
+to the over-broad member-pointer cast probe and now pass.  The audit also
+removed downstream string reclassification, ambiguous owner fallback, a
+duplicate parameter-expansion implementation, and repeated conversion-graph
+walks.
 
 ## Next Checkpoint Group
 
-Fix the pack-expanded-base collection case together with the dependent
-member-pointer replay/lookup group, then rerun the PA26 report before taking
-on the six LowIR-shape mismatches.
+Fix the pack-expanded-base collection case together with the 16-test
+dependent member-pointer replay/lookup group, then rerun the PA26 report
+before taking on the six LowIR-shape mismatches.  This is the next substantial
+checkpoint; the remaining friend/operator group has only two tests.

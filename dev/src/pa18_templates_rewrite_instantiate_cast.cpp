@@ -34,7 +34,13 @@ void PA18TemplateExpander::InstallMemberPointerSubstitutions(
 				pointer, context, substitutions, 0);
 			if(!rewritten.empty()) pointer = CanonicalSpelling(rewritten);
 		} catch(const PA18SubstitutionFailure&) {}
-		active_member_pointer_substitutions_[item.name] = pointer;
+		pointer = CanonicalSpelling(RemoveMarker(pointer));
+		if(pointer.size() <= 1 || pointer[0] != '&') continue;
+		CPPGMAstNodePtr member(new CPPGMAstNode("id-expression", pointer.substr(1)));
+		CPPGMAstNodePtr address(new CPPGMAstNode("unary-expression", "OP_AMP:&"));
+		address->children.push_back(member);
+		active_member_pointer_substitutions_[item.name] = address;
+		member_pointer_expression_cache_[make_pair(context, pointer)] = address;
 	}
 }
 

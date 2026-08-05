@@ -1019,8 +1019,9 @@ Binding* PA14Lowerer::FindContextConversionOperator(const TypePtr& raw_source,
       if(direct) return direct;
     }
     Binding* best = 0;
-    for(size_t i = 0; i < ConversionBindings(source).size(); ++i) {
-      Binding* binding = ConversionBindings(source)[i];
+    const vector<Binding*> conversions = ConversionBindings(source);
+    for(size_t i = 0; i < conversions.size(); ++i) {
+      Binding* binding = conversions[i];
       FunctionRecord* record = RecordForBinding(binding);
       TypePtr function = function_target_type(binding->type);
       TypePtr result = function ? type_value(function->child) : TypePtr();

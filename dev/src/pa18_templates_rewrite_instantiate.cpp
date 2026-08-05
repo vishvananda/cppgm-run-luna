@@ -12,7 +12,8 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformInstantiatedNode(
 	const map<string, FunctionSignature>& function_substitutions)
 {
 	const map<string, PA19IntegralValue> previous = active_integral_substitutions_;
-	const map<string, string> previous_member_pointers = active_member_pointer_substitutions_;
+	const map<string, CPPGMAstNodePtr> previous_member_pointers =
+		active_member_pointer_substitutions_;
 	const map<string, vector<string> > previous_packs = active_pack_substitutions_;
 	const map<string, vector<string> > previous_pack_identifiers = active_pack_identifier_substitutions_, previous_function_packs = active_function_pack_substitutions_;
 	const map<pair<size_t, size_t>, string> previous_lambda_replay_names =
