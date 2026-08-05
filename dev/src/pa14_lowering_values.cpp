@@ -176,6 +176,14 @@ PA14Lowerer::Value PA14Lowerer::EmitIdentifier(const CPPGMAstNodePtr& node, Scop
     if(!binding && candidates.size() == 1) binding = candidates[0];
 	if(!binding) throw logic_error("ambiguous identifier during lowering");
 	if(!IsAccessible(binding, scope)) throw logic_error("inaccessible member");
+	// Mark an ordinary global as soon as its identifier is lowered.  Some
+	// expression paths (notably comparisons and condition lowering) consume
+	// the identifier's typed value without going through the final load branch
+	// below, but the declaration is still required by that emitted load.
+	if(binding->kind == BIND_VARIABLE && !binding->is_member) {
+	  GlobalRecord* referenced_global = FindGlobal(binding->qualified_name);
+	  if(referenced_global) referenced_global->referenced = true;
+	}
 	const TypePtr binding_value_type = type_value(binding->type);
 	const bool binding_integral = binding_value_type &&
 		(is_integral_type(binding_value_type) ||
@@ -288,6 +296,7 @@ PA14Lowerer::Value PA14Lowerer::EmitIdentifier(const CPPGMAstNodePtr& node, Scop
         GlobalRecord* global_member = demanded_global ? demanded_global :
           FindGlobal(binding->qualified_name);
 		if(!global_member) throw logic_error("unknown static member during lowering");
+		global_member->referenced = true;
         result.type = global_member->type;
         result.operand = global_member->type->kind == TYPE_ARRAY ?
           EmitArrayDecay(node, scope) : emit_load("@" + global_member->symbol, global_member->type);
@@ -356,6 +365,7 @@ PA14Lowerer::Value PA14Lowerer::EmitIdentifier(const CPPGMAstNodePtr& node, Scop
     }
     GlobalRecord* global = FindGlobal(binding->qualified_name);
     if(!global) throw logic_error("unknown global during lowering");
+    global->referenced = true;
     result.type = global->type;
     if(global->type->kind == TYPE_ARRAY) {
       result.array = true;
@@ -483,6 +493,11 @@ bool PA14Lowerer::IsTrivialValueStorage(const TypePtr& raw_type) const
     if(type->kind == TYPE_ARRAY) return IsTrivialValueStorage(type->child);
     if(type->kind != TYPE_CLASS) return type->kind != TYPE_FUNCTION &&
       type->kind != TYPE_MEMBER_POINTER;
+    // Object lifetime is non-trivial even when the payload happens to be a
+    // small scalar aggregate.  ABI classification handles the latter case
+    // separately; special-member lowering must still preserve the object
+    // boundary for a class with a destructor.
+    if(HasDestructor(type)) return false;
     if(type->direct_base && !IsTrivialValueStorage(type->direct_base)) return false;
     for(size_t i = 0; i < type->class_members.size(); ++i) {
       const ClassMemberInfo& member = type->class_members[i];
@@ -522,6 +537,11 @@ bool PA14Lowerer::ClassValueNeedsIndirect(const TypePtr& raw_type) const
     TypePtr type = type_value(raw_type);
     if(!type || type->kind != TYPE_CLASS) return false;
     if(type->is_union) return true;
+    // A user-declared destructor makes the class value non-trivial at the
+    // call boundary even when its storage is only a small scalar aggregate.
+    // Keep the indirect-result ABI so reference-bound prvalues and their
+    // cleanup records retain the same object identity across calls.
+    if(HasDestructor(type)) return true;
     // A materialized class specialization carrying another specialization as
     // a template argument has ABI-sensitive nested object state.  Preserve
     // the indirect-result boundary instead of classifying the outer 16-byte

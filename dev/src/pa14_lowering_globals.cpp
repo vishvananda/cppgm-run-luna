@@ -1,5 +1,4 @@
 #include "pa14_lowering.h"
-
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
@@ -14,13 +13,9 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
-
 using namespace std;
-
 namespace cppgm_pa14_lowering {
-
 namespace {
-
 string NormalizeFloatingLiteral(const string& raw, const TypePtr& target)
 {
     string spelling = raw;
@@ -47,7 +42,6 @@ string NormalizeFloatingLiteral(const string& raw, const TypePtr& target)
     }
     return spelling;
   }
-
 bool FloatingConstantText(Analyzer& analyzer, const CPPGMAstNodePtr& expression,
                           Scope* scope, const TypePtr& target, string* text)
 {
@@ -75,7 +69,6 @@ bool FloatingConstantText(Analyzer& analyzer, const CPPGMAstNodePtr& expression,
     if(text) *text = out.str();
     return true;
   }
-
 bool IntegralConstantValue(Analyzer& analyzer, const CPPGMAstNodePtr& expression,
                            Scope* scope, const TypePtr& target, long long* value)
 {
@@ -93,9 +86,7 @@ bool IntegralConstantValue(Analyzer& analyzer, const CPPGMAstNodePtr& expression
     if(value) *value = PA19Signed(constant.integral);
     return true;
   }
-
 } // namespace
-
 PA14Lowerer::Value PA14Lowerer::ConvertValue(Value value, const TypePtr& target,
                      bool immediate_return, bool adjust_derived_pointer)
 {
@@ -235,7 +226,6 @@ PA14Lowerer::Value PA14Lowerer::ConvertValue(Value value, const TypePtr& target,
     (void)immediate_return;
     return result;
   }
-
 string PA14Lowerer::EmitTruthValue(const Value& value)
 {
     if(!value.type) return value.operand;
@@ -257,7 +247,6 @@ string PA14Lowerer::EmitTruthValue(const Value& value)
     AddInstruction(temp + " = cmp ne " + compare_type + " " + operand + ", " + zero);
     return temp;
   }
-
 string PA14Lowerer::InternString(const string& raw)
 {
     const string core = string_literal_core(raw);
@@ -270,7 +259,6 @@ string PA14Lowerer::InternString(const string& raw)
     string_symbols_[core] = symbol;
     return symbol;
   }
-
 bool PA14Lowerer::FoldInteger(const CPPGMAstNodePtr& node, Scope* scope,
                   long long* result, TypePtr* type)
 {
@@ -391,7 +379,6 @@ bool PA14Lowerer::FoldInteger(const CPPGMAstNodePtr& node, Scope* scope,
 	}
 	return true;
 }
-
 PA14Lowerer::AddressInit PA14Lowerer::StaticAddress(const CPPGMAstNodePtr& expression, Scope* scope)
 {
     AddressInit result;
@@ -461,12 +448,10 @@ PA14Lowerer::AddressInit PA14Lowerer::StaticAddress(const CPPGMAstNodePtr& expre
     }
     return result;
   }
-
 string PA14Lowerer::GlobalMetadata(bool internal) const
 {
     return internal ? " [binding=internal]" : " [binding=strong]";
   }
-
 string PA14Lowerer::GlobalMetadata(const GlobalRecord& global) const
 {
     const string binding = global.weak_binding ? "weak" :
@@ -481,7 +466,6 @@ string PA14Lowerer::GlobalMetadata(const GlobalRecord& global) const
         binding + ", object=" + object + "]";
     return " [binding=" + binding + ", object=" + object + "]";
   }
-
 string PA14Lowerer::RenderStringGlobal(const string& symbol, const string& raw,
                                        const vector<unsigned char>& bytes) const
 {
@@ -496,7 +480,6 @@ string PA14Lowerer::RenderStringGlobal(const string& symbol, const string& raw,
     out << "}";
     return out.str();
   }
-
 string PA14Lowerer::RenderGlobal(GlobalRecord& global)
 {
     TypePtr type = global.type;
@@ -601,7 +584,6 @@ string PA14Lowerer::RenderGlobal(GlobalRecord& global)
       out << "}";
       return out.str();
     }
-
     const string low = storage_type(type);
     out << "global @" << global.symbol << " : " << low << GlobalMetadata(global) << " = ";
     AddressInit address = StaticAddress(expression, global.scope);
@@ -636,12 +618,17 @@ string PA14Lowerer::RenderGlobal(GlobalRecord& global)
     }
     return out.str();
   }
-
 void PA14Lowerer::EmitGlobals(vector<string>& entries, size_t begin, bool include_strings)
 {
-    for(size_t i = begin; i < globals_.size(); ++i) {
+    // Declarations are emitted after function lowering has discovered which
+    // declaration-only globals occur in evaluated expressions.  The initial
+    // pass still renders definitions and string data, but its declarations
+    // must wait; otherwise an unevaluated template probe would be
+    // indistinguishable from a runtime reference at this point.
+    const size_t declaration_begin = include_strings ? globals_.size() : 0;
+    for(size_t i = declaration_begin; i < globals_.size(); ++i) {
       GlobalRecord& global = globals_[i];
-      if(!global.declaration) continue;
+      if(!global.declaration || !global.referenced) continue;
       if(global.type && global.type->kind == TYPE_ARRAY && global.type->bound <= 0)
         continue;
       ostringstream declaration;
@@ -668,7 +655,7 @@ void PA14Lowerer::EmitGlobals(vector<string>& entries, size_t begin, bool includ
     // A thread-local definition also has a TLS address wrapper.  Definitions
     // are rendered below, but the wrapper is a declaration and must precede
     // the rendered global just like the declaration-only case above.
-    for(size_t i = begin; i < globals_.size(); ++i) {
+    for(size_t i = declaration_begin; i < globals_.size(); ++i) {
       GlobalRecord& global = globals_[i];
       if(global.declaration || !global.thread_local_storage) continue;
       const string wrapper = global.symbol + "__tls_wrapper";
@@ -693,7 +680,6 @@ void PA14Lowerer::EmitGlobals(vector<string>& entries, size_t begin, bool includ
     }
     for(size_t i = 0; i < rendered.size(); ++i) entries.push_back(rendered[i]);
   }
-
 void PA14Lowerer::EmitDeclarations(vector<string>& entries)
 {
     for(size_t i = 0; i < functions_.size(); ++i) {
@@ -723,8 +709,9 @@ void PA14Lowerer::EmitDeclarations(vector<string>& entries)
       out << "declare function @" << function.symbol << "(";
       for(size_t p = 0; p < function.type->parameters.size(); ++p) {
         if(p != 0) out << ", ";
+        const size_t source_parameter = function.indirect_result && p > 0 ? p - 1 : p;
         out << "%" << (function.indirect_result && p == 0 ? "ret" :
-          string("arg") + integer_text(static_cast<long long>(p))) << " : " <<
+          string("arg") + integer_text(static_cast<long long>(source_parameter))) << " : " <<
           low_type(function.type->parameters[p]);
         if(type_is_reference(function.type->parameters[p])) out << " [pass=reference]";
         else if(function.indirect_result && p == 0) out << " [pass=indirect_result]";
@@ -741,10 +728,31 @@ void PA14Lowerer::EmitDeclarations(vector<string>& entries)
         metadata.push_back("unwind=may");
       if(function.qualified_name == "__external_runtime____cxa_bad_cast")
         metadata.push_back("unwind=may");
+      if(function.qualified_name == "__external_runtime___Unwind_Resume")
+        metadata.push_back("role=eh_resume");
+      if(function.qualified_name == "__external_runtime____cxa_allocate_exception")
+        metadata.push_back("role=eh_allocate_exception");
+      if(function.qualified_name == "__external_runtime____cxa_begin_catch")
+        metadata.push_back("role=eh_begin_catch");
+      if(function.qualified_name == "__external_runtime____cxa_end_catch")
+        metadata.push_back("role=eh_end_catch");
+      if(function.qualified_name == "__external_runtime____cxa_rethrow")
+        metadata.push_back("role=eh_rethrow");
+      if(function.qualified_name == "__external_runtime____cxa_throw")
+        metadata.push_back("role=eh_throw");
+      if(function.qualified_name == "__external_runtime____gxx_personality_v0")
+        metadata.push_back("role=eh_personality");
       if(function.noreturn) metadata.push_back("return=noreturn");
       if(function.qualified_name == "__external_runtime____dynamic_cast" ||
          function.qualified_name == "__external_runtime____cxa_bad_typeid" ||
-         function.qualified_name == "__external_runtime____cxa_bad_cast")
+         function.qualified_name == "__external_runtime____cxa_bad_cast" ||
+         function.qualified_name == "__external_runtime___Unwind_Resume" ||
+         function.qualified_name == "__external_runtime____cxa_allocate_exception" ||
+         function.qualified_name == "__external_runtime____cxa_begin_catch" ||
+         function.qualified_name == "__external_runtime____cxa_end_catch" ||
+         function.qualified_name == "__external_runtime____cxa_rethrow" ||
+         function.qualified_name == "__external_runtime____cxa_throw" ||
+         function.qualified_name == "__external_runtime____gxx_personality_v0")
         metadata.push_back("linkage=c");
       metadata.push_back(function.weak_binding ? "binding=weak" : "binding=strong");
       const string object = function.qualified_name == "__cxa_pure_virtual" ?
@@ -761,7 +769,6 @@ void PA14Lowerer::EmitDeclarations(vector<string>& entries)
       entries.push_back(out.str());
     }
   }
-
 Scope* PA14Lowerer::FunctionScope() const
 {
     map<const CPPGMAstNode*, Scope*>::const_iterator found =
@@ -779,7 +786,6 @@ Scope* PA14Lowerer::FunctionScope() const
     }
     return function_scope;
   }
-
 PA14Lowerer::VariablePlan* PA14Lowerer::BindPlan(const CPPGMAstNodePtr& declarator)
 {
     if(!declarator) return 0;
@@ -788,7 +794,6 @@ PA14Lowerer::VariablePlan* PA14Lowerer::BindPlan(const CPPGMAstNodePtr& declarat
     state_->environments.back()[found->second->source_name] = found->second;
     return found->second;
   }
-
 void PA14Lowerer::BindSimpleDeclaration(const CPPGMAstNodePtr& node)
 {
     CPPGMAstNodePtr list = ChildOfKind(node, "init-declarator-list");
@@ -797,7 +802,6 @@ void PA14Lowerer::BindSimpleDeclaration(const CPPGMAstNodePtr& node)
       if(list->children[i] && !list->children[i]->children.empty())
         BindPlan(list->children[i]->children[0]);
   }
-
 PA14Lowerer::VariablePlan* PA14Lowerer::BindCondition(const CPPGMAstNodePtr& condition)
 {
     if(!condition || condition->kind != "condition-declaration" || condition->children.size() < 2)
@@ -813,25 +817,20 @@ PA14Lowerer::VariablePlan* PA14Lowerer::BindCondition(const CPPGMAstNodePtr& con
     }
     return variable;
 }
-
 void PA14Lowerer::EnterEnvironment()
 { state_->environments.push_back(map<string, VariablePlan*>()); }
-
 void PA14Lowerer::LeaveEnvironment()
 { state_->environments.pop_back(); }
-
 string PA14Lowerer::emit_load(const string& address, const TypePtr& type)
 {
     const string temp = new_temp();
     AddInstruction(temp + " = load " + low_type(type) + " " + address);
     return temp;
   }
-
 void PA14Lowerer::emit_store(const TypePtr& type, const string& value, const string& storage)
 {
     AddInstruction("store " + low_type(type) + " " + value + ", " + storage);
   }
-
 string PA14Lowerer::local_address(VariablePlan* variable)
 {
     if(!variable) throw logic_error("missing local variable");
@@ -853,15 +852,14 @@ string PA14Lowerer::local_address(VariablePlan* variable)
     AddInstruction(temp + " = addr " + StorageForVariable(*variable));
     return temp;
   }
-
 string PA14Lowerer::global_address(GlobalRecord* global)
 {
     if(!global) throw logic_error("missing global variable");
+    global->referenced = true;
     const string temp = new_temp();
     AddInstruction(temp + " = addr @" + global->symbol);
     return temp;
   }
-
 void PA14Lowerer::EnsureThreadLocalGuard(GlobalRecord* object)
 {
     if(!object || !object->thread_local_storage || !object->dynamic_initializer)
@@ -880,7 +878,6 @@ void PA14Lowerer::EnsureThreadLocalGuard(GlobalRecord* object)
     globals_.push_back(guard);
     global_by_key_[global_key(name)] = &globals_.back();
   }
-
 string PA14Lowerer::function_address(FunctionRecord* function)
 {
     if(!function) throw logic_error("missing function symbol");
@@ -889,7 +886,6 @@ string PA14Lowerer::function_address(FunctionRecord* function)
     AddInstruction(temp + " = addr @" + function->symbol);
     return temp;
   }
-
 string PA14Lowerer::EmitArrayDecay(const CPPGMAstNodePtr& node, Scope* scope)
 {
     ExprInfo info = Infer(node, scope);
@@ -921,7 +917,6 @@ string PA14Lowerer::EmitArrayDecay(const CPPGMAstNodePtr& node, Scope* scope)
     AddInstruction(temp + " = unary decay ptr " + address);
     return temp;
   }
-
 string PA14Lowerer::EmitSubscriptAddress(const CPPGMAstNodePtr& node, Scope* scope)
 {
     if(!node || node->children.size() < 2) throw logic_error("invalid subscript");
@@ -992,7 +987,6 @@ string PA14Lowerer::EmitSubscriptAddress(const CPPGMAstNodePtr& node, Scope* sco
       return text;
     }
   }
-
 string PA14Lowerer::EmitPointerOffset(const CPPGMAstNodePtr& node, Scope* scope)
 {
     ExprInfo left_info = Infer(node->children[0], scope);
@@ -1106,7 +1100,6 @@ string PA14Lowerer::EmitPointerOffset(const CPPGMAstNodePtr& node, Scope* scope)
     AddInstruction(result + " = index i8 " + base + ", " + scaled);
     return result;
   }
-
 string PA14Lowerer::EmitLiteralAddress(const CPPGMAstNodePtr& node)
 {
     const string symbol = InternString(node->value);
@@ -1114,7 +1107,6 @@ string PA14Lowerer::EmitLiteralAddress(const CPPGMAstNodePtr& node)
     AddInstruction(temp + " = addr @" + symbol);
     return temp;
 }
-
 string PA14Lowerer::EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
 {
     if(!node) throw logic_error("missing lvalue"); string initializer_list_address;
@@ -1152,6 +1144,7 @@ string PA14Lowerer::EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
         global = EnsureStaticMemberStorage(binding,
           decltype_form);
       if(global) {
+        global->referenced = true;
         if(type_is_reference(global->type))
           return emit_load("@" + global->symbol,
             PointerTo(Fundamental("char")));
@@ -1199,8 +1192,7 @@ string PA14Lowerer::EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
         return EmitAddress(node->children[0], scope);
       }
     }
-    if(node->kind == "subscript-expression") return EmitSubscriptAddress(node, scope);
-    if(node->kind == "conditional-expression") return EmitConditionalAddress(node, scope);
+    if(node->kind == "subscript-expression") return EmitSubscriptAddress(node, scope); if(node->kind == "conditional-expression") return EmitConditionalAddress(node, scope);
     if(node->kind == "binary-expression" && PA12Operator(node->value) == ",") {
       EmitDiscard(node->children[0], scope);
       return EmitAddress(node->children[1], scope);
@@ -1236,7 +1228,6 @@ string PA14Lowerer::EmitAddress(const CPPGMAstNodePtr& node, Scope* scope)
     if(node->kind == "call-expression") return EmitCallAddress(node, scope);
     throw logic_error("expression is not addressable");
   }
-
 string PA14Lowerer::EmitOperatorAddress(const CPPGMAstNodePtr& node, Scope* scope)
 {
     string name;
@@ -1283,12 +1274,13 @@ string PA14Lowerer::EmitOperatorAddress(const CPPGMAstNodePtr& node, Scope* scop
     }
     throw logic_error("operator result is not addressable");
 }
-
 string PA14Lowerer::EmitCallAddress(const CPPGMAstNodePtr& node, Scope* scope)
 {
     TypePtr constructor_type = node->children.empty() ? TypePtr() :
       ConstructorObjectType(node->children[0], scope);
-    if(constructor_type) return EmitTemporaryObjectAddress(node, scope, "tmpobj");
+    if(constructor_type)
+      return EmitTemporaryObjectAddress(node, scope, "tmpobj",
+        HasDestructor(constructor_type));
     ExprInfo info = Infer(node, scope);
     if(type_is_reference(info.type)) return EmitCall(node, scope).operand;
     TypePtr value_type = expression_value_type(info);
@@ -1310,12 +1302,11 @@ string PA14Lowerer::EmitCallAddress(const CPPGMAstNodePtr& node, Scope* scope)
     }
     throw logic_error("expression is not addressable");
   }
-
 string PA14Lowerer::EmitMemberAddress(const CPPGMAstNodePtr& node, Scope* scope,
                                       bool reference_projection)
 {
     ExprInfo object_info;
-    Binding* member = MemberBinding(node, scope, &object_info);
+	Binding* member = MemberBinding(node, scope, &object_info);
 	if(!member) throw logic_error("unknown member");
     if(member->kind == BIND_FUNCTION) {
       if(member->is_static) {
@@ -1334,36 +1325,12 @@ string PA14Lowerer::EmitMemberAddress(const CPPGMAstNodePtr& node, Scope* scope,
       throw logic_error("member has no layout record");
     const ClassMemberInfo& fact = member->member_owner->class_members[member->member_index];
     const string op = PA12Operator(node->value);
-    string stable_key;
     TypePtr field_type = type_value(fact.type);
-    const bool replay_context = state_ && state_->record &&
-      (state_->record->template_instantiation ||
-       (state_->record->member_owner &&
-        state_->record->member_owner->template_specialization));
-    if(replay_context && op == "." && field_type && field_type->kind == TYPE_CLASS &&
-       !field_type->template_specialization &&
-       !HasDefaultConstructionEffects(field_type) &&
-       !HasExplicitConstructor(field_type)) {
-      function<string(const CPPGMAstNodePtr&)> path = [&](const CPPGMAstNodePtr& value) {
-        if(!value) return string();
-        if(value->kind == "id-expression") return value->value;
-        if(value->kind == "parenthesized-expression" && value->children.size() == 1)
-          return path(value->children[0]);
-        if(value->kind == "member-expression" && value->children.size() >= 2 &&
-           value->children[1]) {
-          const string base_path = path(value->children[0]);
-          return base_path.empty() ? string() : base_path + "." + value->children[1]->value;
-        }
-        return string();
-      };
-      if(!node->children.empty()) {
-        const string base_path = path(node->children[0]);
-        if(!base_path.empty()) stable_key = base_path + "." + member->name;
-      }
-      if(!stable_key.empty() && state_) {
-        map<string, string>::const_iterator cached = state_->stable_member_addresses.find(stable_key);
-        if(cached != state_->stable_member_addresses.end()) return cached->second;
-      }
+    const string stable_key = StableMemberAddressKey(node, member, field_type);
+    if(!stable_key.empty() && state_) {
+      map<string, string>::const_iterator cached =
+        state_->stable_member_addresses.find(stable_key);
+      if(cached != state_->stable_member_addresses.end()) return cached->second;
     }
     string base;
     if(op == "->") {
@@ -1373,9 +1340,28 @@ string PA14Lowerer::EmitMemberAddress(const CPPGMAstNodePtr& node, Scope* scope,
       base = EmitValue(node->children[0], scope).operand;
     } else {
       TypePtr object = expression_value_type(object_info);
+      const size_t object_temporary_mark = state_ ?
+        state_->temporary_objects.size() : 0;
       base = EmitAddress(node->children[0], scope);
       object = type_value(object);
       if(object && object->kind == TYPE_POINTER) object = type_value(object->child);
+      // A class prvalue used as a member object creates a temporary before
+      // the member projection itself.  If this projection is an argument to
+      // an enclosing call, its cleanup region must already cover the field
+      // address/load; leave the typed call context open for EmitChosenCall
+      // to close around that enclosing call.
+      if(state_ && !state_->constructor_unwind_active &&
+         !state_->suppress_constructor_unwind &&
+         !state_->defer_temporary_cleanup &&
+         state_->temporary_objects.size() > object_temporary_mark &&
+         object_info.category == "prvalue") {
+        const vector<FunctionState::TemporaryObject> cleanup =
+          CaptureLiveCleanupObjects();
+        if(!cleanup.empty()) {
+          BeginConstructorUnwind(cleanup, true);
+          state_->pending_call_argument_context = true;
+        }
+      }
     }
     TypePtr object = expression_value_type(object_info);
     if(op == "->") object = object && object->kind == TYPE_POINTER ?
@@ -1430,7 +1416,6 @@ string PA14Lowerer::EmitMemberAddress(const CPPGMAstNodePtr& node, Scope* scope,
     if(!stable_key.empty() && state_) state_->stable_member_addresses[stable_key] = result;
     return result;
 }
-
 string PA14Lowerer::AdjustBaseAddress(const string& base, const TypePtr& raw_derived,
                                       const TypePtr& target,
                                       bool project_base_path)
@@ -1481,5 +1466,4 @@ string PA14Lowerer::AdjustBaseAddress(const string& base, const TypePtr& raw_der
     }
     return adjusted;
   }
-
 } // namespace cppgm_pa14_lowering

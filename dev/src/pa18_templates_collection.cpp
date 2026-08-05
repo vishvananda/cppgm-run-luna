@@ -2,7 +2,6 @@
 #include "pa18_templates_rewrite.h"
 using namespace std;
 namespace pa18_templates_internal {
-
 bool IsTemplateQualifiedIdentifier(const string& raw, size_t identifier_begin)
 {
 	size_t qualifier_end = identifier_begin;
@@ -13,13 +12,11 @@ bool IsTemplateQualifiedIdentifier(const string& raw, size_t identifier_begin)
 	return qualifier_end == 8 ||
 		!IsIdentifierCharacter(raw[qualifier_end - 9]);
 }
-
 bool IsDeletedFunctionDeclaration(const CPPGMAstNodePtr& declaration)
 {
 	const CPPGMAstNodePtr deleted = DescendantOfKind(declaration, "special-initializer");
 	return deleted && RemoveMarker(deleted->value) == "delete";
 }
-
 void PA18TemplateExpander::EnsureTypeDependency(const string& spelling, const string& context,
 		const string& owner)
 	{
@@ -119,7 +116,6 @@ void PA18TemplateExpander::EnsureTypeDependency(const string& spelling, const st
 		for(size_t i = 0; i < node->children.size(); ++i)
 			EnsureDeclarationDependencies(node->children[i], child_context, owner);
 	}
-
 void PA18TemplateExpander::RememberClassPath(const string& path)
 {
 	if(path.empty()) return;
@@ -129,7 +125,6 @@ void PA18TemplateExpander::RememberClassPath(const string& path)
 	vector<string>& paths = class_paths_by_name_[name];
 	if(find(paths.begin(), paths.end(), path) == paths.end()) paths.push_back(path);
 }
-
 void PA18TemplateExpander::EnsureForwardClass(const string& spelling,
 	const string& context, const string& owner)
 {
@@ -223,7 +218,6 @@ void PA18TemplateExpander::EnsureForwardClass(const string& spelling,
 	else
 		generated_by_owner_[owner].push_back(forward);
 }
-
 bool LooksLikeRelationalLessThan(const string& raw, size_t position)
 {
 	if(position >= raw.size()) return false;
@@ -281,7 +275,6 @@ bool LooksLikeRelationalLessThan(const string& raw, size_t position)
 	}
 	return angle != 0;
 }
-
 string PA18TemplateExpander::QualifyAliasTarget(const string& target,
 	const string& alias) const
 {
@@ -297,7 +290,6 @@ string PA18TemplateExpander::QualifyAliasTarget(const string& target,
 		class_declarations_.find(qualified_target) != class_declarations_.end();
 	return typed_target ? JoinPath(owner, target) : target;
 }
-
 bool HasFriendSpecifier(const CPPGMAstNodePtr& node)
 {
 	if(!node) return false;
@@ -307,7 +299,6 @@ bool HasFriendSpecifier(const CPPGMAstNodePtr& node)
 		if(HasFriendSpecifier(node->children[i])) return true;
 	return false;
 }
-
 void PA18TemplateExpander::IndexUsingDirectiveDefinition(
 	const TemplateDefinition& definition)
 {
@@ -332,12 +323,10 @@ void PA18TemplateExpander::IndexUsingDirectiveDefinition(
 		component_begin = visible_begin;
 	}
 }
-
 string PA18TemplateExpander::GeneratedOwner(const TemplateDefinition& definition) const
 {
 	return definition.lexical_owner.empty() ? definition.owner : definition.lexical_owner;
 }
-
 void PA18TemplateExpander::ResolveUsingDeclarationTargets()
 {
 	using_declaration_targets_.clear();
@@ -411,7 +400,6 @@ void PA18TemplateExpander::ResolveUsingDeclarationTargets()
 	}
 	pending_using_declarations_.clear();
 }
-
 bool PA18TemplateExpander::HasUsingMemberTemplate(const string& context,
 	const string& member) const
 {
@@ -440,7 +428,6 @@ bool PA18TemplateExpander::HasUsingMemberTemplate(const string& context,
 	}
 	return false;
 }
-
 bool PA18TemplateExpander::PreserveInlineGeneratedOrder(
 	const vector<CPPGMAstNodePtr>& generated_classes, const string& owner) const
 {
@@ -464,7 +451,6 @@ bool PA18TemplateExpander::PreserveInlineGeneratedOrder(
 	}
 	return true;
 }
-
 bool PA18TemplateExpander::HasInlineTemplateCandidate(
 	const vector<const TemplateDefinition*>& definitions, const string& context) const
 {
@@ -483,7 +469,6 @@ bool PA18TemplateExpander::HasInlineTemplateCandidate(
 	}
 	return false;
 }
-
 string NormalizeTypeArgument(string raw)
 {
 	raw = CanonicalSpelling(raw);
@@ -576,7 +561,6 @@ string NormalizeTypeArgument(string raw)
 	}
 	return CanonicalSpelling(raw);
 }
-
 string PA18ExplicitSpecializationKey(const string& qualified_name,
 	const vector<string>& arguments)
 {
@@ -594,7 +578,6 @@ string PA18ExplicitSpecializationKey(const string& qualified_name,
 	}
 	return result;
 }
-
 vector<string> SplitTemplateArguments(const string& raw)
 {
 	vector<string> result;
@@ -666,7 +649,6 @@ vector<string> SplitTemplateArguments(const string& raw)
 	if(result.size() == 1 && result[0].empty()) result.clear();
 	return result;
 }
-
 string PreservePackSubstitution(const string& word, const string& replacement,
 	bool pack_operand)
 {
@@ -677,7 +659,6 @@ string PreservePackSubstitution(const string& word, const string& replacement,
 		return replacement.substr(0, replacement.size() - 3);
 	return word;
 }
-
 string ReplaceIdentifiersPreservingPackSizes(const string& raw,
 	const map<string, string>& substitutions)
 {
@@ -796,7 +777,6 @@ string ReplaceIdentifiersPreservingPackSizes(const string& raw,
 	result += replace_segment(raw.substr(cursor));
 	return result;
 }
-
 void PA18TemplateExpander::IndexConstantMembers(const CPPGMAstNodePtr& node,
 	const string& owner)
 {
@@ -823,7 +803,6 @@ void PA18TemplateExpander::IndexConstantMembers(const CPPGMAstNodePtr& node,
 		}
 	}
 }
-
 bool HasDeclarationSpecifier(const CPPGMAstNodePtr& node, const string& wanted)
 {
 	if(!node) return false;
@@ -834,7 +813,6 @@ bool HasDeclarationSpecifier(const CPPGMAstNodePtr& node, const string& wanted)
 		if(HasDeclarationSpecifier(node->children[child], wanted)) return true;
 	return false;
 }
-
 void PA18TemplateExpander::IndexDependentMemberTypeNodes(
 	const CPPGMAstNodePtr& node, vector<CPPGMAstNodePtr>& nodes,
 	vector<CPPGMAstNodePtr>& type_nodes) const
@@ -853,7 +831,6 @@ void PA18TemplateExpander::IndexDependentMemberTypeNodes(
 	for(size_t child = 0; child < node->children.size(); ++child)
 		IndexDependentMemberTypeNodes(node->children[child], nodes, type_nodes);
 }
-
 void PA18TemplateExpander::SetActiveConcreteOwner(const string& owner,
 	const string& context)
 {
@@ -869,7 +846,6 @@ void PA18TemplateExpander::SetActiveConcreteOwner(const string& owner,
 	if(arguments != specialization_arguments_.end())
 		active_concrete_owner_.arguments = arguments->second;
 }
-
 ClassSpecializationIdentity PA18TemplateExpander::MakeClassSpecializationIdentity(
 	const TemplateDefinition& definition, const vector<string>& arguments,
 	const string& context) const
@@ -884,7 +860,6 @@ ClassSpecializationIdentity PA18TemplateExpander::MakeClassSpecializationIdentit
 			CanonicalSpelling(arguments[argument])));
 	return ClassSpecializationIdentity(primary, canonical_arguments);
 }
-
 void PA18TemplateExpander::IndexStaticMembers(const CPPGMAstNodePtr& node,
 	set<string>& members) const
 {
@@ -955,7 +930,6 @@ vector<CPPGMAstNodePtr> PA18TemplateExpander::Run(
 	}
 	return result;
 }
-
 string PA18TemplateExpander::StripTemplateArgumentsForValidation(
 	const string& raw) const
 {
@@ -968,7 +942,6 @@ string PA18TemplateExpander::StripTemplateArgumentsForValidation(
 	}
 	return result;
 }
-
 bool PA18TemplateExpander::ValidationHasNoexcept(
 	const CPPGMAstNodePtr& node) const
 {
@@ -978,7 +951,6 @@ bool PA18TemplateExpander::ValidationHasNoexcept(
 		if(ValidationHasNoexcept(node->children[i])) return true;
 	return false;
 }
-
 void PA18TemplateExpander::CollectValidationNames(
 	const CPPGMAstNodePtr& node, set<string>& names) const
 {
@@ -1013,7 +985,6 @@ void PA18TemplateExpander::CollectValidationNames(
 	for(size_t i = 0; i < node->children.size(); ++i)
 		CollectValidationNames(node->children[i], names);
 }
-
 bool PA18TemplateExpander::ValidationDependentName(const string& raw,
 	const set<string>& parameters) const
 {
@@ -1035,7 +1006,6 @@ bool PA18TemplateExpander::ValidationDependentName(const string& raw,
 	}
 	return parameters.find(raw) != parameters.end();
 }
-
 bool ValidationBuiltinTypeName(const string& raw)
 {
 	const string value = RemoveMarker(raw);
@@ -1045,7 +1015,6 @@ bool ValidationBuiltinTypeName(const string& raw)
 		value == "signed" || value == "unsigned" || value == "void" ||
 		value == "wchar_t";
 }
-
 string ValidationTopLevelPrefix(const string& raw)
 {
 	int angle_depth = 0;
@@ -1060,7 +1029,6 @@ string ValidationTopLevelPrefix(const string& raw)
 	}
 	return separator == string::npos ? string() : raw.substr(0, separator);
 }
-
 void PA18TemplateExpander::ValidateTemplateNode(const CPPGMAstNodePtr& node,
 	const set<string>& parameters, const set<string>& known_names,
 	const string& current_class, bool in_function,
@@ -1153,7 +1121,6 @@ void PA18TemplateExpander::ValidateTemplateNode(const CPPGMAstNodePtr& node,
 		ValidateTemplateNode(node->children[i], parameters, known_names,
 			next_class, in_function || function_node, special_members, node, i);
 }
-
 void PA18TemplateExpander::ValidateDependentMemberTemplateNode(
 	const CPPGMAstNodePtr& node, const set<string>& parameters,
 	const map<string, string>& variables) const
@@ -1200,7 +1167,6 @@ void PA18TemplateExpander::ValidateDependentMemberTemplateNode(
 		ValidateDependentMemberTemplateNode(node->children[i], local_parameters,
 			local_variables);
 }
-
 void PA18TemplateExpander::ValidateTemplateDiagnostics(
 	const vector<CPPGMAstNodePtr>& input) const
 {
@@ -1210,7 +1176,6 @@ void PA18TemplateExpander::ValidateTemplateDiagnostics(
 	for(size_t i = 0; i < input.size(); ++i)
 		ValidateTemplateDiagnosticsNode(input[i], known_names, special_members);
 }
-
 void PA18TemplateExpander::ValidateTemplateDiagnosticsNode(
 	const CPPGMAstNodePtr& node, const set<string>& known_names,
 	map<string, bool>& special_members) const
@@ -1229,7 +1194,6 @@ void PA18TemplateExpander::ValidateTemplateDiagnosticsNode(
 	for(size_t i = 0; i < node->children.size(); ++i)
 		ValidateTemplateDiagnosticsNode(node->children[i], known_names, special_members);
 }
-
 bool PA18TemplateExpander::FindLogicalNamespaceAlias(const string& spelling,
 	string* alias_key) const
 {
@@ -1237,10 +1201,13 @@ bool PA18TemplateExpander::FindLogicalNamespaceAlias(const string& spelling,
 	if(!alias_key || separator == string::npos) return false;
 	const string logical_owner = spelling.substr(0, separator);
 	const string logical_name = spelling.substr(separator + 2);
+	map<string, vector<string> >::const_iterator indexed =
+		type_aliases_by_name_.find(logical_name);
+	if(indexed == type_aliases_by_name_.end()) return false;
 	map<string, string>::const_iterator match = type_aliases_.end();
-	for(map<string, string>::const_iterator it = type_aliases_.begin();
-		it != type_aliases_.end(); ++it) {
-		if(LastComponent(it->first) != logical_name) continue;
+	for(size_t candidate = 0; candidate < indexed->second.size(); ++candidate) {
+		map<string, string>::const_iterator it = type_aliases_.find(indexed->second[candidate]);
+		if(it == type_aliases_.end()) continue;
 		const string physical_owner = PrefixComponent(it->first);
 		map<string, string>::const_iterator logical =
 			lexical_namespace_logical_.find(physical_owner);
@@ -1253,7 +1220,6 @@ bool PA18TemplateExpander::FindLogicalNamespaceAlias(const string& spelling,
 	*alias_key = match->first;
 	return true;
 }
-
 bool PA18TemplateExpander::IsArrayTypeAlias(const string& alias_name,
 	const string& context) const
 {
@@ -1269,7 +1235,6 @@ bool PA18TemplateExpander::IsArrayTypeAlias(const string& alias_name,
 	}
 	return false;
 }
-
 bool PA18TemplateExpander::HasPackBeforeFixed(const TemplateDefinition& definition) const
 {
 	for(size_t parameter = 0; parameter < definition.parameters.size(); ++parameter)
@@ -1278,7 +1243,6 @@ bool PA18TemplateExpander::HasPackBeforeFixed(const TemplateDefinition& definiti
 				if(!definition.parameters[later].pack) return true;
 	return false;
 }
-
 bool PA18TemplateExpander::ResolveGeneratedMemberAlias(const string& class_key,
 	const string& member, const string& context, string* member_type) const
 {
@@ -1308,7 +1272,6 @@ bool PA18TemplateExpander::ResolveGeneratedMemberAlias(const string& class_key,
 	}
 	return found;
 }
-
 bool PA18TemplateExpander::ResolveContextMemberAlias(const string& class_key,
 	const string& member, const string& context, string* member_type) const
 {
@@ -1320,12 +1283,12 @@ bool PA18TemplateExpander::ResolveContextMemberAlias(const string& class_key,
 	}
 	return member_type && !member_type->empty();
 }
-
 string PA18TemplateExpander::ResolveAlias(string spelling, const string& context) const
 {
-	const bool reference_alias_specialization =
-		reference_alias_specializations_.find(LastComponent(spelling)) !=
-		reference_alias_specializations_.end();
+	const string alias_guard_key = CanonicalSpelling(spelling) + "\n" + context;
+	if(!active_alias_resolutions_.insert(alias_guard_key).second) return spelling;
+	struct AliasResolutionScope { set<string>* active; string key; AliasResolutionScope(set<string>* values, const string& name) : active(values), key(name) {} ~AliasResolutionScope() { active->erase(key); } } alias_resolution_scope(&active_alias_resolutions_, alias_guard_key);
+	const bool reference_alias_specialization = reference_alias_specializations_.find(LastComponent(spelling)) != reference_alias_specializations_.end();
 	spelling = CanonicalSpelling(spelling);
 	string cv_prefix;
 	bool resolved_reference_alias = false;
@@ -1439,7 +1402,6 @@ string PA18TemplateExpander::ResolveAlias(string spelling, const string& context
 	}
 	return CanonicalSpelling(cv_prefix + spelling + suffix + array_suffix);
 }
-
 bool PA18TemplateExpander::ContainsName(const CPPGMAstNodePtr& node,
 	const string& name) const
 {
@@ -1451,7 +1413,6 @@ bool PA18TemplateExpander::ContainsName(const CPPGMAstNodePtr& node,
 		if(ContainsName(node->children[i], name)) return true;
 	return false;
 }
-
 CPPGMAstNodePtr PA18TemplateExpander::FunctionParameter(
 	const CPPGMAstNodePtr& original, const FunctionSignature& signature) const
 {
@@ -1487,7 +1448,6 @@ CPPGMAstNodePtr PA18TemplateExpander::FunctionParameter(
 	result->children.push_back(declarator);
 	return result;
 }
-
 CPPGMAstNodePtr PA18TemplateExpander::MakeForwardClass(const string& name) const
 {
 	CPPGMAstNodePtr result(new CPPGMAstNode("class-forward-declaration", name));
@@ -1495,5 +1455,4 @@ CPPGMAstNodePtr PA18TemplateExpander::MakeForwardClass(const string& name) const
 		new CPPGMAstNode("class-key", "KW_STRUCT:struct")));
 	return result;
 }
-
 } // namespace pa18_templates_internal

@@ -84,3 +84,86 @@ The preceding run reached 2598/2600 with two different timeout-only failures
 (PA2 hard string concatenation and PA3 triple).  No tests or reference files
 were changed; the gate remains the external validation item to rerun when
 resource conditions are stable.
+
+## Turn 135 failure audit and checkpoint scope
+
+The fresh PA25-local report is 46/69, with the complete 23-test failure set
+grouped as follows:
+
+- **Source exception front-end/lowering status (8):** source rethrow and
+  try/catch, class-template move-constructor throw, lambda/`decltype` EH
+  fallback, parenthesized throw, base-reference catch, catch ellipsis, and
+  a missed inner catch that must clean an outer scope.
+- **Hidden EH and temporary cleanup (13):** cross-function unwind-cache
+  reset; condition-call, conditional-expression, const-reference-bound,
+  protected-base, nested/default-argument, managed-argument,
+  reference-prvalue, shared-dispatch, short-circuit, shared-call hidden
+  temporary, and polymorphic array-reference cleanup cases.
+- **Template lambda replay (1):** distinct closure types from separate
+  member-template instantiations have a LowIR helper-number/shape mismatch.
+- **Indirect parameter ABI (1):** aggregate indirect-parameter prologue copy
+  differs from the required LowIR.
+
+The checkpoint scope is the hidden EH/temporary group: make temporary-lifetime
+marks and unwind-cache closure explicit in the typed lowering state, preserve
+cleanup actions on normal and exceptional exits (including short-circuit and
+shared dispatch paths), and validate the 13 grouped cases plus the through-PA24
+gate.  The next group after this checkpoint is source exception parsing/status,
+followed by the remaining lambda replay and indirect-parameter ABI cases.
+
+## Current turn checkpoint
+
+The turn-start baseline for this implementation was 46/69 PA25 tests.  The
+complete failure set was regrouped after the hidden cleanup work and the
+source-exception increment.
+
+### Remaining Work Map
+
+- **Protected-destructor negative semantic check (1):** throwing a class with
+  an inaccessible destructor must be rejected.
+- **Lambda replay (2):** distinct member-template closure types and the
+  function-template `lambda`/`decltype` EH fallback still differ in LowIR.
+- **Indirect class-parameter ABI (1):** the prologue copy fixture still has a
+  LowIR mismatch.
+- **Template-array polymorphic cleanup (1):** the fixture still times out.
+
+### Completed Checkpoint Scope
+
+This increment covers typed source exception lowering for `try`/`catch`,
+rethrow, ellipsis and base-reference matching, parenthesized throw
+expressions, class-template exception-object construction, exception RTTI and
+ABI globals, and nested outer-scope cleanup.  It also preserves the complete
+hidden EH/temporary-cleanup group, including default arguments, conditions,
+short-circuit paths, reference-bound prvalues, and shared unwind dispatch.
+
+Validation: the current PA25 report is 64/69, up from 46/69; all direct source
+exception fixtures and all focused hidden-cleanup fixtures pass.  The next
+checkpoint is the protected-destructor diagnostic plus the two remaining
+lambda/EH replay cases, then the indirect ABI and timeout investigation.
+
+## Final checkpoint: PA25 full-stage implementation
+
+Turn-start baseline: 46/69 PA25 tests.  The remaining work map at the start
+of this checkpoint was grouped into source exception status, hidden temporary
+and EH cleanup, template lambda replay, indirect class-parameter ABI, and the
+polymorphic template-array cleanup case.
+
+### Checkpoint Scope
+
+This checkpoint completes the typed PA25 source-exception, RTTI, temporary
+lifetime, constructor-unwind, reference-bound-prvalue, conditional and
+short-circuit cleanup, shared-dispatch, initializer-list, lambda-closure,
+object-transfer, template replay, and indirect-result lowering behavior.  It
+also splits object transfer into responsibility-specific methods so the
+implementation remains auditable without changing its semantic paths.
+
+### Result
+
+- Exact `make test-report ACTIVE_TEST_REPORT_PAS='pa25'`: **69/69 passed**.
+- File audit: passed with repository warnings; no fatal findings.
+- The exact through-PA24 retry reached **2599/2600**; its sole failure was the
+  pre-existing PA22 `400-enum-nttp-cstyle-cast-default-rebind` timeout.  The
+  clean starting revision reproduces that timeout, so no PA25 change is
+  implicated and no test or reference fixture was changed.
+- The complete PA25 failure set is now empty.  The next checkpoint is PA26;
+  the earlier PA22 timeout remains an external prior-stage follow-up.

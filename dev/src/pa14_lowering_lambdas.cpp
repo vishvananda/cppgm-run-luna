@@ -69,6 +69,10 @@ string LambdaParameterName(const CPPGMAstNodePtr& parameter, size_t index)
 string PA14Lowerer::LambdaClosureName(const CPPGMAstNodePtr& lambda) const
 {
   if(!lambda) return string();
+  if(!lambda->inferred_type.empty() &&
+     lambda_closure_types_.find(lambda->inferred_type) !=
+       lambda_closure_types_.end())
+    return lambda->inferred_type;
   const pair<size_t, size_t> span(lambda->source_token_begin,
     lambda->source_token_end);
   map<pair<size_t, size_t>, string>::const_iterator found =

@@ -8,7 +8,6 @@
 #include <string>
 #include <vector>
 #include "pa12_semantics_support.h"
-
 namespace cppgm_pa14_lowering {
 using namespace std;
 // Constructor lookup is also used as a conversion probe.  Keep the ordinary
@@ -20,7 +19,6 @@ class PA14NoViableConstructor : public logic_error
 public:
   explicit PA14NoViableConstructor(const string& message) : logic_error(message) {}
 };
-
 string trim_type_name(const string& name);
 bool type_is_reference(const TypePtr& type);
 TypePtr type_value(const TypePtr& type);
@@ -54,7 +52,6 @@ class PA14Lowerer
     bool null_pointer_constant;
     bool known_constant;
     long long constant;
-
     ExprInfo()
       : type(), category("prvalue"), binding(), candidates(),
         null_pointer_constant(false), known_constant(false), constant(0) {}
@@ -64,7 +61,6 @@ class PA14Lowerer
     CPPGMAstNodePtr node;
     Scope* scope;
     ExprInfo info;
-
     InferCacheEntry(const CPPGMAstNodePtr& cached_node = CPPGMAstNodePtr(),
                     Scope* cached_scope = 0, const ExprInfo& cached_info = ExprInfo())
       : node(cached_node), scope(cached_scope), info(cached_info) {}
@@ -133,7 +129,6 @@ class PA14Lowerer
     vector<bool> indirect_parameters;
     CPPGMAstNodePtr special_initializer;
     vector<CPPGMAstNodePtr> default_arguments;
-
     FunctionRecord()
       : node(), scope(), type(), source_type(), member_owner(), qualified_name(),
         symbol(), definition(false), member(false), static_member(false),
@@ -170,6 +165,7 @@ class PA14Lowerer
 	bool weak_binding;
     CPPGMAstNodePtr initializer;
     bool declaration;
+    bool referenced;
     bool internal;
     bool local_static;
     bool local_static_guard;
@@ -181,11 +177,10 @@ class PA14Lowerer
     // their typed constructor closure still has to be materialized after all
     // replayed class members have been collected.
     bool demand_constant_constructors;
-
     GlobalRecord()
       : node(), scope(), type(), qualified_name(), symbol(), object_name(), template_owner(),
         template_instantiation(false), explicit_specialization(false), weak_binding(false), initializer(),
-        declaration(false), internal(false), local_static(false), local_static_guard(false),
+        declaration(false), referenced(false), internal(false), local_static(false), local_static_guard(false),
         thread_local_storage(false), tls_guard(false),
         dynamic_initializer(false), dynamic_finalizer(false),
         demand_constant_constructors(false) {}
@@ -213,12 +208,10 @@ class PA14Lowerer
     bool array;
     bool known_constant;
     long long constant;
-
     Value()
       : type(), operand(), lvalue(false), function(false), array(false),
         known_constant(false), constant(0) {}
   };
-
   struct CallChoice
   {
     Binding* binding;
@@ -237,7 +230,6 @@ class PA14Lowerer
 	int user_defined;
     int worst;
     int total;
-
     CallChoice()
       : binding(), function(), object(), direct(false), member(false),
 		static_member(false), conversion(false), project_base_path(false),
@@ -245,17 +237,14 @@ class PA14Lowerer
 		virtual_slot(0), virtual_owner(), user_defined(1000000),
         worst(1000000), total(1000000) {}
   };
-
   struct Block
   {
     string label;
     vector<string> lines;
     bool terminated;
-
     explicit Block(const string& block_label = string())
       : label(block_label), lines(), terminated(false) {}
   };
-
   struct FunctionState
   {
     struct SlotEntry
@@ -263,22 +252,45 @@ class PA14Lowerer
       bool special;
       string name;
       VariablePlan* variable;
-
       SlotEntry(bool is_special = false, const string& slot_name = string(),
                 VariablePlan* slot_variable = 0)
         : special(is_special), name(slot_name), variable(slot_variable) {}
     };
-
     struct TemporaryObject
     {
       TypePtr type;
       string address;
-
+      bool force_empty;
+      bool construction_unwind_no;
+      VariablePlan* variable;
       TemporaryObject(const TypePtr& object_type = TypePtr(),
-                      const string& object_address = string())
-        : type(object_type), address(object_address) {}
+                      const string& object_address = string(),
+                      bool force_destructor = false,
+                      bool construction_no_throw = false,
+                      VariablePlan* live_variable = 0)
+        : type(object_type), address(object_address), force_empty(force_destructor),
+          construction_unwind_no(construction_no_throw), variable(live_variable) {}
     };
-
+    struct UnwindDispatchCacheEntry
+    {
+      vector<TemporaryObject> cleanup;
+      string dispatch;
+      UnwindDispatchCacheEntry(const vector<TemporaryObject>& objects = vector<TemporaryObject>(),
+                               const string& label = string())
+        : cleanup(objects), dispatch(label) {}
+    };
+    struct ExceptionRoute
+    {
+      TypePtr type;
+      bool ellipsis;
+      unsigned int selector;
+      string entry;
+      ExceptionRoute(const TypePtr& exception_type = TypePtr(),
+                     bool catch_all = false, unsigned int route_selector = 0,
+                     const string& entry_label = string())
+        : type(exception_type), ellipsis(catch_all), selector(route_selector),
+          entry(entry_label) {}
+    };
     PA14Lowerer* owner;
     FunctionRecord* record;
     deque<VariablePlan> variables;
@@ -287,6 +299,7 @@ class PA14Lowerer
     map<string, string> special_slot_types;
     vector<SlotEntry> slot_order;
     vector<TemporaryObject> temporary_objects;
+    vector<UnwindDispatchCacheEntry> unwind_dispatch_cache;
     vector<Block> blocks;
     Block* current;
     unsigned int next_temp;
@@ -305,25 +318,80 @@ class PA14Lowerer
     vector<string> switch_end_targets;
     vector<string> break_targets;
     vector<string> continue_targets;
-	    bool unevaluated_context;
-
+    bool unevaluated_context;
+    bool defer_temporary_cleanup;
+    bool defer_call_unwind_completion;
+    bool pending_call_unwind;
+    vector<TemporaryObject> pending_call_cleanup;
+    string pending_call_unwind_dispatch;
+    string pending_call_unwind_end;
+    bool constructor_unwind_active;
+    bool constructor_unwind_call;
+    bool constructor_unwind_shared_dispatch;
+    vector<TemporaryObject> constructor_unwind_cleanup;
+    string constructor_unwind_dispatch;
+    string constructor_unwind_end;
+    bool pending_constructor_unwind_start;
+    bool pending_constructor_unwind_suppress_temporary;
+    string pending_constructor_unwind_dispatch;
+    string pending_constructor_unwind_end;
+    bool pending_reference_unwind_start;
+    string pending_reference_unwind_dispatch;
+    string pending_reference_unwind_end;
+    bool pending_call_argument_context;
+    // A multi-object call argument sequence keeps its outer unwind region
+    // open while indirect-result class arguments are materialized.  This is
+    // distinct from the pending bit: the latter says that the current call
+    // owns the region, while this bit says nested result calls must not close
+    // it before the enclosing call itself is emitted.
+    bool preserve_call_argument_context;
+    // A nested default/reference temporary can share the enclosing constructor
+    // call's EH region after its storage address is formed.
+    bool defer_constructor_unwind_finish;
+    unsigned int condition_cleanup_depth;
+    bool temporary_construction;
+    bool suppress_constructor_unwind;
+    VariablePlan* constructing_variable;
+    vector<ExceptionRoute> exception_routes;
+    unsigned int next_exception_selector;
+    unsigned int exception_try_depth;
+    bool exception_handler_active;
+    bool exception_handler_rethrow;
     FunctionState(PA14Lowerer* lowerer, FunctionRecord* function)
       : owner(lowerer), record(function), variables(), plans(), special_slots(),
-        special_slot_types(), slot_order(), temporary_objects(), blocks(), current(), next_temp(1), next_label(1),
+        special_slot_types(), slot_order(), temporary_objects(), unwind_dispatch_cache(), blocks(), current(), next_temp(1), next_label(1),
         next_special(1), environments(), return_slot_plan(0), return_object_slot(),
         variable_name_counts(),
         reserved_value_names(), stable_member_addresses(), aggregate_precomputed_values(),
         case_labels(), emitted_cases(), named_labels(),
         switch_end_targets(), break_targets(), continue_targets(),
-        unevaluated_context(false) {}
+        unevaluated_context(false), defer_temporary_cleanup(false),
+        defer_call_unwind_completion(false), pending_call_unwind(false),
+        pending_call_cleanup(), pending_call_unwind_dispatch(),
+        pending_call_unwind_end(), constructor_unwind_active(false),
+        constructor_unwind_call(false), constructor_unwind_shared_dispatch(false),
+        constructor_unwind_cleanup(),
+        constructor_unwind_dispatch(), constructor_unwind_end(),
+        pending_constructor_unwind_start(false),
+        pending_constructor_unwind_suppress_temporary(false),
+        pending_constructor_unwind_dispatch(), pending_constructor_unwind_end(),
+        pending_reference_unwind_start(false), pending_reference_unwind_dispatch(),
+        pending_reference_unwind_end(),
+        pending_call_argument_context(false),
+        preserve_call_argument_context(false),
+        defer_constructor_unwind_finish(false),
+        condition_cleanup_depth(0), temporary_construction(false),
+        suppress_constructor_unwind(false), constructing_variable(0),
+        exception_routes(), next_exception_selector(1),
+        exception_try_depth(0),
+        exception_handler_active(false),
+        exception_handler_rethrow(false) {}
   };
-
   struct GlobalDataItem
   {
     string text;
     explicit GlobalDataItem(const string& value = string()) : text(value) {}
   };
-
   vector<CPPGMAstNodePtr> trees_;
   CPPGMAstNodePtr program_;
   Analyzer analyzer_;
@@ -353,6 +421,8 @@ class PA14Lowerer
 	set<const Type*> external_vtables_;
 	set<const Type*> emitted_rtti_;
 	map<string, TypePtr> demanded_rtti_types_;
+	map<string, TypePtr> demanded_exception_types_;
+	map<string, TypePtr> demanded_thrown_types_;
 	bool has_rtti_syntax_;
 	map<string, vector<TypePtr> > class_types_by_name_;
 	FunctionState* state_;
@@ -372,52 +442,37 @@ class PA14Lowerer
 	void EmitNestedRootOperations(vector<string>& entries);
 	void EmitOrdinaryAndHiddenRoots(vector<string>& entries);
 	void EmitNeededOrdinary(vector<string>& entries);
-	vector<size_t> MemberEmissionOrder() const;
-	void EmitMemberPass(vector<string>& entries);
+vector<size_t> MemberEmissionOrder() const;
+void OrderLambdaMembers(vector<size_t>& order) const;
+void EmitMemberPass(vector<string>& entries);
 	void EmitFinalEntries(vector<string>& entries, ostream& out,
 		size_t initial_global_count);
 	void MarkFunctionNeeded(FunctionRecord* function);
-
 public:
 explicit PA14Lowerer(const vector<CPPGMAstNodePtr>& trees)
 ;
-
 void Lower(ostream& out);
-
 private:
 static string function_key(const string& name, const TypePtr& type);
-
 static string global_key(const string& name);
-
 string low_type(const TypePtr& raw) const;
-
 size_t type_size(const TypePtr& type) const;
-
 size_t type_alignment(const TypePtr& type) const;
-
 string storage_type(const TypePtr& type) const;
-
 string qualified_name(Scope* scope, const string& raw) const;
-
 string TypeQualifiedName(const TypePtr& type) const;
-
 TypePtr ResolveClassOwner(Scope* scope, const string& raw) const;
-
 string declarator_name(const CPPGMAstNodePtr& node) const;
-
 TypePtr declared_type(const CPPGMAstNodePtr& node, Scope* scope,
                      Analyzer::SpecFacts* facts = 0);
-
 TypePtr function_type(const TypePtr& raw) const;
-
   void CollectTopLevel(const CPPGMAstNodePtr& node, Scope* scope);
-
 void InstallBuiltins();
-
+void RegisterBuiltin(const char* name, const TypePtr& type, const char* effects,
+                     const char* object_name, bool noreturn,
+                     const char* first_parameter, const char* second_parameter);
 bool HasNoexcept(const CPPGMAstNodePtr& node) const;
-
 bool HasInline(const CPPGMAstNodePtr& node) const;
-
   void CollectClassMembers(const CPPGMAstNodePtr& node, Scope* scope);
   void CollectClassStaticMember(const CPPGMAstNodePtr& child,
                                 const CPPGMAstNodePtr& item,
@@ -425,85 +480,61 @@ bool HasInline(const CPPGMAstNodePtr& node) const;
                                 const Analyzer::SpecFacts& facts,
                                 const TypePtr& member_type,
                                 const string& name);
-
 void BindClassMember(Binding* binding, bool is_static, const TypePtr& owner) const;
-
 void CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, bool definition);
-
 void ResolveAutoFunctionReturns();
-
 void ResolveAutoFunctionReturn(FunctionRecord& function);
-
 TypePtr DeduceAutoFunctionReturn(FunctionRecord& function,
                                  const TypePtr& source_function,
                                  const CPPGMAstNodePtr& body,
                                  const vector<CPPGMAstNodePtr>& returns);
-
 void ApplyAutoFunctionReturn(FunctionRecord& function,
                              const TypePtr& old_source,
                              const TypePtr& source_function,
                              const TypePtr& result_type);
-
 void CollectLocalStatics(const CPPGMAstNodePtr& node, Scope* scope,
                          const string& function_name,
                          bool template_function_context = false);
-
   void CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope,
                             bool definition, bool out_of_class_member);
-
 void MarkHiddenFriendDependencies();
-
 void MarkHiddenFriendDependencyNodes(const CPPGMAstNodePtr& node, Scope* scope);
-
 void CollectInheritedConstructors(const TypePtr& owner, Scope* scope);
-
 void EnsureConstructorBaseEntry(FunctionRecord* function);
-
 void CollectImplicitConstructor(const TypePtr& owner, Scope* scope,
                                 bool force = false);
-
 void CollectImplicitDestructor(const TypePtr& owner, Scope* scope);
-
 void RememberDefaults(FunctionRecord* record, const CPPGMAstNodePtr& declarator);
-
 void CollectSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* scope);
 void CollectSimpleDeclarationItem(const CPPGMAstNodePtr& node, Scope* scope,
                                   const Analyzer::SpecFacts& facts,
                                   const CPPGMAstNodePtr& item);
-
 void CollectGlobalDeclaration(const CPPGMAstNodePtr& node, Scope* scope,
                               const Analyzer::SpecFacts& facts,
                               const CPPGMAstNodePtr& item,
                               const CPPGMAstNodePtr& initializer,
                               const string& name, const TypePtr& type);
-
 void DemandConstantObjectConstructors(const TypePtr& type,
                                       const CPPGMAstNodePtr& initializer,
                                       Scope* scope = 0);
-
 bool PrepareGlobalDeclaration(const CPPGMAstNodePtr& node, Scope* scope,
                               const Analyzer::SpecFacts& facts,
                               const CPPGMAstNodePtr& initializer,
                               const string& name, const TypePtr& type,
                               GlobalRecord* record);
-
 void StoreGlobalDeclaration(GlobalRecord& record, const TypePtr& record_value);
-
 bool HasStorageSpecifier(const CPPGMAstNodePtr& node, const string& word) const;
-
 void FinalizeSymbols();
-
 string TemplateFunctionObjectName(const FunctionRecord& function) const;
-
 string RepeatedTemplateFunctionObjectName(const FunctionRecord& function) const;
-
 string TemplateGlobalObjectName(const GlobalRecord& global) const;
-
 void PreparePolymorphicModel();
-
 void EmitPolymorphicGlobals(vector<string>& entries);
-
+void EmitExceptionRttiDeclarations(vector<string>& entries, bool* has_fundamental,
+                                   bool* has_pointer, bool* has_class, bool* has_si);
+void EmitExceptionObjects(vector<string>& entries);
 void IndexRttiUses(const CPPGMAstNodePtr& node, Scope* scope);
+void IndexExceptionUses(const CPPGMAstNodePtr& node, Scope* scope);
 void EnsureRttiType(const TypePtr& type);
 TypePtr TypeInfoType(Scope* scope) const;
 bool IsTypeidExpression(const CPPGMAstNodePtr& node) const;
@@ -515,172 +546,104 @@ string LambdaRttiMangledName(const TypePtr& type) const;
 string LambdaRttiLowName(const TypePtr& type) const;
 string RttiTemplateMangledName(const TypePtr& type) const;
 string RttiTemplateLowName(const TypePtr& type) const;
-
 bool IsVirtualFunction(const FunctionRecord& function) const;
-
 FunctionRecord* EnsureVirtualDestructor(const TypePtr& owner,
                                         const VirtualMethodInfo& slot,
                                         bool deleting);
-
 FunctionRecord* EnsurePureVirtual(const VirtualMethodInfo& slot);
-
 FunctionRecord* VirtualFunctionRecord(const TypePtr& owner,
                                       const VirtualMethodInfo& slot);
-
 string TypeMangledName(const TypePtr& type) const;
-
 string VTableSymbol(const TypePtr& type) const;
-
 string VTableAddressSymbol(const TypePtr& type) const;
-
 TypePtr SemanticType(const Type* raw_type) const;
-
 vector<const Type*> OrderedTypes(const set<const Type*>& types) const;
-
 bool ShouldUseExternalVtable(const TypePtr& type) const;
-
 void EmitVPointerStore(const TypePtr& owner, const string& address);
-
 bool VirtualSlotForCall(const TypePtr& object, Binding* binding,
                         size_t* slot, size_t* semantic_slot = 0) const;
-
 bool VirtualDestructorDeletingSlot(const TypePtr& object,
                                    size_t* slot) const;
-
 bool ContainsVirtualMemberCall(const CPPGMAstNodePtr& node,
                                const FunctionRecord& function);
-
 void CollectStringLiterals(const CPPGMAstNodePtr& node, unsigned int braced_depth = 0,
                            bool local_static_context = false,
                            bool unevaluated_context = false,
                            bool local_array_context = false,
                            bool function_context = false, bool braced_argument_context = false);
-
 FunctionRecord* FindFunction(const string& qname, const TypePtr& type) const;
-
 GlobalRecord* FindGlobal(const string& qname) const;
-
 GlobalRecord* EnsureStaticMemberStorage(Binding* binding, bool force_declaration = false);
-
 void DemandTemplateStaticMembers(const TypePtr& raw_type);
-
 void EnsureThreadLocalGuard(GlobalRecord* object);
-
 void AppendBindings(Scope* scope, const string& name,
                     vector<Binding*>& result, set<Scope*>& visited) const;
-
 vector<Binding*> DirectBindings(Scope* scope, const string& name) const;
-
 Binding* ResolveDecltypeStaticMember(const string& spelling, Scope* scope) const;
-
 vector<Binding*> LookupUnqualifiedAll(Scope* from, const string& name) const;
-
 Scope* ScopeComponent(Scope* current, const string& component,
                       bool first, bool absolute) const;
-
 vector<Binding*> Lookup(const string& raw, Scope* from) const;
-
 vector<Binding*> OperatorCandidates(const string& name,
                                     const vector<ExprInfo>& arguments,
                                     Scope* scope) const;
-
 void AppendAssociatedOperatorBindings(const TypePtr& type, const string& name,
                                       vector<Binding*>& result,
                                       set<const Type*>& visited_types,
                                       set<Scope*>& visited_scopes) const;
-
 Scope* FindTypeOwnerScope(Scope* scope, const TypePtr& type) const;
-
 vector<Binding*> MemberBindings(const TypePtr& object, const string& name) const;
-
 bool IsAccessible(Binding* binding, Scope* scope) const;
-
 void CheckTypeAccess(const CPPGMAstNodePtr& declaration, Scope* scope) const;
-
 Binding* MemberBinding(const CPPGMAstNodePtr& node, Scope* scope,
                        ExprInfo* object_info = 0);
-
 TypePtr expression_value_type(const ExprInfo& info) const;
-
 TypePtr function_target_type(const TypePtr& type) const;
-
 ExprInfo InferLiteral(const CPPGMAstNodePtr& node, const TypePtr& expected,
                       Scope* scope);
-
 ExprInfo InferKeyword(const CPPGMAstNodePtr& node) const;
-
 VariablePlan* FindLocalPlan(const string& name) const;
-
 ExprInfo InferIdentifier(const CPPGMAstNodePtr& node, Scope* scope,
                          const TypePtr& expected) const;
-
 void InferLocalIdentifierConstant(const TypePtr& type, ExprInfo* result) const;
-
 ExprInfo InferMember(const CPPGMAstNodePtr& node, Scope* scope) const;
-
 TypePtr IntegralPromotion(const TypePtr& raw) const;
-
 bool PointerCompatible(const TypePtr& source, const TypePtr& target) const;
-
 bool IsDerivedFrom(const TypePtr& derived, const TypePtr& base) const;
-
 int BaseDistance(const TypePtr& derived, const TypePtr& base) const;
-
 TypePtr CommonType(const TypePtr& left, const TypePtr& right,
                   const string& op = string()) const;
-
 TypePtr ArithmeticCommonType(const TypePtr& left, const TypePtr& right,
                              const string& op) const;
-
 string OperatorFunctionName(const string& op) const;
-
 int ConversionRank(const ExprInfo& source, const TypePtr& target) const;
-
 int ConversionRankToClass(const ExprInfo& source, const TypePtr& target) const;
-
 vector<Binding*> ConversionBindings(const TypePtr& source) const;
-
 Binding* FindConversionOperator(const TypePtr& source, const TypePtr& target,
                                 bool allow_explicit, int* rank = 0) const;
-
 Binding* FindContextConversionOperator(const TypePtr& source,
                                        bool allow_explicit,
                                        bool boolean_context) const;
-
 Binding* FindNamedConversionOperator(const TypePtr& source,
                                      const string& spelling, Scope* scope) const;
-
 bool DirectFunctionName(const CPPGMAstNodePtr& callee, Scope* scope) const;
-
 FunctionRecord* RecordForBinding(Binding* binding) const;
-
 FunctionRecord* BaseEntryFor(FunctionRecord* function) const;
-
 FunctionRecord* EnsureAggregateConstructor(const TypePtr& type);
-
 FunctionRecord* EnsureAggregateConstructorForArguments(const TypePtr& type,
                                                        size_t argument_count);
-
 // Materialize a captureless lambda as a demand-driven internal function.  The
 // returned record owns the typed callable signature used by both inference and
 // LowIR call lowering.
 FunctionRecord* EnsureLambdaFunction(const CPPGMAstNodePtr& lambda,
                                      Scope* scope);
-
 void ClassifySpecialMember(FunctionRecord* record);
-
 bool ClassHasDeclaredValueMember(const TypePtr& type) const;
-
 bool ClassHasDeclaredMoveMember(const TypePtr& type) const;
-
 bool ClassValueNeedsIndirect(const TypePtr& type) const;
-
 bool IsEmptyBaseStorage(const TypePtr& type) const;
-
 bool IsTrivialValueStorage(const TypePtr& type) const;
-
 	FunctionRecord* EnsureImplicitCopyConstructor(const TypePtr& type, bool move);
-
 	string LambdaClosureName(const CPPGMAstNodePtr& lambda) const;
 	TypePtr LambdaClosureType(const CPPGMAstNodePtr& lambda) const;
 	bool IsLambdaClosureType(const TypePtr& type) const;
@@ -692,28 +655,26 @@ bool IsTrivialValueStorage(const TypePtr& type) const;
 	CPPGMAstNodePtr LambdaCapturedExpression(const string& name) const; string EmitCapturedAddress(const CPPGMAstNodePtr& node, Scope* scope); void ApplyCapturedThisProjection(const CPPGMAstNodePtr& node, const string& op, string* base);
 	void InitializeLambdaClosureAt(const TypePtr& closure, const string& destination,
 	                               const CPPGMAstNodePtr& lambda, Scope* scope);
-
 FunctionRecord* EnsureImplicitAssignment(const TypePtr& type, bool move);
-
 FunctionRecord* FindValueMember(const TypePtr& type, bool move, bool assignment) const;
-
 bool ValueOperationDeleted(const TypePtr& type, bool move, bool assignment,
                            FunctionRecord* ignored = 0) const;
-
 void MarkValueMemberDeleted(FunctionRecord* record);
-
 bool EmitObjectTransferAt(const TypePtr& target, const string& destination,
                           const CPPGMAstNodePtr& source, Scope* scope,
                           bool allow_explicit = true,
-                          bool implicit_return_move = false);
-
+                          bool implicit_return_move = false,
+                          bool full_expression_cleanup = false);
+bool EmitObjectTransferSpecial(const TypePtr&, const string&, const CPPGMAstNodePtr&, Scope*, bool, bool, bool*);
+bool EmitObjectTransferCall(const TypePtr&, const string&, const CPPGMAstNodePtr&, Scope*, bool, bool, bool*);
+bool EmitObjectTransferConverted(const TypePtr&, const string&, const CPPGMAstNodePtr&, Scope*, const ExprInfo&, const TypePtr&, bool, bool, bool*);
+bool EmitObjectTransferDerived(const TypePtr&, const string&, const CPPGMAstNodePtr&, Scope*, const ExprInfo&, const TypePtr&, bool, bool);
+bool EmitObjectTransferSame(const TypePtr&, const string&, const CPPGMAstNodePtr&, Scope*, const ExprInfo&, const TypePtr&, bool, bool, bool);
 bool TryElideEmptyClassConversion(const TypePtr& target,
                                   const TypePtr& source,
                                   const CPPGMAstNodePtr& expression,
                                   Scope* scope);
-
 bool EmitValueSpecialMemberBody(FunctionRecord& function, Scope* scope);
-
 TypePtr SourceReturnType(const FunctionRecord& function) const;
 
 bool LowParameterIsByAddress(const FunctionRecord& function, size_t index) const;
@@ -917,6 +878,8 @@ string EmitLiteralAddress(const CPPGMAstNodePtr& node);
 
 string EmitMemberAddress(const CPPGMAstNodePtr& node, Scope* scope,
                          bool reference_projection = false);
+string StableMemberAddressKey(const CPPGMAstNodePtr& node, Binding* member,
+                              const TypePtr& field_type) const;
 
 string AdjustBaseAddress(const string& base, const TypePtr& derived,
                          const TypePtr& target,
@@ -971,7 +934,8 @@ Value EmitChosenCall(const CallChoice& choice,
                      const CPPGMAstNodePtr& callee,
                      const vector<CPPGMAstNodePtr>& arguments,
                      Scope* scope,
-                     const string& indirect_destination = string());
+                     const string& indirect_destination = string(),
+                     bool full_expression_cleanup = false);
 
 Value EmitOperatorCall(const string& name,
                        const vector<CPPGMAstNodePtr>& arguments,
@@ -988,6 +952,9 @@ Value EmitLogicalValue(const CPPGMAstNodePtr& node, Scope* scope);
 
 void EmitCondition(const CPPGMAstNodePtr& node, Scope* scope,
                    const string& true_label, const string& false_label);
+
+void EmitConditionCore(const CPPGMAstNodePtr& node, Scope* scope,
+                       const string& true_label, const string& false_label);
 
 Value EmitValue(const CPPGMAstNodePtr& node, Scope* scope,
                 const TypePtr& expected = TypePtr());
@@ -1018,14 +985,39 @@ bool EmitConstructorAt(const TypePtr& object_type, const string& address,
                        const vector<CPPGMAstNodePtr>& arguments, Scope* scope,
                        bool allow_explicit = true, bool base_entry = false,
                        bool allow_aggregate = false, bool force_move = false,
-                       bool value_initialization = false);
+                       bool value_initialization = false,
+                       bool full_expression_cleanup = false);
 
 string EmitTemporaryObjectAddress(const CPPGMAstNodePtr& node, Scope* scope,
-                                  const string& prefix);
+                                  const string& prefix,
+                                  bool force_empty = false);
 
-void RegisterTemporaryObject(const TypePtr& type, const string& address);
+void RegisterTemporaryObject(const TypePtr& type, const string& address,
+                             bool force_empty = false,
+                             bool construction_no_throw = false);
 
 void EmitTemporaryDestructors(size_t mark, Scope* scope);
+
+vector<FunctionState::TemporaryObject> CaptureLiveCleanupObjects(
+  const string& exclude_address = string());
+
+void EmitCleanupObjects(const vector<FunctionState::TemporaryObject>& objects,
+                        Scope* scope);
+
+bool HasLiveCleanupObjects(const string& exclude_address = string());
+
+bool BeginAggregateMemberUnwind(const TypePtr& member_type);
+void FinishAggregateMemberUnwind(bool started, Scope* scope);
+
+void FinishPendingCallUnwind(Scope* scope);
+
+void BeginConstructorUnwind(
+  const vector<FunctionState::TemporaryObject>& cleanup, bool call_context,
+  const string& dispatch = string(), const string& end = string());
+
+void FinishConstructorUnwind(Scope* scope, bool use_current_cleanup = false);
+
+void StartPendingReferenceUnwind(Scope* scope);
 
 bool EmitDestructorAt(const TypePtr& object_type, const string& address, Scope* scope,
                       bool force_empty = false);
@@ -1153,6 +1145,14 @@ void EmitSwitchBody(const CPPGMAstNodePtr& node, Scope* scope);
 void EmitSwitch(const CPPGMAstNodePtr& node, Scope* scope);
 
 void EmitDiscard(const CPPGMAstNodePtr& node, Scope* scope);
+
+void EmitTryBlock(const CPPGMAstNodePtr& node, Scope* scope);
+
+void EmitThrow(const CPPGMAstNodePtr& expression, Scope* scope);
+
+void FinishExceptionHandlerForReturn();
+
+void FinishExceptionTryForReturn();
 
 void EmitStatement(const CPPGMAstNodePtr& node, Scope* scope);
 

@@ -590,6 +590,7 @@ bool PA18TemplateExpander::MaterializeNamedCallTarget(
 	}
 	bool replayed = false;
 	string constructor_type;
+	bool lexical_class_constructor = false;
 	if(result_callee && result_callee->kind == "id-expression") {
 		constructor_type = result_callee->value;
 		// A constructor used as a functional cast is commonly unqualified inside
@@ -621,6 +622,7 @@ bool PA18TemplateExpander::MaterializeNamedCallTarget(
 			const bool constructor_candidate = constructor_base != specialization_bases_.end() ||
 				class_contexts_.find(constructor_type) != class_contexts_.end() ||
 				FindClassDeclaration(constructor_type, context);
+			lexical_class_constructor = constructor_candidate;
 			if(constructor_candidate) {
 				CPPGMAstNodePtr synthetic_object(new CPPGMAstNode("id-expression"));
 				synthetic_object->inferred_type = constructor_type;
@@ -662,6 +664,13 @@ bool PA18TemplateExpander::MaterializeNamedCallTarget(
 						MaterializeInitializerConstructor(nested_input, nested_result,
 							context, substitutions);
 				}
+			}
+			if(lexical_class_constructor && !replayed &&
+				constructor_type.find("::") != string::npos) {
+				result->inferred_type = constructor_type;
+				*result_callee_out = result_callee;
+				*constructor_replayed_out = false;
+				return true;
 			}
 		CPPGMAstNodePtr operator_member(new CPPGMAstNode("member-expression", "."));
 		operator_member->children.push_back(result_callee);

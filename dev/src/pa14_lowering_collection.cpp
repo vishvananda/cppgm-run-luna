@@ -1,15 +1,9 @@
 #include "pa14_lowering.h"
-
 #include <functional>
-
 #include <cctype>
-
 using namespace std;
-
 namespace cppgm_pa14_lowering {
-
 namespace {
-
 string SpecialMemberName(const string& raw_name)
 {
     const size_t operator_pos = raw_name.rfind("operator");
@@ -20,7 +14,6 @@ string SpecialMemberName(const string& raw_name)
     }
     return LastComponent(raw_name);
 }
-
 bool IsGeneratedMemberTemplate(const CPPGMAstNodePtr& node,
                                const string& raw_name)
 {
@@ -38,7 +31,6 @@ bool IsGeneratedMemberTemplate(const CPPGMAstNodePtr& node,
     return node->template_primary.find("::") != string::npos &&
       primary == raw_base;
 }
-
 string HexEncode(const string& value)
 {
     static const char digits[] = "0123456789abcdef";
@@ -51,7 +43,6 @@ string HexEncode(const string& value)
     }
     return result;
 }
-
 string PA14TrimOwnerSpelling(string value)
 {
     while(!value.empty() && isspace(static_cast<unsigned char>(value[0])))
@@ -60,7 +51,6 @@ string PA14TrimOwnerSpelling(string value)
       value.erase(value.size() - 1);
     return value;
 }
-
 vector<string> PA14OwnerTemplateArguments(const string& value, size_t open)
 {
     vector<string> result;
@@ -85,7 +75,6 @@ vector<string> PA14OwnerTemplateArguments(const string& value, size_t open)
       result.push_back(PA14TrimOwnerSpelling(current));
     return result;
 }
-
 bool PA14OwnerPrimaryMatches(const string& candidate_raw,
                              const string& requested_raw)
 {
@@ -103,9 +92,7 @@ bool PA14OwnerPrimaryMatches(const string& candidate_raw,
     return !candidate.empty() && !requested.empty() &&
         LastComponent(candidate) == LastComponent(requested);
 }
-
 } // namespace
-
 bool PA14Lowerer::HasInline(const CPPGMAstNodePtr& node) const
 {
     if(!node) return false;
@@ -114,7 +101,6 @@ bool PA14Lowerer::HasInline(const CPPGMAstNodePtr& node) const
       if(HasInline(node->children[i])) return true;
     return false;
   }
-
 bool PA14Lowerer::TemplatePrimaryHasNonstaticMemberFunction(const TypePtr& raw_type) const
 {
     const TypePtr type = type_value(raw_type);
@@ -132,7 +118,6 @@ bool PA14Lowerer::TemplatePrimaryHasNonstaticMemberFunction(const TypePtr& raw_t
     }
     return false;
 }
-
 TypePtr PA14Lowerer::ResolveClassOwner(Scope* scope, const string& raw) const
 {
     if(raw.empty()) return TypePtr();
@@ -141,7 +126,6 @@ TypePtr PA14Lowerer::ResolveClassOwner(Scope* scope, const string& raw) const
       (direct.scope ? type_value(direct.scope->owner_type) : TypePtr());
     if(direct_type && direct_type->kind == TYPE_CLASS && direct_type->owned_scope)
       return direct_type;
-
     string wanted = raw;
     while(wanted.compare(0, 2, "::") == 0) wanted.erase(0, 2);
     const size_t open = wanted.find('<');
@@ -175,7 +159,6 @@ TypePtr PA14Lowerer::ResolveClassOwner(Scope* scope, const string& raw) const
     }
     return TypePtr();
 }
-
 void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, bool definition)
 {
     if(!node || node->children.size() < 2) throw logic_error("invalid function declaration");
@@ -532,7 +515,6 @@ void PA14Lowerer::CollectFunction(const CPPGMAstNodePtr& node, Scope* scope, boo
       }
     }
   }
-
 void PA14Lowerer::CollectLocalStatics(const CPPGMAstNodePtr& node, Scope* scope,
                                       const string& function_name,
                                       bool template_function_context)
@@ -570,6 +552,29 @@ void PA14Lowerer::CollectLocalStatics(const CPPGMAstNodePtr& node, Scope* scope,
           const CPPGMAstNodePtr initializer = item->children.size() > 1 ?
             item->children[1] : CPPGMAstNodePtr();
           TypePtr type = PlannedType(node->children[0], declarator, scope, initializer);
+          if(type && type->kind == TYPE_CLASS && type->owned_scope) {
+            vector<CPPGMAstNodePtr> deferred_special_members;
+            for(size_t binding = 0; binding < type->owned_scope->bindings.size();
+                ++binding) {
+              Binding& member = type->owned_scope->bindings[binding];
+              if(member.kind != BIND_FUNCTION || RecordForBinding(&member) ||
+                 !member.declaration) continue;
+              if(member.declaration->kind == "special-member-definition" ||
+                 member.declaration->kind == "special-member-declaration")
+                deferred_special_members.push_back(member.declaration);
+              else if(member.declaration->kind == "function-definition")
+                CollectFunction(member.declaration, type->owned_scope, true);
+            }
+            for(size_t member = 0; member < deferred_special_members.size(); ++member) {
+              const CPPGMAstNodePtr declaration = deferred_special_members[member];
+              const CPPGMAstNodePtr declarator = ChildOfKind(declaration, "declarator");
+              const CPPGMAstNodePtr initializer = ChildOfKind(
+                declarator, "special-initializer");
+              const bool definition = declaration->kind == "special-member-definition" ||
+                (initializer && initializer->value == "default");
+              CollectSpecialMember(declaration, type->owned_scope, definition, false);
+            }
+          }
           const size_t begin = item->source_token_begin;
           const size_t end = item->source_token_end;
           if(begin == static_cast<size_t>(-1) || end == static_cast<size_t>(-1)) continue;
@@ -641,7 +646,6 @@ void PA14Lowerer::CollectLocalStatics(const CPPGMAstNodePtr& node, Scope* scope,
       CollectLocalStatics(node->children[i], scope, function_name,
         template_function_context);
   }
-
 void PA14Lowerer::ClassifySpecialMember(FunctionRecord* record)
 {
     if(!record || !record->member || record->member_template || record->static_member ||
@@ -675,7 +679,6 @@ void PA14Lowerer::ClassifySpecialMember(FunctionRecord* record)
     }
     if(record->defaulted) MarkValueMemberDeleted(record);
   }
-
 void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope,
 	bool definition, bool out_of_class_member)
 {
@@ -878,7 +881,6 @@ void PA14Lowerer::CollectSpecialMember(const CPPGMAstNodePtr& node, Scope* scope
     }
     (void)facts;
   }
-
 void PA14Lowerer::CollectInheritedConstructors(const TypePtr& raw_owner, Scope* scope)
 {
     TypePtr owner = type_value(raw_owner);
@@ -938,7 +940,6 @@ void PA14Lowerer::CollectInheritedConstructors(const TypePtr& raw_owner, Scope* 
         special_member_symbol_name(owner, owner_name);
       const string key = function_key(qname, source_function);
       if(function_by_key_.find(key) != function_by_key_.end()) continue;
-
       CPPGMAstNodePtr special(new CPPGMAstNode("special-member-definition", owner_name));
       CPPGMAstNodePtr declarator(new CPPGMAstNode("declarator"));
       declarator->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("identifier", owner_name)));
@@ -958,7 +959,6 @@ void PA14Lowerer::CollectInheritedConstructors(const TypePtr& raw_owner, Scope* 
       }
       declarator->children.push_back(clause);
       special->children.push_back(declarator);
-
       CPPGMAstNodePtr ctor_initializer(new CPPGMAstNode("ctor-initializer"));
       CPPGMAstNodePtr mem_initializer(new CPPGMAstNode("mem-initializer"));
       mem_initializer->children.push_back(CPPGMAstNodePtr(
@@ -1032,7 +1032,6 @@ void PA14Lowerer::CollectInheritedConstructors(const TypePtr& raw_owner, Scope* 
 		// Keep the synthetic node on the same lookup path as a parser-created
 		// function.  FunctionScope() consults this map before the record fallback.
 		analyzer_.function_scopes_[special.get()] = function_scope;
-
       vector<Binding*> existing = DirectBindings(scope, owner_name);
       Binding* binding = 0;
       for(size_t b = 0; b < existing.size(); ++b) {
@@ -1059,7 +1058,6 @@ void PA14Lowerer::CollectInheritedConstructors(const TypePtr& raw_owner, Scope* 
         binding->member_owner = owner;
         binding->declaration = special;
       }
-
       functions_.push_back(FunctionRecord());
       FunctionRecord* record = &functions_.back();
       function_by_key_[key] = record;
@@ -1098,7 +1096,6 @@ void PA14Lowerer::CollectInheritedConstructors(const TypePtr& raw_owner, Scope* 
       EnsureConstructorBaseEntry(record);
     }
   }
-
 void PA14Lowerer::CollectSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* scope)
 {
     if(!node || node->children.empty()) return;
@@ -1110,7 +1107,6 @@ void PA14Lowerer::CollectSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* s
     for(size_t i = 0; i < list->children.size(); ++i)
       CollectSimpleDeclarationItem(node, scope, facts, list->children[i]);
   }
-
 void PA14Lowerer::CollectSimpleDeclarationItem(const CPPGMAstNodePtr& node,
                                                 Scope* scope,
                                                 const Analyzer::SpecFacts& facts,
@@ -1150,10 +1146,13 @@ void PA14Lowerer::CollectSimpleDeclarationItem(const CPPGMAstNodePtr& node,
       return;
     }
     const bool is_extern = HasStorageSpecifier(node, "extern");
-    if(is_extern && item->children.size() < 2) return;
+    // An object declaration with external linkage still needs a typed LowIR
+    // declaration so later value lowering can address the external symbol.
+    // Only definitions receive initializer/finalizer work in
+    // CollectGlobalDeclaration; dropping the declaration here leaves a valid
+    // `extern int g` use without a GlobalRecord.
     CollectGlobalDeclaration(node, scope, facts, item, initializer, name, type);
   }
-
 bool PA14Lowerer::PrepareGlobalDeclaration(const CPPGMAstNodePtr& node,
                                            Scope* scope,
                                            const Analyzer::SpecFacts& facts,
@@ -1247,7 +1246,6 @@ bool PA14Lowerer::PrepareGlobalDeclaration(const CPPGMAstNodePtr& node,
     }
     return false;
   }
-
 void PA14Lowerer::CollectGlobalDeclaration(const CPPGMAstNodePtr& node,
                                            Scope* scope,
                                            const Analyzer::SpecFacts& facts,
@@ -1292,7 +1290,8 @@ void PA14Lowerer::CollectGlobalDeclaration(const CPPGMAstNodePtr& node,
             }
           }
     }
-    record.declaration = false;
+    const bool is_extern = HasStorageSpecifier(node, "extern");
+    record.declaration = is_extern && !record.initializer;
     record.internal = facts.is_const || facts.is_constexpr || HasStorageSpecifier(node, "static");
     record.thread_local_storage = HasStorageSpecifier(node, "thread_local");
     record.dynamic_initializer = false;
@@ -1302,7 +1301,6 @@ void PA14Lowerer::CollectGlobalDeclaration(const CPPGMAstNodePtr& node,
       (value_type->kind == TYPE_CLASS ||
        (value_type->kind == TYPE_ARRAY && value_type->child &&
         type_value(value_type->child) && type_value(value_type->child)->kind == TYPE_CLASS));
-    const bool is_extern = HasStorageSpecifier(node, "extern");
     if(!is_extern && object) {
       const bool static_member_object = static_cast<bool>(record.template_owner);
       record.dynamic_initializer = !static_member_object ||
@@ -1342,7 +1340,6 @@ void PA14Lowerer::CollectGlobalDeclaration(const CPPGMAstNodePtr& node,
     }
     StoreGlobalDeclaration(record, type_value(record.type));
   }
-
 void PA14Lowerer::StoreGlobalDeclaration(GlobalRecord& record,
                                          const TypePtr& record_value)
 {

@@ -436,6 +436,22 @@ string PA18TemplateExpander::LambdaClassName(
   return result;
 }
 
+namespace {
+
+string LambdaReplayIdentity(const map<string, string>& substitutions)
+{
+  ostringstream spelling;
+  for(map<string, string>::const_iterator substitution = substitutions.begin();
+      substitution != substitutions.end(); ++substitution) {
+    if(substitution->first.empty() || substitution->second.empty()) continue;
+    spelling << '|' << substitution->first << '=' <<
+      CanonicalSpelling(substitution->second);
+  }
+  return spelling.str();
+}
+
+}
+
 CPPGMAstNodePtr PA18TemplateExpander::BuildLambdaClass(
   const CPPGMAstNodePtr& lambda, const string& class_name) const
 {
@@ -561,6 +577,9 @@ void PA18TemplateExpander::PrepareLambdaClasses(vector<CPPGMAstNodePtr>* trees)
   lambda_capture_contexts_.clear();
   lambda_source_nodes_.clear();
   lambda_deferred_classes_.clear();
+  lambda_replay_names_.clear();
+  lambda_replay_bases_.clear();
+  active_lambda_replay_names_.clear();
   next_lambda_serial_ = 0;
   if(!trees) return;
   for(size_t tree = 0; tree < trees->size(); ++tree) {
@@ -905,9 +924,46 @@ void PA18TemplateExpander::MaterializeDeferredLambdaClasses(
 
   CPPGMAstNodePtr preparation(new CPPGMAstNode("translation-unit"));
   vector<CPPGMAstNodePtr> shells;
+  const string replay_identity = LambdaReplayIdentity(substitutions);
+  const string replay_suffix = replay_identity.empty() ? string() :
+    TypeSuffix(replay_identity);
   for(size_t lambda = 0; lambda < lambdas.size(); ++lambda) {
+    const string base_name = lambdas[lambda].first;
+    string class_name = base_name;
+    if(!replay_suffix.empty()) {
+      const string replay_key = base_name + "|" + replay_suffix;
+      map<string, string>::const_iterator replay = lambda_replay_names_.find(
+        replay_key);
+      if(replay != lambda_replay_names_.end()) class_name = replay->second;
+      else if(lambda_replay_bases_.insert(base_name).second) {
+        class_name = base_name;
+        lambda_replay_names_[replay_key] = class_name;
+      }
+      else {
+        class_name += "__inst_" + replay_suffix;
+        lambda_replay_names_[replay_key] = class_name;
+        lambda_class_name_set_.insert(class_name);
+      }
+    }
+    lambda_capture_contexts_[class_name] = lambda_capture_contexts_[base_name];
+    lambda_source_nodes_[class_name] = lambdas[lambda].second;
+    if(lambdas[lambda].second->source_token_begin != static_cast<size_t>(-1) &&
+       lambdas[lambda].second->source_token_end != static_cast<size_t>(-1))
+      active_lambda_replay_names_[make_pair(
+        lambdas[lambda].second->source_token_begin,
+        lambdas[lambda].second->source_token_end)] = class_name;
     CPPGMAstNodePtr shell = BuildLambdaClass(lambdas[lambda].second,
-      lambdas[lambda].first);
+      class_name);
+    if(class_name != base_name) {
+      const size_t synthetic_source = (static_cast<size_t>(1) << 60) +
+        next_lambda_serial_++;
+      shell->source_token_begin = synthetic_source;
+      shell->source_token_end = synthetic_source;
+      if(shell->children.size() > 1 && shell->children[1]) {
+        shell->children[1]->source_token_begin = synthetic_source;
+        shell->children[1]->source_token_end = synthetic_source;
+      }
+    }
     shells.push_back(shell);
     preparation->children.push_back(shell);
   }
@@ -926,7 +982,7 @@ void PA18TemplateExpander::MaterializeDeferredLambdaClasses(
   for(size_t shell = 0; shell < shells.size(); ++shell) {
     CPPGMAstNodePtr transformed = TransformNode(shells[shell], context,
       substitutions);
-    if(transformed) generated_by_owner_[string()].push_back(transformed);
+    if(transformed) deferred_generated_by_owner_[string()].push_back(transformed);
   }
   active_pack_identifier_substitutions_ = saved_pack_identifiers;
 }

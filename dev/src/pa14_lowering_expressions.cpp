@@ -251,6 +251,7 @@ void PA14Lowerer::StoreLValue(const CPPGMAstNodePtr& node, Scope* scope,
           Binding* global_binding = candidates[0];
           GlobalRecord* global = FindGlobal(global_binding->qualified_name);
           if(global) {
+            global->referenced = true;
             if(type_is_reference(global->type)) {
               const string address = emit_load("@" + global->symbol,
                 PointerTo(Fundamental("char")));
@@ -271,6 +272,7 @@ void PA14Lowerer::StoreLValue(const CPPGMAstNodePtr& node, Scope* scope,
           if(duplicate_declarations) {
             GlobalRecord* global = FindGlobal(candidates[0]->qualified_name);
             if(global) {
+              global->referenced = true;
               if(type_is_reference(global->type)) {
                 const string address = emit_load("@" + global->symbol,
                   PointerTo(Fundamental("char")));
@@ -393,11 +395,25 @@ PA14Lowerer::Value PA14Lowerer::EmitAssignment(const CPPGMAstNodePtr& node, Scop
         (void)EmitValue(node->children[0]->children[0], scope);
     }
     Value right;
+    const bool defer_assignment_call_unwind = op == "=" && state_ &&
+      node->children[1] && node->children[1]->kind == "call-expression";
+    const bool previous_assignment_call_defer = state_ &&
+      state_->defer_call_unwind_completion;
+    if(defer_assignment_call_unwind)
+      state_->defer_call_unwind_completion = true;
     if(op == "=") {
       const ExprInfo& right_info = right_order_info;
 		if(ConversionRank(right_info, left_type) < 0)
 			throw logic_error("invalid assignment conversion");
-      right = EmitValue(node->children[1], scope, left_type);
+      try {
+        right = EmitValue(node->children[1], scope, left_type);
+      } catch(...) {
+        if(defer_assignment_call_unwind)
+          state_->defer_call_unwind_completion = previous_assignment_call_defer;
+        throw;
+      }
+      if(defer_assignment_call_unwind)
+        state_->defer_call_unwind_completion = previous_assignment_call_defer;
       // A constant scalar assignment already has its final value; retaining
       // the literal avoids manufacturing a widening/truncation instruction
       // just to store a byte-sized array element.
@@ -469,6 +485,8 @@ PA14Lowerer::Value PA14Lowerer::EmitAssignment(const CPPGMAstNodePtr& node, Scop
     }
     right = ConvertValue(right, left_type, false, true);
     StoreLValue(node->children[0], scope, left_type, right.operand);
+    if(defer_assignment_call_unwind && state_ && state_->pending_call_unwind)
+      FinishPendingCallUnwind(scope);
     right.lvalue = true;
     right.type = left_type;
     return right;
@@ -493,7 +511,9 @@ PA14Lowerer::Value PA14Lowerer::EmitUpdate(const CPPGMAstNodePtr& node, Scope* s
     Binding* cached_member = 0;
     if(child_node && (child_node->kind == "member-expression" ||
        (child_info.binding && child_info.binding->is_member &&
-        !child_info.binding->is_static))) {
+       !child_info.binding->is_static) ||
+       (child_node->kind == "unary-expression" &&
+        PA12Operator(child_node->value) == "*"))) {
       cached_member = child_node->kind == "member-expression" ?
         MemberBinding(child_node, scope) : child_info.binding;
       cached_address = child_node->kind == "member-expression" ?
@@ -825,6 +845,20 @@ PA14Lowerer::Value PA14Lowerer::EmitConditionalValue(const CPPGMAstNodePtr& node
     if(expected_value && expected_value->kind == TYPE_FUNDAMENTAL &&
        expected_value->name == "bool")
       type = expected_value;
+    // An array conditional decays to a pointer when it is passed to a
+    // pointer parameter.  Keep the value-form lowering for that case; the
+    // equal-bound array case is handled separately by EmitConditionalAddress
+    // at the call boundary, where the reference-like address is required.
+    if(expected_value && expected_value->kind == TYPE_POINTER &&
+       node->children.size() > 2) {
+      TypePtr true_type = expression_value_type(
+        Infer(node->children[1], scope));
+      TypePtr false_type = expression_value_type(
+        Infer(node->children[2], scope));
+      if(true_type && false_type && true_type->kind == TYPE_ARRAY &&
+         false_type->kind == TYPE_ARRAY && true_type->bound != false_type->bound)
+        type = expected_value;
+    }
     // The condition of ?: is a value context.  Logical operators therefore
     // materialize their short-circuit result before selecting the arm; direct
     // statement conditions use EmitCondition and keep the branch-only form.
@@ -847,11 +881,20 @@ PA14Lowerer::Value PA14Lowerer::EmitConditionalValue(const CPPGMAstNodePtr& node
     const string then_label = new_label("cond_then");
     const string else_label = new_label("cond_else");
     const string end_label = new_label("cond_end");
+    const size_t condition_temporary_mark = state_ ?
+      state_->temporary_objects.size() : 0;
+    const bool previous_condition_defer = state_ &&
+      state_->defer_temporary_cleanup;
+    const unsigned int previous_condition_cleanup_depth = state_ ?
+      state_->condition_cleanup_depth : 0;
+    if(state_) state_->defer_temporary_cleanup = true;
     TypePtr condition_type = expression_value_type(condition_info);
     Value condition = condition_type && condition_type->kind == TYPE_CLASS &&
       FindContextConversionOperator(condition_type, true, true) ?
       EmitContextConversion(node->children[0], scope, true, true) :
       EmitValue(node->children[0], scope);
+    if(state_ && state_->pending_call_unwind)
+      FinishPendingCallUnwind(scope);
     if(condition.lvalue && condition.type) {
       condition.operand = emit_load(condition.operand, condition.type);
       condition.lvalue = false;
@@ -859,7 +902,20 @@ PA14Lowerer::Value PA14Lowerer::EmitConditionalValue(const CPPGMAstNodePtr& node
     condition_type = type_value(condition.type);
     if(is_floating_type(condition_type))
       condition.operand = EmitTruthValue(condition);
+    const bool defer_condition_branch = state_ &&
+      state_->constructor_unwind_active &&
+      !state_->constructor_unwind_call &&
+      state_->constructor_unwind_end.empty();
+    if(defer_condition_branch) {
+      // A conditional pointer argument owns the EH dispatch while its
+      // condition is evaluated.  Close that dispatch after the condition
+      // value has been emitted so the condition blocks receive the same
+      // labels as the ordinary conditional lowering.
+      state_->constructor_unwind_end = new_label("call_unwind_end");
+      FinishConstructorUnwind(scope);
+    }
     Terminate("branch " + condition.operand + ", ^" + then_label + ", ^" + else_label);
+    if(state_) state_->condition_cleanup_depth = 2;
     AddBlock(then_label);
     Value when_true = EmitValue(node->children[1], scope, type);
     when_true = ConvertValue(when_true, type);
@@ -874,6 +930,12 @@ PA14Lowerer::Value PA14Lowerer::EmitConditionalValue(const CPPGMAstNodePtr& node
     Value result;
     result.type = type;
     result.operand = emit_load("$" + slot, type);
+    if(state_ && state_->temporary_objects.size() > condition_temporary_mark)
+      EmitTemporaryDestructors(condition_temporary_mark, scope);
+    if(state_) {
+      state_->defer_temporary_cleanup = previous_condition_defer;
+      state_->condition_cleanup_depth = previous_condition_cleanup_depth;
+    }
     return result;
   }
 
@@ -887,7 +949,26 @@ string PA14Lowerer::EmitConditionalAddress(const CPPGMAstNodePtr& node, Scope* s
     const string end_label = new_label("condaddr_end");
     ExprInfo condition_info = Infer(node->children[0], scope);
     TypePtr condition_type = expression_value_type(condition_info);
-    if(condition_type && condition_type->kind == TYPE_POINTER) {
+    const bool defer_condition_branch = state_ &&
+      state_->constructor_unwind_active &&
+      !state_->constructor_unwind_call &&
+      state_->constructor_unwind_end.empty();
+    if(defer_condition_branch) {
+      Value condition = condition_type && condition_type->kind == TYPE_CLASS &&
+        FindContextConversionOperator(condition_type, true, true) ?
+        EmitContextConversion(node->children[0], scope, true, true) :
+        EmitValue(node->children[0], scope);
+      if(condition.lvalue && condition.type) {
+        condition.operand = emit_load(condition.operand, condition.type);
+        condition.lvalue = false;
+      }
+      condition_type = type_value(condition.type);
+      if(is_floating_type(condition_type))
+        condition.operand = EmitTruthValue(condition);
+      state_->constructor_unwind_end = new_label("call_unwind_end");
+      FinishConstructorUnwind(scope);
+      Terminate("branch " + condition.operand + ", ^" + then_label + ", ^" + else_label);
+    } else if(condition_type && condition_type->kind == TYPE_POINTER) {
       Value condition = EmitValue(node->children[0], scope);
       Terminate("branch " + condition.operand + ", ^" + then_label + ", ^" + else_label);
     } else EmitCondition(node->children[0], scope, then_label, else_label);
@@ -958,152 +1039,16 @@ string PA14Lowerer::EmitLogicalRightTruth(const CPPGMAstNodePtr& node, Scope* sc
     }
     return EmitTruthValue(value);
   }
-PA14Lowerer::Value PA14Lowerer::EmitLogicalValue(const CPPGMAstNodePtr& node, Scope* scope)
-{
-    const string op = PA12Operator(node->value);
-    const string slot = new_special_slot(op == "||" || op == "or" ? "lor" : "land", "i64");
-    const string rhs_label = new_label(op == "||" || op == "or" ? "lor_rhs" : "land_rhs");
-    const string short_label = new_label(op == "||" || op == "or" ? "lor_short" : "land_short");
-    const string end_label = new_label(op == "||" || op == "or" ? "lor_end" : "land_end");
-    const CPPGMAstNodePtr left_node = node->children[0];
-    const bool left_is_logical = left_node && left_node->kind == "binary-expression" &&
-      (PA12Operator(left_node->value) == "&&" || PA12Operator(left_node->value) == "||" ||
-       PA12Operator(left_node->value) == "and" || PA12Operator(left_node->value) == "or");
-    if(left_is_logical) {
-      Value left = EmitValue(left_node, scope);
-      Terminate("branch " + left.operand + ", ^" +
-        (op == "||" || op == "or" ? short_label : rhs_label) + ", ^" +
-        (op == "||" || op == "or" ? rhs_label : short_label));
-    } else if(op == "||" || op == "or") {
-      EmitCondition(left_node, scope, short_label, rhs_label);
-    } else EmitCondition(left_node, scope, rhs_label, short_label);
-    AddBlock(rhs_label);
-    const string right = EmitLogicalRightTruth(node->children[1], scope);
-    emit_store(Fundamental("long int"), right, "$" + slot);
-    Terminate("jump ^" + end_label);
-    AddBlock(short_label);
-    emit_store(Fundamental("long int"), op == "||" || op == "or" ? "1" : "0", "$" + slot);
-    Terminate("jump ^" + end_label);
-    AddBlock(end_label);
-    Value result;
-    result.type = Fundamental("bool");
-    result.operand = emit_load("$" + slot, Fundamental("long int"));
-    return result;
-  }
-
-void PA14Lowerer::EmitCondition(const CPPGMAstNodePtr& node, Scope* scope,
-                     const string& true_label, const string& false_label)
-{
-    if(!node) { Terminate("branch 0, ^" + false_label + ", ^" + false_label); return; }
-    if(node->kind == "parenthesized-expression" && !node->children.empty()) {
-      EmitCondition(node->children[0], scope, true_label, false_label);
-      return;
-    }
-    if(node->kind == "condition-declaration") {
-      VariablePlan* variable = BindCondition(node);
-      if(!variable || node->children.size() < 3) throw logic_error("invalid condition declaration");
-      EmitInitializer(variable, node->children[2], scope);
-      CPPGMAstNodePtr condition_id(new CPPGMAstNode("id-expression", variable->source_name));
-      ExprInfo condition_info = Infer(condition_id, scope);
-      TypePtr condition_type = expression_value_type(condition_info);
-      Value value = condition_type && condition_type->kind == TYPE_CLASS &&
-        FindContextConversionOperator(condition_type, true, true) ?
-        EmitContextConversion(condition_id, scope, true, true) :
-        EmitValue(condition_id, scope);
-      string operand = value.operand;
-      if(value.type && type_value(value.type) && type_value(value.type)->kind == TYPE_CLASS &&
-         FindContextConversionOperator(type_value(value.type), true, true)) {
-        value = EmitContextConversion(CPPGMAstNodePtr(
-          new CPPGMAstNode("id-expression", variable->source_name)), scope, true, true);
-        operand = value.operand;
-      }
-      if(is_floating_type(value.type)) operand = EmitTruthValue(value);
-      Terminate("branch " + operand + ", ^" + true_label + ", ^" + false_label);
-      return;
-    }
-    if(node->kind == "binary-expression") {
-      const string op = PA12Operator(node->value);
-      if(op == "&&" || op == "||" || op == "and" || op == "or") {
-        vector<CPPGMAstNodePtr> operator_arguments;
-        operator_arguments.push_back(node->children[0]);
-        operator_arguments.push_back(node->children[1]);
-        if(ChooseOperatorCall(OperatorFunctionName(op), operator_arguments, scope).binding) {
-          Value value = EmitOperatorCall(OperatorFunctionName(op), operator_arguments, scope);
-          value.operand = EmitTruthValue(value);
-          Terminate("branch " + value.operand + ", ^" + true_label + ", ^" + false_label);
-          return;
-        }
-      }
-      if(op == "&&" || op == "and") {
-        const string rhs_label = new_label("land_rhs");
-        EmitCondition(node->children[0], scope, rhs_label, false_label);
-        AddBlock(rhs_label);
-        EmitCondition(node->children[1], scope, true_label, false_label);
-        return;
-      }
-      if(op == "||" || op == "or") {
-        const string rhs_label = new_label("lor_rhs");
-        EmitCondition(node->children[0], scope, true_label, rhs_label);
-        AddBlock(rhs_label);
-        EmitCondition(node->children[1], scope, true_label, false_label);
-        return;
-      }
-      if(op == "==" || op == "!=" || op == "not_eq" || op == "<" ||
-         op == ">" || op == "<=" || op == ">=") {
-        Value value = EmitCompare(node, scope);
-        Terminate("branch " + value.operand + ", ^" + true_label + ", ^" + false_label);
-        return;
-      }
-    }
-    if(node->kind == "unary-expression" && PA12Operator(node->value) == "!") {
-      ExprInfo child_info = Infer(node->children[0], scope);
-      TypePtr child_type = expression_value_type(child_info);
-      Value child = child_type && child_type->kind == TYPE_CLASS &&
-        FindContextConversionOperator(child_type, true, true) ?
-        EmitContextConversion(node->children[0], scope, true, true) :
-        EmitValue(node->children[0], scope);
-      if(child.lvalue && child.type) {
-        child.operand = emit_load(child.operand, child.type);
-        child.lvalue = false;
-      }
-      TypePtr type = type_value(child.type);
-      if(type && (is_integral_type(type) ||
-                  (type->kind == TYPE_FUNDAMENTAL && type->name == "bool"))) {
-        const string temp = new_temp();
-        AddInstruction(temp + " = cmp eq i64 " + child.operand + ", 0");
-        Terminate("branch " + temp + ", ^" + true_label + ", ^" + false_label);
-      } else {
-        const string operand = EmitTruthValue(child);
-        Terminate("branch " + operand + ", ^" + false_label + ", ^" + true_label);
-      }
-      return;
-    }
-    ExprInfo value_info = Infer(node, scope);
-    TypePtr type = expression_value_type(value_info);
-    Value value = type && type->kind == TYPE_CLASS &&
-      FindContextConversionOperator(type, true, true) ?
-      EmitContextConversion(node, scope, true, true) : EmitValue(node, scope);
-    string operand = value.operand;
-    if(type && type->kind == TYPE_CLASS && value.type &&
-       type_value(value.type)->kind != TYPE_CLASS) {
-      if(value.lvalue && value.type) {
-        value.operand = emit_load(value.operand, value.type);
-        value.lvalue = false;
-      }
-      operand = EmitTruthValue(value);
-      type = type_value(value.type);
-    } else if(value.type && type_value(value.type)->kind != TYPE_CLASS) {
-      operand = is_floating_type(value.type) ? EmitTruthValue(value) : value.operand;
-    }
-    Terminate("branch " + operand + ", ^" + true_label + ", ^" + false_label);
-  }
-
 PA14Lowerer::Value PA14Lowerer::EmitValue(const CPPGMAstNodePtr& node, Scope* scope,
                   const TypePtr& expected)
 {
     if(!node) throw logic_error("missing value during LowIR lowering");
     Value initializer_list_value;
     if(EmitInitializerListValue(node, scope, expected, &initializer_list_value)) return initializer_list_value;
+    if(node->kind == "throw-expression") {
+      EmitThrow(node->children.empty() ? CPPGMAstNodePtr() : node->children[0], scope);
+      return Value();
+    }
     if(IsTypeidExpression(node)) return EmitTypeidExpression(node, scope);
     if(node->kind == "lambda-expression") {
       Value closure_result;

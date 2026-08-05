@@ -1,5 +1,7 @@
 #include "pa14_lowering.h"
 
+
+
 #include <algorithm>
 #include <map>
 #include <set>
@@ -9,24 +11,6 @@
 using namespace std;
 
 namespace cppgm_pa14_lowering {
-
-namespace {
-
-bool HasIntegralTemplateArgument(const TypePtr& raw_type)
-{
-  const TypePtr type = type_value(raw_type);
-  if(!type || !type->template_specialization) return false;
-  for(size_t i = 0; i < type->template_arguments.size(); ++i) {
-    PA19IntegralValue value;
-    if(PA19ParseInteger(type->template_arguments[i], &value) ||
-       PA19DecodeCharacter(type->template_arguments[i], &value)) return true;
-    const string argument = PA19Compact(type->template_arguments[i]);
-    if(argument == "true" || argument == "false") return true;
-  }
-  return false;
-}
-
-} // namespace
 
 PA14Lowerer::Value PA14Lowerer::EmitNewExpression(const CPPGMAstNodePtr& node,
                                                   Scope* scope,
@@ -533,300 +517,6 @@ PA14Lowerer::Value PA14Lowerer::EmitDeleteExpression(const CPPGMAstNodePtr& node
     return result;
   }
 
-bool PA14Lowerer::EmitObjectTransferAt(const TypePtr& raw_target,
-                                       const string& destination,
-                                       const CPPGMAstNodePtr& source,
-                                       Scope* scope, bool allow_explicit,
-                                       bool implicit_return_move)
-{
-    TypePtr target = type_value(raw_target);
-    if(!target || target->kind != TYPE_CLASS || !source) return false;
-    CPPGMAstNodePtr lambda_source = source;
-    while(lambda_source && lambda_source->kind == "parenthesized-expression" &&
-          lambda_source->children.size() == 1 && lambda_source->children[0])
-      lambda_source = lambda_source->children[0];
-    if(lambda_source && lambda_source->kind == "lambda-expression") {
-      const TypePtr closure = LambdaClosureType(lambda_source);
-      if(closure && PA12SameType(closure, target, true))
-        {
-          InitializeLambdaClosureAt(closure, destination, lambda_source, scope);
-        return true;
-        }
-    }
-    if(source->kind == "braced-init-list") {
-      const vector<CPPGMAstNodePtr> arguments = source->children;
-      // List-initialization may omit the tail of an aggregate.  Let the
-      // constructor path append those defaulted members even when an implicit
-      // default entry was already collected for the complete class; a later
-      // empty-list probe must not turn aggregate initialization into a
-      // separate default-constructor call.
-      const bool allow_aggregate = true;
-      return EmitConstructorAt(target, destination, arguments, scope,
-        allow_explicit, false, allow_aggregate);
-    }
-    if(source->kind == "conditional-expression") {
-      ExprInfo conditional_info = Infer(source, scope);
-      TypePtr conditional_type = expression_value_type(conditional_info);
-      if(conditional_type && conditional_type->kind == TYPE_CLASS &&
-         (PA12SameType(conditional_type, target, true) ||
-          IsDerivedFrom(conditional_type, target))) {
-        const string then_label = new_label("condobj_then");
-        const string else_label = new_label("condobj_else");
-        const string end_label = new_label("condobj_end");
-        EmitCondition(source->children[0], scope, then_label, else_label);
-        AddBlock(then_label);
-        if(!EmitObjectTransferAt(target, destination, source->children[1], scope,
-                                 allow_explicit)) return false;
-        if(!state_->current->terminated) Terminate("jump ^" + end_label);
-        AddBlock(else_label);
-        if(!EmitObjectTransferAt(target, destination, source->children[2], scope,
-                                 allow_explicit)) return false;
-        if(!state_->current->terminated) Terminate("jump ^" + end_label);
-        AddBlock(end_label);
-        return true;
-      }
-    }
-    if(source->kind == "cast-expression" && source->children.size() > 1) {
-      TypePtr cast_type = analyzer_.TypeFromTypeId(source->children[0], scope);
-      if(cast_type && type_value(cast_type) &&
-         type_value(cast_type)->kind == TYPE_CLASS &&
-         PA12SameType(type_value(cast_type), target, true)) {
-        vector<CPPGMAstNodePtr> arguments;
-        // Preserve a reference cast's value category.  Dropping the cast
-        // turns static_cast<T&&>(object) back into an lvalue and selects the
-        // copy constructor instead of the move constructor.
-        const bool move = cast_type->kind == TYPE_RVALUE_REFERENCE;
-        if(type_is_reference(cast_type)) {
-          FunctionRecord* value_member = EnsureImplicitCopyConstructor(target, move);
-          if(value_member && value_member->deleted) return false;
-          if(PA12SameType(type_value(cast_type), target, true) &&
-             IsTrivialValueStorage(target) &&
-             !(move && ClassHasDeclaredMoveMember(target))) {
-            const string source_address = EmitAddress(source->children[1], scope);
-            AddInstruction("copyobj " +
-              integer_text(static_cast<long long>(type_size(target))) + "x" +
-              integer_text(static_cast<long long>(type_alignment(target))) + " " +
-              source_address + ", " + destination);
-            return true;
-          }
-        }
-        arguments.push_back(type_is_reference(cast_type) ? source : source->children[1]);
-        return EmitConstructorAt(target, destination, arguments, scope, true);
-      }
-    }
-    TypePtr constructed = source->kind == "call-expression" &&
-      !source->children.empty() ? ConstructorObjectType(source->children[0], scope) : TypePtr();
-    if(constructed && PA12SameType(constructed, target, true)) {
-      CPPGMAstNodePtr argument_list = source->children.size() > 1 ?
-        source->children[1] : CPPGMAstNodePtr();
-      vector<CPPGMAstNodePtr> arguments = argument_list ? argument_list->children :
-        vector<CPPGMAstNodePtr>();
-      if(source->value == "braced-construction" && arguments.size() == 1 &&
-         arguments[0] && arguments[0]->kind == "braced-init-list")
-        arguments = arguments[0]->children;
-      if(arguments.empty())
-        CollectImplicitConstructor(constructed, constructed->owned_scope, true);
-      const bool allow_aggregate = !arguments.empty() &&
-        EnsureAggregateConstructor(constructed);
-      const bool value_initialization = arguments.empty() && HasConstructor(constructed) &&
-        (source->value == "braced-construction" || HasIntegralTemplateArgument(constructed));
-      return EmitConstructorAt(target, destination, arguments, scope, allow_explicit,
-        false, allow_aggregate, false, value_initialization);
-    }
-    if(!constructed && source->kind == "call-expression") {
-      CallChoice choice = ChooseCall(source, scope);
-      FunctionRecord* function = choice.binding ? RecordForBinding(choice.binding) : 0;
-      TypePtr result_type = expression_value_type(Infer(source, scope));
-      if(function && function->indirect_result && result_type &&
-         PA12SameType(result_type, target, true)) {
-        CPPGMAstNodePtr argument_list = source->children.size() > 1 ?
-          source->children[1] : CPPGMAstNodePtr();
-        vector<CPPGMAstNodePtr> arguments = argument_list ? argument_list->children :
-          vector<CPPGMAstNodePtr>();
-        EmitChosenCall(choice, source->children[0], arguments, scope, destination);
-        return true;
-      }
-    }
-    ExprInfo source_info;
-    if(lambda_source && lambda_source->kind == "lambda-expression" &&
-       LambdaClosureType(lambda_source))
-      source_info = Infer(lambda_source, scope, LambdaClosureType(lambda_source));
-    else
-      source_info = Infer(source, scope);
-    TypePtr source_type = expression_value_type(source_info);
-    if(!source_type || source_type->kind != TYPE_CLASS) {
-      vector<CPPGMAstNodePtr> arguments;
-      arguments.push_back(source);
-      return EmitConstructorAt(target, destination, arguments, scope, true);
-    }
-    // A class-valued conversion is still a constructor boundary in C++11:
-    // materialize the conversion result, then initialize the destination
-    // through its copy/move constructor.  Passing destination directly as
-    // the conversion's ABI result slot skips that boundary and changes both
-    // object lifetime and the generated call sequence.
-    if(target && target->kind == TYPE_CLASS) {
-      vector<CPPGMAstNodePtr> constructor_arguments;
-      constructor_arguments.push_back(source);
-      // This is the copy-initialization boundary between two class values.
-      // Its destination constructor set excludes explicit constructors even
-      // when the surrounding lowering path permits explicit initialization.
-      if(!PA12SameType(source_type, target, true)) {
-        bool constructed = false;
-        try {
-          constructed = EmitConstructorAt(target, destination,
-            constructor_arguments, scope, false);
-        } catch(const PA14NoViableConstructor&) {
-          // A failed destination-constructor candidate permits the source
-          // conversion-function candidate.  Ambiguity and other lowering
-          // failures remain hard errors and are deliberately not caught.
-        }
-        if(constructed) return true;
-      }
-      Binding* conversion = FindConversionOperator(source_type, target, true);
-      if(conversion) {
-        FunctionRecord* conversion_record = RecordForBinding(conversion);
-        CallChoice choice;
-        choice.binding = conversion;
-        choice.function = function_target_type(conversion->type);
-        choice.object = source;
-        choice.direct = true;
-        choice.member = true;
-        choice.static_member = false;
-        choice.conversion = true;
-        const Value converted = EmitChosenCall(choice, CPPGMAstNodePtr(),
-          vector<CPPGMAstNodePtr>(), scope, destination);
-        if(conversion_record && conversion_record->indirect_result) return true;
-        if(converted.operand.empty()) return false;
-        AddInstruction("copyobj " + integer_text(static_cast<long long>(type_size(target))) +
-          "x" + integer_text(static_cast<long long>(type_alignment(target))) +
-          " " + converted.operand + ", " + destination);
-        return true;
-      }
-    }
-    const bool same_type = PA12SameType(source_type, target, true);
-    const bool move = source_info.category == "xvalue" || implicit_return_move;
-    const bool template_context = type_value(target)->template_specialization ||
-      (scope && scope->owner_type &&
-       type_value(scope->owner_type)->template_specialization) ||
-      (state_ && state_->record && state_->record->template_instantiation) ||
-      (state_ && state_->record && state_->record->member_owner &&
-       state_->record->member_owner->template_specialization);
-    if(same_type && source_info.category == "lvalue" && template_context &&
-       IsEmptyBaseStorage(target) && IsTrivialValueStorage(target)) {
-      // Even an empty object reference must be evaluated.  This matters when
-      // the lvalue is the result of a comma expression whose discarded side
-      // contains an aggregate construction.
-      VariablePlan* source_local = source->kind == "id-expression" ?
-        FindLocalPlan(source->value) : 0;
-      const bool materialized_empty_template_reference = source_local &&
-        source_local->parameter &&
-        target->template_specialization &&
-        HasConstructor(target) &&
-        !TemplatePrimaryHasNonstaticMemberFunction(target) &&
-        !HasUserProvidedConstructor(target);
-      const bool static_member_reference = source_info.binding &&
-        source_info.binding->is_member && source_info.binding->is_static;
-      if((source_local && (implicit_return_move ||
-           (source_local->parameter && !materialized_empty_template_reference))) ||
-         (source->kind == "binary-expression" && PA12Operator(source->value) == ",") ||
-         (source->kind == "call-expression") ||
-         static_member_reference)
-        (void)EmitAddress(source, scope);
-      return true;
-    }
-    if(source_type && source_type->kind == TYPE_CLASS &&
-       IsDerivedFrom(source_type, target)) {
-      FunctionRecord* target_copy = FindValueMember(target, false, false);
-      bool has_single_argument_conversion = false;
-      const vector<Binding*> target_constructors =
-        MemberBindings(target, LastComponent(target->name));
-      for(size_t i = 0; i < target_constructors.size(); ++i) {
-        FunctionRecord* candidate = RecordForBinding(target_constructors[i]);
-        TypePtr candidate_type = function_target_type(target_constructors[i]->type);
-        if(candidate && candidate->constructor && !candidate->copy_constructor &&
-           !candidate->move_constructor && candidate_type &&
-           candidate_type->parameters.size() == 1) {
-          has_single_argument_conversion = true;
-          break;
-        }
-      }
-      if(IsTrivialValueStorage(target) && target_copy && !target_copy->deleted &&
-         (target_copy->defaulted || target_copy->implicit_constructor ||
-          target_copy->synthesized_value_member) && !has_single_argument_conversion &&
-         (source_info.category == "lvalue" || source_info.category == "xvalue")) {
-        string source_address = AdjustBaseAddress(EmitAddress(source, scope),
-          source_type, target);
-        AddInstruction("copyobj " + integer_text(static_cast<long long>(type_size(target))) +
-          "x" + integer_text(static_cast<long long>(type_alignment(target))) + " " +
-          source_address + ", " + destination);
-        return true;
-      }
-      bool empty_target = !target->direct_base;
-      for(size_t member_index = 0; member_index < target->class_members.size();
-          ++member_index)
-        if(!target->class_members[member_index].is_static &&
-           !target->class_members[member_index].name.empty()) {
-          empty_target = false;
-          break;
-        }
-      if(empty_target) return true;
-      vector<CPPGMAstNodePtr> constructor_arguments;
-      constructor_arguments.push_back(source);
-      if(EmitConstructorAt(target, destination, constructor_arguments, scope,
-                           allow_explicit)) return true;
-      string source_address;
-      if(source_info.category == "lvalue" || source_info.category == "xvalue")
-        source_address = EmitAddress(source, scope);
-      else if(source->kind == "call-expression" &&
-              ConstructorObjectType(source->children.empty() ?
-                CPPGMAstNodePtr() : source->children[0], scope))
-        source_address = EmitTemporaryObjectAddress(source, scope, "tmpobj");
-      else
-        source_address = EmitAddress(source, scope);
-      source_address = AdjustBaseAddress(source_address, source_type, target);
-      if(IsTrivialValueStorage(target)) {
-        AddInstruction("copyobj " + integer_text(static_cast<long long>(type_size(target))) +
-          "x" + integer_text(static_cast<long long>(type_alignment(target))) + " " +
-          source_address + ", " + destination);
-        return true;
-      }
-    }
-    if(same_type && ValueOperationDeleted(target, move, false)) return false;
-    if(same_type && IsTrivialValueStorage(target) &&
-       !(move && ClassHasDeclaredMoveMember(target))) {
-      FunctionRecord* copy_member = FindValueMember(target, false, false);
-      if(copy_member && source->kind == "unary-expression") {
-        MarkFunctionNeeded(copy_member);
-        FunctionRecord* base_entry = BaseEntryFor(copy_member);
-        if(base_entry) MarkFunctionNeeded(base_entry);
-      }
-      string source_operand;
-      if(source_info.category == "lvalue" || source_info.category == "xvalue")
-        source_operand = EmitAddress(source, scope);
-      else source_operand = EmitValue(source, scope, target).operand;
-      AddInstruction("copyobj " + integer_text(static_cast<long long>(type_size(target))) +
-        "x" + integer_text(static_cast<long long>(type_alignment(target))) + " " +
-        source_operand + ", " + destination);
-      return true;
-    }
-    if(same_type) {
-      FunctionRecord* value_member = EnsureImplicitCopyConstructor(target, move);
-      if(value_member && value_member->deleted) return false;
-    }
-    vector<CPPGMAstNodePtr> arguments;
-    arguments.push_back(source);
-    if(!EmitConstructorAt(target, destination, arguments, scope, allow_explicit,
-                          false, false, implicit_return_move)) {
-      if(same_type && !move) {
-        FunctionRecord* value_member = EnsureImplicitCopyConstructor(target, false);
-        if(value_member && !value_member->deleted)
-          return EmitConstructorAt(target, destination, arguments, scope, allow_explicit);
-      }
-      return false;
-    }
-    return true;
-  }
-
 void PA14Lowerer::EmitAggregateArrayAt(const string& base, const TypePtr& raw_type,
                                         const CPPGMAstNodePtr& expression, Scope* scope,
                                         const CPPGMAstNodePtr& refresh_node,
@@ -958,16 +648,25 @@ void PA14Lowerer::PrecomputeAggregateChildValues(const TypePtr& child_type,
       const ClassMemberInfo& nested_field = child_type->class_members[member];
       if(nested_field.is_static || !nested_field.type) continue;
       const CPPGMAstNodePtr nested_expression = child->children[nested_child++];
-      if(!nested_expression || nested_expression->kind != "call-expression" ||
-         state_->aggregate_precomputed_values.find(nested_expression.get()) !=
-           state_->aggregate_precomputed_values.end()) continue;
+      if(!nested_expression) continue;
+      const TypePtr nested_type = type_value(nested_field.type);
+      if(nested_type && nested_type->kind == TYPE_CLASS &&
+         nested_expression->kind == "braced-init-list") {
+        PrecomputeAggregateChildValues(nested_type, nested_expression, scope, computed);
+        continue;
+      }
+      const bool scalar = nested_type && nested_type->kind != TYPE_CLASS &&
+        nested_type->kind != TYPE_ARRAY && !type_is_reference(nested_field.type);
+      const bool call = nested_expression->kind == "call-expression";
+      if((!call && !scalar) || state_->aggregate_precomputed_values.find(
+           nested_expression.get()) != state_->aggregate_precomputed_values.end()) continue;
       Value precomputed;
       precomputed.type = nested_field.type;
       if(type_is_reference(nested_field.type)) {
         precomputed.operand = EmitReferenceArgument(nested_expression, scope,
           nested_field.type);
         precomputed.lvalue = true;
-      } else precomputed = EmitValue(nested_expression, scope);
+      } else precomputed = EmitValue(nested_expression, scope, nested_field.type);
       state_->aggregate_precomputed_values[nested_expression.get()] = precomputed;
       computed->push_back(nested_expression.get());
     }
@@ -1173,14 +872,18 @@ void PA14Lowerer::EmitAggregateClassFields(const string& base, const TypePtr& ra
       vector<const CPPGMAstNode*> computed;
       PrecomputeAggregateChildValues(child_type, child, scope, &computed);
       Value precomputed_value;
+      const bool already_precomputed = state_ &&
+        state_->aggregate_precomputed_values.find(child.get()) !=
+          state_->aggregate_precomputed_values.end();
       const bool precompute_address_of = child && child->kind == "unary-expression" &&
         PA12Operator(child->value) == "&" && child_type &&
-        child_type->kind != TYPE_CLASS && child_type->kind != TYPE_ARRAY;
+        child_type->kind != TYPE_CLASS && child_type->kind != TYPE_ARRAY &&
+        !already_precomputed;
       if(precompute_address_of) precomputed_value = EmitValue(child, scope, child_type);
       const bool precompute_scalar = child && !precompute_address_of &&
         child->kind != "braced-init-list" && child_type &&
         child_type->kind != TYPE_CLASS && child_type->kind != TYPE_ARRAY &&
-        !type_is_reference(member.type);
+        !type_is_reference(member.type) && !already_precomputed;
       if(precompute_scalar) precomputed_value = EmitValue(child, scope, child_type);
       const bool have_precomputed_value = precompute_address_of || precompute_scalar;
       Binding* member_binding = 0;
@@ -1205,6 +908,8 @@ void PA14Lowerer::EmitAggregateClassFields(const string& base, const TypePtr& ra
       }
       if(EmitAggregateClassArrayField(base, child_type, child, scope, refresh_node,
                                       refresh_field_base, member.offset)) continue;
+      const bool member_constructor_unwind_started =
+        BeginAggregateMemberUnwind(child_type);
       const string field_base = refresh_field_base ? aggregate_refresh_base() : base;
       string field;
       if(direct_first_field && current_child_index == 0 && member.offset == 0)
@@ -1223,6 +928,7 @@ void PA14Lowerer::EmitAggregateClassFields(const string& base, const TypePtr& ra
          EmitAggregateClassObject(base, child_type, child, expression, scope,
            refresh_node, field, member.name, current_child_index, child_index,
            member.offset, computed)) continue;
+      FinishAggregateMemberUnwind(member_constructor_unwind_started, scope);
       if(child_type && child_type->kind == TYPE_ARRAY &&
          child && child->kind == "braced-init-list") {
         EmitAggregateAt(field, child_type, child, scope, refresh_node, member.offset);
@@ -1389,6 +1095,7 @@ void PA14Lowerer::EmitDestructorBody(FunctionRecord& function, Scope* scope)
       const ClassMemberInfo& member = owner->class_members[i - 1];
       TypePtr member_type = type_value(member.type);
       if(member.is_static || member.name.empty() || !member_type) continue;
+      if(type_is_reference(member.type)) continue;
       CPPGMAstNodePtr expression(new CPPGMAstNode("member-expression", "OP_ARROW:->"));
       expression->children.push_back(this_node);
       expression->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("identifier", member.name)));
@@ -1415,7 +1122,7 @@ void PA14Lowerer::EmitDestructorBody(FunctionRecord& function, Scope* scope)
       }
     }
     TypePtr base = type_value(owner->direct_base);
-    if(base) {
+    if(base && DestructorHasEffects(base)) {
       const string this_address = EmitValue(this_node, scope).operand;
       const string base_address = AdjustBaseAddress(this_address, owner, base);
       // A virtual base destructor still has to run when its body is empty;
@@ -1480,21 +1187,4 @@ void PA14Lowerer::EmitLiveDestructors(Scope* scope)
       }
     }
   }
-void PA14Lowerer::RegisterTemporaryObject(const TypePtr& type, const string& address)
-{
-    if(!state_ || !type || address.empty()) return;
-    if(!HasDestructor(type)) return;
-    state_->temporary_objects.push_back(FunctionState::TemporaryObject(type, address));
-  }
-
-void PA14Lowerer::EmitTemporaryDestructors(size_t mark, Scope* scope)
-{
-    if(!state_) return;
-    for(size_t i = state_->temporary_objects.size(); i > mark; --i) {
-      const FunctionState::TemporaryObject& temporary = state_->temporary_objects[i - 1];
-      (void)EmitDestructorAt(temporary.type, temporary.address, scope);
-    }
-    state_->temporary_objects.resize(mark);
-  }
-
 } // namespace cppgm_pa14_lowering

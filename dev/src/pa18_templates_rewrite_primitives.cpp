@@ -15,10 +15,11 @@ string PA18TemplateExpander::NodeTypeSpelling(const CPPGMAstNodePtr& sequence) c
         string spelling = RemoveMarker(child->value);
         if(spelling == "friend") continue;
         if(spelling.compare(0, 7, "friend ") == 0) spelling.erase(0, 7);
-        if(child->kind == "decl-specifier" &&
-           (spelling == "typedef" || spelling == "static" || spelling == "inline" ||
-            spelling == "constexpr" || spelling == "extern" ||
-            spelling == "thread_local" || spelling == "register" || spelling == "mutable"))
+		if(child->kind == "decl-specifier" &&
+		   (spelling == "typedef" || spelling == "static" || spelling == "inline" ||
+			spelling == "constexpr" || spelling == "extern" ||
+			spelling == "thread_local" || spelling == "register" || spelling == "mutable" ||
+			spelling == "virtual" || spelling == "explicit"))
             continue;
         if(child->kind == "class-forward-declaration" || child->kind == "class-specifier")
             spelling = LastComponent(RemoveMarker(child->value));

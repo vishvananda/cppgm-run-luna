@@ -81,11 +81,19 @@ CPPGMAstNodePtr range_subscript(const string& object, const string& index)
 void PA14Lowerer::EmitReturn(const CPPGMAstNodePtr& node, Scope* scope)
 {
     TypePtr return_type = SourceReturnType(*state_->record);
+    const auto finish_return_boundary = [&]() {
+      // A return from a handler closes the active catch before the ordinary
+      // live-object walk.  A return from a try body closes its source EH
+      // region after that walk, so destructors remain outside the handler.
+      FinishExceptionHandlerForReturn();
+      EmitLiveDestructors(scope);
+      FinishExceptionTryForReturn();
+    };
     if(state_->record->indirect_result) {
       if(!return_type || type_value(return_type)->kind != TYPE_CLASS)
         throw logic_error("indirect result is not a class value");
       if(node->children.empty()) {
-        EmitLiveDestructors(scope);
+        finish_return_boundary();
         Terminate("return void");
         return;
       }
@@ -94,7 +102,25 @@ void PA14Lowerer::EmitReturn(const CPPGMAstNodePtr& node, Scope* scope)
       const CPPGMAstNodePtr expression = node->children[0];
       if(expression->kind == "id-expression" && state_->return_slot_plan &&
          FindLocalPlan(expression->value) == state_->return_slot_plan) {
-        EmitLiveDestructors(scope);
+        // A named local returned through the indirect result slot is elided,
+        // but its class type still has an implicit copy frontier.  Demand the
+        // typed member operations after the local has been lowered so this
+        // late metadata does not change the constructor path being emitted.
+        TypePtr returned_type = type_value(return_type);
+        if(returned_type && returned_type->kind == TYPE_CLASS) {
+          for(size_t member = 0; member < returned_type->class_members.size(); ++member) {
+            const ClassMemberInfo& field = returned_type->class_members[member];
+            if(field.is_static || !field.type) continue;
+            TypePtr field_type = type_value(field.type);
+            while(field_type && field_type->kind == TYPE_ARRAY)
+              field_type = type_value(field_type->child);
+            if(!field_type || field_type->kind != TYPE_CLASS ||
+               !HasDestructor(field_type)) continue;
+            FunctionRecord* copy = EnsureImplicitCopyConstructor(field_type, false);
+            if(copy && !copy->deleted) MarkFunctionNeeded(copy);
+          }
+        }
+        finish_return_boundary();
         Terminate("return void");
         return;
       }
@@ -105,21 +131,36 @@ void PA14Lowerer::EmitReturn(const CPPGMAstNodePtr& node, Scope* scope)
       const bool implicit_return_move = expression->kind == "id-expression" &&
         FindLocalPlan(expression->value) && move_source_type &&
         !move_source_type->is_const;
-      if(!EmitObjectTransferAt(type_value(return_type), "%" + names[0],
-                               expression, scope, true, implicit_return_move))
-        throw logic_error("no viable return value transfer");
-      EmitLiveDestructors(scope);
+      const bool suppress_return_move_unwind = expression &&
+        expression->kind == "id-expression";
+      const bool previous_return_unwind_suppression = state_ &&
+        state_->suppress_constructor_unwind;
+      if(state_) state_->suppress_constructor_unwind =
+        previous_return_unwind_suppression || suppress_return_move_unwind;
+      bool transferred = false;
+      try {
+        transferred = EmitObjectTransferAt(type_value(return_type), "%" + names[0],
+          expression, scope, true, implicit_return_move);
+      } catch(...) {
+        if(state_) state_->suppress_constructor_unwind =
+          previous_return_unwind_suppression;
+        throw;
+      }
+      if(state_) state_->suppress_constructor_unwind =
+        previous_return_unwind_suppression;
+      if(!transferred) throw logic_error("no viable return value transfer");
+      finish_return_boundary();
       Terminate("return void");
       return;
     }
     if(!return_type || low_type(return_type) == "void") {
       if(!node->children.empty()) EmitDiscard(node->children[0], scope);
-      EmitLiveDestructors(scope);
+      finish_return_boundary();
       Terminate("return void");
       return;
     }
     if(node->children.empty()) {
-      EmitLiveDestructors(scope);
+      finish_return_boundary();
       Terminate("return " + low_type(return_type) + " 0");
       return;
     }
@@ -144,7 +185,7 @@ void PA14Lowerer::EmitReturn(const CPPGMAstNodePtr& node, Scope* scope)
          target_type->kind == TYPE_CLASS &&
          IsDerivedFrom(source_type, target_type))
         address = AdjustBaseAddress(address, source_type, target_type);
-      EmitLiveDestructors(scope);
+      finish_return_boundary();
       Terminate("return ptr " + address);
       return;
     }
@@ -162,10 +203,25 @@ void PA14Lowerer::EmitReturn(const CPPGMAstNodePtr& node, Scope* scope)
       const bool implicit_return_move = expression->kind == "id-expression" &&
         FindLocalPlan(expression->value) && move_source_type &&
         !move_source_type->is_const;
-      if(!EmitObjectTransferAt(return_value_type, destination, expression, scope, true,
-                               implicit_return_move))
-        throw logic_error("no viable direct class return transfer");
-      EmitLiveDestructors(scope);
+      const bool suppress_return_move_unwind = expression &&
+        expression->kind == "id-expression";
+      const bool previous_return_unwind_suppression = state_ &&
+        state_->suppress_constructor_unwind;
+      if(state_) state_->suppress_constructor_unwind =
+        previous_return_unwind_suppression || suppress_return_move_unwind;
+      bool transferred = false;
+      try {
+        transferred = EmitObjectTransferAt(return_value_type, destination, expression,
+          scope, true, implicit_return_move);
+      } catch(...) {
+        if(state_) state_->suppress_constructor_unwind =
+          previous_return_unwind_suppression;
+        throw;
+      }
+      if(state_) state_->suppress_constructor_unwind =
+        previous_return_unwind_suppression;
+      if(!transferred) throw logic_error("no viable direct class return transfer");
+      finish_return_boundary();
       Terminate("return " + low_type(return_type) + " $" + slot);
       return;
     }
@@ -180,7 +236,7 @@ void PA14Lowerer::EmitReturn(const CPPGMAstNodePtr& node, Scope* scope)
       // A known integral return value is already folded by the semantic
       // evaluator; retain it as an immediate across the ordinary integral
       // conversion boundary.
-      EmitLiveDestructors(scope);
+      finish_return_boundary();
       Terminate("return " + low_type(return_type) + " " + integer_text(value.constant));
       return;
     }
@@ -196,7 +252,7 @@ void PA14Lowerer::EmitReturn(const CPPGMAstNodePtr& node, Scope* scope)
       AddInstruction(copied + " = copy " + low_type(return_type) + " " + value.operand);
       value.operand = copied;
     }
-    EmitLiveDestructors(scope);
+    finish_return_boundary();
     Terminate("return " + low_type(return_type) + " " + value.operand);
   }
 

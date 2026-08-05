@@ -14,6 +14,8 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformInstantiatedNode(
 	const map<string, PA19IntegralValue> previous = active_integral_substitutions_;
 	const map<string, vector<string> > previous_packs = active_pack_substitutions_;
 	const map<string, vector<string> > previous_pack_identifiers = active_pack_identifier_substitutions_, previous_function_packs = active_function_pack_substitutions_;
+	const map<pair<size_t, size_t>, string> previous_lambda_replay_names =
+		active_lambda_replay_names_;
 	const map<string, FunctionSignature> previous_functions = active_function_substitutions_;
 	const set<string> previous_function_pointer_parameters =
 		active_function_pointer_substitutions_;
@@ -84,6 +86,7 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformInstantiatedNode(
 		active_integral_substitutions_ = previous;
 		active_pack_substitutions_ = previous_packs;
 		active_pack_identifier_substitutions_ = previous_pack_identifiers; active_function_pack_substitutions_ = previous_function_packs;
+		active_lambda_replay_names_ = previous_lambda_replay_names;
 		active_function_substitutions_ = previous_functions;
 		active_function_pointer_substitutions_ = previous_function_pointer_parameters;
 		early_integral_members_.swap(previous_early_integral_members);
@@ -92,6 +95,7 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformInstantiatedNode(
 		active_integral_substitutions_ = previous;
 		active_pack_substitutions_ = previous_packs;
 		active_pack_identifier_substitutions_ = previous_pack_identifiers; active_function_pack_substitutions_ = previous_function_packs;
+		active_lambda_replay_names_ = previous_lambda_replay_names;
 		active_function_substitutions_ = previous_functions;
 		active_function_pointer_substitutions_ = previous_function_pointer_parameters;
 		early_integral_members_.swap(previous_early_integral_members);

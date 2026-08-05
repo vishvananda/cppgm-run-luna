@@ -531,7 +531,7 @@ private:
 	set<string> function_contexts_;
 	map<string, string> function_owners_;
 	map<const CPPGMAstNode*, string> lambda_class_names_; map<pair<size_t, size_t>, string> lambda_class_names_by_span_; set<string> lambda_class_name_set_;
-	map<string, string> lambda_capture_contexts_; map<string, CPPGMAstNodePtr> lambda_source_nodes_; set<string> lambda_deferred_classes_; size_t next_lambda_serial_ = 0;
+	map<string, string> lambda_capture_contexts_; map<string, CPPGMAstNodePtr> lambda_source_nodes_; set<string> lambda_deferred_classes_; map<string, string> lambda_replay_names_; set<string> lambda_replay_bases_; map<pair<size_t, size_t>, string> active_lambda_replay_names_; size_t next_lambda_serial_ = 0;
 	map<string, string> local_class_names_; map<string, CPPGMAstNodePtr> class_declarations_; map<string, set<string> > static_members_by_class_; map<string, vector<const TemplateDefinition*> > using_member_template_targets_;
 	map<string, vector<string> > constant_member_owners_;
 	set<string> named_type_contexts_; map<string, string> enumerator_types_; map<string, string> variable_types_; map<string, string> variable_qualified_names_;

@@ -1,5 +1,4 @@
 #include "pa14_lowering.h"
-
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
@@ -14,11 +13,8 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
-
 using namespace std;
-
 namespace cppgm_pa14_lowering {
-
 PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expression, Scope* scope)
 {
     if(!expression || expression->children.empty()) throw logic_error("invalid call expression");
@@ -32,7 +28,6 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
     vector<ExprInfo> arguments;
     for(size_t i = 0; i < argument_nodes.size(); ++i)
       arguments.push_back(Infer(argument_nodes[i], scope));
-
     CallChoice best;
     vector<Binding*> candidates;
     bool direct = false;
@@ -361,26 +356,26 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseCall(const CPPGMAstNodePtr& expressio
 		best.function = function_target_type(callee.type);
 		if(!best.function) {
 			TypePtr callable = expression_value_type(callee);
-			if(callable && callable->kind == TYPE_CLASS)
+			if(callable && callable->kind == TYPE_CLASS) {
 				return ChooseCall(MakeMemberCall(callee_node, "operator()", argument_nodes), scope);
+			}
 		}
 		if(!best.function) throw logic_error("expression is not callable");
 		best.direct = false;
 		return best;
 	}
-
 	ExprInfo callee = Infer(callee_node, scope);
     best.function = function_target_type(callee.type);
     if(!best.function) {
       TypePtr callable = expression_value_type(callee);
-      if(callable && callable->kind == TYPE_CLASS)
+      if(callable && callable->kind == TYPE_CLASS) {
         return ChooseCall(MakeMemberCall(callee_node, "operator()", argument_nodes), scope);
+      }
     }
     if(!best.function) throw logic_error("expression is not callable");
     best.direct = false;
     return best;
   }
-
 PA14Lowerer::CallChoice PA14Lowerer::ChooseOperatorCall(
     const string& name, const vector<CPPGMAstNodePtr>& argument_nodes, Scope* scope)
 {
@@ -503,7 +498,6 @@ PA14Lowerer::CallChoice PA14Lowerer::ChooseOperatorCall(
     }
     return best;
   }
-
 string PA14Lowerer::new_temp()
 {
     while(true) {
@@ -513,14 +507,12 @@ string PA14Lowerer::new_temp()
         return "%" + name.str();
     }
   }
-
 string PA14Lowerer::new_label(const string& prefix)
 {
     ostringstream result;
     result << prefix << "_" << state_->next_label++;
     return result.str();
   }
-
 string PA14Lowerer::new_special_slot(const string& prefix, const string& type)
 {
     ostringstream result;
@@ -530,32 +522,27 @@ string PA14Lowerer::new_special_slot(const string& prefix, const string& type)
     state_->slot_order.push_back(FunctionState::SlotEntry(true, result.str()));
     return result.str();
   }
-
 void PA14Lowerer::AddInstruction(const string& text)
 {
     if(!state_->current || state_->current->terminated)
       throw logic_error("instruction emitted after LowIR terminator");
     state_->current->lines.push_back("    " + text);
-  }
-
+}
 void PA14Lowerer::Terminate(const string& text)
 {
     AddInstruction(text);
     state_->current->terminated = true;
   }
-
 PA14Lowerer::Block* PA14Lowerer::AddBlock(const string& label)
 {
     state_->blocks.push_back(Block(label));
     state_->current = &state_->blocks.back();
     return state_->current;
   }
-
 bool PA14Lowerer::block_is_terminated(const Block* block)
 {
     return block && block->terminated;
   }
-
 string PA14Lowerer::parameter_name(const CPPGMAstNodePtr& declarator, size_t index) const
 {
     if(!declarator) return "__param" + integer_text(static_cast<long long>(index));
@@ -563,7 +550,6 @@ string PA14Lowerer::parameter_name(const CPPGMAstNodePtr& declarator, size_t ind
     return name.empty() ? "__param" + integer_text(static_cast<long long>(index)) :
       last_component(name);
   }
-
 vector<string> PA14Lowerer::ParameterNames(const FunctionRecord& function) const
 {
     vector<string> result;
@@ -637,7 +623,6 @@ vector<string> PA14Lowerer::ParameterNames(const FunctionRecord& function) const
     }
     return result;
   }
-
 CPPGMAstNodePtr PA14Lowerer::InitializerExpression(const CPPGMAstNodePtr& initializer) const
 {
     if(!initializer || initializer->children.empty()) return CPPGMAstNodePtr();
@@ -646,7 +631,6 @@ CPPGMAstNodePtr PA14Lowerer::InitializerExpression(const CPPGMAstNodePtr& initia
       return expression->children.empty() ? CPPGMAstNodePtr() : expression->children[0];
     return expression;
   }
-
 long long PA14Lowerer::BracedElementCount(const CPPGMAstNodePtr& initializer) const
 {
     CPPGMAstNodePtr expression = InitializerExpression(initializer);
@@ -663,13 +647,11 @@ long long PA14Lowerer::BracedElementCount(const CPPGMAstNodePtr& initializer) co
       return static_cast<long long>(decode_string_literal(expression->value).size());
     return -1;
   }
-
 PA14Lowerer::FunctionRecord* PA14Lowerer::EnsureAggregateConstructor(const TypePtr& raw_type)
 {
     return EnsureAggregateConstructorForArguments(raw_type,
       static_cast<size_t>(-1));
   }
-
 PA14Lowerer::FunctionRecord* PA14Lowerer::EnsureAggregateConstructorForArguments(
     const TypePtr& raw_type, size_t argument_count)
 {
@@ -706,7 +688,6 @@ PA14Lowerer::FunctionRecord* PA14Lowerer::EnsureAggregateConstructorForArguments
     const string key = function_key(qname, source);
     map<string, FunctionRecord*>::const_iterator found = function_by_key_.find(key);
     if(found != function_by_key_.end()) return found->second;
-
     CPPGMAstNodePtr special(new CPPGMAstNode("special-member-definition", name));
     CPPGMAstNodePtr declarator(new CPPGMAstNode("declarator"));
     declarator->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("identifier", name)));
@@ -723,7 +704,6 @@ PA14Lowerer::FunctionRecord* PA14Lowerer::EnsureAggregateConstructorForArguments
     declarator->children.push_back(clause);
     special->children.push_back(declarator);
     special->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode("compound-statement")));
-
     Binding binding(BIND_FUNCTION, name, source);
     binding.qualified_name = qname;
     binding.is_member = true;
@@ -732,7 +712,6 @@ PA14Lowerer::FunctionRecord* PA14Lowerer::EnsureAggregateConstructorForArguments
     binding.access = "public";
     binding.declaration = special;
     owner->owned_scope->add(binding);
-
     functions_.push_back(FunctionRecord());
     FunctionRecord* record = &functions_.back();
     function_by_key_[key] = record;
@@ -769,7 +748,6 @@ PA14Lowerer::FunctionRecord* PA14Lowerer::EnsureAggregateConstructorForArguments
     }
     return record;
   }
-
 TypePtr PA14Lowerer::ArithmeticCommonType(const TypePtr& left, const TypePtr& right,
                                           const string& op) const
 {
@@ -804,7 +782,6 @@ TypePtr PA14Lowerer::ArithmeticCommonType(const TypePtr& left, const TypePtr& ri
     }
     return CommonType(common_left, common_right, op);
   }
-
 bool PA14Lowerer::AppendAggregateConstructorDefaults(
     const TypePtr& raw_object_type, const vector<CPPGMAstNodePtr>& input,
     vector<CPPGMAstNodePtr>* arguments)
@@ -813,6 +790,30 @@ bool PA14Lowerer::AppendAggregateConstructorDefaults(
     if(!object_type || object_type->kind != TYPE_CLASS || !arguments)
       return false;
     if(HasUserProvidedConstructor(object_type)) return false;
+    const auto has_out_of_line_default = [this](const TypePtr& raw_type) {
+      const TypePtr type = type_value(raw_type);
+      if(!type || type->kind != TYPE_CLASS || !type->owned_scope) return false;
+      const vector<Binding*> constructors = MemberBindings(type,
+        LastComponent(type->name));
+      for(size_t i = 0; i < constructors.size(); ++i) {
+        FunctionRecord* record = RecordForBinding(constructors[i]);
+        if(!record || !record->constructor || record->deleted ||
+           record->implicit_constructor || record->aggregate_constructor ||
+           record->copy_constructor || record->move_constructor ||
+           record->defaulted) continue;
+        TypePtr signature = function_target_type(constructors[i]->type);
+        if(!signature) continue;
+        bool defaultable = true;
+        for(size_t parameter = 0; parameter < signature->parameters.size(); ++parameter)
+          if(!HasDefaultArgument(constructors[i], parameter)) {
+            defaultable = false;
+            break;
+          }
+        if(defaultable && !ChildOfKind(record->node, "compound-statement"))
+          return true;
+      }
+      return false;
+    };
     size_t initialized_members = 0;
     bool aggregate_class_tail = false;
     for(size_t member = 0; member < object_type->class_members.size(); ++member) {
@@ -822,6 +823,12 @@ bool PA14Lowerer::AppendAggregateConstructorDefaults(
       const TypePtr field_type = type_value(field.type);
       if(field_type && (field_type->kind == TYPE_CLASS ||
                         field_type->kind == TYPE_ARRAY)) {
+        // Keep an out-of-line/default-only member in the generated aggregate
+        // body.  Its declaration has no inline body to replay here, while an
+        // inline default constructor can be materialized as the synthetic
+        // aggregate argument used by the earlier object-lowering contract.
+        if(field_type->kind == TYPE_CLASS && has_out_of_line_default(field_type))
+          return false;
         aggregate_class_tail = true;
         break;
       }
@@ -846,7 +853,6 @@ bool PA14Lowerer::AppendAggregateConstructorDefaults(
     }
     return true;
   }
-
 bool PA14Lowerer::EmitStringArrayInitializer(VariablePlan* variable,
     const CPPGMAstNodePtr& expression, const string& base, Scope* scope)
 {
@@ -872,7 +878,6 @@ bool PA14Lowerer::EmitStringArrayInitializer(VariablePlan* variable,
     }
     return true;
   }
-
 bool PA14Lowerer::EmitAggregateOmittedField(const ClassMemberInfo& member,
     const CPPGMAstNodePtr& this_node, Scope* scope)
 {
@@ -893,7 +898,6 @@ bool PA14Lowerer::EmitAggregateOmittedField(const ClassMemberInfo& member,
     } else emit_store(member.type, "0", address);
     return true;
   }
-
 bool PA14Lowerer::EmitAggregateClassParameter(FunctionRecord& function,
     const ClassMemberInfo& member, const string& address,
     const vector<string>& names, size_t* parameter)
@@ -935,7 +939,6 @@ bool PA14Lowerer::EmitAggregateClassParameter(FunctionRecord& function,
     ++*parameter;
     return true;
   }
-
 bool PA14Lowerer::EmitReferenceConversionUpdate(const CPPGMAstNodePtr& node,
     Scope* scope, Value* result)
 {
@@ -969,7 +972,6 @@ bool PA14Lowerer::EmitReferenceConversionUpdate(const CPPGMAstNodePtr& node,
     *result = node->kind == "postfix-expression" ? old : updated;
     return true;
   }
-
 bool PA14Lowerer::ContainsAutoType(const TypePtr& raw) const
 {
     if(!raw) return false;
@@ -981,7 +983,6 @@ bool PA14Lowerer::ContainsAutoType(const TypePtr& raw) const
     }
     return false;
   }
-
 PA14Lowerer::ExprInfo PA14Lowerer::InferAutoInitializer(
     const CPPGMAstNodePtr& initializer, Scope* scope)
 {
@@ -992,7 +993,6 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferAutoInitializer(
     }
     return Infer(expression, scope);
   }
-
 TypePtr PA14Lowerer::DeduceAutoType(const TypePtr& declared,
                                     const CPPGMAstNodePtr& initializer,
                                     Scope* scope)
@@ -1002,7 +1002,6 @@ TypePtr PA14Lowerer::DeduceAutoType(const TypePtr& declared,
     TypePtr source = source_info.type;
     if(!source) throw logic_error("auto initializer has no type");
     TypePtr source_value = type_value(source);
-
     // A by-value placeholder follows the ordinary array/function adjustment
     // before the placeholder is substituted.  References retain the source
     // value and category, which is the distinction that makes auto&& useful.
@@ -1019,7 +1018,6 @@ TypePtr PA14Lowerer::DeduceAutoType(const TypePtr& declared,
         source_value = PointerTo(source_value->child);
       else source_value = without_top_cv(source_value);
     }
-
     function<TypePtr(const TypePtr&, const TypePtr&)> substitute;
     substitute = [&](const TypePtr& pattern, const TypePtr& value) -> TypePtr {
       if(!pattern) return value;
@@ -1042,7 +1040,6 @@ TypePtr PA14Lowerer::DeduceAutoType(const TypePtr& declared,
         throw logic_error("unsupported auto declarator shape");
       return pattern;
     };
-
     if(declared->kind == TYPE_LVALUE_REFERENCE ||
        declared->kind == TYPE_RVALUE_REFERENCE) {
       const TypeKind reference_kind = declared->kind == TYPE_LVALUE_REFERENCE ||
@@ -1054,7 +1051,6 @@ TypePtr PA14Lowerer::DeduceAutoType(const TypePtr& declared,
     }
     return substitute(declared, source_value);
   }
-
 TypePtr PA14Lowerer::PlannedType(const CPPGMAstNodePtr& declaration,
                       const CPPGMAstNodePtr& declarator,
                       Scope* scope, const CPPGMAstNodePtr& initializer)
@@ -1072,7 +1068,6 @@ TypePtr PA14Lowerer::PlannedType(const CPPGMAstNodePtr& declaration,
       type = CloneWithCv(type, true, false);
     return type;
   }
-
 PA14Lowerer::VariablePlan* PA14Lowerer::AddVariablePlan(const string& name, const TypePtr& type,
                                 const CPPGMAstNodePtr& declarator,
                                 const CPPGMAstNodePtr& initializer)
@@ -1099,7 +1094,6 @@ PA14Lowerer::VariablePlan* PA14Lowerer::AddVariablePlan(const string& name, cons
     state_->environments.back()[name] = &plan;
     return &plan;
   }
-
 void PA14Lowerer::PlanSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* scope)
 {
     if(!node || node->children.empty()) return;
@@ -1118,10 +1112,26 @@ void PA14Lowerer::PlanSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* scop
         item->children.size() > 1 ? item->children[1] : CPPGMAstNodePtr());
 		map<const CPPGMAstNode*, GlobalRecord*>::const_iterator local_static =
 			local_static_plans_.find(declarator.get());
-		if(plan && local_static != local_static_plans_.end()) plan->global = local_static->second;
+		if(plan && local_static != local_static_plans_.end())
+      plan->global = local_static->second;
+    // Replayed template bodies can carry a fresh declarator node while the
+    // semantic scope retains the binding whose qualified name was assigned
+    // by CollectLocalStatics.  Recover that typed global identity by binding
+    // name so a local-static guard is not silently dropped from the replay.
+    if(plan && !plan->global) {
+      const string name = LastComponent(declarator_name(declarator));
+      for(Scope* current = scope; current && !plan->global;
+          current = current->parent) {
+        Binding* binding = current->local(name);
+        if(!binding || binding->qualified_name.find("__local_static__") != 0)
+          continue;
+        map<string, GlobalRecord*>::const_iterator found =
+          global_by_key_.find(global_key(binding->qualified_name));
+        if(found != global_by_key_.end()) plan->global = found->second;
+      }
+    }
     }
   }
-
 void PA14Lowerer::PlanCondition(const CPPGMAstNodePtr& condition, Scope* scope)
 {
     if(!condition || condition->kind != "condition-declaration" || condition->children.size() < 3) return;
@@ -1131,12 +1141,10 @@ void PA14Lowerer::PlanCondition(const CPPGMAstNodePtr& condition, Scope* scope)
     AddVariablePlan(declarator_name(condition->children[1]), type,
       condition->children[1], condition->children[2]);
   }
-
 CPPGMAstNodePtr PA14Lowerer::ChildNamed(const CPPGMAstNodePtr& node, const string& name) const
 {
     return ChildOfKind(node, name);
   }
-
 void PA14Lowerer::PlanStatement(const CPPGMAstNodePtr& node, Scope* scope)
 {
     if(!node) return;
@@ -1148,6 +1156,15 @@ void PA14Lowerer::PlanStatement(const CPPGMAstNodePtr& node, Scope* scope)
       state_->environments.push_back(map<string, VariablePlan*>());
       for(size_t i = 0; i < node->children.size(); ++i) PlanStatement(node->children[i], scope);
       state_->environments.pop_back();
+      return;
+    }
+    if(node->kind == "try-block") {
+      if(!node->children.empty()) PlanStatement(node->children[0], scope);
+      for(size_t i = 1; i < node->children.size(); ++i) {
+        const CPPGMAstNodePtr handler = node->children[i];
+        if(handler && handler->kind == "handler" && handler->children.size() > 1)
+          PlanStatement(handler->children[1], scope);
+      }
       return;
     }
     if(node->kind == "simple-declaration" || node->kind == "bit-field-declaration") {
@@ -1210,7 +1227,6 @@ void PA14Lowerer::PlanStatement(const CPPGMAstNodePtr& node, Scope* scope)
       return;
     }
   }
-
 void PA14Lowerer::PlanFunction(FunctionState& state)
 {
     state.environments.push_back(map<string, VariablePlan*>());
@@ -1251,8 +1267,7 @@ void PA14Lowerer::PlanFunction(FunctionState& state)
         for(size_t i = state.variables.size(); i > 0; --i) {
           VariablePlan& variable = state.variables[i - 1];
           if(variable.parameter || variable.source_name != expression->value ||
-             !PA12SameType(type_value(variable.type), return_type, true) ||
-             DestructorHasEffects(variable.type)) continue;
+             !PA12SameType(type_value(variable.type), return_type, true)) continue;
           state.return_slot_plan = &variable;
           variable.initialization_address = "%" + names[0];
           break;
@@ -1260,7 +1275,6 @@ void PA14Lowerer::PlanFunction(FunctionState& state)
       }
     }
   }
-
 void PA14Lowerer::ResolveAutoFunctionReturns()
 {
     for(size_t function_index = 0; function_index < functions_.size();
@@ -1268,7 +1282,6 @@ void PA14Lowerer::ResolveAutoFunctionReturns()
       ResolveAutoFunctionReturn(functions_[function_index]);
     }
   }
-
 void PA14Lowerer::ResolveAutoFunctionReturn(FunctionRecord& record)
 {
     TypePtr source_function = function_target_type(record.source_type);
@@ -1298,14 +1311,14 @@ void PA14Lowerer::ResolveAutoFunctionReturn(FunctionRecord& record)
       return;
     }
     TypePtr result_type = DeduceAutoFunctionReturn(record, source_function, body, returns);
-    if(ContainsAutoType(result_type)) throw logic_error("could not deduce auto return type");
+    if(ContainsAutoType(result_type))
+      throw logic_error("could not deduce auto return type");
     const TypePtr old_source = record.source_type;
     TypePtr adjusted_source(new Type(*source_function));
     adjusted_source->child = result_type;
     ApplyAutoFunctionReturn(record, old_source, source_function, result_type);
     (void)adjusted_source;
   }
-
 TypePtr PA14Lowerer::DeduceAutoFunctionReturn(FunctionRecord& record,
     const TypePtr& source_function, const CPPGMAstNodePtr& body,
     const vector<CPPGMAstNodePtr>& returns)
@@ -1392,7 +1405,6 @@ TypePtr PA14Lowerer::DeduceAutoFunctionReturn(FunctionRecord& record,
     state_ = saved_state;
     return result_type;
   }
-
 void PA14Lowerer::ApplyAutoFunctionReturn(FunctionRecord& record,
     const TypePtr& old_source, const TypePtr& source_function,
     const TypePtr& result_type)
@@ -1429,7 +1441,6 @@ void PA14Lowerer::ApplyAutoFunctionReturn(FunctionRecord& record,
     function_by_key_[function_key(record.qualified_name, adjusted_source)] = &record;
     infer_cache_.clear();
   }
-
 CPPGMAstNodePtr PA14Lowerer::FindDirectReturnExpression(
   const CPPGMAstNodePtr& node, unsigned int& count) const
 {
@@ -1445,7 +1456,6 @@ CPPGMAstNodePtr PA14Lowerer::FindDirectReturnExpression(
     }
     return result;
   }
-
 string PA14Lowerer::FunctionSymbolForBinding(Binding* binding, const TypePtr& fallback) const
 {
     if(binding) {
@@ -1461,23 +1471,19 @@ string PA14Lowerer::FunctionSymbolForBinding(Binding* binding, const TypePtr& fa
     FunctionRecord* record = FindFunction(last_component(""), fallback);
     return record ? record->symbol : string();
   }
-
 string PA14Lowerer::GlobalSymbolForBinding(Binding* binding) const
 {
     if(!binding) return string();
     GlobalRecord* global = FindGlobal(binding->qualified_name);
     return global ? global->symbol : low_symbol_component(binding->qualified_name);
   }
-
 PA14Lowerer::VariablePlan* PA14Lowerer::LocalForName(const string& name) const
 {
     return FindLocalPlan(name);
   }
-
 string PA14Lowerer::StorageForVariable(const VariablePlan& variable) const
 {
     if(variable.global) return "@" + variable.global->symbol;
     return "$" + variable.slot_name;
   }
-
 } // namespace cppgm_pa14_lowering

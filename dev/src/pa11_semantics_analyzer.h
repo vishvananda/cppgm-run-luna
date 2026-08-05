@@ -1062,6 +1062,35 @@ public:
 		compound_scopes_[node.get()] = block;
 		for (size_t i = 0; i < node->children.size(); ++i) Process(node->children[i], block);
 	}
+	void ProcessTryBlock(const CPPGMAstNodePtr& node, Scope* parent)
+	{
+		if (!node || node->children.empty()) return;
+		Process(node->children[0], parent);
+		for (size_t i = 1; i < node->children.size(); ++i)
+		{
+			const CPPGMAstNodePtr handler = node->children[i];
+			if (!handler || handler->kind != "handler" || handler->children.size() < 2)
+				continue;
+			// The exception declaration is a binding in the handler's enclosing
+			// scope; the compound statement below then gets the ordinary block
+			// scope used by all other statements.
+			Scope* handler_scope = NewChild(parent, SCOPE_BLOCK, string());
+			const CPPGMAstNodePtr exception = handler->children[0];
+			if (exception && !exception->children.empty() &&
+				exception->children[0] &&
+				exception->children[0]->kind != "ellipsis")
+			{
+				TypePtr type = TypeFromSpecSeq(exception->children[0], handler_scope);
+				if (exception->children.size() > 1 && exception->children[1])
+				{
+					const string name = FirstIdentifier(exception->children[1]);
+					type = BuildDeclarator(exception->children[1], type, handler_scope);
+					if (!name.empty()) handler_scope->add(Binding(BIND_VARIABLE, name, type));
+				}
+			}
+			ProcessCompound(handler->children[1], handler_scope);
+		}
+	}
 	void AddFunctionParameters(Scope* function_scope, const CPPGMAstNodePtr& declarator,
 		Scope* lookup_scope)
 	{
@@ -1130,6 +1159,7 @@ public:
 		if (node->kind == "function-definition") return ProcessFunctionDefinition(node, scope);
 		if (node->kind == "static-assert-declaration") return ProcessStaticAssert(node, scope);
 		if (node->kind == "compound-statement") return ProcessCompound(node, scope);
+		if (node->kind == "try-block") return ProcessTryBlock(node, scope);
 		if (node->kind == "linkage-specification" || node->kind == "explicit-instantiation-declaration")
 		{
 			for (size_t i = 0; i < node->children.size(); ++i) Process(node->children[i], scope);

@@ -11,6 +11,10 @@ void PA14Lowerer::EmitDiscard(const CPPGMAstNodePtr& node, Scope* scope)
       if(!node->children.empty()) EmitDiscard(node->children[0], scope);
       return;
     }
+    if(node->kind == "throw-expression") {
+      EmitThrow(node->children.empty() ? CPPGMAstNodePtr() : node->children[0], scope);
+      return;
+    }
     if(node->kind == "postfix-expression") {
       EmitUpdate(node, scope, false);
       return;

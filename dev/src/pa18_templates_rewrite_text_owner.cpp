@@ -83,6 +83,12 @@ void PA18TemplateExpander::RebindGeneratedOwnerMembers(string* raw,
 		if(current->first.empty() || current->second.empty() ||
 			current->second.find('<') != string::npos ||
 			current->first == current->second) continue;
+		// Most replay substitutions are ordinary value/type bindings that do
+		// not own a qualified member in this spelling.  Avoid class lookup for
+		// those bindings; FindClassDeclaration may perform partial-specialization
+		// selection and is substantially more expensive than the actual rewrite.
+		const string marker = current->first + "::";
+		if(raw->find(marker) == string::npos) continue;
 		const bool generated_scope = specialization_bases_.find(
 			LastComponent(current->second)) != specialization_bases_.end() &&
 			specialization_arguments_.find(LastComponent(current->second)) !=
@@ -91,7 +97,6 @@ void PA18TemplateExpander::RebindGeneratedOwnerMembers(string* raw,
 			class_contexts_.find(current->second) != class_contexts_.end() ||
 			FindClassDeclaration(current->second, context) != CPPGMAstNodePtr();
 		if(!known_scope) continue;
-		const string marker = current->first + "::";
 		for(size_t at = raw->find(marker); at != string::npos;
 			at = raw->find(marker, at + current->second.size())) {
 			if(at > 0 && IsIdentifierCharacter((*raw)[at - 1])) continue;

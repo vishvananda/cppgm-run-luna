@@ -120,6 +120,18 @@ bool PA18TemplateExpander::InferCallIdentifierArgument(
 	if(!owner.empty() && !member.empty() && FindClassMemberType(
 		owner, member, substitutions, context, &member_type, &active)) {
 		string callable_result;
+		// A callable data member is itself resolved through ordinary class-member
+		// lookup.  This is important for dependent wrapper members such as
+		// `PrevType const& prev_`: the member lookup above recovers the concrete
+		// object type, after which its non-special `operator()` must determine the
+		// call expression's result type before surrounding operator overload
+		// deduction runs.
+		set<string> callable_active;
+		if(FindClassMemberType(member_type, "operator()", substitutions, context,
+			&callable_result, &callable_active) && !callable_result.empty()) {
+			*result = callable_result;
+			return true;
+		}
 		if(InferCallableObjectCall(expression, member_type, substitutions,
 			context, &callable_result)) {
 			*result = callable_result;

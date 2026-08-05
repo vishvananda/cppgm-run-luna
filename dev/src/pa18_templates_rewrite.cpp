@@ -1,5 +1,6 @@
 #include "pa18_templates_collection.h"
 #include "pa18_templates_rewrite.h"
+
 using namespace std;
 namespace pa18_templates_internal {
 
@@ -1212,9 +1213,18 @@ CPPGMAstNodePtr PA18TemplateExpander::TransformRegularNode(
 		result->extern_instantiation = input->extern_instantiation;
 		result->dependent_base_lookup = input->dependent_base_lookup;
 		result->has_deferred_constructor = input->has_deferred_constructor;
-		result->materialize_object_address = input->materialize_object_address;
-		result->source_token_begin = input->source_token_begin;
-		result->source_token_end = input->source_token_end;
+	result->materialize_object_address = input->materialize_object_address;
+	result->source_token_begin = input->source_token_begin;
+	result->source_token_end = input->source_token_end;
+	if(input->kind == "lambda-expression" &&
+	   input->source_token_begin != static_cast<size_t>(-1) &&
+	   input->source_token_end != static_cast<size_t>(-1)) {
+		map<pair<size_t, size_t>, string>::const_iterator replay =
+			active_lambda_replay_names_.find(make_pair(input->source_token_begin,
+				input->source_token_end));
+		if(replay != active_lambda_replay_names_.end())
+			result->inferred_type = replay->second;
+	}
 		if(input->kind == "simple-declaration" &&
 			SpellNode(input).find("decltype(") != string::npos) {
 			result->materialize_object_address = true;

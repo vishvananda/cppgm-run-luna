@@ -580,6 +580,16 @@ bool PA18TemplateExpander::InferArgument(const CPPGMAstNodePtr& expression,
 		return true;
 	}
 	if(expression->kind == "lambda-expression") {
+		if(expression->source_token_begin != static_cast<size_t>(-1) &&
+		   expression->source_token_end != static_cast<size_t>(-1)) {
+			map<pair<size_t, size_t>, string>::const_iterator replay =
+				active_lambda_replay_names_.find(make_pair(
+					expression->source_token_begin, expression->source_token_end));
+			if(replay != active_lambda_replay_names_.end()) {
+				*result = replay->second;
+				return true;
+			}
+		}
 		map<const CPPGMAstNode*, string>::const_iterator closure =
 			lambda_class_names_.find(expression.get());
 		if(closure != lambda_class_names_.end()) {
@@ -745,8 +755,9 @@ bool PA18TemplateExpander::InferArgument(const CPPGMAstNodePtr& expression,
 		if(expression->kind == "id-expression")
 			return InferIdentifierArgument(expression, result, substitutions, context,
 				function_signature);
-		if(expression->kind == "call-expression")
+		if(expression->kind == "call-expression") {
 			return InferCallArgument(expression, result, substitutions, context);
+		}
 		if(expression->kind == "unary-expression" && !expression->children.empty()) {
 			const string op = RemoveMarker(expression->value);
 			if(op == "*") {

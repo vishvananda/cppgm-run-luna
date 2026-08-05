@@ -2,10 +2,8 @@
 #include <cstdlib>
 #include <functional>
 using namespace std;
-
 namespace cppgm_pa14_lowering {
 namespace {
-
 string TypeNameValue(const CPPGMAstNodePtr& node)
 {
     if(!node) return string();
@@ -248,7 +246,6 @@ void PA14Lowerer::AppendAssociatedOperatorBindings(const TypePtr& raw_type,
     }
     if(type->kind != TYPE_CLASS && type->kind != TYPE_ENUM) return;
     if(!visited_types.insert(type.get()).second) return;
-
     Scope* owner_scope = type->owned_scope;
     if(!owner_scope) owner_scope = FindTypeOwnerScope(analyzer_.global_.get(), type);
     if(type->kind == TYPE_CLASS && owner_scope) {
@@ -454,12 +451,10 @@ Binding* PA14Lowerer::MemberBinding(const CPPGMAstNodePtr& node, Scope* scope,
     }
     return selected;
   }
-
 TypePtr PA14Lowerer::expression_value_type(const ExprInfo& info) const
 {
     return type_value(info.type);
   }
-
 TypePtr PA14Lowerer::function_target_type(const TypePtr& type) const
 {
     TypePtr value = type_value(type);
@@ -468,7 +463,6 @@ TypePtr PA14Lowerer::function_target_type(const TypePtr& type) const
        value->child->kind == TYPE_FUNCTION) return value->child;
     return TypePtr();
   }
-
 PA14Lowerer::ExprInfo PA14Lowerer::InferLiteral(const CPPGMAstNodePtr& node,
                                                 const TypePtr& expected,
                                                 Scope* scope)
@@ -513,7 +507,6 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferLiteral(const CPPGMAstNodePtr& node,
     }
     return result;
   }
-
 PA14Lowerer::ExprInfo PA14Lowerer::InferKeyword(const CPPGMAstNodePtr& node) const
 {
     ExprInfo result;
@@ -541,7 +534,6 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferKeyword(const CPPGMAstNodePtr& node) con
     }
     return result;
 }
-
 Binding* PA14Lowerer::ResolveDecltypeStaticMember(const string& spelling,
                                                   Scope* scope) const
 {
@@ -568,7 +560,6 @@ Binding* PA14Lowerer::ResolveDecltypeStaticMember(const string& spelling,
             return members[i];
     return 0;
 }
-
 PA14Lowerer::VariablePlan* PA14Lowerer::FindLocalPlan(const string& name) const
 {
     if(!state_) return 0;
@@ -579,7 +570,6 @@ PA14Lowerer::VariablePlan* PA14Lowerer::FindLocalPlan(const string& name) const
     }
     return 0;
   }
-
 PA14Lowerer::ExprInfo PA14Lowerer::InferIdentifier(const CPPGMAstNodePtr& node, Scope* scope,
                            const TypePtr& expected) const
 {
@@ -702,7 +692,6 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferIdentifier(const CPPGMAstNodePtr& node, 
     result.category = "lvalue";
     return result;
   }
-
 PA14Lowerer::ExprInfo PA14Lowerer::InferMember(const CPPGMAstNodePtr& node,
                                                 Scope* scope) const
 {
@@ -758,8 +747,6 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferMember(const CPPGMAstNodePtr& node,
     result.category = "lvalue";
     return result;
   }
-
-
 TypePtr PA14Lowerer::CommonType(const TypePtr& left, const TypePtr& right,
                     const string& op) const
 {
@@ -817,7 +804,6 @@ TypePtr PA14Lowerer::CommonType(const TypePtr& left, const TypePtr& right,
     (void)op;
     return l;
   }
-
 string PA14Lowerer::OperatorFunctionName(const string& raw) const
 {
     const string op = PA12Operator(raw);
@@ -829,7 +815,6 @@ string PA14Lowerer::OperatorFunctionName(const string& raw) const
     if(op == "not_eq") return "operator!=";
     return "operator" + op;
   }
-
 PA14Lowerer::ExprInfo PA14Lowerer::InferCall(const CPPGMAstNodePtr& node, Scope* scope)
 {
     ExprInfo result;
@@ -870,7 +855,6 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferCall(const CPPGMAstNodePtr& node, Scope*
     result.binding = choice.binding;
     return result;
   }
-
 TypePtr PA14Lowerer::ConstructorObjectType(const CPPGMAstNodePtr& callee,
                                             Scope* scope) const
 {
@@ -928,7 +912,6 @@ TypePtr PA14Lowerer::ConstructorObjectType(const CPPGMAstNodePtr& callee,
     }
     return TypePtr();
 }
-
 TypePtr PA14Lowerer::BuiltinCastType(const CPPGMAstNodePtr& callee,
                                       Scope* scope) const
 {
@@ -979,7 +962,6 @@ TypePtr PA14Lowerer::BuiltinCastType(const CPPGMAstNodePtr& callee,
     return alias && type_value(alias) && type_value(alias)->kind != TYPE_CLASS &&
       type_value(alias)->kind != TYPE_ARRAY ? alias : TypePtr();
   }
-
 PA14Lowerer::ExprInfo PA14Lowerer::InferUnary(const CPPGMAstNodePtr& node, Scope* scope)
 {
     ExprInfo result;
@@ -1027,7 +1009,6 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferUnary(const CPPGMAstNodePtr& node, Scope
     }
     return result;
   }
-
 PA14Lowerer::ExprInfo PA14Lowerer::InferBinary(const CPPGMAstNodePtr& node, Scope* scope)
 {
     ExprInfo result;
@@ -1149,7 +1130,6 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferBinary(const CPPGMAstNodePtr& node, Scop
     result.category = "prvalue";
     return result;
   }
-
 PA14Lowerer::ExprInfo PA14Lowerer::InferSubscript(const CPPGMAstNodePtr& node, Scope* scope)
 {
     ExprInfo base = Infer(node->children[0], scope);
@@ -1182,7 +1162,6 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferSubscript(const CPPGMAstNodePtr& node, S
     result.category = "lvalue";
     return result;
   }
-
 PA14Lowerer::ExprInfo PA14Lowerer::Infer(const CPPGMAstNodePtr& node, Scope* scope,
                 const TypePtr& expected)
 {
@@ -1202,7 +1181,6 @@ PA14Lowerer::ExprInfo PA14Lowerer::Infer(const CPPGMAstNodePtr& node, Scope* sco
     if(!expected) infer_cache_[node.get()] = InferCacheEntry(node, scope, result);
     return result;
 }
-
 PA14Lowerer::ExprInfo PA14Lowerer::InferSizeofExpression(
     const CPPGMAstNodePtr& node, Scope* scope)
 {
@@ -1264,7 +1242,6 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferSizeofExpression(
         static_cast<long long>(type_alignment(type)) : static_cast<long long>(type_size(type));
       return result;
 }
-
 PA14Lowerer::ExprInfo PA14Lowerer::InferUncached(const CPPGMAstNodePtr& node, Scope* scope,
                 const TypePtr& expected)
 {
@@ -1380,7 +1357,6 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferUncached(const CPPGMAstNodePtr& node, Sc
     }
     throw logic_error("unsupported expression in LowIR lowering: " + node->kind);
   }
-
 PA14Lowerer::ExprInfo PA14Lowerer::InferAllocation(const CPPGMAstNodePtr& node,
                                                     Scope* scope)
 {
@@ -1404,7 +1380,6 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferAllocation(const CPPGMAstNodePtr& node,
     result.category = "prvalue";
     return result;
   }
-
 bool PA14Lowerer::HasExplicitConstructor(const TypePtr& raw_type) const
 {
     TypePtr type = type_value(raw_type);
@@ -1420,7 +1395,6 @@ bool PA14Lowerer::HasExplicitConstructor(const TypePtr& raw_type) const
     }
     return false;
   }
-
 bool PA14Lowerer::HasUserProvidedConstructor(const TypePtr& raw_type) const
 {
     TypePtr type = type_value(raw_type);
@@ -1436,7 +1410,6 @@ bool PA14Lowerer::HasUserProvidedConstructor(const TypePtr& raw_type) const
     }
     return false;
   }
-
 bool PA14Lowerer::HasClassArrayMember(const TypePtr& raw_type) const
 {
     TypePtr type = type_value(raw_type);
@@ -1455,7 +1428,6 @@ bool PA14Lowerer::HasClassArrayMember(const TypePtr& raw_type) const
     }
     return false;
   }
-
 bool PA14Lowerer::HasNonstaticMemberFunction(const TypePtr& raw_type) const
 {
     TypePtr type = type_value(raw_type);
@@ -1467,7 +1439,6 @@ bool PA14Lowerer::HasNonstaticMemberFunction(const TypePtr& raw_type) const
     }
   return false;
 }
-
 bool PA14Lowerer::HasNonSizeofReference(const CPPGMAstNodePtr& node,
                                         const string& name, bool inside_sizeof,
                                         bool ignore_discarded) const
@@ -1496,5 +1467,4 @@ bool PA14Lowerer::HasNonSizeofReference(const CPPGMAstNodePtr& node,
                                ignore_discarded)) return true;
     return false;
   }
-
 } // namespace cppgm_pa14_lowering

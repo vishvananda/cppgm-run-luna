@@ -247,6 +247,28 @@ string abi_type_text(const string& raw)
 	// treating it as an identifier.
 	if(value == "true") return "Lb1E";
 	if(value == "false") return "Lb0E";
+	// A reference to an array is spelled with a parenthesized declarator,
+	// e.g. `const char (&)[4]`.  Recognize that shape before the generic
+	// function-type probe; otherwise the inner `(&)` is mistaken for a
+	// zero-argument function returning `char`.
+	const size_t lvalue_array_reference = value.find("(&)");
+	if(lvalue_array_reference != string::npos &&
+	   lvalue_array_reference + 3 < value.size() &&
+	   value[lvalue_array_reference + 3] == '[' &&
+	   value[value.size() - 1] == ']') {
+	  const string element = value.substr(0, lvalue_array_reference) +
+	    value.substr(lvalue_array_reference + 3);
+	  return "R" + abi_type_text(element);
+	}
+	const size_t rvalue_array_reference = value.find("(&&)");
+	if(rvalue_array_reference != string::npos &&
+	   rvalue_array_reference + 4 < value.size() &&
+	   value[rvalue_array_reference + 4] == '[' &&
+	   value[value.size() - 1] == ']') {
+	  const string element = value.substr(0, rvalue_array_reference) +
+	    value.substr(rvalue_array_reference + 4);
+	  return "O" + abi_type_text(element);
+	}
 	string function_result;
 	vector<string> function_parameters;
 	bool function_reference = false;

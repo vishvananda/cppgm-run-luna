@@ -22,7 +22,10 @@ bool RttiNeedsTypeMangledClassName(const TypePtr& type)
   if(!type || type->kind != TYPE_CLASS || !type->template_specialization)
     return false;
   for(size_t argument = 0; argument < type->template_arguments.size(); ++argument)
-    if(type->template_arguments[argument].find("[]") != string::npos)
+    // Array-containing template arguments need the ABI spelling for their
+    // identity.  The source-style low name is not stable for either a
+    // bounded array (`T[N]`) or an array reference (`T const (&)[N]`).
+    if(type->template_arguments[argument].find('[') != string::npos)
       return true;
   return false;
 }
@@ -580,8 +583,58 @@ void PA14Lowerer::IndexRttiUses(const CPPGMAstNodePtr& node, Scope* scope)
       throw logic_error("dynamic_cast source is not polymorphic");
     EnsureRttiType(source_class);
   }
-  for(size_t child = 0; child < node->children.size(); ++child)
+    for(size_t child = 0; child < node->children.size(); ++child)
     IndexRttiUses(node->children[child], current);
+}
+
+void PA14Lowerer::IndexExceptionUses(const CPPGMAstNodePtr& node, Scope* scope)
+{
+  if(!node) return;
+  Scope* current = scope;
+  map<const CPPGMAstNode*, Scope*>::const_iterator function_scope =
+    analyzer_.function_scopes_.find(node.get());
+  if(function_scope != analyzer_.function_scopes_.end()) current = function_scope->second;
+  map<const CPPGMAstNode*, Scope*>::const_iterator compound_scope =
+    analyzer_.compound_scopes_.find(node.get());
+  if(compound_scope != analyzer_.compound_scopes_.end()) current = compound_scope->second;
+
+  const auto demand = [this](const TypePtr& raw) {
+    const TypePtr type = RttiValueType(raw);
+    if(!type || type->kind == TYPE_FUNCTION ||
+       type->kind == TYPE_TEMPLATE_PARAMETER ||
+       type->kind == TYPE_TEMPLATE_TEMPLATE_PARAMETER) return;
+    has_rtti_syntax_ = true;
+    demanded_exception_types_[RttiMangledName(type)] = type;
+    // Fundamental exception type_info objects are supplied by the C++ ABI for
+    // matching, while the local weak model remains useful for the ordinary
+    // typed RTTI graph and object-size bookkeeping.
+    EnsureRttiType(type);
+    for(size_t function = 0; function < functions_.size(); ++function) {
+      if(functions_[function].qualified_name == "__external_runtime___Unwind_Resume" ||
+         functions_[function].qualified_name == "__external_runtime____gxx_personality_v0")
+        MarkFunctionNeeded(&functions_[function]);
+    }
+  };
+
+  if(node->kind == "throw-statement" || node->kind == "throw-expression") {
+    if(!node->children.empty() && node->children[0]) {
+      const ExprInfo info = Infer(node->children[0], current);
+      const TypePtr thrown = RttiValueType(expression_value_type(info));
+      demand(thrown);
+      if(thrown) demanded_thrown_types_[RttiMangledName(thrown)] = thrown;
+    }
+  } else if(node->kind == "handler" && !node->children.empty()) {
+    const CPPGMAstNodePtr declaration = node->children[0];
+    if(declaration && !declaration->children.empty() && declaration->children[0] &&
+       declaration->children[0]->kind != "ellipsis") {
+      TypePtr type = analyzer_.TypeFromSpecSeq(declaration->children[0], current);
+      if(declaration->children.size() > 1 && declaration->children[1])
+        type = analyzer_.BuildDeclarator(declaration->children[1], type, current);
+      demand(type);
+    }
+  }
+  for(size_t child = 0; child < node->children.size(); ++child)
+    IndexExceptionUses(node->children[child], current);
 }
 
 PA14Lowerer::ExprInfo PA14Lowerer::InferTypeidExpression(
@@ -609,6 +662,8 @@ PA14Lowerer::ExprInfo PA14Lowerer::InferTypeidExpression(
 
 string PA14Lowerer::VTableSymbol(const TypePtr& type) const
 {
+  if(RttiNeedsTypeMangledClassName(type))
+    return "__vtable_type_" + RttiMangledName(type);
   return low_symbol_component(TypeQualifiedName(type)) + "__vtable";
 }
 
@@ -1093,7 +1148,7 @@ void PA14Lowerer::EmitPolymorphicGlobals(vector<string>& entries)
 {
   for(set<const Type*>::const_iterator it = emitted_vtables_.begin(); it != emitted_vtables_.end(); ++it) EnsureRttiType(SemanticType(*it));
   for(set<const Type*>::const_iterator it = external_vtables_.begin(); it != external_vtables_.end(); ++it) EnsureRttiType(SemanticType(*it));
-  if (emitted_vtables_.empty() && external_vtables_.empty() && demanded_rtti_types_.empty()) return;
+  if (emitted_vtables_.empty() && external_vtables_.empty() && demanded_rtti_types_.empty() && demanded_exception_types_.empty()) return;
   bool has_class = false, has_fundamental = false, has_pointer = false, has_si = false;
   for(map<string, TypePtr>::const_iterator it = demanded_rtti_types_.begin(); it != demanded_rtti_types_.end(); ++it) {
     const TypePtr type = RttiValueType(it->second);
@@ -1102,6 +1157,7 @@ void PA14Lowerer::EmitPolymorphicGlobals(vector<string>& entries)
     else if(type->kind == TYPE_POINTER || type->kind == TYPE_ARRAY) has_pointer = true;
     else if(type->kind == TYPE_CLASS || type->kind == TYPE_ENUM) { has_class = true; if(type->kind == TYPE_CLASS && type->direct_base) has_si = true; }
   }
+  EmitExceptionRttiDeclarations(entries, &has_fundamental, &has_pointer, &has_class, &has_si);
   if(has_fundamental)
     entries.push_back("declare global @__external_rtti_vtable____fundamental_type_info [binding=strong, object=_ZTVN10__cxxabiv123__fundamental_type_infoE]");
   if(has_pointer)
@@ -1111,13 +1167,10 @@ void PA14Lowerer::EmitPolymorphicGlobals(vector<string>& entries)
   if(has_si)
     entries.push_back("declare global @__external_rtti_vtable____si_class_type_info [binding=strong, object=_ZTVN10__cxxabiv120__si_class_type_infoE]");
 
-  const vector<const Type*> emitted_types = OrderedTypes(emitted_vtables_);
-  const vector<const Type*> external_types = OrderedTypes(external_vtables_);
+  const vector<const Type*> emitted_types = OrderedTypes(emitted_vtables_), external_types = OrderedTypes(external_vtables_);
   for (size_t type_index = 0; type_index < external_types.size(); ++type_index) {
     const TypePtr type = SemanticType(external_types[type_index]);
-    entries.push_back("declare global @__external_vtable__" +
-      low_symbol_component(TypeQualifiedName(type)) + " [binding=strong, object=_ZTV" +
-      TypeMangledName(type) + "]");
+    entries.push_back("declare global @__external_vtable__" + low_symbol_component(TypeQualifiedName(type)) + " [binding=strong, object=_ZTV" + TypeMangledName(type) + "]");
   }
 
   vector<TypePtr> ordered_rtti_types;
@@ -1209,6 +1262,7 @@ void PA14Lowerer::EmitPolymorphicGlobals(vector<string>& entries)
     table << "}";
     entries.push_back(table.str());
   }
+  EmitExceptionObjects(entries);
 }
 
 } // namespace cppgm_pa14_lowering

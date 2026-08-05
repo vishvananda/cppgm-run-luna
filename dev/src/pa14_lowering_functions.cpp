@@ -111,8 +111,23 @@ string PA14Lowerer::EmitFunction(FunctionRecord& function)
                  (function.defaulted || function.implicit_constructor))) EmitStatement(body, scope);
     if(function.destructor) EmitDestructorBody(function, scope);
     if(!state.current->terminated) {
+      // Parameters and locals with automatic storage are destroyed on an
+      // implicit fall-through return just as they are on an explicit return.
+      // Keep this in the typed live-object path so the same reverse-order and
+      // base/member cleanup rules apply in both cases.
+      EmitLiveDestructors(scope);
       if(low_type(function.type->child) == "void") Terminate("return void");
-      else Terminate("return " + low_type(function.type->child) + " 0");
+      else if(!state.return_object_slot.empty()) {
+        TypePtr result_type = type_value(SourceReturnType(function));
+        if(!result_type || result_type->kind != TYPE_CLASS)
+          throw logic_error("indirect result slot has no class type");
+        AddInstruction("zeroinit " +
+          integer_text(static_cast<long long>(type_size(result_type))) + "x" +
+          integer_text(static_cast<long long>(type_alignment(result_type))) +
+          " $" + state.return_object_slot);
+        Terminate("return " + low_type(function.type->child) + " $" +
+          state.return_object_slot);
+      } else Terminate("return " + low_type(function.type->child) + " 0");
     }
 
     for(size_t i = 0; i < state.variables.size(); ++i) {

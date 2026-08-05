@@ -159,16 +159,14 @@ bool PA14Lowerer::ConstructorInitializerNamesType(const string& raw_name,
 
 string PA14Lowerer::EmitTemporaryObjectAddress(const CPPGMAstNodePtr& node,
                                                Scope* scope,
-                                               const string& prefix)
+                                               const string& prefix,
+                                               bool force_empty)
 {
     if(!node || node->kind != "call-expression" || node->children.empty())
       throw logic_error("invalid temporary object expression");
     TypePtr object_type = ConstructorObjectType(node->children[0], scope);
     if(!object_type) throw logic_error("temporary expression is not a class construction");
     CollectImplicitConstructor(object_type, object_type->owned_scope, true);
-    const string slot = new_special_slot(prefix, low_type(object_type));
-    const string address = new_temp();
-    AddInstruction(address + " = addr $" + slot);
     const CPPGMAstNodePtr argument_list = node->children.size() > 1 ?
       node->children[1] : CPPGMAstNodePtr();
     vector<CPPGMAstNodePtr> arguments = argument_list ?
@@ -176,12 +174,110 @@ string PA14Lowerer::EmitTemporaryObjectAddress(const CPPGMAstNodePtr& node,
     if(node->value == "braced-construction" && arguments.size() == 1 &&
        arguments[0] && arguments[0]->kind == "braced-init-list")
       arguments = arguments[0]->children;
-    if(!EmitConstructorAt(object_type, address, arguments, scope,
-                          true, false, false, false, arguments.empty()))
+    const bool pending_constructor_context = state_ &&
+      state_->pending_constructor_unwind_start;
+    const bool pending_argument_unwind = pending_constructor_context &&
+      !state_->pending_constructor_unwind_suppress_temporary;
+    const string pending_dispatch = pending_constructor_context ?
+      state_->pending_constructor_unwind_dispatch : string();
+    const string pending_end = pending_constructor_context ?
+      state_->pending_constructor_unwind_end : string();
+    if(pending_argument_unwind) {
+      BeginConstructorUnwind(CaptureLiveCleanupObjects(), false,
+        pending_dispatch, pending_end);
+      state_->pending_constructor_unwind_start = false;
+      state_->pending_constructor_unwind_suppress_temporary = false;
+      state_->pending_constructor_unwind_dispatch.clear();
+      state_->pending_constructor_unwind_end.clear();
+    }
+    const string slot = new_special_slot(prefix, low_type(object_type));
+    const string address = new_temp();
+    const bool previous_temporary_construction = state_ && state_->temporary_construction;
+    const bool previous_suppress_constructor_unwind = state_ &&
+      state_->suppress_constructor_unwind;
+    const bool previous_defer_temporary_cleanup = state_ &&
+      state_->defer_temporary_cleanup;
+    bool construction_no_throw = false;
+    bool found_constructor = false;
+    const vector<Binding*> constructors = MemberBindings(object_type,
+      LastComponent(object_type->name));
+    for(size_t i = 0; i < constructors.size(); ++i) {
+      FunctionRecord* candidate = RecordForBinding(constructors[i]);
+      if(!candidate || !candidate->constructor || candidate->deleted) continue;
+      found_constructor = true;
+      if(!candidate->unwind_no) {
+        construction_no_throw = false;
+        found_constructor = false;
+        break;
+      }
+      construction_no_throw = true;
+    }
+    // A directly bound temporary is protected from the beginning of its
+    // construction expression, including formation of its storage address.
+    // Nested default-argument temporaries are different: before the nested
+    // object has completed there is no nested destructor to run, and the
+    // enclosing constructor call will open the region once this temporary is
+    // live.  Keep that distinction in the typed lowering state.
+    bool preopened_constructor_unwind = false;
+    if(state_ && !previous_temporary_construction &&
+       !pending_constructor_context &&
+       !state_->constructor_unwind_active &&
+       !state_->suppress_constructor_unwind && HasDestructor(object_type) &&
+       (!construction_no_throw || object_type->direct_base)) {
+      BeginConstructorUnwind(CaptureLiveCleanupObjects(), false);
+      preopened_constructor_unwind = true;
+    }
+    const bool suppress_pending_default = state_ &&
+      state_->pending_constructor_unwind_start &&
+      state_->pending_constructor_unwind_suppress_temporary;
+    const bool suppress_nested_empty_constructor = state_ &&
+      previous_temporary_construction &&
+      CaptureLiveCleanupObjects().empty();
+    if(state_) state_->temporary_construction = true;
+    if(suppress_pending_default || suppress_nested_empty_constructor)
+      state_->suppress_constructor_unwind = true;
+    if(state_) state_->defer_temporary_cleanup = true;
+    AddInstruction(address + " = addr $" + slot);
+    const bool constructed = EmitConstructorAt(object_type, address, arguments, scope,
+                          true, false, false, false, arguments.empty());
+    if(state_) state_->temporary_construction = previous_temporary_construction;
+    if(state_) state_->suppress_constructor_unwind = previous_suppress_constructor_unwind;
+    if(state_) state_->defer_temporary_cleanup = previous_defer_temporary_cleanup;
+    if(preopened_constructor_unwind && state_ &&
+       state_->constructor_unwind_active)
+      FinishConstructorUnwind(scope);
+    if(!constructed)
       throw logic_error("no viable temporary object construction");
-    RegisterTemporaryObject(object_type, address);
+    // A user-declared destructor is still a lifetime boundary when its body is
+    // empty.  Keep that typed fact on the temporary so PA25 can emit the same
+    // normal and exceptional cleanup action for reference-bound and value
+    // temporaries alike.
+    RegisterTemporaryObject(object_type, address, force_empty,
+      found_constructor && construction_no_throw);
+    if(state_ && state_->pending_constructor_unwind_start) {
+      const vector<FunctionState::TemporaryObject> cleanup =
+        CaptureLiveCleanupObjects();
+      if(!cleanup.empty()) {
+        if(state_->pending_constructor_unwind_dispatch.empty()) {
+          state_->pending_constructor_unwind_dispatch =
+            new_label("call_unwind_dispatch");
+          state_->pending_constructor_unwind_end =
+            new_label("call_unwind_end");
+        }
+        if(state_->constructor_unwind_active) {
+          state_->constructor_unwind_cleanup = cleanup;
+          state_->constructor_unwind_call = true;
+        } else BeginConstructorUnwind(cleanup, true,
+          state_->pending_constructor_unwind_dispatch,
+          state_->pending_constructor_unwind_end);
+      }
+      state_->pending_constructor_unwind_start = false;
+      state_->pending_constructor_unwind_suppress_temporary = false;
+      state_->pending_constructor_unwind_dispatch.clear();
+      state_->pending_constructor_unwind_end.clear();
+    }
     return address;
-  }
+}
 
 PA14Lowerer::Value PA14Lowerer::EmitObjectValueArgument(
     const CPPGMAstNodePtr& node, Scope* scope, const TypePtr& target)
@@ -287,6 +383,10 @@ bool PA14Lowerer::EmitDestructorAt(const TypePtr& raw_object_type, const string&
     if(!object_type || object_type->kind != TYPE_CLASS) return false;
     const string name = "~" + LastComponent(object_type->name);
     vector<Binding*> candidates = MemberBindings(object_type, name);
+    if(candidates.empty() && object_type->owned_scope) {
+      CollectImplicitDestructor(object_type, object_type->owned_scope);
+      candidates = MemberBindings(object_type, name);
+    }
     for(size_t i = 0; i < candidates.size(); ++i) {
       Binding* binding = candidates[i];
       if(binding->kind != BIND_FUNCTION || !binding->is_member || binding->is_static) continue;
@@ -298,7 +398,8 @@ bool PA14Lowerer::EmitDestructorAt(const TypePtr& raw_object_type, const string&
       FunctionRecord* base_entry = BaseEntryFor(record);
       FunctionRecord* call_record = object_type->polymorphic && force_empty && base_entry ?
         base_entry : record;
-      if(base_entry) MarkFunctionNeeded(base_entry);
+      if(base_entry && object_type->polymorphic && force_empty)
+        MarkFunctionNeeded(base_entry);
       AddInstruction("call void @" + call_record->symbol + "(" + address + ")");
       return true;
     }
@@ -330,8 +431,6 @@ bool PA14Lowerer::EmitValueSpecialMemberBody(FunctionRecord& function, Scope* sc
       IsEmptyBaseStorage(owner->direct_base);
     const bool defer_bit_field_destination = assignment && has_bit_field;
     string destination;
-    if(!defer_destination && !defer_bit_field_destination)
-      destination = EmitValue(this_node, scope).operand;
     string source;
     if(IsEmptyBaseStorage(owner)) {
       // Empty class/base subobjects have no payload.  Their special members
@@ -343,6 +442,8 @@ bool PA14Lowerer::EmitValueSpecialMemberBody(FunctionRecord& function, Scope* sc
       }
       return true;
     }
+    if(!defer_destination && !defer_bit_field_destination)
+      destination = EmitValue(this_node, scope).operand;
     bool defaulted_copy_storage = function.copy_assignment && function.defaulted &&
       !owner->direct_base;
     if(defaulted_copy_storage) {
@@ -355,8 +456,19 @@ bool PA14Lowerer::EmitValueSpecialMemberBody(FunctionRecord& function, Scope* sc
         }
       }
     }
+    // A class with only scalar payload still has a non-trivial lifetime when
+    // its destructor is user-declared.  Its implicit copy constructor may
+    // copy that payload as one object, while nested class members must retain
+    // their own typed copy-constructor boundaries.
+    bool byte_copyable_owner = !owner->direct_base && !owner->polymorphic &&
+      !has_bit_field && !has_reference_member;
+    for(size_t i = 0; byte_copyable_owner && i < owner->class_members.size(); ++i) {
+      const ClassMemberInfo& member = owner->class_members[i];
+      if(member.is_static || !member.type) continue;
+      if(!IsTrivialValueStorage(member.type)) byte_copyable_owner = false;
+    }
     set<long long> copied_bit_offsets;
-    if((IsTrivialValueStorage(owner) && !has_reference_member &&
+    if(((IsTrivialValueStorage(owner) || byte_copyable_owner) && !has_reference_member &&
         !(assignment && has_bit_field)) ||
        defaulted_copy_storage) {
       source = emit_load(source_storage, PointerTo(Fundamental("char")));
@@ -519,6 +631,11 @@ bool PA14Lowerer::EmitValueSpecialMemberBody(FunctionRecord& function, Scope* sc
             source_member + ", " + destination_member);
         }
       }
+    }
+    if(owner->polymorphic) {
+      const string vptr_destination = destination.empty() || owner->direct_base ?
+        EmitValue(this_node, scope).operand : destination;
+      EmitVPointerStore(owner, vptr_destination);
     }
     if(assignment) {
       // Keep the ABI result tied to the stored this pointer.  Besides

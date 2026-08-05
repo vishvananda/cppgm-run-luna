@@ -365,7 +365,9 @@ PA14Lowerer::PA14Lowerer(const vector<CPPGMAstNodePtr>& trees)
       lambda_functions_(), next_lambda_serial_(0), deferred_static_members_(),
       needs_init_helper_(false),
       needs_fini_helper_(false), emitted_vtables_(), external_vtables_(),
-      emitted_rtti_(), demanded_rtti_types_(), has_rtti_syntax_(false),
+      emitted_rtti_(), demanded_rtti_types_(), demanded_exception_types_(),
+      demanded_thrown_types_(),
+      has_rtti_syntax_(false),
       class_types_by_name_(), state_(), next_needed_order_(0),
       infer_cache_(), friend_owner_index_(), hidden_friend_binding_index_(),
       hidden_friend_binding_index_ready_(false)
@@ -493,6 +495,8 @@ void PA14Lowerer::InstallBuiltins()
     byte_copy_parameters.push_back(size_type);
     vector<TypePtr> dynamic_cast_parameters(3, PointerTo(Fundamental("void")));
     dynamic_cast_parameters.push_back(Fundamental("long int"));
+    vector<TypePtr> pointer_parameters(1, PointerTo(Fundamental("void")));
+    vector<TypePtr> throw_parameters(3, PointerTo(Fundamental("void")));
     vector<TypePtr> no_parameters;
     vector<BuiltinSpec> specs;
     specs.push_back(BuiltinSpec{"__builtin_strlen",
@@ -520,35 +524,33 @@ void PA14Lowerer::InstallBuiltins()
     specs.push_back(BuiltinSpec{"__external_runtime____dynamic_cast",
       FunctionOf(dynamic_cast_parameters, false, PointerTo(Fundamental("void")), false),
       "", "__dynamic_cast", false, 0, 0});
+    specs.push_back(BuiltinSpec{"__external_runtime___Unwind_Resume",
+      FunctionOf(no_parameters, false, Fundamental("void"), false),
+      "", "_Unwind_Resume", true, 0, 0});
+    specs.push_back(BuiltinSpec{"__external_runtime____cxa_allocate_exception",
+      FunctionOf(vector<TypePtr>(1, size_type), false,
+        PointerTo(Fundamental("void")), false),
+      "", "__cxa_allocate_exception", false, 0, 0});
+    specs.push_back(BuiltinSpec{"__external_runtime____cxa_begin_catch",
+      FunctionOf(pointer_parameters, false, PointerTo(Fundamental("void")), false),
+      "", "__cxa_begin_catch", false, 0, 0});
+    specs.push_back(BuiltinSpec{"__external_runtime____cxa_end_catch",
+      FunctionOf(no_parameters, false, Fundamental("void"), false),
+      "", "__cxa_end_catch", false, 0, 0});
+    specs.push_back(BuiltinSpec{"__external_runtime____cxa_rethrow",
+      FunctionOf(no_parameters, false, Fundamental("void"), false),
+      "", "__cxa_rethrow", true, 0, 0});
+    specs.push_back(BuiltinSpec{"__external_runtime____cxa_throw",
+      FunctionOf(throw_parameters, false, Fundamental("void"), false),
+      "", "__cxa_throw", true, 0, 0});
+    specs.push_back(BuiltinSpec{"__external_runtime____gxx_personality_v0",
+      FunctionOf(no_parameters, false, Fundamental("void"), false),
+      "", "__gxx_personality_v0", false, 0, 0});
 
     for(size_t i = 0; i < specs.size(); ++i) {
       const BuiltinSpec& spec = specs[i];
-      Binding binding(BIND_FUNCTION, spec.name, spec.type);
-      binding.qualified_name = spec.name;
-      binding.declaration = CPPGMAstNodePtr();
-      analyzer_.global_->add(binding);
-
-      functions_.push_back(FunctionRecord());
-      FunctionRecord* record = &functions_.back();
-      function_by_key_[function_key(spec.name, spec.type)] = record;
-      record->scope = analyzer_.global_.get();
-      record->source_type = spec.type;
-      record->type = spec.type;
-      record->qualified_name = spec.name;
-      record->symbol = spec.name;
-      record->builtin = true;
-      record->unwind_no = true;
-      record->noreturn = spec.noreturn;
-      record->effects = spec.effects;
-      record->object_name = spec.object_name;
-      if(spec.first_parameter) record->parameter_metadata.push_back(spec.first_parameter);
-      if(spec.second_parameter) record->parameter_metadata.push_back(spec.second_parameter);
-      if(spec.first_parameter && spec.type->parameters.size() > 2)
-        record->parameter_metadata.push_back(string());
-      if(string(spec.name) == "__external_runtime____dynamic_cast" ||
-         string(spec.name) == "__external_runtime____cxa_bad_typeid" ||
-         string(spec.name) == "__external_runtime____cxa_bad_cast")
-        record->unwind_no = false;
+      RegisterBuiltin(spec.name, spec.type, spec.effects, spec.object_name,
+        spec.noreturn, spec.first_parameter, spec.second_parameter);
     }
     vector<TypePtr> new_parameters(1, size_type);
     vector<TypePtr> new_array_parameters(1, size_type);
@@ -590,6 +592,34 @@ void PA14Lowerer::InstallBuiltins()
       record->unwind_no = true;
       record->object_name = spec.object_name;
     }
+  }
+
+void PA14Lowerer::RegisterBuiltin(const char* name, const TypePtr& type,
+                                  const char* effects, const char* object_name,
+                                  bool noreturn, const char* first_parameter,
+                                  const char* second_parameter)
+{
+    Binding binding(BIND_FUNCTION, name, type);
+    binding.qualified_name = name;
+    binding.declaration = CPPGMAstNodePtr();
+    analyzer_.global_->add(binding);
+    functions_.push_back(FunctionRecord());
+    FunctionRecord* record = &functions_.back();
+    function_by_key_[function_key(name, type)] = record;
+    record->scope = analyzer_.global_.get();
+    record->source_type = type;
+    record->type = type;
+    record->qualified_name = name;
+    record->symbol = name;
+    record->builtin = true;
+    record->unwind_no = string(name).find("__external_runtime__") != 0;
+    record->noreturn = noreturn;
+    record->effects = effects;
+    record->object_name = object_name;
+    if(first_parameter) record->parameter_metadata.push_back(first_parameter);
+    if(second_parameter) record->parameter_metadata.push_back(second_parameter);
+    if(first_parameter && type->parameters.size() > 2)
+      record->parameter_metadata.push_back(string());
   }
 
 bool PA14Lowerer::HasNoexcept(const CPPGMAstNodePtr& node) const
@@ -965,10 +995,11 @@ void PA14Lowerer::CollectImplicitDestructor(const TypePtr& owner, Scope* scope)
     }
     for(size_t i = 0; i < owner->class_members.size() && !needed; ++i) {
       const ClassMemberInfo& member = owner->class_members[i];
+      if(member.is_static || type_is_reference(member.type)) continue;
       TypePtr member_type = type_value(member.type);
       while(member_type && member_type->kind == TYPE_ARRAY)
         member_type = type_value(member_type->child);
-      if(member.is_static || !member_type || member_type->kind != TYPE_CLASS) continue;
+      if(!member_type || member_type->kind != TYPE_CLASS) continue;
       vector<Binding*> member_destructors = MemberBindings(member_type,
         "~" + LastComponent(member_type->name));
       for(size_t j = 0; j < member_destructors.size(); ++j)
@@ -991,6 +1022,7 @@ void PA14Lowerer::CollectImplicitDestructor(const TypePtr& owner, Scope* scope)
     binding.is_static = false;
     binding.member_owner = owner;
     binding.declaration = special;
+    binding.qualified_name = qname;
     scope->add(binding);
     functions_.push_back(FunctionRecord());
     FunctionRecord* record = &functions_.back();
@@ -1239,8 +1271,19 @@ void PA14Lowerer::EnsureConstructorBaseEntry(FunctionRecord* function)
     for(size_t i = 0; i < functions_.size(); ++i)
       if(!functions_[i].base_entry && functions_[i].qualified_name == function->qualified_name)
         ++overload;
-    if(overload > 1)
-      base_qname += "__ov" + integer_text(static_cast<long long>(overload));
+    if(overload > 1) {
+      // Constructor overload numbering is a semantic ABI fact, not an
+      // artifact of the order in which PA11 discovers the declarations.  A
+      // default constructor remains the primary entry even when the copy
+      // constructor was collected first; the copy/move overload is the
+      // second constructor entry.
+      unsigned int stable_overload = overload;
+      if(function->copy_constructor || function->move_constructor) stable_overload = 2;
+      else if(function->source_type && function->source_type->parameters.empty())
+        stable_overload = 1;
+      if(stable_overload > 1)
+        base_qname += "__ov" + integer_text(static_cast<long long>(stable_overload));
+    }
     base_entry.qualified_name = base_qname + "__base_entry";
     base_entry.definition = function->definition;
     base_entry.member = function->member;
@@ -1345,6 +1388,12 @@ bool PA14Lowerer::HasDestructor(const TypePtr& raw_type) const
       if(binding->kind == BIND_FUNCTION && binding->is_member && !binding->is_static &&
          record && record->destructor) return true;
     }
+    if(type->direct_base && HasDestructor(type->direct_base)) return true;
+    for(size_t i = 0; i < type->class_members.size(); ++i) {
+      const ClassMemberInfo& member = type->class_members[i];
+      if(member.is_static || !member.type || type_is_reference(member.type)) continue;
+      if(HasDestructor(member.type)) return true;
+    }
     return false;
   }
 
@@ -1365,20 +1414,33 @@ bool PA14Lowerer::DestructorHasEffects(const TypePtr& raw_type) const
         break;
       }
     }
-    if(!destructor) return false;
+    if(!destructor) {
+      if(type->direct_base && DestructorHasEffects(type->direct_base)) return true;
+      for(size_t i = 0; i < type->class_members.size(); ++i) {
+        const ClassMemberInfo& member = type->class_members[i];
+        if(member.is_static || !member.type || type_is_reference(member.type)) continue;
+        if(DestructorHasEffects(member.type)) return true;
+      }
+      return false;
+    }
     CPPGMAstNodePtr body = destructor->node ?
       ChildOfKind(destructor->node, "compound-statement") : CPPGMAstNodePtr();
+    // A declaration without a body is an out-of-line destructor contract,
+    // not an empty destructor.  The call is externally defined and must stay
+    // on every normal and exceptional object-lifetime path.
+    if(!body) return !destructor->defaulted;
     if(body && !body->children.empty()) return true;
     for(size_t i = 0; i < type->class_members.size(); ++i) {
       const ClassMemberInfo& member = type->class_members[i];
-      if(member.is_static || !member.type) continue;
+      if(member.is_static || !member.type || type_is_reference(member.type)) continue;
       TypePtr member_type = type_value(member.type);
       if(member_type && member_type->kind == TYPE_CLASS &&
          DestructorHasEffects(member_type)) return true;
       if(member_type && member_type->kind == TYPE_ARRAY && member_type->child &&
          DestructorHasEffects(member_type->child)) return true;
     }
-    return type->direct_base && DestructorHasEffects(type->direct_base);
+    if(type->direct_base && DestructorHasEffects(type->direct_base)) return true;
+    return false;
   }
 
 bool PA14Lowerer::IsBitField(Binding* binding, long long* bit_offset,

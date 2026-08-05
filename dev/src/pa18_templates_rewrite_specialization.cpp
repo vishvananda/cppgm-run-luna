@@ -54,6 +54,8 @@ int PA18TemplateExpander::MatchReferenceArrayPattern(const string& pattern,
 		!actual.empty() && actual[actual.size() - 1] == ']';
 	if((!typed_reference_array && !lvalue_array) || pattern.empty() ||
 		pattern[pattern.size() - 1] != '&') return -1;
+	const bool pattern_const = pattern.find("const") != string::npos;
+	const bool pattern_volatile = pattern.find("volatile") != string::npos;
 	string parameter = CanonicalSpelling(pattern.substr(0, pattern.size() - 1));
 	while(parameter.compare(0, 6, "const ") == 0) parameter = CanonicalSpelling(parameter.substr(6));
 	while(parameter.compare(0, 9, "volatile ") == 0) parameter = CanonicalSpelling(parameter.substr(9));
@@ -68,6 +70,16 @@ int PA18TemplateExpander::MatchReferenceArrayPattern(const string& pattern,
 		const size_t reference_before_array = array_type.find("&[");
 		if(reference_before_array != string::npos) array_type.erase(reference_before_array, 1);
 	}
+	// For `const T&`/`T const&` the cv-qualifier belongs to the parameter
+	// pattern, not to the deduced T.  A reference-to-array spelling retains the
+	// argument's top-level cv in `array_type`, so remove only that outer
+	// qualifier before binding the array type parameter.
+	if(pattern_const)
+		while(array_type.compare(0, 6, "const ") == 0)
+			array_type = CanonicalSpelling(array_type.substr(6));
+	if(pattern_volatile)
+		while(array_type.compare(0, 9, "volatile ") == 0)
+			array_type = CanonicalSpelling(array_type.substr(9));
 	map<string, string>::const_iterator prior = inferred->find(parameter);
 	if(prior != inferred->end() && CanonicalSpelling(prior->second) !=
 		CanonicalSpelling(array_type)) return 0;

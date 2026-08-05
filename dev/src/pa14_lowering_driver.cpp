@@ -232,6 +232,9 @@ void PA14Lowerer::PrepareLoweringProgram()
   ResolveAutoFunctionReturns();
   if(has_rtti_syntax_)
     IndexRttiUses(program_, analyzer_.global_.get());
+  demanded_exception_types_.clear();
+  demanded_thrown_types_.clear();
+  IndexExceptionUses(program_, analyzer_.global_.get());
   PreparePolymorphicModel();
   FinalizeSymbols();
   CollectStringLiterals(program_);
@@ -409,7 +412,7 @@ vector<size_t> PA14Lowerer::MemberEmissionOrder() const
             nested_template_lifecycle = true;
     }
   }
-  if(!nested_template_lifecycle) return order;
+  if(nested_template_lifecycle) {
   stable_sort(lifecycle_order.begin(), lifecycle_order.end(), [this](size_t left,
                                                                        size_t right) {
     const size_t unset = static_cast<size_t>(-1);
@@ -423,9 +426,69 @@ vector<size_t> PA14Lowerer::MemberEmissionOrder() const
   });
   for(size_t position = 0; position < lifecycle_positions.size(); ++position)
     order[lifecycle_positions[position]] = lifecycle_order[position];
+  }
+  OrderLambdaMembers(order);
   return order;
 }
 
+void PA14Lowerer::OrderLambdaMembers(vector<size_t>& order) const
+{
+  // Lambda closure operators are collected from generated class shells.  A
+  // replayed class-return operator can otherwise land after the pointer
+  // operators and the value-type constructor records that its body demands.
+  // Keep the lambda operator frontier contiguous and deterministic: the
+  // class-valued closures establish their result type first, followed by the
+  // pointer-valued callable members, while ordinary lifecycle records retain
+  // their relative order after that frontier.
+  vector<size_t> lambda_positions;
+  vector<size_t> lambda_order;
+  for(size_t position = 0; position < order.size(); ++position)
+    if(IsLambdaOperator(functions_[order[position]])) {
+      lambda_positions.push_back(position);
+      lambda_order.push_back(order[position]);
+    }
+  if(lambda_positions.size() > 1) {
+    const auto lambda_order_key = [this](size_t index) {
+      const TypePtr owner = type_value(functions_[index].member_owner);
+      const string owner_name = owner ? LastComponent(owner->name) :
+        functions_[index].qualified_name;
+      const size_t replay = owner_name.find("__inst__");
+      if(replay == string::npos) return string("0|") + owner_name;
+      const size_t result = owner_name.find("_Result", replay + 8);
+      const string group = owner_name.substr(replay + 8,
+        result == string::npos ? string::npos : result - (replay + 8));
+      return string("1|") + group + "|" + owner_name.substr(0, replay);
+    };
+    stable_sort(lambda_order.begin(), lambda_order.end(), [this, &lambda_order_key](size_t left,
+                                                                  size_t right) {
+      const FunctionRecord& left_function = functions_[left];
+      const FunctionRecord& right_function = functions_[right];
+      const TypePtr left_result = left_function.source_type &&
+        left_function.source_type->child ?
+        type_value(left_function.source_type->child) : TypePtr();
+      const TypePtr right_result = right_function.source_type &&
+        right_function.source_type->child ?
+        type_value(right_function.source_type->child) : TypePtr();
+      const bool left_class = left_result && left_result->kind == TYPE_CLASS;
+      const bool right_class = right_result && right_result->kind == TYPE_CLASS;
+      if(left_class != right_class) return left_class;
+      const string left_key = lambda_order_key(left);
+      const string right_key = lambda_order_key(right);
+      if(left_key != right_key) return left_key < right_key;
+      return left_function.qualified_name < right_function.qualified_name;
+    });
+    const size_t first_lambda_position = lambda_positions.front();
+    vector<size_t> reordered;
+    reordered.reserve(order.size());
+    for(size_t position = 0; position < order.size(); ++position) {
+      if(position == first_lambda_position)
+        reordered.insert(reordered.end(), lambda_order.begin(), lambda_order.end());
+      if(find(lambda_positions.begin(), lambda_positions.end(), position) ==
+         lambda_positions.end()) reordered.push_back(order[position]);
+    }
+    order.swap(reordered);
+  }
+}
 void PA14Lowerer::EmitMemberPass(vector<string>& entries)
 {
   bool added = true;
