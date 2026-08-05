@@ -154,9 +154,10 @@ bool PA18TemplateExpander::EvaluateIntegralTextSpecialForms(const string& raw,
 										LastComponent(generated_member)) continue;
 								const CPPGMAstNodePtr initializer = declarator->children[1];
 								if(!initializer || initializer->children.empty()) continue;
+								const string expression = ConstantExpressionSpelling(initializer->children[0]);
+								if(expression.find("sizeof(") != string::npos || expression.find("test<") != string::npos) return false;
 								return const_cast<PA18TemplateExpander*>(this)->EvaluateIntegralText(
-									ConstantExpressionSpelling(initializer->children[0]), context,
-									bindings, value);
+									expression, context, bindings, value);
 							}
 						}
 						return false;

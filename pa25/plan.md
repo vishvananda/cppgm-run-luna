@@ -167,3 +167,25 @@ implementation remains auditable without changing its semantic paths.
   implicated and no test or reference fixture was changed.
 - The complete PA25 failure set is now empty.  The next checkpoint is PA26;
   the earlier PA22 timeout remains an external prior-stage follow-up.
+
+## Final verification checkpoint: reentrant static-member replay
+
+### Remaining Work Map
+
+- **PA25-local suite:** none; all 69 tests pass.
+- **Prior-stage suite through PA24:** none; all 2600 tests pass.
+- **Stage implementation:** complete.  The next checkpoint group is PA26.
+
+### Checkpoint Scope
+
+Prevent source static-member reconstruction from recursively replaying dependent
+probe initializers (`sizeof(...)` and `test<...>`), while retaining typed source
+member evaluation for trait selection.  Validate the PA22 enum-NTTP replay,
+the two reentrant PA23 enable-if cases, the exact through-PA24 gate, the PA25
+report, and the PA25 file audit.
+
+### Checkpoint Result
+
+The focused replay cases pass; `make test-report-through-pa24` passes 2600/2600;
+`make test-report ACTIVE_TEST_REPORT_PAS='pa25'` passes 69/69; and the file
+audit passes with only the repository's existing warnings.
