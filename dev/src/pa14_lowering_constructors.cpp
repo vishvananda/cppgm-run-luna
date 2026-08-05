@@ -1003,9 +1003,21 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
         // not evaluate a reference source merely to feed an elided transfer.
         // This preserves constructor ABI demand while avoiding a spurious
         // load from forwarding parameters in generated empty functors.
-        if(HasElidedTemplateInitialization(field_type) && arguments.size() == 1 &&
-           arguments[0]) {
-          const TypePtr source_type = expression_value_type(Infer(arguments[0], scope));
+        const bool empty_trivial_field = IsEmptyBaseStorage(field_type) &&
+          IsTrivialValueStorage(field_type) &&
+          !HasUserProvidedConstructor(field_type);
+        if((HasElidedTemplateInitialization(field_type) || empty_trivial_field) &&
+           arguments.size() == 1 && arguments[0]) {
+          TypePtr source_type;
+          if(arguments[0]->kind == "id-expression") {
+            VariablePlan* source_local = LocalForName(arguments[0]->value);
+            if(source_local) source_type = type_value(source_local->type);
+            if(!source_type) {
+              Analyzer::PathTarget source = analyzer_.ResolvePath(scope, arguments[0]->value);
+              if(source.binding) source_type = type_value(source.binding->type);
+            }
+          }
+          if(!source_type) source_type = expression_value_type(Infer(arguments[0], scope));
           if(source_type && source_type->kind == TYPE_CLASS) continue;
         }
         if(function.base_entry && IsEmptyBaseStorage(field_type)) continue;

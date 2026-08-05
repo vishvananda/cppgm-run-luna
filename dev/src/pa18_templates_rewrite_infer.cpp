@@ -967,8 +967,16 @@ bool PA18TemplateExpander::CompleteFunctionArguments(
 			// supplied by an earlier default (`Result = Ref`).  Keep each
 			// completed default in the typed deduction map so both the result
 			// vector and subsequent defaults see the same concrete argument.
-			const string value = NormalizeTypeArgument(ReplaceIdentifiers(
-				parameter.default_type, *inferred));
+			string value;
+			try {
+				value = NormalizeTypeArgument(const_cast<PA18TemplateExpander*>(this)->RewriteText(
+					parameter.default_type, context, *inferred, 0));
+				value = NormalizeTypeArgument(ReplaceIdentifiers(value, *inferred));
+			} catch(const PA18SubstitutionFailure&) {
+				return false;
+			}
+			if(value.empty() || HasUnavailableGeneratedMemberType(value, context, *inferred))
+				return false;
 			(*inferred)[parameter.name] = value;
 			result->push_back(value);
 		}

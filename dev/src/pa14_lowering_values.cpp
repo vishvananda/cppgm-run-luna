@@ -505,8 +505,7 @@ bool PA14Lowerer::IsTrivialValueStorage(const TypePtr& raw_type) const
     TypePtr type = type_value(raw_type);
     if(!type) return false;
     if(type->kind == TYPE_ARRAY) return IsTrivialValueStorage(type->child);
-    if(type->kind != TYPE_CLASS) return type->kind != TYPE_FUNCTION &&
-      type->kind != TYPE_MEMBER_POINTER;
+    if(type->kind != TYPE_CLASS) return type->kind != TYPE_FUNCTION;
     // Object lifetime is non-trivial even when the payload happens to be a
     // small scalar aggregate.  ABI classification handles the latter case
     // separately; special-member lowering must still preserve the object

@@ -464,6 +464,13 @@ bool PA18TemplateExpander::InferFunctionTypeArguments(const TemplateDefinition& 
 						return false;
 					}
 					result->push_back(rewritten_default);
+					// Later defaults are formed in the same left-to-right template
+					// parameter environment.  Keep this typed default binding visible
+					// to the next default (for example, ClassT depending on the
+					// already-defaulted DecayF); otherwise the unresolved spelling
+					// bypasses the candidate-local SFINAE check.
+					if(!definition.parameters[i].name.empty())
+						inferred[definition.parameters[i].name] = rewritten_default;
 			} catch(const PA18SubstitutionFailure&) {
 				result->clear();
 				return false;

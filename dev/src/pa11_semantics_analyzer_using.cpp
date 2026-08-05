@@ -210,6 +210,8 @@ void Analyzer::ProcessUsingDeclaration(const CPPGMAstNodePtr& node, Scope* scope
 	{
 		if (!processing_pending_using_declarations_)
 		{
+			if (operator_name && operator_owner_scope && operator_owner_scope->owner_type &&
+				!operator_owner_scope->owner_type->template_primary.empty()) return;
 			pending_using_declarations_.push_back(make_pair(node, scope));
 			return;
 		}
