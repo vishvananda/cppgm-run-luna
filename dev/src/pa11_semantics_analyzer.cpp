@@ -1256,9 +1256,11 @@ TypePtr Analyzer::ProcessClass(const CPPGMAstNodePtr& node, Scope* scope)
 	type->direct_base_access.clear();
 	type->direct_base_offsets.clear();
 	type->virtual_base_types.clear();
+	type->virtual_base_roots.clear();
 	type->virtual_base_offsets.clear();
 	type->nonvirtual_size = 0;
 	type->virtual_methods.clear();
+	type->virtual_table_views.clear();
 	type->polymorphic = false;
 	type->has_vpointer = false;
 	Scope* class_scope = ClassScope(type, owner, name);

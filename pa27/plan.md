@@ -120,3 +120,63 @@ with the repository's existing 14 non-fatal warnings.
 
 None for PA27 or the through-PA26 regression set.  The next checkpoint group
 is the PA28 full-stage implementation and its native-validation contract.
+
+## Architecture Review
+
+The completed implementation follows the intended staged compiler boundary.
+PA11 owns the semantic facts: `Type` records the ordered direct-base graph,
+per-edge virtual/access properties, the primary-base choice, non-virtual and
+complete object sizes, virtual-base closure/offsets, and the polymorphic
+`VirtualTableView` set.  `pa11_semantics_layout.cpp` computes those facts from
+typed base and member declarations.  Virtual-base closure is a typed,
+visited graph walk, so a diamond contributes one shared virtual subobject and
+does not depend on a source-level base spelling or a first-base shortcut.
+
+PA14 consumes those facts for LowIR.  `pa14_lowering_addresses.cpp` projects
+through typed direct-base paths and virtual-base offsets; `pa14_lowering_abi.cpp`
+and `pa14_lowering_parameter_names.cpp` keep hidden virtual-base carriers
+aligned with the function ABI; and the constructor, destructor, object,
+function, call, and constructor-entry modules use the same typed path and
+ownership rules.  Complete constructors own each virtual base, while base
+entries forward the existing hidden view and skip duplicate construction.
+VTT and secondary-view handling is kept with construction and polymorphic
+lowering rather than encoded in individual tests.
+
+PA17 and PA25 complete the ABI-facing side.  The polymorphic lowering renders
+primary and secondary views, adapts final overriders and adjustor thunks, and
+emits vtables, VTTs, RTTI, and view globals in deterministic typed order.
+`pa25_lowering_rtti.cpp` delegates the general runtime cast cases while the
+lowering supplies the semantic RTTI objects and the complete-object fast path
+needed for the PA27 sibling-cast and non-primary-view cases.  This preserves
+the earlier PA15--PA26 overload, call, lifetime, and RTTI contracts.
+
+The ownership review found no unstable raw-pointer container ownership in the
+new path: function and global records use stable deques, and semantic derived
+facts are rebuilt from canonical type data.  As a small rematerialization
+cleanup, `ProcessClass` now clears `virtual_base_roots` and
+`virtual_table_views` together with the other derived layout/polymorphism
+state before rebuilding a class.  The graph walks use visited sets and the
+polymorphic model is demand/fixpoint driven, avoiding repeated unbounded
+replay.  The file audit's 14 warnings are existing non-fatal style/complexity
+warnings in the staged codebase; no new source file or test/reference
+workaround was introduced.
+
+## Final Architecture Review
+
+PA27 is consolidated as a monotonic extension of the PA26 architecture.  The
+semantic layer is the single owner of shared virtual-base identity, layout,
+access, and final-overrider facts; LowIR lowering reads those facts through
+typed helpers and explicit hidden ABI state; and the PA17/PA25 emitters are
+the only owners of vtable/RTTI materialization.  Construction, destruction,
+member access, virtual dispatch, `dynamic_cast`, and `typeid` therefore agree
+on the same complete-object and subobject model.
+
+The checkpoint repairs are architectural rather than fixture-specific: they
+cover hidden carrier projection, nested constructor/base-entry demand,
+function-record selection, EH cleanup paths, and address-taking without
+changing ordinary pointer shapes.  The implementation does not invoke
+reference binaries, a host compiler, or an interpreter to manufacture output,
+and the unsupported PA27 runtime/error boundaries remain explicit in the
+handout contract.  Earlier assignments remain covered by the through-stage
+report, so the handoff to PA28 is the existing typed model plus its tested
+LowerIR/ABI boundary, not a parallel PA27 implementation.
