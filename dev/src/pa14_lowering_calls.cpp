@@ -55,7 +55,8 @@ string PA14Lowerer::EmitReferenceArgument(const CPPGMAstNodePtr& node, Scope* sc
         for(size_t destructor = 0; destructor < destructors.size(); ++destructor) {
           FunctionRecord* record = RecordForBinding(destructors[destructor]);
           if(record && record->destructor && record->node &&
-             record->node->kind != "special-member-definition") {
+             (record->node->kind != "special-member-definition" ||
+              record->node->source_token_end != record->node->source_token_begin)) {
             user_destructor = true;
             break;
           }
@@ -186,7 +187,8 @@ string PA14Lowerer::EmitReferenceArgument(const CPPGMAstNodePtr& node, Scope* sc
           ConstructorObjectType(node->children[0]->children[0], scope) != TypePtr();
         const bool result_reference_context = state_ && direct_class_operand &&
           !state_->constructor_unwind_active &&
-          !state_->suppress_constructor_unwind && HasDestructor(result_type);
+          !state_->suppress_constructor_unwind &&
+          !state_->defer_temporary_cleanup && HasDestructor(result_type);
         if(result_reference_context)
           BeginConstructorUnwind(vector<FunctionState::TemporaryObject>(), false);
         const string slot = new_special_slot("arg", low_type(result_type));
@@ -526,19 +528,33 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
       }
       return found;
     };
+    const auto has_explicit_destructor = [this](const TypePtr& raw_type) {
+      const TypePtr type = type_value(raw_type);
+      if(!type || type->kind != TYPE_CLASS) return false;
+      const vector<Binding*> destructors = MemberBindings(type,
+        "~" + LastComponent(type->name));
+      for(size_t destructor = 0; destructor < destructors.size(); ++destructor) {
+        FunctionRecord* record = RecordForBinding(destructors[destructor]);
+        if(record && record->destructor && record->node &&
+           (record->node->kind != "special-member-definition" ||
+            record->node->source_token_end != record->node->source_token_begin))
+          return true;
+      }
+      return false;
+    };
     contains_managed_temporary = [&](const CPPGMAstNodePtr& expression) -> bool {
       if(!expression) return false;
     if(expression->kind == "call-expression" && !expression->children.empty()) {
         TypePtr constructed = ConstructorObjectType(expression->children[0], scope);
         if(constructed && HasDestructor(constructed) &&
-           DestructorHasEffects(constructed) &&
+           (DestructorHasEffects(constructed) || has_explicit_destructor(constructed)) &&
            !constructor_is_nothrow(constructed)) return true;
         try {
           const ExprInfo expression_info = Infer(expression, scope);
           TypePtr value = expression_value_type(expression_info);
           if(value && value->kind == TYPE_CLASS &&
              !type_is_reference(expression_info.type) && HasDestructor(value) &&
-             DestructorHasEffects(value)) return true;
+             (DestructorHasEffects(value) || has_explicit_destructor(value))) return true;
       } catch(const logic_error&) {
       }
     }
@@ -546,13 +562,14 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
         expression->kind == "braced-init-list") && !expression->children.empty()) {
       TypePtr constructed = ConstructorObjectType(expression->children[0], scope);
       if(constructed && HasDestructor(constructed) &&
-         DestructorHasEffects(constructed)) return true;
+         (DestructorHasEffects(constructed) || has_explicit_destructor(constructed))) return true;
     }
       if(expression->kind == "binary-expression") {
         try {
           const TypePtr value = expression_value_type(Infer(expression, scope));
-          if(value && value->kind == TYPE_CLASS && value->polymorphic &&
-             HasDestructor(value) && DestructorHasEffects(value)) return true;
+          if(value && value->kind == TYPE_CLASS &&
+             HasDestructor(value) &&
+             (DestructorHasEffects(value) || has_explicit_destructor(value))) return true;
         } catch(const logic_error&) {
         }
       }
@@ -618,9 +635,21 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
       state_->pending_call_argument_context = true;
       state_->preserve_call_argument_context = false;
     }
+    bool deferred_managed_expression = false;
+    for(size_t argument = 0; argument < all_arguments.size(); ++argument) {
+      CPPGMAstNodePtr expression = all_arguments[argument];
+      while(expression && expression->kind == "parenthesized-expression" &&
+            expression->children.size() == 1)
+        expression = expression->children[0];
+      if(expression && expression->kind == "binary-expression" &&
+         contains_managed_temporary(expression)) {
+        deferred_managed_expression = true;
+        break;
+      }
+    }
     if(state_ && !state_->constructor_unwind_active &&
        !state_->suppress_constructor_unwind &&
-       !state_->defer_temporary_cleanup) {
+       (!state_->defer_temporary_cleanup || deferred_managed_expression)) {
       size_t managed_argument_count = 0;
       size_t managed_class_value_count = 0;
       for(size_t argument = 0; argument < all_arguments.size(); ++argument)
@@ -934,6 +963,24 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
       }
     }
     for(size_t i = 0; i < all_arguments.size(); ++i) {
+      // A string literal is a non-throwing address formation.  If the
+      // preceding argument opened a call-boundary cleanup region, close that
+      // region before materializing the literal so the subsequent overloaded
+      // call gets its own protected boundary.
+      if(i != 0 && state_ && state_->constructor_unwind_active &&
+         state_->constructor_unwind_call &&
+         all_arguments[i] && all_arguments[i]->kind == "literal" &&
+         !all_arguments[i]->value.empty() && all_arguments[i]->value[0] == '"') {
+        FinishConstructorUnwind(scope);
+        state_->pending_call_argument_context = false;
+        const vector<FunctionState::TemporaryObject> literal_cleanup =
+          CaptureLiveCleanupObjects();
+        if(!literal_cleanup.empty()) {
+          BeginConstructorUnwind(literal_cleanup, true);
+          state_->pending_call_argument_context = true;
+          state_->preserve_call_argument_context = false;
+        }
+      }
       const size_t argument_temporary_mark = state_ ?
         state_->temporary_objects.size() : 0;
       begin_argument_unwind(all_arguments[i], argument_temporary_mark);
@@ -1173,8 +1220,7 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
     if(state_ && state_->constructor_unwind_active &&
        state_->constructor_unwind_call &&
        (call_argument_context_started || state_->pending_call_argument_context ||
-        (state_->pending_call_unwind &&
-         state_->defer_call_unwind_completion))) {
+        (state_->pending_call_unwind && state_->defer_call_unwind_completion))) {
       state_->constructor_unwind_cleanup = CaptureLiveCleanupObjects();
       state_->pending_call_argument_context = false;
       reused_call_context = true;
@@ -1219,6 +1265,12 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
     } else if(state_ && state_->constructor_unwind_active) {
       FinishConstructorUnwind(scope);
     }
+    // EmitCompare/EmitConditionalValue deliberately defer completion so a
+    // whole value expression remains inside one protected region.  If the
+    // first operand already opened that region, a later call operand must
+    // reuse its dispatch instead of nesting a second region inside it.
+    const bool reuse_pending_call_unwind = state_ &&
+      state_->pending_call_unwind && state_->defer_call_unwind_completion;
     if(full_expression_cleanup && state_)
       state_->defer_temporary_cleanup = previous_full_expression_defer;
     TypePtr return_type = choice.function->child;
@@ -1247,25 +1299,30 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
       (!planned_unwind_result_slot.empty() && managed_call_argument);
     const string unwind_dispatch = reused_call_context ?
       state_->constructor_unwind_dispatch :
-      (wrap_unwind ? new_label("call_unwind_dispatch") : string());
+      (reuse_pending_call_unwind ? state_->pending_call_unwind_dispatch :
+       (wrap_unwind ? new_label("call_unwind_dispatch") : string()));
     const string unwind_end = reused_call_context ?
       state_->constructor_unwind_end :
-      (wrap_unwind ? new_label("call_unwind_end") : string());
+      (reuse_pending_call_unwind ? state_->pending_call_unwind_end :
+       (wrap_unwind ? new_label("call_unwind_end") : string()));
     Value result;
     result.type = type_is_reference(return_type) ? return_type->child : return_type;
     result.lvalue = type_is_reference(return_type);
     if(return_low == "void") {
-      if(wrap_unwind && !reused_call_context) {
+      if(wrap_unwind && !reused_call_context && !reuse_pending_call_unwind) {
         AddInstruction("eh_try ^" + unwind_dispatch);
       }
       AddInstruction("call void " + callee + "(" + arguments_text.str() + ")" + signature.str());
       const bool defer_unwind_completion = state_ &&
         state_->defer_call_unwind_completion && wrap_unwind;
       if(defer_unwind_completion) {
-        state_->pending_call_unwind = true;
-        state_->pending_call_cleanup = unwind_cleanup;
-        state_->pending_call_unwind_dispatch = unwind_dispatch;
-        state_->pending_call_unwind_end = unwind_end;
+        if(!reuse_pending_call_unwind &&
+           (!reused_call_context || !unwind_cleanup.empty())) {
+          state_->pending_call_unwind = true;
+          state_->pending_call_cleanup = unwind_cleanup;
+          state_->pending_call_unwind_dispatch = unwind_dispatch;
+          state_->pending_call_unwind_end = unwind_end;
+        }
         return result;
       }
       if(!state_ || (!state_->defer_temporary_cleanup &&
@@ -1295,7 +1352,7 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
     const string unwind_result_slot = spill_unwind_result ?
       (planned_unwind_result_slot.empty() ?
        new_special_slot("call", return_low) : planned_unwind_result_slot) : string();
-    if(wrap_unwind && !reused_call_context) {
+    if(wrap_unwind && !reused_call_context && !reuse_pending_call_unwind) {
       AddInstruction("eh_try ^" + unwind_dispatch);
     }
     AddInstruction(result.operand + " = call " + return_low + " " + callee + "(" +
@@ -1309,10 +1366,13 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
     const bool defer_unwind_completion = state_ &&
       state_->defer_call_unwind_completion && wrap_unwind;
     if(defer_unwind_completion) {
-      state_->pending_call_unwind = true;
-      state_->pending_call_cleanup = unwind_cleanup;
-      state_->pending_call_unwind_dispatch = unwind_dispatch;
-      state_->pending_call_unwind_end = unwind_end;
+      if(!reuse_pending_call_unwind &&
+         (!reused_call_context || !unwind_cleanup.empty())) {
+        state_->pending_call_unwind = true;
+        state_->pending_call_cleanup = unwind_cleanup;
+        state_->pending_call_unwind_dispatch = unwind_dispatch;
+        state_->pending_call_unwind_end = unwind_end;
+      }
       return result;
     }
     if(!state_ || (!state_->defer_temporary_cleanup &&

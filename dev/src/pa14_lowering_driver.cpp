@@ -587,10 +587,6 @@ void PA14Lowerer::Lower(ostream& out)
     // complete-object constructors cannot reference a table that was never
     // selected as a root.
     EmitPolymorphicGlobals(entries);
-    // The late vtable pass can synthesize destructor/base-entry records.  Run
-    // the normal ABI finalization once more so those typed records receive
-    // symbols and hidden-parameter metadata before their bodies are emitted.
-    FinalizeSymbols();
     EmitMemberPass(entries);
     EmitNeededOrdinary(entries);
     // A generated member body can instantiate a free helper after the last

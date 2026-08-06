@@ -303,7 +303,7 @@ string PA14Lowerer::EmitFunction(FunctionRecord& function)
     }
     Scope* scope = FunctionScope();
     if(function.value_special_member && (function.defaulted || function.implicit_constructor) &&
-       !function.base_entry)
+       (!function.base_entry || !HasVirtualBases(type_value(function.member_owner))))
       EmitValueSpecialMemberBody(function, scope);
     else if(function.constructor && !function.aggregate_constructor)
       EmitConstructorInitializers(function, scope);

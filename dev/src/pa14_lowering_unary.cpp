@@ -147,7 +147,8 @@ PA14Lowerer::Value PA14Lowerer::EmitUnary(const CPPGMAstNodePtr& node, Scope* sc
 			}
 			const bool reference_parameter = local &&
 				(type_is_reference(local->type) || type_is_reference(source_parameter)) &&
-				expected_base && !PA12SameType(source_value, expected_base, true);
+				expected_base && expected_base->kind == TYPE_CLASS &&
+				!PA12SameType(source_value, expected_base, true);
 			if(local && reference_parameter && source_value) {
 				Value result;
 				result.type = PointerTo(source_value);

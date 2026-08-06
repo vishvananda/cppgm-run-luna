@@ -233,6 +233,17 @@ string PA14Lowerer::EmitTemporaryObjectAddress(const CPPGMAstNodePtr& node,
     const bool suppress_pending_default = state_ &&
       state_->pending_constructor_unwind_start &&
       state_->pending_constructor_unwind_suppress_temporary;
+    const vector<FunctionState::TemporaryObject> pending_default_cleanup =
+      suppress_pending_default ? CaptureLiveCleanupObjects() :
+      vector<FunctionState::TemporaryObject>();
+    bool pending_default_context_started = false;
+    if(suppress_pending_default && state_ &&
+       !state_->constructor_unwind_active &&
+       !state_->suppress_constructor_unwind &&
+       !pending_default_cleanup.empty()) {
+      BeginConstructorUnwind(pending_default_cleanup, true);
+      pending_default_context_started = true;
+    }
     const bool suppress_nested_empty_constructor = state_ &&
       previous_temporary_construction &&
       CaptureLiveCleanupObjects().empty();
@@ -257,27 +268,43 @@ string PA14Lowerer::EmitTemporaryObjectAddress(const CPPGMAstNodePtr& node,
     // temporaries alike.
     RegisterTemporaryObject(object_type, address, force_empty,
       found_constructor && construction_no_throw);
+    if(pending_default_context_started && state_ &&
+       state_->constructor_unwind_active) {
+      state_->constructor_unwind_cleanup = pending_default_cleanup;
+      FinishConstructorUnwind(scope);
+    }
     if(state_ && state_->pending_constructor_unwind_start) {
+      const bool preserve_pending_default_context = suppress_pending_default;
       const vector<FunctionState::TemporaryObject> cleanup =
         CaptureLiveCleanupObjects();
-      if(!cleanup.empty()) {
-        if(state_->pending_constructor_unwind_dispatch.empty()) {
+      const bool close_empty_default_context = suppress_pending_default &&
+        state_->constructor_unwind_active &&
+        state_->constructor_unwind_cleanup.empty();
+      if(close_empty_default_context) {
+        FinishConstructorUnwind(scope);
+      } else if(!cleanup.empty()) {
+        if(state_->pending_constructor_unwind_dispatch.empty() &&
+           !suppress_pending_default) {
           state_->pending_constructor_unwind_dispatch =
             new_label("call_unwind_dispatch");
           state_->pending_constructor_unwind_end =
             new_label("call_unwind_end");
         }
         if(state_->constructor_unwind_active) {
-          state_->constructor_unwind_cleanup = cleanup;
-          state_->constructor_unwind_call = true;
-        } else BeginConstructorUnwind(cleanup, true,
+          if(!suppress_pending_default) {
+            state_->constructor_unwind_cleanup = cleanup;
+            state_->constructor_unwind_call = true;
+          }
+        } else if(!suppress_pending_default) BeginConstructorUnwind(cleanup, true,
           state_->pending_constructor_unwind_dispatch,
           state_->pending_constructor_unwind_end);
       }
-      state_->pending_constructor_unwind_start = false;
-      state_->pending_constructor_unwind_suppress_temporary = false;
-      state_->pending_constructor_unwind_dispatch.clear();
-      state_->pending_constructor_unwind_end.clear();
+      if(!preserve_pending_default_context) {
+        state_->pending_constructor_unwind_start = false;
+        state_->pending_constructor_unwind_suppress_temporary = false;
+        state_->pending_constructor_unwind_dispatch.clear();
+        state_->pending_constructor_unwind_end.clear();
+      }
     }
     return address;
 }
@@ -455,7 +482,7 @@ bool PA14Lowerer::EmitValueSpecialMemberBody(FunctionRecord& function, Scope* sc
         "x" + integer_text(static_cast<long long>(type_alignment(owner))) + " " +
         source + ", " + destination);
     } else {
-      if(!function.special_initializer)
+      if(!function.special_initializer || !HasVirtualBases(owner))
       for(size_t base_index = 0; base_index < direct_bases.size(); ++base_index) {
         TypePtr base = type_value(direct_bases[base_index]);
         if(!base || IsEmptyBaseStorage(base)) continue;
@@ -864,6 +891,7 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
           used_initializers.insert(selected.get());
           continue;
         }
+        if(!HasDefaultConstructionEffects(direct_base)) continue;
         CPPGMAstNodePtr synthetic(new CPPGMAstNode("mem-initializer"));
         synthetic->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
           "mem-initializer-id", LastComponent(direct_base->name))));

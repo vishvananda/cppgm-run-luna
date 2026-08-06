@@ -921,11 +921,6 @@ PA14Lowerer::Value PA14Lowerer::EmitConditionalValue(const CPPGMAstNodePtr& node
     const unsigned int previous_condition_cleanup_depth = state_ ?
       state_->condition_cleanup_depth : 0;
     if(state_) state_->defer_temporary_cleanup = true;
-    // Keep the call's EH region open through the complete condition value.
-    // For a comparison such as `f() == 7`, the comparison itself is part of
-    // the value evaluation and must precede the region's `eh_end`; closing
-    // immediately after f() leaves the condition outside its protected
-    // expression boundary.
     const bool previous_condition_call_defer = state_ &&
       state_->defer_call_unwind_completion;
     if(state_) state_->defer_call_unwind_completion = true;

@@ -323,16 +323,25 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
       type_value(state_->record->member_owner) : TypePtr();
     const bool needs_construction_vtt = base_entry && construction_owner &&
       object_type->polymorphic && HasVirtualBases(object_type);
+    const bool multiple_direct_bases = construction_owner &&
+      DirectBaseTypes(construction_owner).size() > 1;
+    const bool explicit_polymorphic_initializer = object_type->polymorphic &&
+      DirectBaseTypes(object_type).empty() && record && record->special_initializer &&
+      !record->special_initializer->children.empty();
     // A non-polymorphic base with an explicitly parameterized constructor
     // still has an observable complete-object entry.  The most-derived
-    // constructor calls its C2/base entry, while the C1 entry remains part of
-    // the ABI surface and is demanded by the complete typed constructor set.
+    // constructor calls its C2/base entry, while the C1 entry remains part
+    // of the ABI surface and is demanded by the complete typed constructor
+    // set.
     if(base_entry && record &&
-       (!object_type->polymorphic || DirectBaseTypes(object_type).empty()) &&
+       (!object_type->polymorphic || explicit_polymorphic_initializer) &&
        HasUserProvidedConstructor(object_type) &&
+       ((construction_owner && construction_owner->polymorphic) ||
+        (object_type->template_specialization && multiple_direct_bases &&
+         !record->member_template_frame)) &&
        ((!raw_arguments.empty() && !has_record_default_argument) ||
         object_type->template_specialization ||
-        (object_type->polymorphic && !record->implicit_constructor)) &&
+        explicit_polymorphic_initializer) &&
        !record->member_template)
       demand_complete_record = true;
     // EnsureConstructorBaseEntry may append to the function-record vector,
@@ -430,19 +439,33 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
       }
       return found;
     };
+    const auto has_explicit_destructor = [this](const TypePtr& raw_type) {
+      const TypePtr type = type_value(raw_type);
+      if(!type || type->kind != TYPE_CLASS) return false;
+      const vector<Binding*> destructors = MemberBindings(type,
+        "~" + LastComponent(type->name));
+      for(size_t destructor = 0; destructor < destructors.size(); ++destructor) {
+        FunctionRecord* record = RecordForBinding(destructors[destructor]);
+        if(record && record->destructor && record->node &&
+           (record->node->kind != "special-member-definition" ||
+            record->node->source_token_end != record->node->source_token_begin))
+          return true;
+      }
+      return false;
+    };
     contains_managed_temporary = [&](const CPPGMAstNodePtr& expression) -> bool {
       if(!expression) return false;
       if(expression->kind == "call-expression" && !expression->children.empty()) {
         TypePtr constructed = ConstructorObjectType(expression->children[0], scope);
         if(constructed && HasDestructor(constructed) &&
-           DestructorHasEffects(constructed) &&
+           (DestructorHasEffects(constructed) || has_explicit_destructor(constructed)) &&
            !constructor_is_nothrow(constructed)) return true;
         try {
           const ExprInfo expression_info = Infer(expression, scope);
           TypePtr value = expression_value_type(expression_info);
           if(value && value->kind == TYPE_CLASS &&
              !type_is_reference(expression_info.type) && HasDestructor(value) &&
-             DestructorHasEffects(value) &&
+             (DestructorHasEffects(value) || has_explicit_destructor(value)) &&
              (!constructed || !constructor_is_nothrow(constructed))) return true;
         } catch(const logic_error&) {
         }
@@ -451,7 +474,7 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
         if(contains_managed_temporary(expression->children[child])) return true;
       return false;
     };
-    const auto is_reference_temporary = [this, scope](
+    const auto is_reference_temporary = [this, scope, &has_explicit_destructor](
       const CPPGMAstNodePtr& expression, const TypePtr& parameter) {
       if(!expression || !parameter || !type_is_reference(parameter) ||
          !type_value(parameter->child) ||
@@ -464,20 +487,21 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
          !value->children.empty()) {
         TypePtr constructed = ConstructorObjectType(value->children[0], scope);
         if(constructed && HasDestructor(constructed) &&
-           DestructorHasEffects(constructed)) return true;
+           (DestructorHasEffects(constructed) || has_explicit_destructor(constructed))) return true;
         try {
           const ExprInfo info = Infer(value, scope);
           const TypePtr result = expression_value_type(info);
           if(result && result->kind == TYPE_CLASS &&
              !type_is_reference(info.type) && HasDestructor(result) &&
-             DestructorHasEffects(result)) return true;
+             (DestructorHasEffects(result) || has_explicit_destructor(result))) return true;
         } catch(const logic_error&) {
         }
       }
       if(value && (value->kind == "braced-construction" ||
                    value->kind == "braced-init-list"))
         return HasDestructor(type_value(parameter->child)) &&
-          DestructorHasEffects(type_value(parameter->child));
+          (DestructorHasEffects(type_value(parameter->child)) ||
+           has_explicit_destructor(type_value(parameter->child)));
       return false;
     };
     const vector<FunctionState::TemporaryObject> cleanup_before_arguments =
@@ -626,6 +650,13 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
     }
     for(size_t i = 0; i < arguments.size(); ++i) {
       TypePtr target = i < best_function->parameters.size() ? best_function->parameters[i] : TypePtr();
+      const bool default_reference_temporary = state_ && i >= raw_arguments.size() &&
+        target && (type_is_reference(target) ||
+          (type_value(target) && type_value(target)->kind == TYPE_CLASS));
+      if(default_reference_temporary && !state_->pending_constructor_unwind_start) {
+        state_->pending_constructor_unwind_start = true;
+        state_->pending_constructor_unwind_suppress_temporary = true;
+      }
       const size_t target_low_index = (record && record->indirect_result ? 1 : 0) +
         (record && record->member && !record->static_member ? 1 : 0) + i;
       const bool delayed_reference_context = wrap_before_arguments &&
@@ -702,17 +733,29 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
         } else if(target) value = ConvertValue(value, target, false, true);
         operands.push_back(value.operand);
       }
+      // Keep the pending marker until the enclosing constructor has finished
+      // evaluating all of its arguments.  The temporary helper may have
+      // supplied the dispatch labels; opening the region here would put the
+      // default object's own construction outside that enclosing boundary.
     }
-    if(defer_unwind_start && state_ &&
-       state_->pending_constructor_unwind_start &&
-       !state_->constructor_unwind_active) {
-      BeginConstructorUnwind(cleanup_before_arguments, true,
-        pending_dispatch, pending_end);
+    if(state_ && state_->pending_constructor_unwind_start &&
+       !state_->constructor_unwind_active && !state_->temporary_construction) {
+      const vector<FunctionState::TemporaryObject> deferred_cleanup =
+        CaptureLiveCleanupObjects();
+      if(!deferred_cleanup.empty()) {
+        const string deferred_dispatch =
+          state_->pending_constructor_unwind_dispatch.empty() ? pending_dispatch :
+          state_->pending_constructor_unwind_dispatch;
+        const string deferred_end = state_->pending_constructor_unwind_end.empty() ?
+          pending_end : state_->pending_constructor_unwind_end;
+        BeginConstructorUnwind(deferred_cleanup, true,
+          deferred_dispatch, deferred_end);
+        argument_context_started_here = true;
+      }
       state_->pending_constructor_unwind_start = false;
       state_->pending_constructor_unwind_suppress_temporary = false;
       state_->pending_constructor_unwind_dispatch.clear();
       state_->pending_constructor_unwind_end.clear();
-      argument_context_started_here = true;
     }
     const bool new_temporary = state_ &&
       state_->temporary_objects.size() > temporary_mark;
@@ -738,8 +781,7 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
        !state_->suppress_constructor_unwind &&
       !constructor_call_no_throw &&
       (has_temporary_cleanup ||
-        (full_expression_cleanup && !unwind_cleanup.empty() &&
-         !state_->constructing_variable)) &&
+        (full_expression_cleanup && !unwind_cleanup.empty())) &&
       !unwind_cleanup.empty())
       BeginConstructorUnwind(unwind_cleanup, true);
     if(record)

@@ -107,9 +107,16 @@ nested virtual-base constructor-reference case.
 The final case required rebuilding hidden `this` views from the complete
 constructor object, preserving reverse hidden-view stores for nested virtual
 carriers, and demanding the nested carrier's copy base entry from typed
-lowering state.  Earlier PA behavior remains covered by the through-PA26
-report and the file audit.
+lowering state.  The final regression repair also made function-record lookup
+respect the binding's static/member status, and limited reference-parameter
+address fallback to class-pointer conversions; this preserves PA15 overload
+selection while preventing an extra load for ordinary `void*` address-taking.
+
+The exact prior-through report passed with `2735 / 2735` tests.  The required
+PA27 report passed with `34 / 34` tests.  The required source file audit passed
+with the repository's existing 14 non-fatal warnings.
 
 ## Remaining work after checkpoint
 
-None for PA27.  The next stage checkpoint, if requested, is PA28.
+None for PA27 or the through-PA26 regression set.  The next checkpoint group
+is the PA28 full-stage implementation and its native-validation contract.

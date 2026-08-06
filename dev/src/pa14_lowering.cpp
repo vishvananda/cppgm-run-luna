@@ -1238,6 +1238,7 @@ PA14Lowerer::FunctionRecord* PA14Lowerer::RecordForBinding(Binding* binding) con
     for(size_t i = 0; i < functions_.size(); ++i) {
       const FunctionRecord& candidate = functions_[i];
       if(candidate.qualified_name != binding->qualified_name) continue;
+      if(candidate.static_member != binding->is_static) continue;
       const TypePtr source = function_target_type(candidate.source_type);
       if(source && wanted && PA12SameType(source, wanted, false))
         return const_cast<FunctionRecord*>(&candidate);
@@ -1258,6 +1259,7 @@ void PA14Lowerer::MarkFunctionNeeded(FunctionRecord* function)
       function->needed_order = next_needed_order_++;
     const TypePtr owner = type_value(function->member_owner);
     if(owner && owner->kind == TYPE_CLASS && owner->polymorphic &&
+       (function->definition || function->constructor || function->destructor) &&
        (function->constructor || function->destructor || IsVirtualFunction(*function))) {
       if(ShouldUseExternalVtable(owner)) external_vtables_.insert(owner.get());
       else emitted_vtables_.insert(owner.get());

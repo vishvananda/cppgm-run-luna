@@ -60,6 +60,7 @@ void PA14Lowerer::EmitPolymorphicGlobals(vector<string>& entries)
     const vector<TypePtr> bases = DirectBaseTypes(type);
     return type && type->kind == TYPE_CLASS && bases.size() == 1 &&
       !IsVirtualDirectBase(type, 0) &&
+      !ShouldUseExternalVtable(type) &&
       (type->direct_base_offsets.empty() || type->direct_base_offsets[0] == 0);
   };
   for(map<string, TypePtr>::const_iterator it = demanded_rtti_types_.begin(); it != demanded_rtti_types_.end(); ++it) {
@@ -71,7 +72,8 @@ void PA14Lowerer::EmitPolymorphicGlobals(vector<string>& entries)
       has_class = true;
       if(type->kind == TYPE_CLASS) {
         if(class_uses_si_rtti(type)) has_si = true;
-        else if(!DirectBaseTypes(type).empty()) has_vmi = true;
+        else if(!DirectBaseTypes(type).empty() && !ShouldUseExternalVtable(type))
+          has_vmi = true;
       }
     }
   }
@@ -126,7 +128,8 @@ void PA14Lowerer::EmitPolymorphicGlobals(vector<string>& entries)
       rtti << "  ptr addr @__external_rtti_vtable____pointer_type_info + 16\n";
     else if (class_uses_si_rtti(type))
       rtti << "  ptr addr @__external_rtti_vtable____si_class_type_info + 16\n";
-    else if (type->kind == TYPE_CLASS && !DirectBaseTypes(type).empty())
+    else if (type->kind == TYPE_CLASS && !DirectBaseTypes(type).empty() &&
+             !ShouldUseExternalVtable(type))
       rtti << "  ptr addr @__external_rtti_vtable____vmi_class_type_info + 16\n";
     else
       rtti << "  ptr addr @__external_rtti_vtable____class_type_info + 16\n";
@@ -137,7 +140,8 @@ void PA14Lowerer::EmitPolymorphicGlobals(vector<string>& entries)
         RttiNeedsTypeMangledClassName(RttiValueType(type->child));
       rtti << "  i32 " << (incomplete_pointee ? 8 : 0) << "\n";
       rtti << "  ptr addr @" << RttiSymbol(type->child) << "\n";
-    } else if (type->kind == TYPE_CLASS && !DirectBaseTypes(type).empty()) {
+    } else if (type->kind == TYPE_CLASS && !DirectBaseTypes(type).empty() &&
+               !ShouldUseExternalVtable(type)) {
       const vector<TypePtr> bases = DirectBaseTypes(type);
       if (class_uses_si_rtti(type)) {
         rtti << "  ptr addr @" << RttiSymbol(bases[0]) << "\n";
