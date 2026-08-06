@@ -86,6 +86,48 @@ bool IntegralConstantValue(Analyzer& analyzer, const CPPGMAstNodePtr& expression
     if(value) *value = PA19Signed(constant.integral);
     return true;
   }
+
+bool HasVirtualBasePath(const TypePtr& raw_derived, const TypePtr& raw_base)
+{
+  const TypePtr derived = type_value(raw_derived);
+  const TypePtr base = type_value(raw_base);
+  if(!derived || !base || derived->kind != TYPE_CLASS || base->kind != TYPE_CLASS)
+    return false;
+  set<const Type*> visited;
+  function<bool(const TypePtr&, bool)> walk = [&](const TypePtr& current,
+                                                   bool virtual_path) {
+    if(!current || !visited.insert(current.get()).second) return false;
+    if(PA12SameType(current, base, true)) return virtual_path;
+    const vector<TypePtr> bases = DirectBaseTypes(current);
+    for(size_t index = 0; index < bases.size(); ++index)
+      if(walk(bases[index], virtual_path || IsVirtualDirectBase(current, index)))
+        return true;
+    return false;
+  };
+  return walk(derived, false);
+}
+
+bool HasNonzeroBasePath(const TypePtr& raw_derived, const TypePtr& raw_base)
+{
+  const TypePtr derived = type_value(raw_derived);
+  const TypePtr base = type_value(raw_base);
+  if(!derived || !base || derived->kind != TYPE_CLASS || base->kind != TYPE_CLASS)
+    return false;
+  set<const Type*> visited;
+  function<bool(const TypePtr&, size_t)> walk = [&](const TypePtr& current,
+                                                    size_t accumulated) {
+    if(!current || !visited.insert(current.get()).second) return false;
+    if(PA12SameType(current, base, true)) return accumulated != 0;
+    const vector<TypePtr> bases = DirectBaseTypes(current);
+    for(size_t index = 0; index < bases.size(); ++index) {
+      const size_t offset = index < current->direct_base_offsets.size() ?
+        current->direct_base_offsets[index] : (index == 0 ? current->direct_base_offset : 0);
+      if(walk(bases[index], accumulated + offset)) return true;
+    }
+    return false;
+  };
+  return walk(derived, 0);
+}
 } // namespace
 
 PA14Lowerer::Value PA14Lowerer::ConvertValue(Value value, const TypePtr& target,
@@ -122,8 +164,68 @@ PA14Lowerer::Value PA14Lowerer::ConvertValue(Value value, const TypePtr& target,
        adjust_derived_pointer && IsDerivedFrom(value.type->child, target_value->child)) {
       Value result = value;
       result.type = target_value;
+      // A derived-to-base pointer conversion preserves a null pointer just
+      // like the downcast path below.  Keep the test in LowIR because this
+      // value can originate from a nullable pointer parameter.
+      const bool preserve_null = !value.nonnull &&
+        (HasVirtualBasePath(value.type->child, target_value->child) ||
+         HasVirtualBases(type_value(target_value->child)));
+      if(state_ && preserve_null) {
+        const string slot = new_special_slot("basecast", "ptr");
+        const string null_label = new_label("basecast_null");
+        const string adjust_label = new_label("basecast_adjust");
+        const string end_label = new_label("basecast_end");
+        const string is_null = new_temp();
+        AddInstruction(is_null + " = cmp eq ptr " + value.operand + ", 0");
+        Terminate("branch " + is_null + ", ^" + null_label + ", ^" + adjust_label);
+        AddBlock(null_label);
+        emit_store(PointerTo(Fundamental("char")), "0", "$" + slot);
+        Terminate("jump ^" + end_label);
+        AddBlock(adjust_label);
+        const string adjusted = AdjustBaseAddress(value.operand,
+          value.type->child, target_value->child);
+        emit_store(PointerTo(Fundamental("char")), adjusted, "$" + slot);
+        Terminate("jump ^" + end_label);
+        AddBlock(end_label);
+        result.operand = emit_load("$" + slot,
+          PointerTo(Fundamental("char")));
+        return result;
+      }
       result.operand = AdjustBaseAddress(value.operand,
         value.type->child, target_value->child);
+      return result;
+    }
+    if(target_value->kind == TYPE_POINTER && value.type->kind == TYPE_POINTER &&
+       value.type->child && target_value->child &&
+       adjust_derived_pointer && IsDerivedFrom(target_value->child, value.type->child)) {
+      Value result = value;
+      result.type = target_value;
+      const bool preserve_null = !value.nonnull &&
+        (HasVirtualBasePath(target_value->child, value.type->child) ||
+         HasNonzeroBasePath(target_value->child, value.type->child));
+      if(state_ && preserve_null) {
+        const string slot = new_special_slot("basecast", "ptr");
+        const string null_label = new_label("basecast_null");
+        const string adjust_label = new_label("basecast_adjust");
+        const string end_label = new_label("basecast_end");
+        const string is_null = new_temp();
+        AddInstruction(is_null + " = cmp eq ptr " + value.operand + ", 0");
+        Terminate("branch " + is_null + ", ^" + null_label + ", ^" + adjust_label);
+        AddBlock(null_label);
+        emit_store(PointerTo(Fundamental("char")), "0", "$" + slot);
+        Terminate("jump ^" + end_label);
+        AddBlock(adjust_label);
+        const string adjusted = AdjustDerivedAddress(value.operand,
+          target_value->child, value.type->child);
+        emit_store(PointerTo(Fundamental("char")), adjusted, "$" + slot);
+        Terminate("jump ^" + end_label);
+        AddBlock(end_label);
+        result.operand = emit_load("$" + slot,
+          PointerTo(Fundamental("char")));
+        return result;
+      }
+      result.operand = AdjustDerivedAddress(value.operand,
+        target_value->child, value.type->child);
       return result;
     }
     if(target_value->kind == TYPE_POINTER && value.type->kind == TYPE_FUNCTION) {
@@ -714,11 +816,18 @@ void PA14Lowerer::EmitDeclarations(vector<string>& entries)
       }
       ostringstream out;
       out << "declare function @" << function.symbol << "(";
+      const vector<string> parameter_names = ParameterNames(function);
+      const size_t hidden_count = function.hidden_virtual_bases.size();
+      const size_t ordinary_count = function.type->parameters.size() >= hidden_count ?
+        function.type->parameters.size() - hidden_count : 0;
       for(size_t p = 0; p < function.type->parameters.size(); ++p) {
         if(p != 0) out << ", ";
         const size_t source_parameter = function.indirect_result && p > 0 ? p - 1 : p;
-        out << "%" << (function.indirect_result && p == 0 ? "ret" :
-          string("arg") + integer_text(static_cast<long long>(source_parameter))) << " : " <<
+        const string parameter_name = function.indirect_result && p == 0 ? "ret" :
+          (p >= ordinary_count && p < parameter_names.size() ?
+            parameter_names[p] :
+            string("arg") + integer_text(static_cast<long long>(source_parameter)));
+        out << "%" << parameter_name << " : " <<
           low_type(function.type->parameters[p]);
         if(type_is_reference(function.type->parameters[p])) out << " [pass=reference]";
         else if(function.indirect_result && p == 0) out << " [pass=indirect_result]";
@@ -1273,7 +1382,15 @@ string PA14Lowerer::EmitCallAddress(const CPPGMAstNodePtr& node, Scope* scope)
       const string slot = new_special_slot("tmpobj", low_type(value_type));
       const string address = new_temp();
       AddInstruction(address + " = addr $" + slot);
+      const bool defer_class_return_unwind = state_ && function &&
+        !function->indirect_result;
+      const bool previous_call_defer = state_ &&
+        state_->defer_call_unwind_completion;
+      if(defer_class_return_unwind)
+        state_->defer_call_unwind_completion = true;
       Value value = EmitCall(node, scope);
+      if(defer_class_return_unwind)
+        state_->defer_call_unwind_completion = previous_call_defer;
       if(function && function->indirect_result) {
         RegisterTemporaryObject(value_type, value.operand);
         return value.operand;
@@ -1281,173 +1398,19 @@ string PA14Lowerer::EmitCallAddress(const CPPGMAstNodePtr& node, Scope* scope)
       AddInstruction("copyobj " + integer_text(static_cast<long long>(type_size(value_type))) +
         "x" + integer_text(static_cast<long long>(type_alignment(value_type))) + " " +
         value.operand + ", " + address);
+      if(state_ && state_->pending_call_unwind) {
+        if(state_->post_call_unwind_requested) {
+          // The returned object can immediately be used as a member object.
+          // Preserve the active dispatch for that following field load after
+          // closing the call's own protected region.
+          state_->post_call_unwind_pending = true;
+          state_->post_call_unwind_dispatch = state_->pending_call_unwind_dispatch;
+        }
+        FinishPendingCallUnwind(scope);
+      }
       RegisterTemporaryObject(value_type, address);
       return address;
     }
     throw logic_error("expression is not addressable");
-  }
-string PA14Lowerer::EmitMemberAddress(const CPPGMAstNodePtr& node, Scope* scope,
-                                      bool reference_projection)
-{
-    ExprInfo object_info;
-	Binding* member = MemberBinding(node, scope, &object_info);
-	if(!member) throw logic_error("unknown member");
-    if(member->kind == BIND_FUNCTION) {
-      if(member->is_static) {
-        FunctionRecord* function = RecordForBinding(member);
-        if(function) return function_address(function);
-      }
-      throw logic_error("member function is not an lvalue");
-    }
-    if(member->is_static) {
-      GlobalRecord* global = EnsureStaticMemberStorage(member);
-      if(!global) throw logic_error("static member has no storage");
-      return global_address(global);
-    }
-    if(member->member_index == static_cast<size_t>(-1) || !member->member_owner ||
-       member->member_index >= member->member_owner->class_members.size())
-      throw logic_error("member has no layout record");
-    const ClassMemberInfo& fact = member->member_owner->class_members[member->member_index];
-    const string op = PA12Operator(node->value);
-    TypePtr field_type = type_value(fact.type);
-    const string stable_key = StableMemberAddressKey(node, member, field_type);
-    if(!stable_key.empty() && state_) {
-      map<string, string>::const_iterator cached =
-        state_->stable_member_addresses.find(stable_key);
-      if(cached != state_->stable_member_addresses.end()) return cached->second;
-    }
-    string base;
-    if(op == "->") {
-      TypePtr object = expression_value_type(object_info);
-      if(!object || object->kind != TYPE_POINTER) throw logic_error("arrow requires a pointer to class");
-      object = type_value(object->child);
-      base = EmitValue(node->children[0], scope).operand;
-    } else {
-      TypePtr object = expression_value_type(object_info);
-      const size_t object_temporary_mark = state_ ?
-        state_->temporary_objects.size() : 0;
-      base = EmitAddress(node->children[0], scope);
-      object = type_value(object);
-      if(object && object->kind == TYPE_POINTER) object = type_value(object->child);
-      // A class prvalue used as a member object creates a temporary before
-      // the member projection itself.  If this projection is an argument to
-      // an enclosing call, its cleanup region must already cover the field
-      // address/load; leave the typed call context open for EmitChosenCall
-      // to close around that enclosing call.
-      if(state_ && !state_->constructor_unwind_active &&
-         !state_->suppress_constructor_unwind &&
-         !state_->defer_temporary_cleanup &&
-         state_->temporary_objects.size() > object_temporary_mark &&
-         object_info.category == "prvalue") {
-        const vector<FunctionState::TemporaryObject> cleanup =
-          CaptureLiveCleanupObjects();
-        if(!cleanup.empty()) {
-          BeginConstructorUnwind(cleanup, true);
-          state_->pending_call_argument_context = true;
-        }
-      }
-    }
-    TypePtr object = expression_value_type(object_info);
-    if(op == "->") object = object && object->kind == TYPE_POINTER ?
-      type_value(object->child) : TypePtr();
-    else if(object && object->kind == TYPE_POINTER) object = type_value(object->child);
-    bool projected_injected_storage = false;
-    if(member->injected_member && member->injected_owner &&
-       (!object || !PA12SameType(object, member->injected_owner, true))) {
-      bool found_injected_storage = false;
-      if(object && object->kind == TYPE_CLASS) {
-        for(size_t i = 0; i < object->class_members.size(); ++i) {
-          const ClassMemberInfo& outer = object->class_members[i];
-          if(!outer.name.empty() && outer.type) continue;
-          if(outer.type && PA12SameType(type_value(outer.type),
-                                        member->injected_owner, true)) {
-            found_injected_storage = true;
-            if(outer.offset != 0) {
-              const string adjusted = new_temp();
-              AddInstruction(adjusted + " = index i8 [projection=field] " + base + ", " +
-                integer_text(outer.offset));
-              base = adjusted;
-              projected_injected_storage = true;
-            }
-            break;
-          }
-        }
-      }
-      if(!found_injected_storage)
-        throw logic_error("anonymous member has no storage record");
-    } else base = AdjustBaseAddress(base, object, member->member_owner);
-    ApplyCapturedThisProjection(node, op, &base);
-    // An injected member of an anonymous union uses the union storage itself
-    // when its layout offset is zero.  The injected binding carries the
-    // outer member's offset in the projection above; applying a second
-    // zero-offset field projection changes the canonical LowIR shape and,
-    // more importantly, obscures that this is the union object address.
-    const TypePtr injected_owner = type_value(member->injected_owner);
-    if(member->injected_member && injected_owner && injected_owner->kind == TYPE_CLASS &&
-       injected_owner->is_union && fact.offset == 0 &&
-       projected_injected_storage) {
-      if(!stable_key.empty() && state_) state_->stable_member_addresses[stable_key] = base;
-      return base;
-    }
-    const string result = new_temp();
-    const bool raw_bit_field = IsBitField(member) && op == ".";
-    const bool reference_field = reference_projection && type_is_reference(fact.type);
-    AddInstruction(result + " = index i8 " +
-      (raw_bit_field ? string() :
-       (reference_field ? "[projection=reference_field] " : "[projection=field] ")) +
-      base + ", " +
-      integer_text(fact.offset));
-    if(!stable_key.empty() && state_) state_->stable_member_addresses[stable_key] = result;
-    return result;
-}
-string PA14Lowerer::AdjustBaseAddress(const string& base, const TypePtr& raw_derived,
-                                      const TypePtr& target,
-                                      bool project_base_path)
-{
-    TypePtr derived = type_value(raw_derived);
-    TypePtr wanted = type_value(target);
-    if(!derived || !wanted || PA12SameType(derived, wanted, true)) return base;
-    if(derived->kind != TYPE_CLASS || wanted->kind != TYPE_CLASS)
-      throw logic_error("member owner is not a base class");
-    if(!IsDerivedFrom(derived, wanted))
-      throw logic_error("member owner is not a base class");
-    vector<size_t> path;
-    set<const Type*> visited;
-    function<bool(const TypePtr&)> find_base =
-      [&](const TypePtr& current) {
-        if(!current || !visited.insert(current.get()).second) return false;
-        if(PA12SameType(current, wanted, true)) return true;
-        if(!current->direct_bases.empty()) {
-          for(size_t i = 0; i < current->direct_bases.size(); ++i) {
-            const size_t base_offset = i < current->direct_base_offsets.size() ?
-              current->direct_base_offsets[i] : (i == 0 ? current->direct_base_offset : 0);
-            path.push_back(base_offset);
-            if(find_base(type_value(current->direct_bases[i]))) return true;
-            path.pop_back();
-          }
-        } else if(current->direct_base) {
-          path.push_back(current->direct_base_offset);
-          if(find_base(type_value(current->direct_base))) return true;
-          path.pop_back();
-        }
-        return false;
-      };
-    if(!find_base(derived)) throw logic_error("member owner is not a base class");
-    if(!project_base_path) {
-      size_t offset = 0;
-      for(size_t i = 0; i < path.size(); ++i) offset += path[i];
-      const string adjusted = new_temp();
-      AddInstruction(adjusted + " = index i8 [projection=base_subobject] " + base + ", " +
-        integer_text(static_cast<long long>(offset)));
-      return adjusted;
-    }
-    string adjusted = base;
-    for(size_t i = 0; i < path.size(); ++i) {
-      const string projected = new_temp();
-      AddInstruction(projected + " = index i8 [projection=base_subobject] " + adjusted + ", " +
-        integer_text(static_cast<long long>(path[i])));
-      adjusted = projected;
-    }
-    return adjusted;
   }
 } // namespace cppgm_pa14_lowering

@@ -43,9 +43,26 @@ string PA14Lowerer::EmitReferenceArgument(const CPPGMAstNodePtr& node, Scope* sc
     // returned object is the forwarding-reference materialization boundary
     // used by earlier assignments; its empty destructor is intentionally
     // elided there.
-    const bool force_empty_temporary = target &&
+    bool force_empty_temporary = target &&
       target->kind == TYPE_LVALUE_REFERENCE && node &&
       node->kind != "cast-expression";
+    if(force_empty_temporary && referred) {
+      const TypePtr referred_value = type_value(referred);
+      if(referred_value && referred_value->kind == TYPE_CLASS) {
+        bool user_destructor = false;
+        const vector<Binding*> destructors = MemberBindings(referred_value,
+          "~" + LastComponent(referred_value->name));
+        for(size_t destructor = 0; destructor < destructors.size(); ++destructor) {
+          FunctionRecord* record = RecordForBinding(destructors[destructor]);
+          if(record && record->destructor && record->node &&
+             record->node->kind != "special-member-definition") {
+            user_destructor = true;
+            break;
+          }
+        }
+        force_empty_temporary = user_destructor;
+      }
+    }
     CPPGMAstNodePtr lambda_source = node;
     while(lambda_source && lambda_source->kind == "parenthesized-expression" &&
           lambda_source->children.size() == 1 && lambda_source->children[0])
@@ -680,14 +697,89 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
       string object_operand;
       ExprInfo object_info = Infer(choice.object, scope);
       TypePtr object_type = expression_value_type(object_info);
-      if(object_type && object_type->kind == TYPE_POINTER) {
+      const TypePtr receiver_owner = choice.member_pointer_owner ?
+        choice.member_pointer_owner :
+        (choice.binding ? choice.binding->member_owner : TypePtr());
+      bool used_hidden_receiver = false;
+      bool hidden_cast_receiver = false;
+      string hidden_receiver_source;
+      if(choice.object && choice.object->kind == "keyword-literal" &&
+         PA12Operator(choice.object->value) == "this")
+        hidden_receiver_source = "this";
+      else if(choice.object && choice.object->kind == "id-expression")
+        hidden_receiver_source = choice.object->value;
+      else if(choice.object && choice.object->kind == "cast-expression" &&
+              choice.object->children.size() > 1) {
+        CPPGMAstNodePtr source = choice.object->children[1];
+        while(source && source->kind == "parenthesized-expression" &&
+              source->children.size() == 1) source = source->children[0];
+        if(source && source->kind == "unary-expression" &&
+           PA12Operator(source->value) == "*" && !source->children.empty() &&
+           source->children[0] && source->children[0]->kind == "keyword-literal" &&
+           PA12Operator(source->children[0]->value) == "this") {
+          hidden_receiver_source = "this";
+          hidden_cast_receiver = true;
+        }
+      }
+      // A member call on a complete object whose selected owner is a virtual
+      // base can use the incoming typed view directly.  Resolve this before
+      // materializing the ordinary receiver so the LowIR does not contain a
+      // dead load of `this`/the complete object before the hidden view.
+      TypePtr hidden_object_type = object_type;
+      if(hidden_object_type && hidden_object_type->kind == TYPE_POINTER)
+        hidden_object_type = type_value(hidden_object_type->child);
+      if(hidden_cast_receiver) {
+        const TypePtr complete_owner = state_ && state_->record &&
+          state_->record->member_owner ? state_->record->member_owner :
+          (function_record ? function_record->member_owner : TypePtr());
+        if(complete_owner) hidden_object_type = type_value(complete_owner);
+      }
+      if(state_ && receiver_owner && hidden_object_type && hidden_object_type->kind == TYPE_CLASS &&
+         !hidden_receiver_source.empty()) {
+        map<string, vector<string> >::const_iterator hidden_this =
+          state_->virtual_base_hidden_by_source.find(hidden_receiver_source);
+        if(hidden_this != state_->virtual_base_hidden_by_source.end()) {
+          size_t virtual_index = 0;
+          size_t relative = 0;
+          bool found = false;
+          for(; virtual_index < hidden_object_type->virtual_base_types.size(); ++virtual_index)
+            if(hidden_object_type->virtual_base_types[virtual_index] &&
+               (SameLayoutType(hidden_object_type->virtual_base_types[virtual_index], receiver_owner) ||
+                (virtual_index < hidden_object_type->virtual_base_roots.size() &&
+                 hidden_object_type->virtual_base_roots[virtual_index] &&
+                 FindVirtualBaseOffset(hidden_object_type->virtual_base_roots[virtual_index],
+                   receiver_owner, &relative)))) {
+              found = true;
+              break;
+            }
+          if(found && virtual_index < hidden_this->second.size()) {
+            object_operand = hidden_this->second[virtual_index];
+            if(!object_operand.empty() && object_operand[0] == '$')
+              object_operand = emit_load(object_operand, PointerTo(Fundamental("char")));
+            if(relative != 0) {
+              const string adjusted = new_temp();
+              AddInstruction(adjusted + " = index i8 " + object_operand + ", " +
+                integer_text(static_cast<long long>(relative)));
+              object_operand = adjusted;
+            }
+            if(!hidden_cast_receiver) {
+              const string projected = new_temp();
+              AddInstruction(projected + " = index i8 " + object_operand + ", 0");
+              object_operand = projected;
+            }
+            object_type = receiver_owner;
+            used_hidden_receiver = true;
+          }
+        }
+      }
+      if(!used_hidden_receiver && object_type && object_type->kind == TYPE_POINTER) {
         object_operand = EmitValue(choice.object, scope).operand;
         object_type = type_value(object_type->child);
-	      } else if(object_info.category == "lvalue" ||
+	      } else if(!used_hidden_receiver && (object_info.category == "lvalue" ||
 	                (choice.object->kind == "keyword-literal" &&
-	                 PA12Operator(choice.object->value) == "this")) {
-	        object_operand = EmitAddress(choice.object, scope);
-	      } else if(choice.object->kind == "cast-expression" &&
+	                 PA12Operator(choice.object->value) == "this"))) {
+        object_operand = EmitAddress(choice.object, scope);
+	      } else if(!used_hidden_receiver && choice.object->kind == "cast-expression" &&
 	                choice.object->children.size() > 1 && object_type &&
 	                object_type->kind == TYPE_CLASS &&
 	                type_is_reference(analyzer_.TypeFromTypeId(
@@ -696,13 +788,13 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
 	        // class value here would copy the most-derived object and lose the
 	        // typed base projection used by a subsequent member call.
 	        object_operand = EmitAddress(choice.object, scope);
-	      } else if(object_type && object_type->kind == TYPE_CLASS &&
+      } else if(!used_hidden_receiver && object_type && object_type->kind == TYPE_CLASS &&
 	                object_info.category == "xvalue") {
 	        // An xvalue class expression denotes an existing object.  A
 	        // forwarding-reference helper can return the callable closure by
 	        // reference, so materializing it here would add an extra copy.
 	        object_operand = EmitAddress(choice.object, scope);
-      } else if(choice.object->kind == "call-expression" &&
+      } else if(!used_hidden_receiver && choice.object->kind == "call-expression" &&
                 !choice.object->children.empty() &&
                 ConstructorObjectType(choice.object->children[0], scope)) {
         object_operand = EmitTemporaryObjectAddress(choice.object, scope, "tmpobj");
@@ -719,7 +811,7 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
              state_->temporary_objects.back().address == object_operand)
             state_->temporary_objects.pop_back();
         }
-      } else if(choice.object->kind == "call-expression" && object_type &&
+      } else if(!used_hidden_receiver && choice.object->kind == "call-expression" && object_type &&
                 object_type->kind == TYPE_CLASS) {
         // A class-valued call is a prvalue object, not a scalar to spill into
         // an arbitrary member-call slot.  Give the common object-transfer
@@ -734,7 +826,7 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
             "x" + integer_text(static_cast<long long>(type_alignment(object_type))) + " " +
             object_value.operand + ", " + object_operand);
         }
-      } else if(object_type && object_type->kind == TYPE_CLASS &&
+      } else if(!used_hidden_receiver && object_type && object_type->kind == TYPE_CLASS &&
                 object_info.category != "lvalue") {
         CPPGMAstNodePtr lambda_object = choice.object;
         while(lambda_object && lambda_object->kind == "parenthesized-expression" &&
@@ -762,10 +854,10 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
             "x" + integer_text(static_cast<long long>(type_alignment(object_type))) + " " +
             object_value.operand + ", " + object_operand);
         }
-      } else if(choice.conversion && object_info.category == "lvalue" &&
+      } else if(!used_hidden_receiver && choice.conversion && object_info.category == "lvalue" &&
                 object_type && object_type->kind == TYPE_CLASS) {
         object_operand = EmitAddress(choice.object, scope);
-    } else {
+      } else if(!used_hidden_receiver) {
         Value object_value = EmitValue(choice.object, scope);
         const string slot = new_special_slot("object", low_type(object_type));
         emit_store(object_type, object_value.operand, "$" + slot);
@@ -778,12 +870,38 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
           choice.project_base_type, true);
         object_type = choice.project_base_type;
       }
-      const TypePtr receiver_owner = choice.member_pointer_owner ?
-        choice.member_pointer_owner :
-        (choice.binding ? choice.binding->member_owner : TypePtr());
-      object_operand = AdjustBaseAddress(object_operand, object_type,
-        receiver_owner,
-        choice.project_base_path);
+      const bool hidden_from_complete_receiver = function_record &&
+        function_record->member && !function_record->static_member &&
+        receiver_owner && object_type && object_type->kind == TYPE_CLASS &&
+        !PA12SameType(object_type, receiver_owner, true) &&
+        IsDerivedFrom(object_type, receiver_owner) &&
+        !function_record->hidden_virtual_bases.empty() && state_;
+      if(!used_hidden_receiver)
+        object_operand = AdjustBaseAddress(object_operand, object_type,
+          receiver_owner,
+          choice.project_base_path);
+      if(hidden_from_complete_receiver) {
+        // The ordinary receiver is the selected base view.  Hidden virtual
+        // arguments, however, are rooted in the complete lvalue used to form
+        // that receiver; retain a separate typed address evaluation so the
+        // shared virtual subobject is not reconstructed from the base view.
+        const string complete_receiver = EmitAddress(choice.object, scope);
+        vector<string> hidden_addresses;
+        for(size_t hidden = 0;
+            hidden < function_record->hidden_virtual_bases.size(); ++hidden) {
+          size_t offset = 0;
+          if(!FindVirtualBaseOffset(object_type,
+              function_record->hidden_virtual_bases[hidden], &offset)) {
+            hidden_addresses.push_back(string());
+            continue;
+          }
+          const string address = new_temp();
+          AddInstruction(address + " = index i8 " + complete_receiver + ", " +
+            integer_text(static_cast<long long>(offset)));
+          hidden_addresses.push_back(address);
+        }
+        state_->virtual_base_hidden_by_operand[object_operand] = hidden_addresses;
+      }
       operands.push_back(object_operand);
       if(choice.virtual_dispatch) virtual_object_operand = object_operand;
       if(object_unwind_started && state_ && state_->constructor_unwind_active &&
@@ -889,6 +1007,52 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
       operands.push_back(value.operand);
       finish_argument_unwind(argument_temporary_mark, i);
     }
+    if(function_record)
+      AppendVirtualBaseCallArguments(*function_record, operands, all_arguments, scope);
+    vector<TypePtr> indirect_hidden_bases;
+    if(!function_record && choice.member && !choice.static_member && choice.function) {
+      // A pointer-to-member call has no collected FunctionRecord at the call
+      // site, but its pointed-to member type still carries ordinary reference
+      // parameters whose virtual views belong in the indirect-call ABI.
+      for(size_t parameter = 0; parameter < choice.function->parameters.size(); ++parameter) {
+        const TypePtr source_type = choice.function->parameters[parameter];
+        const TypePtr carrier = virtual_base_carrier(source_type);
+        if(!carrier || carrier->kind != TYPE_CLASS) continue;
+        vector<TypePtr> bases = VirtualBaseTypes(carrier);
+        if(source_type->kind == TYPE_POINTER) {
+          vector<TypePtr> roots;
+          for(size_t base = 0; base < bases.size(); ++base) {
+            TypePtr root = base < carrier->virtual_base_roots.size() &&
+              carrier->virtual_base_roots[base] ? carrier->virtual_base_roots[base] : bases[base];
+            bool seen = false;
+            for(size_t prior = 0; prior < roots.size(); ++prior)
+              if(PA12SameType(roots[prior], root, true)) { seen = true; break; }
+            if(!seen) roots.push_back(root);
+          }
+          bases = roots;
+        }
+        const size_t ordinary_operand = 1 + parameter;
+        for(size_t base = 0; base < bases.size(); ++base) {
+          if(ordinary_operand >= operands.size()) break;
+          string complete = operands[ordinary_operand];
+          if(parameter < all_arguments.size() && all_arguments[parameter]) {
+            ExprInfo argument_info = Infer(all_arguments[parameter], scope);
+            TypePtr actual = expression_value_type(argument_info);
+            if(actual && actual->kind == TYPE_CLASS &&
+               IsDerivedFrom(actual, carrier) &&
+               !PA12SameType(actual, carrier, true))
+              complete = EmitAddress(all_arguments[parameter], scope);
+          }
+          size_t offset = 0;
+          if(!FindVirtualBaseOffset(carrier, bases[base], &offset)) continue;
+          const string hidden = new_temp();
+          AddInstruction(hidden + " = index i8 " + complete + ", " +
+            integer_text(static_cast<long long>(offset)));
+          operands.push_back(hidden);
+          indirect_hidden_bases.push_back(bases[base]);
+        }
+      }
+    }
     ostringstream arguments_text;
     for(size_t i = 0; i < operands.size(); ++i) {
       if(i != 0) arguments_text << ", ";
@@ -980,16 +1144,23 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
       const bool synthetic_member_pointer_call = choice.member &&
         !choice.static_member && !function_record;
       const size_t signature_parameters = choice.function->parameters.size() +
-        (synthetic_member_pointer_call ? 1 : 0);
+        (synthetic_member_pointer_call ? 1 + indirect_hidden_bases.size() : 0);
       for(size_t i = 0; i < signature_parameters; ++i) {
         if(i != 0) signature << ", ";
-        const TypePtr parameter = synthetic_member_pointer_call && i == 0 ?
-          PointerTo(choice.member_pointer_owner) :
-          choice.function->parameters[i - (synthetic_member_pointer_call ? 1 : 0)];
+        const bool hidden_parameter = synthetic_member_pointer_call &&
+          i >= 1 + choice.function->parameters.size();
+        const TypePtr parameter = hidden_parameter ?
+          PointerTo(Fundamental("char")) :
+          (synthetic_member_pointer_call && i == 0 ?
+            PointerTo(choice.member_pointer_owner) :
+            choice.function->parameters[i - (synthetic_member_pointer_call ? 1 : 0)]);
         const bool by_address = parameter && !type_is_reference(parameter) &&
           type_value(parameter) && type_value(parameter)->kind == TYPE_CLASS &&
           !function_record && ClassValueNeedsIndirect(parameter);
-        signature << "%arg" << i << " : " <<
+        if(hidden_parameter)
+          signature << "%__pvbptr" << (i - 1 - choice.function->parameters.size()) << " : ";
+        else signature << "%arg" << i << " : ";
+        signature <<
           (by_address ? low_type(PointerTo(type_value(parameter))) : low_type(parameter));
         if(type_is_reference(parameter)) signature << " [pass=reference]";
         else if(by_address) signature << " [pass=by_address]";
@@ -1001,7 +1172,9 @@ PA14Lowerer::Value PA14Lowerer::EmitChosenCall(
     bool suppress_preserved_reference_cleanup = false;
     if(state_ && state_->constructor_unwind_active &&
        state_->constructor_unwind_call &&
-       (call_argument_context_started || state_->pending_call_argument_context)) {
+       (call_argument_context_started || state_->pending_call_argument_context ||
+        (state_->pending_call_unwind &&
+         state_->defer_call_unwind_completion))) {
       state_->constructor_unwind_cleanup = CaptureLiveCleanupObjects();
       state_->pending_call_argument_context = false;
       reused_call_context = true;

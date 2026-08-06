@@ -166,8 +166,12 @@ PA14Lowerer::Value PA14Lowerer::EmitDynamicCast(
   const string target_rtti = new_temp();
   AddInstruction(target_rtti + " = addr @" + RttiSymbol(target_class));
   const string converted = new_temp();
+  const long long runtime_hint =
+    (IsDerivedFrom(source_class, target_class) ||
+     IsDerivedFrom(target_class, source_class)) ? 0 : -2;
   AddInstruction(converted + " = call ptr @" + dynamic_cast_function->symbol +
-    "(" + source_value.operand + ", " + source_rtti + ", " + target_rtti + ", 0)");
+    "(" + source_value.operand + ", " + source_rtti + ", " + target_rtti + ", " +
+    integer_text(runtime_hint) + ")");
   emit_store(PointerTo(Fundamental("char")), converted, "$" + slot);
   if(reference_target) {
     const string fail_label = new_label("dyn_cast_fail");

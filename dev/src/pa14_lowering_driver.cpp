@@ -556,7 +556,6 @@ void PA14Lowerer::Lower(ostream& out)
     PrepareLoweringProgram();
     vector<string> entries;
     EmitGlobals(entries);
-    EmitPolymorphicGlobals(entries);
     const size_t initial_global_count = globals_.size();
     MarkHiddenFriendDependencies();
     EmitInitialFunctionRoots(entries);
@@ -582,6 +581,18 @@ void PA14Lowerer::Lower(ostream& out)
     EmitDynamicInitializers(entries);
     EmitNeededOrdinary(entries);
     EmitMemberPass(entries);
+    // Constructor and virtual-call lowering discovers the concrete
+    // polymorphic owners after the initial semantic preparation pass.  Emit
+    // the vtable group only after that typed demand frontier is closed so
+    // complete-object constructors cannot reference a table that was never
+    // selected as a root.
+    EmitPolymorphicGlobals(entries);
+    // The late vtable pass can synthesize destructor/base-entry records.  Run
+    // the normal ABI finalization once more so those typed records receive
+    // symbols and hidden-parameter metadata before their bodies are emitted.
+    FinalizeSymbols();
+    EmitMemberPass(entries);
+    EmitNeededOrdinary(entries);
     // A generated member body can instantiate a free helper after the last
     // ordinary-demand sweep.  Close that typed demand frontier before final
     // declarations are emitted.

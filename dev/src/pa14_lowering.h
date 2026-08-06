@@ -22,6 +22,10 @@ public:
 string trim_type_name(const string& name);
 bool type_is_reference(const TypePtr& type);
 TypePtr type_value(const TypePtr& type);
+// Return the class object whose virtual-base edges are carried by a low-level
+// parameter.  References are aliases; pointers and indirect class values
+// carry the pointed-to object.
+TypePtr virtual_base_carrier(const TypePtr& type);
 string last_component(const string& name);
 string special_member_symbol_name(const TypePtr& owner, const string& name);
 string low_symbol_component(const string& name);
@@ -112,6 +116,11 @@ class PA14Lowerer
     bool unwind_no;
     bool noreturn;
     bool base_entry;
+    // A construction-vtable base entry is entered while a most-derived
+    // object is being assembled.  Its ABI carries a typed VTT slot address so
+    // the entry can install the intermediate primary and virtual-base views.
+    bool construction_entry;
+    bool vtt_parameter;
     bool out_of_class_definition;
     bool inherited_constructor_wrapper;
     // Captureless lambdas are lowered as internal function entities.  Keep
@@ -127,6 +136,11 @@ class PA14Lowerer
     string base_entry_for;
     vector<string> parameter_metadata;
     vector<bool> indirect_parameters;
+    // Hidden virtual-base operands are appended after the ordinary low-level
+    // parameters.  Keep their source low-parameter index and typed target so
+    // lowering never has to recover this ABI fact from emitted text.
+    vector<TypePtr> hidden_virtual_bases;
+    vector<size_t> hidden_virtual_base_sources;
     CPPGMAstNodePtr special_initializer;
     vector<CPPGMAstNodePtr> default_arguments;
     FunctionRecord()
@@ -144,12 +158,22 @@ class PA14Lowerer
 		destructor(false), deleting_entry(false), needed(false),
         needed_order(static_cast<size_t>(-1)),
         emitted(false), variadic(false), unwind_no(false), noreturn(false), base_entry(false),
+        construction_entry(false), vtt_parameter(false),
         out_of_class_definition(false),
         inherited_constructor_wrapper(false),
         lambda_function(false),
         indirect_result(false), effects(), object_name(), template_primary(), template_arguments(),
         base_entry_for(), parameter_metadata(),
-        indirect_parameters(), special_initializer(), default_arguments() {}
+        indirect_parameters(), hidden_virtual_bases(),
+        hidden_virtual_base_sources(), special_initializer(), default_arguments() {}
+  };
+  struct RenderedVirtualTableView
+  {
+    TypePtr base;
+    size_t offset;
+    vector<VirtualMethodInfo> methods;
+    RenderedVirtualTableView()
+      : base(), offset(0), methods() {}
   };
   struct GlobalRecord
   {
@@ -206,11 +230,15 @@ class PA14Lowerer
     bool lvalue;
     bool function;
     bool array;
+    // The language guarantees that a member function's `this` expression is
+    // non-null.  Keep that fact on the typed value so a downcast of `this`
+    // does not acquire a runtime null branch intended for nullable pointers.
+    bool nonnull;
     bool known_constant;
     long long constant;
     Value()
       : type(), operand(), lvalue(false), function(false), array(false),
-        known_constant(false), constant(0) {}
+        nonnull(false), known_constant(false), constant(0) {}
   };
   struct CallChoice
   {
@@ -313,6 +341,9 @@ class PA14Lowerer
     map<string, unsigned int> variable_name_counts;
     set<string> reserved_value_names;
     map<string, string> stable_member_addresses;
+    map<string, vector<string> > virtual_base_hidden_by_source;
+    map<string, vector<string> > virtual_base_hidden_by_operand;
+    map<const Type*, string> pending_constructor_virtual_base_arguments;
     map<const CPPGMAstNode*, Value> aggregate_precomputed_values;
     map<const CPPGMAstNode*, string> member_pointer_adjustments;
     map<const CPPGMAstNode*, string> case_labels;
@@ -328,6 +359,12 @@ class PA14Lowerer
     vector<TemporaryObject> pending_call_cleanup;
     string pending_call_unwind_dispatch;
     string pending_call_unwind_end;
+    // A class-valued call used as a member object has one protected region
+    // for the call/copy and a second region for the subsequent field load.
+    // Keep the dispatch label typed across that address boundary.
+    bool post_call_unwind_pending;
+    string post_call_unwind_dispatch;
+    bool post_call_unwind_requested;
     bool constructor_unwind_active;
     bool constructor_unwind_call;
     bool constructor_unwind_shared_dispatch;
@@ -365,14 +402,18 @@ class PA14Lowerer
         special_slot_types(), slot_order(), temporary_objects(), unwind_dispatch_cache(), blocks(), current(), next_temp(1), next_label(1),
         next_special(1), environments(), return_slot_plan(0), return_object_slot(),
         variable_name_counts(),
-        reserved_value_names(), stable_member_addresses(), aggregate_precomputed_values(),
+        reserved_value_names(), stable_member_addresses(), virtual_base_hidden_by_source(),
+        virtual_base_hidden_by_operand(), pending_constructor_virtual_base_arguments(),
+        aggregate_precomputed_values(),
         member_pointer_adjustments(),
         case_labels(), emitted_cases(), named_labels(),
         switch_end_targets(), break_targets(), continue_targets(),
         unevaluated_context(false), defer_temporary_cleanup(false),
         defer_call_unwind_completion(false), pending_call_unwind(false),
         pending_call_cleanup(), pending_call_unwind_dispatch(),
-        pending_call_unwind_end(), constructor_unwind_active(false),
+        pending_call_unwind_end(), post_call_unwind_pending(false),
+        post_call_unwind_dispatch(), post_call_unwind_requested(false),
+        constructor_unwind_active(false),
         constructor_unwind_call(false), constructor_unwind_shared_dispatch(false),
         constructor_unwind_cleanup(),
         constructor_unwind_dispatch(), constructor_unwind_end(),
@@ -535,6 +576,7 @@ string TemplateFunctionObjectName(const FunctionRecord& function) const;
 string RepeatedTemplateFunctionObjectName(const FunctionRecord& function) const;
 string TemplateGlobalObjectName(const GlobalRecord& global) const;
 void PreparePolymorphicModel();
+void MarkVirtualMemberCallDependencies();
 void EmitPolymorphicGlobals(vector<string>& entries);
 void EmitExceptionRttiDeclarations(vector<string>& entries, bool* has_fundamental,
                                    bool* has_pointer, bool* has_class, bool* has_si);
@@ -555,17 +597,24 @@ string RttiTemplateLowName(const TypePtr& type) const;
 bool IsVirtualFunction(const FunctionRecord& function) const;
 FunctionRecord* EnsureVirtualDestructor(const TypePtr& owner,
                                         const VirtualMethodInfo& slot,
-                                        bool deleting);
+                                        bool deleting,
+                                        bool for_base_subobject = false);
 FunctionRecord* EnsurePureVirtual(const VirtualMethodInfo& slot);
 FunctionRecord* VirtualFunctionRecord(const TypePtr& owner,
                                       const VirtualMethodInfo& slot);
 string TypeMangledName(const TypePtr& type) const;
 string VTableSymbol(const TypePtr& type) const;
 string VTableAddressSymbol(const TypePtr& type) const;
+string VttSymbol(const TypePtr& type) const;
+size_t ConstructionVttIndex(const TypePtr& owner, const TypePtr& base) const;
+size_t ConstructionVttViewIndex(const TypePtr& owner, size_t view_index) const;
+string VTableViewSymbol(const TypePtr& owner, const TypePtr& base,
+                        size_t offset) const;
 TypePtr SemanticType(const Type* raw_type) const;
 vector<const Type*> OrderedTypes(const set<const Type*>& types) const;
 bool ShouldUseExternalVtable(const TypePtr& type) const;
 void EmitVPointerStore(const TypePtr& owner, const string& address);
+vector<RenderedVirtualTableView> RenderedVirtualTableViews(const TypePtr& owner) const;
 bool VirtualSlotForCall(const TypePtr& object, Binding* binding,
                         size_t* slot, size_t* semantic_slot = 0) const;
 bool VirtualDestructorDeletingSlot(const TypePtr& object,
@@ -682,17 +731,34 @@ bool TryElideEmptyClassConversion(const TypePtr& target,
                                   Scope* scope);
 bool EmitValueSpecialMemberBody(FunctionRecord& function, Scope* scope);
 TypePtr SourceReturnType(const FunctionRecord& function) const;
-
 bool LowParameterIsByAddress(const FunctionRecord& function, size_t index) const;
 TypePtr LowParameterSourceType(const FunctionRecord& function, size_t index) const;
 void BuildFunctionABI(FunctionRecord& function);
-
+bool TryCompleteConstructorVirtualBaseArgument(FunctionRecord& function,
+                                                const TypePtr& target,
+                                                size_t source,
+                                                vector<string>& operands,
+                                                Scope* scope);
+bool TryForwardedVirtualBaseArgument(FunctionRecord& function,
+                                     const TypePtr& target, size_t source,
+                                     const vector<CPPGMAstNodePtr>& arguments,
+                                     Scope* scope, TypePtr* carrier,
+                                     string* operand, string* projection_operand,
+                                     bool* complete_argument_projection,
+                                     bool* null_pointer);
+void ProjectVirtualBaseArgument(const TypePtr& carrier, const TypePtr& target,
+                                const string& projection_operand,
+                                bool complete_argument_projection,
+                                string* operand);
+void AppendVirtualBaseCallArguments(FunctionRecord& function,
+                                    vector<string>& operands,
+                                    const vector<CPPGMAstNodePtr>& arguments,
+                                    Scope* scope);
 bool HasDefaultArgument(Binding* binding, size_t index) const;
 bool HasConstructor(const TypePtr& type) const;
 bool IsInitializerListType(const TypePtr& type) const; void EnsureInitializerListType(const TypePtr& type) const;
 TypePtr InitializerListElementType(const TypePtr& type, Scope* scope) const; TypePtr MakeInitializerListType(const TypePtr& element, Scope* scope) const;
 bool HasInitializerListConstructor(const TypePtr& type) const; bool InitializerListArgumentViable(const CPPGMAstNodePtr& node, const TypePtr& parameter, Scope* scope);
-
 bool HasExplicitConstructor(const TypePtr& type) const;
 bool HasUserProvidedConstructor(const TypePtr& type) const;
 bool HasDefaultInitializationEffects(const TypePtr& type) const;
@@ -703,109 +769,69 @@ bool HasNonstaticMemberFunction(const TypePtr& type) const;
 bool TemplatePrimaryHasNonstaticMemberFunction(const TypePtr& type) const;
 bool HasDestructor(const TypePtr& type) const;
 bool DestructorHasEffects(const TypePtr& type) const;
-
 bool IsBitField(Binding* binding, long long* bit_offset = 0,
                 long long* bit_width = 0) const;
-
 CallChoice ChooseCall(const CPPGMAstNodePtr& expression, Scope* scope);
-
 CallChoice ChooseOperatorCall(const string& name,
                               const vector<CPPGMAstNodePtr>& arguments,
                               Scope* scope);
-
 CPPGMAstNodePtr MakeMemberCall(const CPPGMAstNodePtr& object,
                                const string& name,
                                const vector<CPPGMAstNodePtr>& arguments) const;
-
 string new_temp();
-
 string new_label(const string& prefix);
-
 string new_special_slot(const string& prefix, const string& type);
-
 void AddInstruction(const string& text);
-
 void Terminate(const string& text);
-
 Block* AddBlock(const string& label);
-
 static bool block_is_terminated(const Block* block);
-
 string parameter_name(const CPPGMAstNodePtr& declarator, size_t index) const;
-
 vector<string> ParameterNames(const FunctionRecord& function) const;
-
 CPPGMAstNodePtr InitializerExpression(const CPPGMAstNodePtr& initializer) const;
-
 long long BracedElementCount(const CPPGMAstNodePtr& initializer) const;
-
 TypePtr PlannedType(const CPPGMAstNodePtr& declaration,
                     const CPPGMAstNodePtr& declarator,
                     Scope* scope, const CPPGMAstNodePtr& initializer);
-
 bool ContainsAutoType(const TypePtr& type) const;
-
 ExprInfo InferAutoInitializer(const CPPGMAstNodePtr& initializer,
                               Scope* scope);
 ExprInfo InferInitializerListAuto(const CPPGMAstNodePtr& expression, Scope* scope); ExprInfo InferCapturedIdentifier(const CPPGMAstNodePtr& node, Scope* scope, const TypePtr& expected) const;
-
 TypePtr DeduceAutoType(const TypePtr& declared,
                        const CPPGMAstNodePtr& initializer,
                        Scope* scope);
-
 bool AppendAggregateConstructorDefaults(const TypePtr& object_type,
                                         const vector<CPPGMAstNodePtr>& input,
                                         vector<CPPGMAstNodePtr>* arguments);
-
 bool EmitStringArrayInitializer(VariablePlan* variable,
                                 const CPPGMAstNodePtr& expression,
                                 const string& base, Scope* scope);
-
 VariablePlan* AddVariablePlan(const string& name, const TypePtr& type,
                               const CPPGMAstNodePtr& declarator,
                               const CPPGMAstNodePtr& initializer);
-
 void PlanSimpleDeclaration(const CPPGMAstNodePtr& node, Scope* scope);
-
 void PlanCondition(const CPPGMAstNodePtr& condition, Scope* scope);
-
 CPPGMAstNodePtr ChildNamed(const CPPGMAstNodePtr& node, const string& name) const;
-
 void PlanStatement(const CPPGMAstNodePtr& node, Scope* scope);
 void PlanRangeFor(const CPPGMAstNodePtr& node, Scope* scope);
-
 void PlanFunction(FunctionState& state);
-
 CPPGMAstNodePtr FindDirectReturnExpression(const CPPGMAstNodePtr& node,
                                           unsigned int& count) const;
-
 string FunctionSymbolForBinding(Binding* binding, const TypePtr& fallback = TypePtr()) const;
-
 string GlobalSymbolForBinding(Binding* binding) const;
-
 VariablePlan* LocalForName(const string& name) const;
-
 string StorageForVariable(const VariablePlan& variable) const;
-
 Value ConvertValue(Value value, const TypePtr& target,
                    bool immediate_return = false,
                    bool adjust_derived_pointer = false);
-
 bool TryConvertMemberPointerValue(Value value, const TypePtr& target, Value* result);
-
 Value EmitConversionOperator(const CPPGMAstNodePtr& node, Scope* scope,
                              const TypePtr& target, bool allow_explicit);
-
 Value EmitContextConversion(const CPPGMAstNodePtr& node, Scope* scope,
                             bool allow_explicit, bool boolean_context);
-
 string EmitTruthValue(const Value& value);
-
 string InternString(const string& raw);
-
 bool FoldInteger(const CPPGMAstNodePtr& node, Scope* scope,
                 long long* result, TypePtr* type = 0);
-
   struct AddressInit
   {
     bool valid;
@@ -814,246 +840,169 @@ bool FoldInteger(const CPPGMAstNodePtr& node, Scope* scope,
     long long addend;
     AddressInit() : valid(false), function(false), symbol(), addend(0) {}
   };
-
 AddressInit StaticAddress(const CPPGMAstNodePtr& expression, Scope* scope);
-
 string GlobalMetadata(bool internal) const;
-
 string GlobalMetadata(const GlobalRecord& global) const;
-
 string RenderStringGlobal(const string& symbol, const string& raw,
                           const vector<unsigned char>& bytes) const;
-
 bool AppendConstantGlobalData(const TypePtr& type, const ConstantValue& value,
                              vector<GlobalDataItem>& items) const;
-
 string RenderGlobal(GlobalRecord& global);
-
 void EmitGlobals(vector<string>& entries, size_t begin = 0,
                 bool include_strings = true);
-
 void EmitDeclarations(vector<string>& entries);
-
 Scope* FunctionScope() const;
-
 VariablePlan* BindPlan(const CPPGMAstNodePtr& declarator);
-
 void BindSimpleDeclaration(const CPPGMAstNodePtr& node);
-
 VariablePlan* BindCondition(const CPPGMAstNodePtr& condition);
-
 void EnterEnvironment()
 ;
 void LeaveEnvironment()
 ;
-
 string emit_load(const string& address, const TypePtr& type);
-
 void emit_store(const TypePtr& type, const string& value, const string& storage);
-
 string local_address(VariablePlan* variable);
-
 string global_address(GlobalRecord* global);
-
 string function_address(FunctionRecord* function);
-
 string EmitArrayDecay(const CPPGMAstNodePtr& node, Scope* scope);
 string EmitSubscriptAddress(const CPPGMAstNodePtr& node, Scope* scope);
 string EmitPointerOffset(const CPPGMAstNodePtr& node, Scope* scope);
-
 string EmitAddress(const CPPGMAstNodePtr& node, Scope* scope);
 string EmitReferenceCastAddress(const CPPGMAstNodePtr& node, Scope* scope);
 bool EmitInitializerListAddress(const CPPGMAstNodePtr& node, Scope* scope, string* address);
-
 string EmitOperatorAddress(const CPPGMAstNodePtr& node, Scope* scope);
 string EmitMemberPointerAddress(const CPPGMAstNodePtr& node, Scope* scope);
 string EmitCallAddress(const CPPGMAstNodePtr& node, Scope* scope);
-
 string EmitLiteralAddress(const CPPGMAstNodePtr& node);
-
 string EmitMemberAddress(const CPPGMAstNodePtr& node, Scope* scope,
                          bool reference_projection = false);
 string StableMemberAddressKey(const CPPGMAstNodePtr& node, Binding* member,
                               const TypePtr& field_type) const;
-
 string AdjustBaseAddress(const string& base, const TypePtr& derived,
                          const TypePtr& target,
                          bool project_base_path = false);
-
 bool UniqueBaseOffset(const TypePtr& derived, const TypePtr& target,
                       size_t* offset);
-
 string AdjustDerivedAddress(const string& base, const TypePtr& derived,
                             const TypePtr& base_type);
-
 Value EmitIdentifier(const CPPGMAstNodePtr& node, Scope* scope,
                      const TypePtr& expected);
-
 Value EmitUnary(const CPPGMAstNodePtr& node, Scope* scope,
                 const TypePtr& expected);
-
 void StoreLValue(const CPPGMAstNodePtr& node, Scope* scope,
                  const TypePtr& type, const string& value);
-
 Value EmitBitFieldLoad(Binding* binding, const string& address,
                        const TypePtr& type, bool copy_result);
-
 string PrepareBitFieldValue(Binding* binding, const TypePtr& type,
                             const string& value);
-
 string MergeBitFieldValue(Binding* binding, const string& address,
                           const TypePtr& type, const string& value,
                           bool preserve);
-
 void StoreBitField(Binding* binding, const string& address,
                    const TypePtr& type, const string& value,
                    bool initializing = false);
-
 Value EmitAssignment(const CPPGMAstNodePtr& node, Scope* scope);
-
 Value EmitUpdate(const CPPGMAstNodePtr& node, Scope* scope, bool address_only);
-
 bool EmitReferenceConversionUpdate(const CPPGMAstNodePtr& node, Scope* scope,
                                    Value* result);
-
 Value EmitCompare(const CPPGMAstNodePtr& node, Scope* scope);
-
 Value EmitBinary(const CPPGMAstNodePtr& node, Scope* scope);
-
 string EmitReferenceArgument(const CPPGMAstNodePtr& node, Scope* scope,
                              const TypePtr& target);
-
 Value EmitObjectValueArgument(const CPPGMAstNodePtr& node, Scope* scope,
                               const TypePtr& target);
-
 Value EmitCall(const CPPGMAstNodePtr& node, Scope* scope);
-
 Value EmitChosenCall(const CallChoice& choice,
                      const CPPGMAstNodePtr& callee,
                      const vector<CPPGMAstNodePtr>& arguments,
                      Scope* scope,
                      const string& indirect_destination = string(),
                      bool full_expression_cleanup = false);
-
 Value EmitOperatorCall(const string& name,
                        const vector<CPPGMAstNodePtr>& arguments,
                        Scope* scope);
-
 Value EmitConditionalValue(const CPPGMAstNodePtr& node, Scope* scope,
                             const TypePtr& expected);
-
 string EmitConditionalAddress(const CPPGMAstNodePtr& node, Scope* scope);
-
 string EmitLogicalRightTruth(const CPPGMAstNodePtr& node, Scope* scope);
-
 Value EmitLogicalValue(const CPPGMAstNodePtr& node, Scope* scope);
-
 void EmitCondition(const CPPGMAstNodePtr& node, Scope* scope,
                    const string& true_label, const string& false_label);
-
 void EmitConditionCore(const CPPGMAstNodePtr& node, Scope* scope,
                        const string& true_label, const string& false_label);
-
 Value EmitValue(const CPPGMAstNodePtr& node, Scope* scope,
                 const TypePtr& expected = TypePtr());
 bool EmitInitializerListValue(const CPPGMAstNodePtr& node, Scope* scope, const TypePtr& expected, Value* result);
 Value EmitTypeidExpression(const CPPGMAstNodePtr& node, Scope* scope);
 Value EmitDynamicCast(const CPPGMAstNodePtr& node, Scope* scope,
                       const TypePtr& target);
-
 Value EmitNewExpression(const CPPGMAstNodePtr& node, Scope* scope, const TypePtr& expected = TypePtr());
 Value EmitDeleteExpression(const CPPGMAstNodePtr& node, Scope* scope);
-
 Value ValueFromInfo(const ExprInfo& info) const;
-
 Value ValueWithNullptr() const;
-
 void EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr& initializer,
                      Scope* scope);
 bool EmitInitializerListAt(const string& destination, const CPPGMAstNodePtr& expression,
                            const TypePtr& list_type, Scope* scope);
 string EmitInitializerListArgument(const CPPGMAstNodePtr& expression, const TypePtr& target,
                                    Scope* scope, const string& prefix); bool EmitInitializerListAssignment(const vector<CPPGMAstNodePtr>& arguments, Scope* scope, Value* result);
-
 bool EmitObjectConstructor(VariablePlan* variable, const TypePtr& object_type,
                            const vector<CPPGMAstNodePtr>& arguments, Scope* scope,
                            bool allow_explicit = true);
-
 bool EmitConstructorAt(const TypePtr& object_type, const string& address,
                        const vector<CPPGMAstNodePtr>& arguments, Scope* scope,
                        bool allow_explicit = true, bool base_entry = false,
                        bool allow_aggregate = false, bool force_move = false,
                        bool value_initialization = false,
                        bool full_expression_cleanup = false);
-
 string EmitTemporaryObjectAddress(const CPPGMAstNodePtr& node, Scope* scope,
                                   const string& prefix,
                                   bool force_empty = false);
-
 void RegisterTemporaryObject(const TypePtr& type, const string& address,
                              bool force_empty = false,
                              bool construction_no_throw = false);
-
 void EmitTemporaryDestructors(size_t mark, Scope* scope);
-
 vector<FunctionState::TemporaryObject> CaptureLiveCleanupObjects(
   const string& exclude_address = string());
-
 void EmitCleanupObjects(const vector<FunctionState::TemporaryObject>& objects,
                         Scope* scope);
-
 bool HasLiveCleanupObjects(const string& exclude_address = string());
-
 bool BeginAggregateMemberUnwind(const TypePtr& member_type);
 void FinishAggregateMemberUnwind(bool started, Scope* scope);
-
 void FinishPendingCallUnwind(Scope* scope);
-
 void BeginConstructorUnwind(
   const vector<FunctionState::TemporaryObject>& cleanup, bool call_context,
   const string& dispatch = string(), const string& end = string());
-
 void FinishConstructorUnwind(Scope* scope, bool use_current_cleanup = false);
-
 void StartPendingReferenceUnwind(Scope* scope);
-
 bool EmitDestructorAt(const TypePtr& object_type, const string& address, Scope* scope,
                       bool force_empty = false);
-
 void EmitConstructorInitializers(FunctionRecord& function, Scope* scope);
-
 bool ConstructorInitializerNamesType(const string& raw_name,
                                      const TypePtr& target_type,
                                      Scope* scope) const;
-
 void EmitDestructorBody(FunctionRecord& function, Scope* scope);
-
+void EmitDestructorVTable(FunctionRecord& function, Scope* scope);
 void EmitLiveDestructors(Scope* scope);
-
 void EmitAggregateConstructorBody(FunctionRecord& function, Scope* scope);
-
 bool EmitAggregateClassParameter(FunctionRecord& function,
                                  const ClassMemberInfo& member,
                                  const string& address,
                                  const vector<string>& names,
                                  size_t* parameter);
-
 bool EmitAggregateOmittedField(const ClassMemberInfo& member,
                                const CPPGMAstNodePtr& this_node,
                                Scope* scope);
-
 void EmitAggregateAt(const string& base, const TypePtr& type,
                      const CPPGMAstNodePtr& expression, Scope* scope,
                      const CPPGMAstNodePtr& refresh_node = CPPGMAstNodePtr(),
                      long long refresh_offset = -1,
                      bool direct_first_field = false);
-
 void EmitAggregateArrayAt(const string& base, const TypePtr& type,
                           const CPPGMAstNodePtr& expression, Scope* scope,
                           const CPPGMAstNodePtr& refresh_node = CPPGMAstNodePtr(),
                           long long refresh_offset = -1,
                           bool direct_elements = false);
-
 void EmitAggregateClassFields(const string& base, const TypePtr& type,
                               const CPPGMAstNodePtr& expression, Scope* scope,
                               const CPPGMAstNodePtr& refresh_node,
@@ -1061,18 +1010,14 @@ void EmitAggregateClassFields(const string& base, const TypePtr& type,
                               bool direct_first_field = false,
                               const string& refresh_base = string(),
                               long long refresh_offset = -1);
-
 void PrecomputeAggregateChildValues(const TypePtr& child_type,
                                     const CPPGMAstNodePtr& child, Scope* scope,
                                     vector<const CPPGMAstNode*>* computed);
-
 void ClearAggregateChildValues(const vector<const CPPGMAstNode*>& computed);
-
 string AggregateFieldBase(const string& base, bool refresh_field_base,
                           const CPPGMAstNodePtr& refresh_node, Scope* scope,
                           const string& refresh_base, long long refresh_offset,
                           string* synthetic_refresh_base);
-
 void EmitAggregateClassBitField(const string& base, bool refresh_field_base,
                                 const CPPGMAstNodePtr& refresh_node,
                                 const string& refresh_base, long long refresh_offset,
@@ -1082,7 +1027,6 @@ void EmitAggregateClassBitField(const string& base, bool refresh_field_base,
                                 Binding* member_binding, const ClassMemberInfo& member,
                                 bool* storage_initialized,
                                 const Value* precomputed_value);
-
 void EmitAggregateClassReference(const string& base, bool refresh_field_base,
                                  const CPPGMAstNodePtr& refresh_node,
                                  const string& refresh_base, long long refresh_offset,
@@ -1090,7 +1034,6 @@ void EmitAggregateClassReference(const string& base, bool refresh_field_base,
                                  const TypePtr& member_type,
                                  const CPPGMAstNodePtr& child, Scope* scope,
                                  const ClassMemberInfo& member);
-
 bool EmitAggregateClassObject(const string& base, const TypePtr& child_type,
                               const CPPGMAstNodePtr& child,
                               const CPPGMAstNodePtr& expression, Scope* scope,
@@ -1099,101 +1042,62 @@ bool EmitAggregateClassObject(const string& base, const TypePtr& child_type,
                               size_t current_child_index, size_t* child_index,
                               long long member_offset,
                               const vector<const CPPGMAstNode*>& computed);
-
 bool EmitAggregateClassArrayField(const string& base, const TypePtr& type,
                                   const CPPGMAstNodePtr& child, Scope* scope,
                                   const CPPGMAstNodePtr& refresh_node,
                                   bool refresh_field_base, long long offset);
-
 void EmitAggregateClassDefaults(const string& base, const TypePtr& type,
                                 const CPPGMAstNodePtr& expression, Scope* scope,
                                 const CPPGMAstNodePtr& refresh_node,
                                 size_t child_index,
                                 bool direct_first_field = false);
-
 bool HasNonSizeofReference(const CPPGMAstNodePtr& node,
                            const string& name, bool inside_sizeof = false,
                            bool ignore_discarded = false) const;
-
 bool StatementTerminates(const CPPGMAstNodePtr& node) const;
-
 void EmitReturn(const CPPGMAstNodePtr& node, Scope* scope);
-
 void EmitIf(const CPPGMAstNodePtr& node, Scope* scope);
-
 void EmitWhile(const CPPGMAstNodePtr& node, Scope* scope);
-
 void EmitDo(const CPPGMAstNodePtr& node, Scope* scope);
-
 void EmitFor(const CPPGMAstNodePtr& node, Scope* scope);
 void EmitRangeFor(const CPPGMAstNodePtr& node, Scope* scope);
-
 void CollectCaseNodes(const CPPGMAstNodePtr& node,
                       vector<CPPGMAstNodePtr>& cases) const;
-
 void CollectNamedLabels(const CPPGMAstNodePtr& node,
                         vector<string>& labels) const;
-
 bool HasBlockLabel(const string& label) const;
-
 void EmitCaseLabelAndBody(const CPPGMAstNodePtr& node, Scope* scope);
-
 void EmitSwitchBody(const CPPGMAstNodePtr& node, Scope* scope);
-
 void EmitSwitch(const CPPGMAstNodePtr& node, Scope* scope);
-
 void EmitDiscard(const CPPGMAstNodePtr& node, Scope* scope);
-
 void EmitTryBlock(const CPPGMAstNodePtr& node, Scope* scope);
-
 void EmitThrow(const CPPGMAstNodePtr& expression, Scope* scope);
-
 void FinishExceptionHandlerForReturn();
-
 void FinishExceptionTryForReturn();
-
 void EmitStatement(const CPPGMAstNodePtr& node, Scope* scope);
-
 string EmitFunction(FunctionRecord& function);
-
 void EmitDynamicInitializers(vector<string>& entries);
-
 void EmitGlobalInitializer(GlobalRecord& global, Scope* scope);
-
 void EmitLocalStaticInitialization(VariablePlan* variable, Scope* scope);
-
 void EmitGlobalFinalizer(GlobalRecord& global, Scope* scope);
-
 ExprInfo InferCall(const CPPGMAstNodePtr& node, Scope* scope);
-
 TypePtr ConstructorObjectType(const CPPGMAstNodePtr& callee, Scope* scope) const;
-
 TypePtr BuiltinCastType(const CPPGMAstNodePtr& callee, Scope* scope) const;
-
 ExprInfo InferUnary(const CPPGMAstNodePtr& node, Scope* scope,
                     const TypePtr& expected = TypePtr());
-
 ExprInfo InferBinary(const CPPGMAstNodePtr& node, Scope* scope);
-
 ExprInfo InferSubscript(const CPPGMAstNodePtr& node, Scope* scope);
-
 ExprInfo InferConditional(const CPPGMAstNodePtr& node, Scope* scope);
-
 ExprInfo Infer(const CPPGMAstNodePtr& node, Scope* scope,
               const TypePtr& expected = TypePtr());
-
 ExprInfo InferUncached(const CPPGMAstNodePtr& node, Scope* scope,
                        const TypePtr& expected);
 bool InferInitializerListNode(const CPPGMAstNodePtr& node, Scope* scope,
                               const TypePtr& expected, ExprInfo* result);
-
 ExprInfo InferSizeofExpression(const CPPGMAstNodePtr& node, Scope* scope);
 ExprInfo InferTypeidExpression(const CPPGMAstNodePtr& node, Scope* scope);
-
 ExprInfo InferAllocation(const CPPGMAstNodePtr& node, Scope* scope);
 };
-
 } // namespace cppgm_pa14_lowering
-
 void EmitPA14LowIR(const std::vector<CPPGMAstNodePtr>& translation_units,
                    std::ostream& out);

@@ -387,98 +387,6 @@ bool IsValidAlignment(size_t alignment)
 	return alignment == 0 || (alignment & (alignment - 1)) == 0;
 }
 
-TypePtr FunctionTypeForVirtual(const Binding& binding)
-{
-	if (!binding.type) return TypePtr();
-	return binding.type->kind == TYPE_FUNCTION ? binding.type : TypePtr();
-}
-
-bool SameVirtualParameters(const TypePtr& left, const TypePtr& right)
-{
-	if (!left || !right || left->kind != TYPE_FUNCTION || right->kind != TYPE_FUNCTION ||
-		left->variadic != right->variadic ||
-		left->function_const != right->function_const ||
-		left->function_volatile != right->function_volatile ||
-		left->function_lvalue_ref_qualified != right->function_lvalue_ref_qualified ||
-		left->function_rvalue_ref_qualified != right->function_rvalue_ref_qualified ||
-		left->parameters.size() != right->parameters.size()) return false;
-	for (size_t i = 0; i < left->parameters.size(); ++i)
-		if (!SameLayoutType(left->parameters[i], right->parameters[i])) return false;
-	return true;
-}
-
-bool IsDerivedClass(const TypePtr& derived, const TypePtr& base)
-{
-	const vector<TypePtr> bases = BaseTypeClosure(derived);
-	for (size_t current = 1; current < bases.size(); ++current) if (SameLayoutType(bases[current], base)) return true;
-	return false;
-}
-
-bool CovariantVirtualReturn(const TypePtr& derived, const TypePtr& base)
-{
-	if (!derived || !base || derived->kind != TYPE_FUNCTION || base->kind != TYPE_FUNCTION)
-		return false;
-	if (SameLayoutType(derived->child, base->child)) return true;
-	const TypePtr derived_return = derived->child;
-	const TypePtr base_return = base->child;
-	if (!derived_return || !base_return ||
-		(derived_return->kind != TYPE_POINTER && derived_return->kind != TYPE_LVALUE_REFERENCE) ||
-		derived_return->kind != base_return->kind ||
-		!derived_return->child || !base_return->child) return false;
-	return derived_return->child->kind == TYPE_CLASS &&
-		base_return->child->kind == TYPE_CLASS &&
-	IsDerivedClass(derived_return->child, base_return->child);
-}
-
-bool IsDestructorName(const string& name)
-{
-	return name.size() > 1 && name[0] == '~';
-}
-
-bool SameVirtualSlot(const VirtualMethodInfo& slot, const Binding& binding)
-{
-	const TypePtr function = FunctionTypeForVirtual(binding);
-	if (!function) return false;
-	if (slot.destructor || IsDestructorName(binding.name))
-		return slot.destructor && IsDestructorName(binding.name) &&
-			SameVirtualParameters(slot.function, function);
-	return slot.name == binding.name && SameVirtualParameters(slot.function, function) &&
-		CovariantVirtualReturn(function, slot.function);
-}
-
-const VirtualMethodInfo* FindInheritedVirtual(const TypePtr& base,
-	const Binding& binding)
-{
-	if (!base) return 0;
-	for (size_t i = 0; i < base->virtual_methods.size(); ++i)
-		if (SameVirtualSlot(base->virtual_methods[i], binding))
-			return &base->virtual_methods[i];
-	return 0;
-}
-
-void ApplyPolymorphicLayout(const TypePtr& type, bool empty_base,
-	size_t base_size, size_t base_alignment, size_t* offset,
-	size_t* maximum_alignment)
-{
-	if (!type || !type->has_vpointer || !offset || !maximum_alignment) return;
-	const size_t pointer_size = 8;
-	*maximum_alignment = max(*maximum_alignment, pointer_size);
-	if (type->direct_base && !empty_base && !type->direct_base->polymorphic)
-	{
-		// PA17 puts the first vpointer at complete-object offset zero.  A
-		// non-polymorphic direct base therefore starts after that pointer and
-		// every base/member access must use the same typed adjustment.
-		type->direct_base_offset = Analyzer::AlignUp(pointer_size,
-			max<size_t>(1, base_alignment));
-		*offset = type->direct_base_offset + base_size;
-	}
-	else if (!type->direct_base || empty_base)
-	{
-		type->direct_base_offset = 0;
-		*offset = pointer_size;
-	}
-}
-
 } // namespace
 
 void Analyzer::ProcessFunctionDefinition(const CPPGMAstNodePtr& node, Scope* scope)
@@ -914,20 +822,42 @@ void Analyzer::ComputeClassLayout(const CPPGMAstNodePtr& node, const TypePtr& ty
 		!type->direct_base->complete) {
 		throw logic_error("incomplete direct base class");
 	}
-	const bool empty_base = type->direct_base && EmptyBaseStorage(type->direct_base);
+	if (ComputeVirtualClassLayout(type)) return;
 	const bool owns_vpointer = type->has_vpointer;
 	type->direct_base_offset = 0;
 	type->direct_base_offsets.assign(type->direct_bases.size(), 0);
-	size_t offset = type->direct_base && !empty_base ? TypeSize(type->direct_base) : 0;
-	size_t maximum_alignment = type->direct_base && !empty_base ?
-		TypeAlignment(type->direct_base) : 1;
-	if (owns_vpointer) ApplyPolymorphicLayout(type, empty_base,
-		type->direct_base && !empty_base ? TypeSize(type->direct_base) : 0,
-		type->direct_base && !empty_base ? TypeAlignment(type->direct_base) : 1,
-		&offset, &maximum_alignment);
-	if (!type->direct_base_offsets.empty())
-		type->direct_base_offsets[0] = type->direct_base_offset;
-	for (size_t base_index = 1; base_index < type->direct_bases.size(); ++base_index) {
+	size_t offset = owns_vpointer ? 8 : 0;
+	size_t maximum_alignment = owns_vpointer ? 8 : 1;
+	const size_t primary = type->primary_base_index;
+	const auto place_base = [&](size_t base_index) {
+		if (base_index >= type->direct_bases.size()) return;
+		const TypePtr base = type->direct_bases[base_index];
+		if (base && base->kind == TYPE_CLASS && !base->complete)
+			throw logic_error("incomplete direct base class");
+		if (!base || EmptyBaseStorage(base)) {
+			type->direct_base_offsets[base_index] = 0;
+			return;
+		}
+		const size_t base_alignment = max<size_t>(1, TypeAlignment(base));
+		if (!owns_vpointer && base_index == primary)
+			type->direct_base_offsets[base_index] = 0;
+		else {
+			offset = AlignUp(offset, base_alignment);
+			type->direct_base_offsets[base_index] = offset;
+		}
+		maximum_alignment = max(maximum_alignment, base_alignment);
+		offset = max(offset, type->direct_base_offsets[base_index] + TypeSize(base));
+	};
+	if (!owns_vpointer && primary != static_cast<size_t>(-1)) {
+		const TypePtr base = primary < type->direct_bases.size() ? type->direct_bases[primary] : TypePtr();
+		if (base && !EmptyBaseStorage(base)) {
+			maximum_alignment = max(maximum_alignment, max<size_t>(1, TypeAlignment(base)));
+			type->direct_base_offsets[primary] = 0;
+			offset = TypeSize(base);
+		}
+	}
+	for (size_t base_index = 0; base_index < type->direct_bases.size(); ++base_index) {
+		if (base_index == primary && !owns_vpointer) continue;
 		const TypePtr base = type->direct_bases[base_index];
 		if (base && base->kind == TYPE_CLASS && !base->complete)
 			throw logic_error("incomplete direct base class");
@@ -935,12 +865,10 @@ void Analyzer::ComputeClassLayout(const CPPGMAstNodePtr& node, const TypePtr& ty
 			type->direct_base_offsets[base_index] = 0;
 			continue;
 		}
-		const size_t base_alignment = max<size_t>(1, TypeAlignment(base));
-		offset = AlignUp(offset, base_alignment);
-		type->direct_base_offsets[base_index] = offset;
-		maximum_alignment = max(maximum_alignment, base_alignment);
-		offset += TypeSize(base);
+		place_base(base_index);
 	}
+	if (!type->direct_base_offsets.empty())
+		type->direct_base_offset = type->direct_base_offsets[0];
 	size_t union_size = offset;
 
 	ComputeClassMemberLayout(type, union_size, &offset, &maximum_alignment);
@@ -948,6 +876,7 @@ void Analyzer::ComputeClassLayout(const CPPGMAstNodePtr& node, const TypePtr& ty
 	if (type->object_alignment == 0) type->object_alignment = 1;
 	if (type->class_members.empty() && type->direct_bases.empty() && !owns_vpointer) offset = 1;
 	type->object_size = AlignUp(max<size_t>(1, offset), type->object_alignment);
+	type->nonvirtual_size = type->object_size;
 	type->materialize_sizeof_address = false;
 	if(type->template_specialization && !type->template_primary.empty())
 		for(size_t member = 0; member < type->class_members.size() &&
@@ -1212,54 +1141,7 @@ void Analyzer::RecordClassMembers(const CPPGMAstNodePtr& node, const TypePtr& ty
 	}
 	RecordMemberIndices(type, class_scope);
 
-	// Build the effective single-inheritance virtual-slot map after all direct
-	// member bindings have been recorded.  Keeping this map on Type makes the
-	// later LowIR pass consume typed semantic facts rather than re-parsing the
-	// source AST to rediscover overrides.
-	type->virtual_methods.clear();
-	if (type->direct_base)
-		type->virtual_methods = type->direct_base->virtual_methods;
-	for (size_t i = 0; i < class_scope->bindings.size(); ++i)
-	{
-		Binding& binding = class_scope->bindings[i];
-		if (binding.kind != BIND_FUNCTION || !binding.is_member ||
-			binding.is_static || binding.member_owner.get() != type.get()) continue;
-		const TypePtr function = FunctionTypeForVirtual(binding);
-		if (!function) continue;
-		const VirtualMethodInfo* inherited = FindInheritedVirtual(
-			type->direct_base, binding);
-		if (binding.is_override && !inherited) {
-			throw logic_error("override does not match a base virtual function: " + binding.name);
-		}
-		if (inherited && inherited->final)
-			throw logic_error("override of final virtual function");
-		if (inherited || binding.is_virtual || binding.is_pure || binding.is_override ||
-			binding.is_final)
-			binding.is_virtual = true;
-		else continue;
-
-		VirtualMethodInfo effective;
-		effective.name = binding.name;
-		effective.function = function;
-		effective.binding = &binding;
-		effective.owner = type;
-		effective.destructor = IsDestructorName(binding.name) ||
-			(inherited && inherited->destructor);
-		effective.pure = binding.is_pure;
-		effective.final = binding.is_final;
-		bool replaced = false;
-		for (size_t slot = 0; slot < type->virtual_methods.size(); ++slot)
-			if (SameVirtualSlot(type->virtual_methods[slot], binding))
-			{
-				type->virtual_methods[slot] = effective;
-				replaced = true;
-				break;
-			}
-		if (!replaced) type->virtual_methods.push_back(effective);
-	}
-	type->polymorphic = !type->virtual_methods.empty();
-	type->has_vpointer = type->polymorphic &&
-		(!type->direct_base || !type->direct_base->polymorphic);
+	FinalizeVirtualClassMembers(type, class_scope);
 	(void)scope;
 }
 
@@ -1370,30 +1252,19 @@ TypePtr Analyzer::ProcessClass(const CPPGMAstNodePtr& node, Scope* scope)
 	type->layout_complete = false;
 	type->direct_base.reset();
 	type->direct_bases.clear();
+	type->direct_base_virtual.clear();
+	type->direct_base_access.clear();
 	type->direct_base_offsets.clear();
+	type->virtual_base_types.clear();
+	type->virtual_base_offsets.clear();
+	type->nonvirtual_size = 0;
 	type->virtual_methods.clear();
 	type->polymorphic = false;
 	type->has_vpointer = false;
 	Scope* class_scope = ClassScope(type, owner, name);
 	// Seed complete typed lookup for injected member-class specializations.
 	PredeclareMaterializedNestedClasses(node, class_scope);
-	for (size_t i = 0; i < node->children.size(); ++i)
-	{
-		const CPPGMAstNodePtr child = node->children[i];
-		if (!child || child->kind != "base-clause") continue;
-		for (size_t j = 0; j < child->children.size(); ++j)
-		{
-			const CPPGMAstNodePtr base = child->children[j];
-			if (!base) continue;
-			const CPPGMAstNodePtr base_name = ChildOfKind(base, "base-name");
-			if (!base_name) continue;
-			TypePtr resolved_base = ResolveType(owner, base_name->value);
-		if (!resolved_base) continue;
-		type->direct_bases.push_back(resolved_base);
-		if (!type->direct_base) type->direct_base = resolved_base;
-		}
-		break;
-	}
+	RecordDirectClassBases(node, type, owner);
 	if (node->template_instantiation && !type->template_primary.empty())
 		RebindGeneratedClassMembers(type, owner, class_scope);
 	// Generated class specializations can contain a member function before the
@@ -1421,7 +1292,7 @@ TypePtr Analyzer::ProcessClass(const CPPGMAstNodePtr& node, Scope* scope)
 	RecordClassMembers(node, type, owner, class_scope);
 	const bool dependent_template_definition = scope &&
 		scope->kind == SCOPE_TEMPLATE_PARAMETERS;
-	if (node->template_instantiation && !LayoutDependenciesReady(type))
+	if (!LayoutDependenciesReady(type))
 		pending_class_layouts_.push_back(PendingClassLayout(node, type, class_scope));
 	else if (dependent_template_definition && !LayoutDependenciesReady(type))
 		// A source template may legally name a dependent/incomplete base; its
@@ -1492,6 +1363,27 @@ TypePtr Analyzer::ProcessForwardClass(const CPPGMAstNodePtr& node, Scope* scope)
 		type->template_primary = node->template_primary;
 		type->template_arguments = node->template_arguments;
 		SeedGeneratedTemplateScope(node, type, owner, name);
+		// A generated specialization may be introduced as a forward class
+		// marker when its call/member replay is the first observable use.  Such
+		// a marker still has the primary's concrete storage when the primary has
+		// no dependent bases or fields (the common CRTP holder shape).  Preserve
+		// that typed layout instead of treating the specialization as an empty
+		// EBO base; otherwise a later non-primary base is placed at offset zero
+		// and overwrites the holder's storage.
+		TypePtr primary;
+		try { primary = ResolveType(owner, node->template_primary); }
+		catch (const logic_error&) {}
+		if(primary && primary->kind == TYPE_CLASS && primary->direct_bases.empty() &&
+			primary->layout_complete && type->class_members.empty()) {
+			type->class_members = primary->class_members;
+			type->object_size = primary->object_size;
+			type->nonvirtual_size = primary->nonvirtual_size;
+			type->object_alignment = primary->object_alignment;
+			type->explicit_alignment = primary->explicit_alignment;
+			type->polymorphic = primary->polymorphic;
+			type->has_vpointer = primary->has_vpointer;
+			type->layout_complete = true;
+		}
 	}
 	ApplyClassAttributes(node, type, scope);
 	if (!owner->qualified_prefix.empty()) type->name = owner->qualified_prefix + "::" + name;

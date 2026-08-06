@@ -1084,13 +1084,60 @@ void PA14Lowerer::EmitAggregateConstructorBody(FunctionRecord& function, Scope* 
     }
   }
 
+void PA14Lowerer::EmitDestructorVTable(FunctionRecord& function, Scope* scope)
+{
+    TypePtr owner = type_value(function.member_owner);
+    if(!owner || !owner->polymorphic) return;
+    CPPGMAstNodePtr this_node(new CPPGMAstNode("keyword-literal", "KW_THIS:this"));
+    const string this_address = EmitValue(this_node, scope).operand;
+    if(!function.base_entry || !function.vtt_parameter) {
+      EmitVPointerStore(owner, this_address);
+      return;
+    }
+    const vector<string> names = ParameterNames(function);
+    const size_t vtt_index = (function.indirect_result ? 1 : 0) +
+      (function.member && !function.static_member ? 1 : 0);
+    if(vtt_index >= names.size()) throw logic_error("destructor base entry has no VTT parameter");
+    const string construction_vptr = new_temp();
+    AddInstruction(construction_vptr + " = load ptr %" + names[vtt_index]);
+    emit_store(PointerTo(Fundamental("char")), construction_vptr, this_address);
+    const size_t hidden_count = function.hidden_virtual_bases.size();
+    const size_t hidden_begin = function.type->parameters.size() >= hidden_count ?
+      function.type->parameters.size() - hidden_count : function.type->parameters.size();
+    const vector<RenderedVirtualTableView> construction_views =
+      RenderedVirtualTableViews(owner);
+    for(size_t view = 0; view < construction_views.size(); ++view) {
+      const RenderedVirtualTableView& rendered = construction_views[view];
+      if(!rendered.base || rendered.offset == 0) continue;
+      string base_address;
+      for(size_t hidden = 0; hidden < hidden_count; ++hidden) {
+        if(hidden_begin + hidden >= names.size() || !function.hidden_virtual_bases[hidden] ||
+           !PA12SameType(function.hidden_virtual_bases[hidden], rendered.base, true)) continue;
+        base_address = new_temp();
+        AddInstruction(base_address + " = index i8 %" + names[hidden_begin + hidden] + ", 0");
+        break;
+      }
+      if(base_address.empty()) {
+        const string object_address = new_temp();
+        AddInstruction(object_address + " = load ptr $this");
+        base_address = new_temp();
+        AddInstruction(base_address + " = index i8 [projection=base_subobject] " +
+          object_address + ", " + integer_text(static_cast<long long>(rendered.offset)));
+      }
+      const string vtt_element = new_temp();
+      AddInstruction(vtt_element + " = index i8 %" + names[vtt_index] + ", " +
+        integer_text(static_cast<long long>(ConstructionVttViewIndex(owner, view) * 8)));
+      const string view_vptr = new_temp();
+      AddInstruction(view_vptr + " = load ptr " + vtt_element);
+      emit_store(PointerTo(Fundamental("char")), view_vptr, base_address);
+    }
+}
+
 void PA14Lowerer::EmitDestructorBody(FunctionRecord& function, Scope* scope)
 {
     TypePtr owner = type_value(function.member_owner);
     if(!owner) return;
     CPPGMAstNodePtr this_node(new CPPGMAstNode("keyword-literal", "KW_THIS:this"));
-    if(owner->polymorphic)
-      EmitVPointerStore(owner, EmitValue(this_node, scope).operand);
     for(size_t i = owner->class_members.size(); i > 0; --i) {
       const ClassMemberInfo& member = owner->class_members[i - 1];
       TypePtr member_type = type_value(member.type);
@@ -1128,11 +1175,44 @@ void PA14Lowerer::EmitDestructorBody(FunctionRecord& function, Scope* scope)
     for(size_t base_index = direct_bases.size(); base_index > 0; --base_index) {
       TypePtr base = type_value(direct_bases[base_index - 1]);
       if(!base || !DestructorHasEffects(base)) continue;
+      if((function.base_entry || function.deleting_entry) &&
+         IsVirtualDirectBase(owner, base_index - 1)) continue;
       const string this_address = EmitValue(this_node, scope).operand;
-      const string base_address = AdjustBaseAddress(this_address, owner, base);
+      string base_address;
+      if(IsVirtualDirectBase(owner, base_index - 1)) {
+        size_t virtual_offset = 0;
+        FindVirtualBaseOffset(owner, base, &virtual_offset);
+        base_address = new_temp();
+        AddInstruction(base_address + " = index i8 " + this_address + ", " +
+          integer_text(static_cast<long long>(virtual_offset)));
+      } else base_address = AdjustBaseAddress(this_address, owner, base);
       // A virtual base destructor still has to run when its body is empty;
       // the derived destructor owns the base-subobject transition.
       (void)EmitDestructorAt(base, base_address, scope, true);
+    }
+    const bool emit_inherited_virtual_bases =
+      !function.base_entry && !function.deleting_entry;
+    if(emit_inherited_virtual_bases) {
+      const vector<TypePtr> virtual_bases = VirtualBaseTypes(owner);
+      for(size_t virtual_index = virtual_bases.size(); virtual_index > 0; --virtual_index) {
+        const TypePtr base = type_value(virtual_bases[virtual_index - 1]);
+        if(!base || !DestructorHasEffects(base)) continue;
+        bool direct_virtual = false;
+        for(size_t direct = 0; direct < direct_bases.size(); ++direct)
+          if(IsVirtualDirectBase(owner, direct) &&
+             PA12SameType(direct_bases[direct], base, true)) {
+            direct_virtual = true;
+            break;
+          }
+        if(direct_virtual) continue;
+        const string this_address = EmitValue(this_node, scope).operand;
+        size_t virtual_offset = 0;
+        FindVirtualBaseOffset(owner, base, &virtual_offset);
+        const string base_address = new_temp();
+        AddInstruction(base_address + " = index i8 " + this_address + ", " +
+          integer_text(static_cast<long long>(virtual_offset)));
+        (void)EmitDestructorAt(base, base_address, scope, true);
+      }
     }
     if(function.deleting_entry) {
       TypePtr parameter = PointerTo(Fundamental("void"));

@@ -235,7 +235,22 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
       } else if(worst == best_worst && total == best_total &&
                 !PA12SameType(best_function, function, false) &&
                 !better_lvalue_reference_binding(best_function, function, argument_infos)) {
-		throw logic_error("ambiguous constructor overload");
+        FunctionRecord* best_record = best_binding ? RecordForBinding(best_binding) : 0;
+        const bool current_copy = record->copy_constructor || record->move_constructor;
+        const bool best_copy = best_record &&
+          (best_record->copy_constructor || best_record->move_constructor);
+        // A copy/move constructor is the selected special-member path when
+        // an otherwise tied synthesized candidate represents the same
+        // source object.  Keep overload selection typed instead of treating
+        // the generated ABI entry as a source-level ambiguity.
+        if(current_copy && !best_copy) {
+          best_binding = binding;
+          best_function = function;
+          best_worst = worst;
+          best_total = total;
+        } else if(!best_copy && current_copy) {
+          throw logic_error("ambiguous constructor overload " + object_type->name);
+        }
 		}
     }
     if(!best_binding) {
@@ -277,6 +292,7 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
       demanded_rtti_types_.find(RttiMangledName(object_type)) != demanded_rtti_types_.end();
     if(record && record->copy_constructor && raw_arguments.size() == 1 &&
        raw_arguments[0] && IsTrivialValueStorage(object_type) &&
+       !HasVirtualBases(object_type) &&
        !rtti_template_copy) {
       if(IsEmptyBaseStorage(object_type)) {
         EmitTemporaryDestructors(temporary_mark, scope);
@@ -296,6 +312,37 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
     }
     FunctionRecord* complete_record = record;
     bool demand_complete_record = false;
+    bool has_record_default_argument = false;
+    if(record)
+      for(size_t argument = 0; argument < record->default_arguments.size(); ++argument)
+        if(record->default_arguments[argument]) {
+          has_record_default_argument = true;
+          break;
+        }
+    const TypePtr construction_owner = state_ && state_->record ?
+      type_value(state_->record->member_owner) : TypePtr();
+    const bool needs_construction_vtt = base_entry && construction_owner &&
+      object_type->polymorphic && HasVirtualBases(object_type);
+    // A non-polymorphic base with an explicitly parameterized constructor
+    // still has an observable complete-object entry.  The most-derived
+    // constructor calls its C2/base entry, while the C1 entry remains part of
+    // the ABI surface and is demanded by the complete typed constructor set.
+    if(base_entry && record &&
+       (!object_type->polymorphic || DirectBaseTypes(object_type).empty()) &&
+       HasUserProvidedConstructor(object_type) &&
+       ((!raw_arguments.empty() && !has_record_default_argument) ||
+        object_type->template_specialization ||
+        (object_type->polymorphic && !record->implicit_constructor)) &&
+       !record->member_template)
+      demand_complete_record = true;
+    // EnsureConstructorBaseEntry may append to the function-record vector,
+    // invalidating a saved pointer to the complete entry.  Demand it while
+    // the selected complete record is still stable; the base entry is
+    // demanded separately after selection below.
+    if(demand_complete_record && record) {
+      MarkFunctionNeeded(record);
+      demand_complete_record = false;
+    }
     if(record && base_entry) {
       // A template specialization with a direct base can be entered solely
       // through that base ABI entry.  Keep the complete-object entry demand
@@ -330,6 +377,11 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
         entry = BaseEntryFor(record);
       }
       if(entry) record = entry;
+      if(record && needs_construction_vtt) {
+        record->construction_entry = true;
+        record->vtt_parameter = true;
+        BuildFunctionABI(*record);
+      }
     }
 	bool has_instance_member = false;
 	for(size_t member = 0; member < object_type->class_members.size(); ++member)
@@ -411,18 +463,21 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
       if(value && value->kind == "call-expression" &&
          !value->children.empty()) {
         TypePtr constructed = ConstructorObjectType(value->children[0], scope);
-        if(constructed && HasDestructor(constructed)) return true;
+        if(constructed && HasDestructor(constructed) &&
+           DestructorHasEffects(constructed)) return true;
         try {
           const ExprInfo info = Infer(value, scope);
           const TypePtr result = expression_value_type(info);
           if(result && result->kind == TYPE_CLASS &&
-             !type_is_reference(info.type) && HasDestructor(result)) return true;
+             !type_is_reference(info.type) && HasDestructor(result) &&
+             DestructorHasEffects(result)) return true;
         } catch(const logic_error&) {
         }
       }
       if(value && (value->kind == "braced-construction" ||
                    value->kind == "braced-init-list"))
-        return HasDestructor(type_value(parameter->child));
+        return HasDestructor(type_value(parameter->child)) &&
+          DestructorHasEffects(type_value(parameter->child));
       return false;
     };
     const vector<FunctionState::TemporaryObject> cleanup_before_arguments =
@@ -504,7 +559,7 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
         (best_binding->noexcept_specified || HasNoexcept(best_binding->declaration))));
     const bool temporary_constructor_context = state_ &&
       state_->temporary_construction && HasDestructor(object_type) &&
-      !selected_constructor_no_throw;
+      !selected_constructor_no_throw && !state_->constructing_variable;
     const bool noexcept_constructor_argument_context = record &&
       record->constructor && (record->unwind_no ||
         (best_binding && (best_binding->noexcept_specified ||
@@ -549,6 +604,26 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
     }
     vector<string> operands;
     operands.push_back(address);
+    if(record && record->vtt_parameter) {
+      string vtt_address;
+      if(state_ && state_->record && state_->record->base_entry &&
+         state_->record->vtt_parameter) {
+        const vector<string> current_names = ParameterNames(*state_->record);
+        const size_t current_vtt = (state_->record->indirect_result ? 1 : 0) +
+          (state_->record->member && !state_->record->static_member ? 1 : 0);
+        if(current_vtt < current_names.size())
+          vtt_address = "%" + current_names[current_vtt];
+      }
+      if(vtt_address.empty()) {
+        vtt_address = new_temp();
+        AddInstruction(vtt_address + " = addr @" + VttSymbol(construction_owner));
+      }
+      const size_t vtt_index = ConstructionVttIndex(construction_owner, object_type);
+      const string vtt_slot = new_temp();
+      AddInstruction(vtt_slot + " = index i8 " + vtt_address + ", " +
+        integer_text(static_cast<long long>(vtt_index * 8)));
+      operands.push_back(vtt_slot);
+    }
     for(size_t i = 0; i < arguments.size(); ++i) {
       TypePtr target = i < best_function->parameters.size() ? best_function->parameters[i] : TypePtr();
       const size_t target_low_index = (record && record->indirect_result ? 1 : 0) +
@@ -661,11 +736,14 @@ bool PA14Lowerer::EmitConstructorAt(const TypePtr& raw_object_type, const string
       }
     if(state_ && !state_->constructor_unwind_active &&
        !state_->suppress_constructor_unwind &&
-       !constructor_call_no_throw &&
-       (has_temporary_cleanup ||
-        (full_expression_cleanup && !unwind_cleanup.empty())) &&
-       !unwind_cleanup.empty())
+      !constructor_call_no_throw &&
+      (has_temporary_cleanup ||
+        (full_expression_cleanup && !unwind_cleanup.empty() &&
+         !state_->constructing_variable)) &&
+      !unwind_cleanup.empty())
       BeginConstructorUnwind(unwind_cleanup, true);
+    if(record)
+      AppendVirtualBaseCallArguments(*record, operands, arguments, scope);
     ostringstream call;
     call << "call void @" << record->symbol << "(";
     for(size_t i = 0; i < operands.size(); ++i) {

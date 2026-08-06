@@ -11,10 +11,8 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
-
 using namespace std;
 namespace cppgm_pa14_lowering {
-
 void PA14Lowerer::InferLocalIdentifierConstant(const TypePtr& type,
                                                 ExprInfo* result) const
 {
@@ -37,7 +35,6 @@ void PA14Lowerer::InferLocalIdentifierConstant(const TypePtr& type,
     return;
   }
 }
-
 PA14Lowerer::Value PA14Lowerer::EmitBitFieldLoad(Binding* binding, const string& address,
                                       const TypePtr& type, bool copy_result)
 {
@@ -75,7 +72,6 @@ PA14Lowerer::Value PA14Lowerer::EmitBitFieldLoad(Binding* binding, const string&
     (void)bits;
     return result;
   }
-
 string PA14Lowerer::PrepareBitFieldValue(Binding* binding, const TypePtr& type,
                                           const string& value)
 {
@@ -94,7 +90,6 @@ string PA14Lowerer::PrepareBitFieldValue(Binding* binding, const TypePtr& type,
       integer_text(bit_offset));
     return shifted;
   }
-
 string PA14Lowerer::MergeBitFieldValue(Binding* binding, const string& address,
                                         const TypePtr& type, const string& value,
                                         bool preserve)
@@ -119,7 +114,6 @@ string PA14Lowerer::MergeBitFieldValue(Binding* binding, const string& address,
     AddInstruction(combined + " = binary or " + low + " " + retained + ", " + prepared);
     return combined;
   }
-
 void PA14Lowerer::StoreBitField(Binding* binding, const string& address,
                                 const TypePtr& type, const string& value,
                                 bool initializing)
@@ -133,7 +127,6 @@ void PA14Lowerer::StoreBitField(Binding* binding, const string& address,
     const string stored = preserve ? merged : PrepareBitFieldValue(binding, type, value);
     emit_store(type, stored, address);
   }
-
 void PA14Lowerer::StoreLValue(const CPPGMAstNodePtr& node, Scope* scope,
                    const TypePtr& type, const string& value)
 {
@@ -519,6 +512,9 @@ PA14Lowerer::Value PA14Lowerer::EmitCompare(const CPPGMAstNodePtr& node, Scope* 
       common : TypePtr();
     const TypePtr right_expected = right_class_operand && !right_template_class ?
       common : TypePtr();
+    const bool previous_compare_call_defer = state_ &&
+      state_->defer_call_unwind_completion;
+    if(state_) state_->defer_call_unwind_completion = true;
     Value left = left_bit_field ? EmitValue(node->children[0], scope) :
       EmitValue(node->children[0], scope, left_expected);
     Value right = right_bit_field ? EmitValue(node->children[1], scope) :
@@ -579,6 +575,15 @@ PA14Lowerer::Value PA14Lowerer::EmitCompare(const CPPGMAstNodePtr& node, Scope* 
     result.operand = new_temp();
     AddInstruction(result.operand + " = cmp " + predicate + " " + low_type(common) +
       " " + left.operand + ", " + right.operand);
+    if(state_ && state_->pending_call_unwind)
+      FinishPendingCallUnwind(scope);
+    if(state_)
+      state_->defer_call_unwind_completion = previous_compare_call_defer;
+    if(state_ && state_->post_call_unwind_pending) {
+      AddInstruction("eh_end");
+      state_->post_call_unwind_pending = false;
+      state_->post_call_unwind_dispatch.clear();
+    }
     return result;
   }
 PA14Lowerer::Value PA14Lowerer::EmitBinary(const CPPGMAstNodePtr& node, Scope* scope)
@@ -818,9 +823,13 @@ PA14Lowerer::Value PA14Lowerer::EmitBinary(const CPPGMAstNodePtr& node, Scope* s
     result.operand = new_temp();
     AddInstruction(result.operand + " = binary " + binary + " " + low_type(common) +
       " " + left.operand + ", " + right.operand);
+    if(state_ && state_->post_call_unwind_pending) {
+      AddInstruction("eh_end");
+      state_->post_call_unwind_pending = false;
+      state_->post_call_unwind_dispatch.clear();
+    }
     return result;
   }
-
 PA14Lowerer::Value PA14Lowerer::EmitCall(const CPPGMAstNodePtr& node, Scope* scope)
 {
     if(node && !node->children.empty() && node->children[0] &&
@@ -844,7 +853,6 @@ PA14Lowerer::Value PA14Lowerer::EmitCall(const CPPGMAstNodePtr& node, Scope* sco
     vector<CPPGMAstNodePtr> arguments = argument_list ? argument_list->children : vector<CPPGMAstNodePtr>();
     return EmitChosenCall(choice, node->children[0], arguments, scope);
   }
-
 PA14Lowerer::Value PA14Lowerer::EmitOperatorCall(
     const string& name, const vector<CPPGMAstNodePtr>& arguments, Scope* scope)
 {
@@ -852,7 +860,6 @@ PA14Lowerer::Value PA14Lowerer::EmitOperatorCall(
     if(!choice.binding) throw logic_error("no viable operator overload");
     return EmitChosenCall(choice, CPPGMAstNodePtr(), arguments, scope);
   }
-
 PA14Lowerer::Value PA14Lowerer::EmitConditionalValue(const CPPGMAstNodePtr& node, Scope* scope,
                               const TypePtr& expected)
 {
@@ -914,11 +921,20 @@ PA14Lowerer::Value PA14Lowerer::EmitConditionalValue(const CPPGMAstNodePtr& node
     const unsigned int previous_condition_cleanup_depth = state_ ?
       state_->condition_cleanup_depth : 0;
     if(state_) state_->defer_temporary_cleanup = true;
+    // Keep the call's EH region open through the complete condition value.
+    // For a comparison such as `f() == 7`, the comparison itself is part of
+    // the value evaluation and must precede the region's `eh_end`; closing
+    // immediately after f() leaves the condition outside its protected
+    // expression boundary.
+    const bool previous_condition_call_defer = state_ &&
+      state_->defer_call_unwind_completion;
+    if(state_) state_->defer_call_unwind_completion = true;
     TypePtr condition_type = expression_value_type(condition_info);
     Value condition = condition_type && condition_type->kind == TYPE_CLASS &&
       FindContextConversionOperator(condition_type, true, true) ?
       EmitContextConversion(node->children[0], scope, true, true) :
       EmitValue(node->children[0], scope);
+    if(state_) state_->defer_call_unwind_completion = previous_condition_call_defer;
     if(state_ && state_->pending_call_unwind)
       FinishPendingCallUnwind(scope);
     if(condition.lvalue && condition.type) {
@@ -964,7 +980,6 @@ PA14Lowerer::Value PA14Lowerer::EmitConditionalValue(const CPPGMAstNodePtr& node
     }
     return result;
   }
-
 string PA14Lowerer::EmitConditionalAddress(const CPPGMAstNodePtr& node, Scope* scope)
 {
     ExprInfo info = Infer(node, scope);
@@ -1121,7 +1136,9 @@ PA14Lowerer::Value PA14Lowerer::EmitValue(const CPPGMAstNodePtr& node, Scope* sc
       const string op = PA12Operator(node->value);
       if(op == "this") {
         CPPGMAstNodePtr this_id(new CPPGMAstNode("id-expression", "this"));
-        return EmitIdentifier(this_id, scope, expected);
+        Value result = EmitIdentifier(this_id, scope, expected);
+        result.nonnull = true;
+        return result;
       }
       return InferKeyword(node).type->name == "nullptr_t" ?
         ValueWithNullptr() : ValueFromInfo(InferKeyword(node));
@@ -1407,7 +1424,7 @@ PA14Lowerer::Value PA14Lowerer::EmitValue(const CPPGMAstNodePtr& node, Scope* sc
 			is_integral_type(source_type) && is_integral_type(target_type) &&
 			type_size(source_type) == type_size(target_type) &&
 			is_unsigned_type(source_type) != is_unsigned_type(target_type);
-		return ConvertValue(value, target, preserve_signedness_boundary);
+        return ConvertValue(value, target, preserve_signedness_boundary, true);
     }
     if(node->kind == "sizeof-pack-expression" || node->kind == "sizeof-expression" ||
        node->kind == "type-trait-expression") {
@@ -1472,5 +1489,4 @@ PA14Lowerer::Value PA14Lowerer::EmitValue(const CPPGMAstNodePtr& node, Scope* sc
     }
     throw logic_error("unsupported value node in LowIR lowering: " + node->kind);
   }
-
 } // namespace cppgm_pa14_lowering

@@ -77,9 +77,99 @@ PA14Lowerer::Value PA14Lowerer::EmitUnary(const CPPGMAstNodePtr& node, Scope* sc
 	if(ChooseOperatorCall(OperatorFunctionName(op), operator_arguments, scope).binding)
 		return EmitOperatorCall(OperatorFunctionName(op), operator_arguments, scope);
 	if(op == "&") {
+		if(!node->children.empty() && node->children[0] &&
+			node->children[0]->kind == "id-expression") {
+			VariablePlan* local = LocalForName(node->children[0]->value);
+			TypePtr source_parameter;
+			if(local && state_ && state_->record) {
+				const vector<string> names = ParameterNames(*state_->record);
+				for(size_t parameter = 0; parameter < names.size(); ++parameter)
+					if(names[parameter] == node->children[0]->value) {
+						source_parameter = LowParameterSourceType(*state_->record, parameter);
+						break;
+					}
+			}
+			const TypePtr source_value = source_parameter ?
+				type_value(source_parameter) : type_value(local ? local->type : TypePtr());
+			const TypePtr expected_pointer = expected && type_value(expected) &&
+				type_value(expected)->kind == TYPE_POINTER ? type_value(expected) : TypePtr();
+			const TypePtr expected_base = expected_pointer ?
+				type_value(expected_pointer->child) : TypePtr();
+			if(local && expected_pointer && expected_base && source_value &&
+				source_value->kind == TYPE_CLASS && expected_base->kind == TYPE_CLASS && state_) {
+				map<string, vector<string> >::const_iterator hidden =
+					state_->virtual_base_hidden_by_source.find(node->children[0]->value);
+				if(hidden != state_->virtual_base_hidden_by_source.end()) {
+					size_t hidden_index = static_cast<size_t>(-1);
+					size_t relative = 0;
+					for(size_t candidate = 0; candidate < source_value->virtual_base_types.size(); ++candidate) {
+						const TypePtr root = candidate < source_value->virtual_base_roots.size() &&
+							source_value->virtual_base_roots[candidate] ?
+							source_value->virtual_base_roots[candidate] :
+							source_value->virtual_base_types[candidate];
+						bool root_matches = root && PA12SameType(root, expected_base, true);
+						if(!root_matches && root) {
+							for(size_t nested = 0; nested < root->virtual_base_types.size(); ++nested)
+								if(root->virtual_base_types[nested] &&
+									PA12SameType(root->virtual_base_types[nested], expected_base, true)) {
+									relative = nested < root->virtual_base_offsets.size() ?
+										root->virtual_base_offsets[nested] : 0;
+									root_matches = true;
+									break;
+								}
+						}
+						if(root_matches) {
+							hidden_index = candidate;
+							break;
+						}
+					}
+					if(hidden_index != static_cast<size_t>(-1) &&
+						hidden_index < hidden->second.size()) {
+						string operand = hidden->second[hidden_index];
+						if(!operand.empty() && operand[0] == '$')
+							operand = emit_load(operand, PointerTo(Fundamental("char")));
+						if(relative != 0) {
+							const string projected = new_temp();
+							AddInstruction(projected + " = index i8 [projection=base_subobject] " +
+								operand + ", " + integer_text(static_cast<long long>(relative)));
+							operand = projected;
+						}
+						const string view = new_temp();
+						AddInstruction(view + " = index i8 [projection=base_subobject] " +
+							operand + ", 0");
+						Value result;
+						result.type = expected_pointer;
+						result.operand = view;
+						result.nonnull = true;
+						return result;
+					}
+				}
+			}
+			const bool reference_parameter = local &&
+				(type_is_reference(local->type) || type_is_reference(source_parameter)) &&
+				expected_base && !PA12SameType(source_value, expected_base, true);
+			if(local && reference_parameter && source_value) {
+				Value result;
+				result.type = PointerTo(source_value);
+				result.operand = emit_load(local_address(local),
+					PointerTo(Fundamental("char")));
+				result.nonnull = true;
+				if(state_) {
+					map<string, vector<string> >::const_iterator hidden =
+						state_->virtual_base_hidden_by_source.find(node->children[0]->value);
+					if(hidden != state_->virtual_base_hidden_by_source.end())
+						state_->virtual_base_hidden_by_operand[result.operand] = hidden->second;
+				}
+				return result;
+			}
+		}
 		Value result;
 		result.type = PointerTo(expression_value_type(Infer(node->children[0], scope)));
 		result.operand = EmitAddress(node->children[0], scope);
+		// The address-of operator cannot produce a null pointer for a valid
+		// glvalue.  Preserve that fact for class-pointer conversions so a
+		// virtual-base projection is not needlessly wrapped in a null branch.
+		result.nonnull = true;
 		return result;
 	}
 	if(op == "*") {

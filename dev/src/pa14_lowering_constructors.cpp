@@ -16,6 +16,7 @@ bool PA14Lowerer::HasDefaultInitializationEffects(const TypePtr& raw_type) const
       return type->bound != 0 && HasDefaultInitializationEffects(type->child);
     if(type->kind != TYPE_CLASS) return true;
     if(type->polymorphic) return true;
+    if(HasVirtualBases(type)) return true;
     const vector<Binding*> constructors =
       MemberBindings(type, LastComponent(type->name));
 
@@ -378,36 +379,6 @@ PA14Lowerer::Value PA14Lowerer::EmitObjectValueArgument(
     return result;
   }
 
-bool PA14Lowerer::EmitDestructorAt(const TypePtr& raw_object_type, const string& address,
-                                   Scope* scope, bool force_empty)
-{
-    TypePtr object_type = type_value(raw_object_type);
-    if(!object_type || object_type->kind != TYPE_CLASS) return false;
-    const string name = "~" + LastComponent(object_type->name);
-    vector<Binding*> candidates = MemberBindings(object_type, name);
-    if(candidates.empty() && object_type->owned_scope) {
-      CollectImplicitDestructor(object_type, object_type->owned_scope);
-      candidates = MemberBindings(object_type, name);
-    }
-    for(size_t i = 0; i < candidates.size(); ++i) {
-      Binding* binding = candidates[i];
-      if(binding->kind != BIND_FUNCTION || !binding->is_member || binding->is_static) continue;
-      FunctionRecord* record = RecordForBinding(binding);
-      if(!record || !record->destructor) continue;
-      if(!HasDestructor(object_type)) continue;
-      if(!force_empty && !DestructorHasEffects(object_type)) continue;
-      MarkFunctionNeeded(record);
-      FunctionRecord* base_entry = BaseEntryFor(record);
-      FunctionRecord* call_record = object_type->polymorphic && force_empty && base_entry ?
-        base_entry : record;
-      if(base_entry && object_type->polymorphic && force_empty)
-        MarkFunctionNeeded(base_entry);
-      AddInstruction("call void @" + call_record->symbol + "(" + address + ")");
-      return true;
-    }
-    (void)scope;
-    return false;
-  }
 
 bool PA14Lowerer::EmitValueSpecialMemberBody(FunctionRecord& function, Scope* scope)
 {
@@ -484,6 +455,7 @@ bool PA14Lowerer::EmitValueSpecialMemberBody(FunctionRecord& function, Scope* sc
         "x" + integer_text(static_cast<long long>(type_alignment(owner))) + " " +
         source + ", " + destination);
     } else {
+      if(!function.special_initializer)
       for(size_t base_index = 0; base_index < direct_bases.size(); ++base_index) {
         TypePtr base = type_value(direct_bases[base_index]);
         if(!base || IsEmptyBaseStorage(base)) continue;
@@ -691,6 +663,24 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
       }
       return false;
     };
+    const auto demand_complete_default_constructor = [&](const TypePtr& target) {
+      if(!target || !HasUserProvidedConstructor(target)) return;
+      const vector<Binding*> candidates = MemberBindings(target,
+        LastComponent(target->name));
+      for(size_t candidate = 0; candidate < candidates.size(); ++candidate) {
+        Binding* binding = candidates[candidate];
+        FunctionRecord* record = RecordForBinding(binding);
+        TypePtr signature = binding ? function_target_type(binding->type) : TypePtr();
+        if(!record || !record->constructor || record->deleted || !signature) continue;
+        bool defaultable = true;
+        for(size_t parameter = 0; parameter < signature->parameters.size(); ++parameter)
+          if(!HasDefaultArgument(binding, parameter)) { defaultable = false; break; }
+        if(defaultable) {
+          MarkFunctionNeeded(record);
+          return;
+        }
+      }
+    };
     bool delegating = false;
     if(function.special_initializer) {
       for(size_t i = 0; i < function.special_initializer->children.size(); ++i) {
@@ -734,32 +724,150 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
       }
     }
 	if(!delegating) {
+      // The complete constructor owns each virtual base.  Base-entry
+      // constructors deliberately skip this phase: their hidden arguments
+      // name the already-created virtual subobjects in the most-derived
+      // object and are forwarded to their non-virtual base entries below.
+      if(!function.base_entry) {
+        set<const Type*> constructed_virtual_bases;
+        for(size_t virtual_index = 0;
+            virtual_index < owner->virtual_base_types.size(); ++virtual_index) {
+          TypePtr virtual_base = type_value(owner->virtual_base_types[virtual_index]);
+          if(!virtual_base || !constructed_virtual_bases.insert(virtual_base.get()).second)
+            continue;
+          if(!HasConstructor(virtual_base) && HasDefaultConstructionEffects(virtual_base))
+            CollectImplicitConstructor(virtual_base, virtual_base->owned_scope, true);
+          if(!HasConstructor(virtual_base) ||
+             (IsEmptyBaseStorage(virtual_base) &&
+              !HasDefaultConstructionEffects(virtual_base) &&
+              !HasUserProvidedConstructor(virtual_base))) continue;
+          demand_complete_default_constructor(virtual_base);
+          const string this_address = EmitValue(this_node, scope).operand;
+          const string base_address = AdjustBaseAddress(this_address, owner, virtual_base);
+          const map<const Type*, string> saved_pending = state_ ?
+            state_->pending_constructor_virtual_base_arguments :
+            map<const Type*, string>();
+          if(state_) {
+            state_->pending_constructor_virtual_base_arguments.clear();
+            // A virtual root constructor can itself have virtual bases.  Its
+            // complete-constructor call is entered on the root view, while
+            // the hidden arguments must still name the corresponding views
+            // in the most-derived object.
+            const vector<TypePtr> nested_bases = VirtualBaseTypes(virtual_base);
+            for(size_t nested = 0; nested < nested_bases.size(); ++nested) {
+              TypePtr nested_base = nested_bases[nested];
+              if(!nested_base || PA12SameType(nested_base, virtual_base, true))
+                continue;
+              const string nested_address = AdjustBaseAddress(
+                EmitValue(this_node, scope).operand, owner, nested_base);
+              state_->pending_constructor_virtual_base_arguments[nested_base.get()] =
+                nested_address;
+            }
+          }
+          (void)EmitConstructorAt(virtual_base, base_address,
+            vector<CPPGMAstNodePtr>(), scope, true, true);
+          if(state_) state_->pending_constructor_virtual_base_arguments = saved_pending;
+        }
+      }
+      // When a source constructor has a mem-initializer list, the ordered
+      // initializer sequence below owns all direct-base calls.  Running the
+      // implicit-base pass as well would initialize an omitted base once
+      // before the explicit list and once again at its declaration-order
+      // position.
+      if(!function.special_initializer)
       for(size_t base_index = 0; base_index < direct_bases.size(); ++base_index) {
         TypePtr current_base = type_value(direct_bases[base_index]);
         if(!current_base) continue;
+        // Complete constructors initialize virtual direct bases in the
+        // ownership pass above.  Base entries likewise receive their
+        // already-created virtual views from hidden arguments.
+        if(IsVirtualDirectBase(owner, base_index)) continue;
+        if(!HasConstructor(current_base) && HasDefaultConstructionEffects(current_base))
+          CollectImplicitConstructor(current_base, current_base->owned_scope, true);
         const bool defer_current_base = current_base == base && defer_dependent_base;
         const bool explicit_current_base = has_explicit_direct_base(current_base);
         if(defer_current_base || explicit_current_base || !HasConstructor(current_base) ||
            (IsEmptyBaseStorage(current_base) &&
             !HasDefaultConstructionEffects(current_base) &&
             !HasUserProvidedConstructor(current_base))) continue;
+        if(HasVirtualBases(owner))
+          demand_complete_default_constructor(current_base);
         const string this_address = EmitValue(this_node, scope).operand;
         const string base_address = AdjustBaseAddress(this_address, owner, current_base);
+        const map<const Type*, string> saved_pending = state_ ?
+          state_->pending_constructor_virtual_base_arguments :
+          map<const Type*, string>();
+        if(state_) {
+          state_->pending_constructor_virtual_base_arguments.clear();
+          const vector<TypePtr> hidden_bases = VirtualBaseTypes(current_base);
+          for(size_t hidden = 0; hidden < hidden_bases.size(); ++hidden) {
+            TypePtr hidden_base = hidden_bases[hidden];
+            if(!hidden_base) continue;
+            string hidden_address;
+            if(function.base_entry) {
+              map<string, vector<string> >::const_iterator incoming =
+                state_->virtual_base_hidden_by_source.find("this");
+              size_t owner_index = 0;
+              bool found_owner_index = false;
+              for(; owner_index < owner->virtual_base_types.size(); ++owner_index)
+                if(owner->virtual_base_types[owner_index] &&
+                   SameLayoutType(owner->virtual_base_types[owner_index], hidden_base)) {
+                  found_owner_index = true;
+                  break;
+                }
+              if(incoming != state_->virtual_base_hidden_by_source.end() &&
+                 found_owner_index && owner_index < incoming->second.size())
+                hidden_address = incoming->second[owner_index];
+            } else {
+              // Defer this projection until EmitConstructorAt has evaluated
+              // the ordinary arguments.  The hidden view is rooted in the
+              // base-subobject operand, so AppendVirtualBaseCallArguments
+              // can form it from that typed source without changing the ABI.
+              hidden_address = "__deferred_constructor_virtual_base__";
+            }
+            if(!hidden_address.empty())
+              state_->pending_constructor_virtual_base_arguments[hidden_base.get()] =
+                hidden_address;
+          }
+        }
         (void)EmitConstructorAt(current_base, base_address,
           vector<CPPGMAstNodePtr>(), scope, true, true);
+        if(state_) state_->pending_constructor_virtual_base_arguments = saved_pending;
       }
     }
     vector<CPPGMAstNodePtr> ordered_initializers;
     set<const CPPGMAstNode*> used_initializers;
     if(function.special_initializer) {
-      for(size_t i = 0; i < function.special_initializer->children.size(); ++i) {
-        CPPGMAstNodePtr initializer = function.special_initializer->children[i];
-        if(!initializer || initializer->kind != "mem-initializer") continue;
-        CPPGMAstNodePtr name_node = ChildOfKind(initializer, "mem-initializer-id");
-        if(name_node && matching_direct_base(name_node->value)) {
-          ordered_initializers.push_back(initializer);
-          used_initializers.insert(initializer.get());
+      // C++ initializes direct bases in declaration order, independently of
+      // the order in the mem-initializer list.  Keep explicit and implicit
+      // base actions in one typed sequence; otherwise an explicit first base
+      // is delayed until after the implicit second base.
+      for(size_t base_index = 0; base_index < direct_bases.size(); ++base_index) {
+        const TypePtr direct_base = type_value(direct_bases[base_index]);
+        if(!direct_base) continue;
+        CPPGMAstNodePtr selected;
+        for(size_t i = 0; i < function.special_initializer->children.size(); ++i) {
+          CPPGMAstNodePtr initializer = function.special_initializer->children[i];
+          if(!initializer || initializer->kind != "mem-initializer") continue;
+          CPPGMAstNodePtr name_node = ChildOfKind(initializer, "mem-initializer-id");
+          if(name_node && matching_direct_base(name_node->value) == direct_base) {
+            selected = initializer;
+            break;
+          }
         }
+        if(IsVirtualDirectBase(owner, base_index)) {
+          if(selected) used_initializers.insert(selected.get());
+          continue;
+        }
+        if(selected) {
+          ordered_initializers.push_back(selected);
+          used_initializers.insert(selected.get());
+          continue;
+        }
+        CPPGMAstNodePtr synthetic(new CPPGMAstNode("mem-initializer"));
+        synthetic->children.push_back(CPPGMAstNodePtr(new CPPGMAstNode(
+          "mem-initializer-id", LastComponent(direct_base->name))));
+        ordered_initializers.push_back(synthetic);
       }
       for(size_t m = 0; m < owner->class_members.size(); ++m) {
         const ClassMemberInfo& member_fact = owner->class_members[m];
@@ -862,7 +970,24 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
              EmitObjectTransferAt(named_base, base_address, arguments[0], scope, true))
             continue;
         }
-        if(!EmitConstructorAt(named_base, base_address, arguments, scope, true, true))
+        const map<const Type*, string> saved_pending = state_ ?
+          state_->pending_constructor_virtual_base_arguments :
+          map<const Type*, string>();
+        if(state_) {
+          state_->pending_constructor_virtual_base_arguments.clear();
+          const vector<TypePtr> hidden_bases = VirtualBaseTypes(named_base);
+          for(size_t hidden = 0; hidden < hidden_bases.size(); ++hidden) {
+            TypePtr hidden_base = hidden_bases[hidden];
+            if(!hidden_base) continue;
+            const string hidden_address = "__deferred_constructor_virtual_base__";
+            state_->pending_constructor_virtual_base_arguments[hidden_base.get()] =
+              hidden_address;
+          }
+        }
+        const bool constructed = EmitConstructorAt(named_base, base_address,
+          arguments, scope, true, true);
+        if(state_) state_->pending_constructor_virtual_base_arguments = saved_pending;
+        if(!constructed)
           throw logic_error("base mem-initializer has no constructor");
         continue;
       }
@@ -1047,7 +1172,52 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
       }
     }
 	if(owner->is_union) return;
-	if(owner->polymorphic && !vptr_stored && !delegating) {
+	if(function.construction_entry && !delegating) {
+		const vector<string> constructor_names = ParameterNames(function);
+		const size_t vtt_index = (function.indirect_result ? 1 : 0) +
+			(function.member && !function.static_member ? 1 : 0);
+		if(vtt_index >= constructor_names.size())
+			throw logic_error("construction entry has no VTT parameter");
+		const string this_address = EmitValue(this_node, scope).operand;
+		const string construction_vptr = new_temp();
+		AddInstruction(construction_vptr + " = load ptr %" +
+			constructor_names[vtt_index]);
+		emit_store(PointerTo(Fundamental("char")), construction_vptr, this_address);
+		const size_t hidden_count = function.hidden_virtual_bases.size();
+		const size_t hidden_begin = function.type->parameters.size() >= hidden_count ?
+			function.type->parameters.size() - hidden_count : function.type->parameters.size();
+		const vector<RenderedVirtualTableView> construction_views =
+			RenderedVirtualTableViews(owner);
+		for(size_t view = 0; view < construction_views.size(); ++view) {
+			const RenderedVirtualTableView& rendered = construction_views[view];
+			if(!rendered.base || rendered.offset == 0) continue;
+			string base_address;
+			for(size_t hidden = 0; hidden < hidden_count; ++hidden) {
+				if(hidden_begin + hidden >= constructor_names.size() ||
+					!function.hidden_virtual_bases[hidden] ||
+					!PA12SameType(function.hidden_virtual_bases[hidden], rendered.base, true)) continue;
+				base_address = new_temp();
+				AddInstruction(base_address + " = index i8 %" +
+					constructor_names[hidden_begin + hidden] + ", 0");
+				break;
+			}
+			if(base_address.empty()) {
+				const string object_address = new_temp();
+				AddInstruction(object_address + " = load ptr $this");
+				base_address = new_temp();
+				AddInstruction(base_address + " = index i8 [projection=base_subobject] " +
+					object_address + ", " + integer_text(static_cast<long long>(rendered.offset)));
+			}
+			const string vtt_element = new_temp();
+			AddInstruction(vtt_element + " = index i8 %" +
+				constructor_names[vtt_index] + ", " +
+				integer_text(static_cast<long long>(ConstructionVttViewIndex(owner, view) * 8)));
+			const string view_vptr = new_temp();
+			AddInstruction(view_vptr + " = load ptr " + vtt_element);
+			emit_store(PointerTo(Fundamental("char")), view_vptr, base_address);
+		}
+		vptr_stored = true;
+	} else if(owner->polymorphic && !vptr_stored && !delegating) {
 		EmitVPointerStore(owner, EmitValue(this_node, scope).operand);
 		vptr_stored = true;
 	}
@@ -1279,94 +1449,5 @@ void PA14Lowerer::EmitConstructorInitializers(FunctionRecord& function, Scope* s
     }
   }
 
-void PA14Lowerer::DemandConstantObjectConstructors(const TypePtr& raw_type,
-                                                    const CPPGMAstNodePtr& initializer,
-                                                    Scope* scope)
-{
-  TypePtr type = type_value(raw_type);
-  if(!type || !initializer) return;
-  CPPGMAstNodePtr expression = initializer;
-  if(expression->kind == "initializer" || expression->kind == "paren-initializer" ||
-     expression->kind == "default-argument" || expression->kind == "initializer-clause")
-    expression = InitializerExpression(expression);
-  if(!expression) return;
-  if(type->kind == TYPE_ARRAY) {
-    if(expression->kind == "braced-init-list")
-      for(size_t i = 0; i < expression->children.size(); ++i)
-        DemandConstantObjectConstructors(type->child, expression->children[i], scope);
-    return;
-  }
-  if(type->kind != TYPE_CLASS) return;
-  vector<CPPGMAstNodePtr> arguments;
-  if(expression->kind == "braced-init-list" || expression->kind == "argument-list")
-    arguments = expression->children;
-  else if(expression->kind == "call-expression" && expression->children.size() > 1) {
-    CPPGMAstNodePtr list = expression->children[1];
-    arguments = list ? list->children : vector<CPPGMAstNodePtr>();
-    if(expression->value == "braced-construction" && arguments.size() == 1 &&
-       arguments[0] && arguments[0]->kind == "braced-init-list")
-      arguments = arguments[0]->children;
-  } else return;
-  const string constructor_name = type->template_specialization &&
-    !type->template_primary.empty() ? LastComponent(type->template_primary) :
-    LastComponent(type->name);
-  vector<Binding*> candidates = MemberBindings(type, LastComponent(type->name));
-  if(candidates.empty() && constructor_name != LastComponent(type->name))
-    candidates = MemberBindings(type, constructor_name);
-  if(candidates.empty() && arguments.empty() && scope && type->owned_scope) {
-    // Empty class expressions use the implicitly declared default constructor,
-    // which is not represented by a binding until a concrete object use
-    // demands it.  Materialize that typed member before matching the call.
-    CollectImplicitConstructor(type, type->owned_scope, true);
-    candidates = MemberBindings(type, LastComponent(type->name));
-    if(candidates.empty() && constructor_name != LastComponent(type->name))
-      candidates = MemberBindings(type, constructor_name);
-  }
-  for(size_t i = 0; i < candidates.size(); ++i) {
-    Binding* binding = candidates[i];
-    FunctionRecord* record = RecordForBinding(binding);
-    if(!record || !record->constructor || record->deleted ||
-       !record->source_type || record->source_type->parameters.size() != arguments.size())
-      continue;
-    MarkFunctionNeeded(record);
-    break;
-  }
-
-  // A zero-storage global may still have a typed constructor closure even
-  // when its runtime initialization is elided.  Walk nested construction
-  // expressions so the closure remains available in LowIR without emitting
-  // the elided constructor actions themselves.
-  if(scope) {
-    function<void(const CPPGMAstNodePtr&)> demand_nested;
-    demand_nested = [&](const CPPGMAstNodePtr& node) {
-      if(!node) return;
-      if(node->kind == "call-expression" && !node->children.empty()) {
-        TypePtr constructed;
-        try {
-          constructed = ConstructorObjectType(node->children[0], scope);
-        } catch(const logic_error&) {
-          constructed.reset();
-        }
-        if(!constructed && !node->inferred_type.empty()) {
-          try {
-            constructed = type_value(analyzer_.ResolveType(scope,
-              node->inferred_type));
-          } catch(const logic_error&) {
-            constructed.reset();
-          }
-        }
-        if(constructed) {
-          const CPPGMAstNodePtr nested_initializer = node->children.size() > 1 &&
-            node->children[1] ? node->children[1] : node;
-          DemandConstantObjectConstructors(constructed, nested_initializer, scope);
-          return;
-        }
-      }
-      for(size_t child = 0; child < node->children.size(); ++child)
-        demand_nested(node->children[child]);
-    };
-    demand_nested(expression);
-  }
-}
 
 } // namespace cppgm_pa14_lowering

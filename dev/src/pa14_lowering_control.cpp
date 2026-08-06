@@ -347,9 +347,15 @@ void PA14Lowerer::EmitInitializer(VariablePlan* variable, const CPPGMAstNodePtr&
             (void)EmitDestructorAt(aggregate_type, argument_address, scope, true);
             return;
           }
-          if(EmitObjectTransferAt(aggregate_type, destination, expression, scope,
-                                  initializer->initializer_form != AST_INITIALIZER_COPY,
-                                  false, true)) return;
+          VariablePlan* previous_constructing = state_ ?
+            state_->constructing_variable : 0;
+          if(state_) state_->constructing_variable = variable;
+          const bool transferred = EmitObjectTransferAt(
+            aggregate_type, destination, expression, scope,
+            initializer->initializer_form != AST_INITIALIZER_COPY,
+            false, true);
+          if(state_) state_->constructing_variable = previous_constructing;
+          if(transferred) return;
         }
       }
       bool has_anonymous_union_member = false;

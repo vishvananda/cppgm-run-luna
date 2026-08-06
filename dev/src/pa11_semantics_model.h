@@ -81,6 +81,20 @@ struct VirtualMethodInfo
 		  pure(false), final(false) {}
 };
 
+// Each polymorphic direct base contributes a typed vtable view.  The primary
+// view is still mirrored in Type::virtual_methods for earlier PA consumers;
+// secondary views retain the base-specific slot map needed by multiple
+// inheritance lowering.
+struct VirtualTableView
+{
+	TypePtr base;
+	size_t base_index;
+	vector<VirtualMethodInfo> methods;
+
+	VirtualTableView()
+		: base(), base_index(static_cast<size_t>(-1)), methods() {}
+};
+
 enum TypeKind
 {
 	TYPE_FUNDAMENTAL,
@@ -122,12 +136,32 @@ struct Type
 	// All direct base subobjects, retained alongside direct_base for the
 	// single-inheritance consumers from earlier assignments.
 	vector<TypePtr> direct_bases;
+	// Whether each direct base edge is virtual.  The edge fact belongs to the
+	// derived class rather than the base type: the same base may occur once
+	// non-virtually and once virtually in a class lattice.
+	vector<bool> direct_base_virtual;
+	// Access is an edge fact used by RTTI's base-class flags.
+	vector<string> direct_base_access;
 	// Offset of the direct base subobject within the complete object.  The
 	// supported PA17 layout normally keeps a single-inheritance base at zero;
 	// a class that introduces its first vpointer reserves offset zero for that
 	// pointer and records the non-polymorphic base's adjusted address here.
-	size_t direct_base_offset;
+	 size_t direct_base_offset;
 	vector<size_t> direct_base_offsets;
+	// The first polymorphic direct base supplies the primary object view even
+	// when a non-polymorphic base is spelled first in the source list.
+	size_t primary_base_index;
+	// Complete-object virtual-base closure and its deterministic offsets.
+	// `nonvirtual_size` is the storage occupied by this class's own
+	// non-virtual subobjects and members when embedded in another object; it
+	// deliberately excludes the virtual-base closure.
+	vector<TypePtr> virtual_base_types;
+	// The physical virtual-base root that contains each view above.  Nested
+	// virtual bases share the root allocation but retain their own address
+	// projection in the ABI closure.
+	vector<TypePtr> virtual_base_roots;
+	vector<size_t> virtual_base_offsets;
+	size_t nonvirtual_size;
 	size_t object_size;
 	size_t object_alignment;
 	size_t explicit_alignment;
@@ -140,6 +174,7 @@ struct Type
 	bool dependent_base_lookup;
 	vector<FriendAccess> friend_access;
 	vector<VirtualMethodInfo> virtual_methods;
+	vector<VirtualTableView> virtual_table_views;
 	bool polymorphic;
 	bool has_vpointer;
 	bool template_specialization;
@@ -305,6 +340,12 @@ bool SameTypeIgnoringTopCv(const TypePtr& left, const TypePtr& right);
 // base and retain the old representation as a fallback for materialized types.
 vector<TypePtr> DirectBaseTypes(const TypePtr& type);
 vector<TypePtr> BaseTypeClosure(const TypePtr& type);
+bool IsVirtualDirectBase(const TypePtr& type, size_t index);
+size_t NonVirtualObjectSize(const TypePtr& type);
+bool HasVirtualBases(const TypePtr& type);
+vector<TypePtr> VirtualBaseTypes(const TypePtr& type);
+bool FindVirtualBaseOffset(const TypePtr& type, const TypePtr& target,
+	size_t* offset, size_t occurrence = 0);
 TypePtr Fundamental(const string& name);
 TypePtr CloneWithCv(const TypePtr& original, bool add_const, bool add_volatile);
 TypePtr PointerTo(const TypePtr& pointee);

@@ -559,6 +559,11 @@ bool PA14Lowerer::ClassValueNeedsIndirect(const TypePtr& raw_type) const
     TypePtr type = type_value(raw_type);
     if(!type || type->kind != TYPE_CLASS) return false;
     if(type->is_union) return true;
+    // A value carrying virtual-base subobjects is not a register aggregate in
+    // the supported PA27 ABI.  Its construction needs the complete-object
+    // address and the virtual-base view state, so preserve the indirect-result
+    // boundary even when the final storage happens to be only 16 bytes.
+    if(HasVirtualBases(type)) return true;
     // A user-declared destructor makes the class value non-trivial at the
     // call boundary even when its storage is only a small scalar aggregate.
     // Keep the indirect-result ABI so reference-bound prvalues and their
@@ -663,45 +668,17 @@ TypePtr PA14Lowerer::LowParameterSourceType(const FunctionRecord& function,
       if(low_index == 0) return function.member_owner;
       --low_index;
     }
+    if(function.vtt_parameter) {
+      if(low_index == 0) return TypePtr();
+      --low_index;
+    }
     if(!function.source_type || low_index >= function.source_type->parameters.size())
       return function.type && index < function.type->parameters.size() ?
         function.type->parameters[index] : TypePtr();
     return function.source_type->parameters[low_index];
   }
 
-void PA14Lowerer::BuildFunctionABI(FunctionRecord& function)
-{
-    if(function.builtin || !function.source_type) return;
-    TypePtr source = function.source_type;
-    if(!source || source->kind != TYPE_FUNCTION) return;
-    const TypePtr result = source->child;
-    function.indirect_result = result && !type_is_reference(result) &&
-      type_value(result) && type_value(result)->kind == TYPE_CLASS &&
-      ClassValueNeedsIndirect(result);
-    vector<TypePtr> parameters;
-    vector<bool> indirect;
-    if(function.indirect_result) {
-      parameters.push_back(PointerTo(type_value(result)));
-      indirect.push_back(false);
-    }
-    if(function.member && !function.static_member) {
-      TypePtr this_parameter = function.type && !function.type->parameters.empty() ?
-        function.type->parameters[0] : PointerTo(function.member_owner);
-      parameters.push_back(this_parameter);
-      indirect.push_back(false);
-    }
-    for(size_t i = 0; i < source->parameters.size(); ++i) {
-      TypePtr parameter = source->parameters[i];
-      const bool by_address = parameter && !type_is_reference(parameter) &&
-        type_value(parameter) && type_value(parameter)->kind == TYPE_CLASS &&
-        ClassValueNeedsIndirect(parameter);
-      parameters.push_back(by_address ? PointerTo(type_value(parameter)) : parameter);
-      indirect.push_back(by_address);
-    }
-    function.indirect_parameters = indirect;
-    function.type = FunctionOf(parameters, source->variadic,
-      function.indirect_result ? Fundamental("void") : result, false);
-  }
+
 
 namespace {
 
@@ -1321,7 +1298,10 @@ int PA14Lowerer::ConversionRank(const ExprInfo& source, const TypePtr& target) c
         if(PA12SameType(source_value, target_value, true)) return 1;
         if(source_value->child && target_value->child &&
            IsDerivedFrom(source_value->child, target_value->child))
-          return BaseDistance(source_value->child, target_value->child);
+          // A derived-to-base pointer conversion is a standard conversion.
+          // Keep it ahead of the equally standard pointer-to-void conversion
+          // so an overload for the actual base subobject wins.
+          return 1;
         if(target_value->child && target_value->child->kind == TYPE_FUNDAMENTAL &&
            target_value->child->name == "void") return 2;
       }

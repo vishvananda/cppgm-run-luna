@@ -6,7 +6,11 @@ namespace cppgm_pa10 {
 
 bool Parser::ParseIdentifierName(string* value)
 {
-	if (Peek().kind != AST_IDENTIFIER) return false;
+	// `final` and `override` are contextual keywords.  The lexer retains them
+	// as keyword tokens, but they are still valid identifiers in declarations
+	// such as `Final * final()`.
+	if (Peek().kind != AST_IDENTIFIER && Peek().text != "final" &&
+		Peek().text != "override") return false;
 	*value = Peek().text;
 	++position_;
 	return true;

@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <functional>
 #include <set>
 #include <sstream>
 
@@ -28,6 +29,25 @@ bool RttiNeedsTypeMangledClassName(const TypePtr& type)
     if(type->template_arguments[argument].find('[') != string::npos)
       return true;
   return false;
+}
+
+// The LowIR surface uses the source spelling for the anonymous namespace's
+// typeinfo symbols in the reference ABI (the mangled bytes still retain the
+// anonymous-namespace component).  Keep this presentation detail local to
+// the symbol name; RttiMangledName remains the semantic identity used by the
+// emitted typeinfo object.
+string RttiLowClassName(const TypePtr& type)
+{
+  const string qualified = type && type->owned_scope &&
+    !type->owned_scope->qualified_prefix.empty() ?
+    type->owned_scope->qualified_prefix : (type ? type->name : string());
+  const size_t marker = qualified.find("_GLOBAL__N_");
+  if(marker != string::npos) {
+    const size_t last = qualified.rfind("::");
+    if(last != string::npos && last > marker)
+      return qualified.substr(last + 2);
+  }
+  return low_symbol_component(qualified);
 }
 
 bool SameLowFunctionShape(const TypePtr& left, const TypePtr& right)
@@ -279,7 +299,8 @@ string PA14Lowerer::RttiInfoSymbol(const TypePtr& raw_type) const
   const string prefix = type->kind == TYPE_CLASS ?
     (type->tag.empty() ? string("class") : type->tag) : string("enum");
   return "__typeinfo_name__" + prefix + "_" +
-    low_symbol_component(TypeQualifiedName(type));
+    (type->kind == TYPE_CLASS ? RttiLowClassName(type) :
+      low_symbol_component(TypeQualifiedName(type)));
 }
 
 string PA14Lowerer::RttiMangledName(const TypePtr& raw_type) const
@@ -308,7 +329,9 @@ string PA14Lowerer::RttiSymbol(const TypePtr& raw_type) const
     return "__rtti_type_" + RttiMangledName(type);
   const string prefix = type->kind == TYPE_CLASS ?
     (type->tag.empty() ? string("class") : type->tag) : string("enum");
-  return "__rtti_" + prefix + "_" + low_symbol_component(TypeQualifiedName(type));
+  return "__rtti_" + prefix + "_" +
+    (type->kind == TYPE_CLASS ? RttiLowClassName(type) :
+      low_symbol_component(TypeQualifiedName(type)));
 }
 
 string PA14Lowerer::RttiTemplateMangledName(const TypePtr& type) const
@@ -520,8 +543,9 @@ void PA14Lowerer::EnsureRttiType(const TypePtr& raw_type)
   if(!demanded_rtti_types_.insert(make_pair(key, type)).second) return;
   if(type->kind == TYPE_POINTER || type->kind == TYPE_ARRAY)
     EnsureRttiType(type->child);
-  else if(type->kind == TYPE_CLASS && type->direct_base)
-    EnsureRttiType(type->direct_base);
+  else if(type->kind == TYPE_CLASS)
+    for(size_t base = 0; base < type->direct_bases.size(); ++base)
+      EnsureRttiType(type->direct_bases[base]);
 }
 
 TypePtr PA14Lowerer::TypeInfoType(Scope* scope) const
@@ -679,6 +703,153 @@ string PA14Lowerer::VTableAddressSymbol(const TypePtr& type) const
   if (external_vtables_.find(type.get()) != external_vtables_.end())
     return "__external_vtable__" + low_symbol_component(TypeQualifiedName(type));
   return VTableSymbol(type);
+}
+
+string PA14Lowerer::VttSymbol(const TypePtr& type) const
+{
+  return low_symbol_component(TypeQualifiedName(type)) + "____vtt";
+}
+
+size_t PA14Lowerer::ConstructionVttIndex(const TypePtr& raw_owner,
+                                         const TypePtr& raw_base) const
+{
+  const TypePtr owner = type_value(raw_owner);
+  const TypePtr base = type_value(raw_base);
+  if(!owner || !base) return 0;
+  size_t index = 1; // the complete-object address point is VTT element zero
+  const vector<TypePtr> direct_bases = DirectBaseTypes(owner);
+  for(size_t base_index = 0; base_index < direct_bases.size(); ++base_index) {
+    const TypePtr direct = type_value(direct_bases[base_index]);
+    if(!direct || !direct->polymorphic || !HasVirtualBases(direct)) continue;
+    if(SameLayoutType(direct, base)) return index;
+    ++index;
+    index += RenderedVirtualTableViews(direct).size();
+  }
+  return index;
+}
+
+size_t PA14Lowerer::ConstructionVttViewIndex(const TypePtr& raw_owner,
+                                             size_t view_index) const
+{
+  const TypePtr owner = type_value(raw_owner);
+  if(!owner) return 1 + view_index;
+  function<size_t(const TypePtr&)> group_size;
+  group_size = [&](const TypePtr& base) {
+    size_t result = 1 + RenderedVirtualTableViews(base).size();
+    const vector<TypePtr> direct_bases = DirectBaseTypes(base);
+    for(size_t index = 0; index < direct_bases.size(); ++index) {
+      const TypePtr nested = type_value(direct_bases[index]);
+      if(nested && nested->polymorphic && HasVirtualBases(nested))
+        result += group_size(nested);
+    }
+    return result;
+  };
+  size_t result = 1;
+  const vector<TypePtr> direct_bases = DirectBaseTypes(owner);
+  for(size_t index = 0; index < direct_bases.size(); ++index) {
+    const TypePtr base = type_value(direct_bases[index]);
+    if(base && base->polymorphic && HasVirtualBases(base))
+      result += group_size(base);
+  }
+  return result + view_index;
+}
+
+string PA14Lowerer::VTableViewSymbol(const TypePtr& owner, const TypePtr& base,
+                                     size_t offset) const
+{
+  return low_symbol_component(TypeQualifiedName(owner)) + "____view__" +
+    low_symbol_component(TypeQualifiedName(base)) + "__" +
+    integer_text(static_cast<long long>(offset)) + "__vtable";
+}
+
+vector<PA14Lowerer::RenderedVirtualTableView>
+PA14Lowerer::RenderedVirtualTableViews(const TypePtr& raw_owner) const
+{
+  vector<RenderedVirtualTableView> result;
+  const TypePtr owner = type_value(raw_owner);
+  if(!owner || owner->kind != TYPE_CLASS) return result;
+  set<pair<const Type*, size_t> > seen;
+  const auto same_slot = [](const VirtualMethodInfo& left,
+                            const VirtualMethodInfo& right) {
+    const bool left_destructor = IsDestructorSlot(left);
+    const bool right_destructor = IsDestructorSlot(right);
+    if(left_destructor != right_destructor) return false;
+    if(!left_destructor && left.name != right.name) return false;
+    if(!left.function || !right.function ||
+       left.function->kind != TYPE_FUNCTION || right.function->kind != TYPE_FUNCTION ||
+       left.function->parameters.size() != right.function->parameters.size() ||
+       left.function->variadic != right.function->variadic ||
+       left.function->function_const != right.function->function_const ||
+       left.function->function_volatile != right.function->function_volatile ||
+       left.function->function_lvalue_ref_qualified != right.function->function_lvalue_ref_qualified ||
+       left.function->function_rvalue_ref_qualified != right.function->function_rvalue_ref_qualified)
+      return false;
+    for(size_t parameter = 0; parameter < left.function->parameters.size(); ++parameter)
+      if(!SameLayoutType(left.function->parameters[parameter],
+                         right.function->parameters[parameter])) return false;
+    return true;
+  };
+  const auto adapted_methods = [&](const vector<VirtualMethodInfo>& nested,
+                                    const vector<VirtualMethodInfo>& parent) {
+    vector<VirtualMethodInfo> result_methods = nested;
+    for(size_t nested_index = 0; nested_index < result_methods.size(); ++nested_index)
+      for(size_t parent_index = 0; parent_index < parent.size(); ++parent_index)
+        if(same_slot(result_methods[nested_index], parent[parent_index])) {
+          result_methods[nested_index] = parent[parent_index];
+          break;
+        }
+    return result_methods;
+  };
+  function<void(const TypePtr&, const vector<VirtualMethodInfo>&, size_t, bool)> walk;
+  walk = [&](const TypePtr& base, const vector<VirtualMethodInfo>& methods,
+             size_t offset, bool emit_view) {
+    if(!base) return;
+    if(emit_view && offset != 0 && seen.insert(make_pair(base.get(), offset)).second) {
+      RenderedVirtualTableView view;
+      view.base = base;
+      view.offset = offset;
+      view.methods = methods;
+      result.push_back(view);
+    }
+    for(size_t nested_index = 0; nested_index < base->virtual_table_views.size(); ++nested_index) {
+      const VirtualTableView& nested = base->virtual_table_views[nested_index];
+      if(!nested.base || nested.base_index >= base->direct_base_offsets.size()) continue;
+      const size_t nested_offset = base->direct_base_offsets[nested.base_index];
+      walk(nested.base, adapted_methods(nested.methods, methods),
+           offset + nested_offset, true);
+    }
+  };
+  for(size_t view_index = 0; view_index < owner->virtual_table_views.size(); ++view_index) {
+    const VirtualTableView& view = owner->virtual_table_views[view_index];
+    if(!view.base || view.base_index >= owner->direct_base_offsets.size()) continue;
+    const size_t offset = owner->direct_base_offsets[view.base_index];
+    walk(view.base, view.methods, offset, true);
+  }
+  // A nested view reached through a virtual edge is addressed from the
+  // complete object, not from the statically laid-out base subobject that
+  // supplied the view.  Normalize its physical offset before using it for
+  // symbols, vtable headers, and constructor projections.
+  for(size_t view_index = 0; view_index < result.size(); ++view_index) {
+    size_t physical_offset = 0;
+    if(FindVirtualBaseOffset(owner, result[view_index].base, &physical_offset))
+      result[view_index].offset = physical_offset;
+  }
+  vector<RenderedVirtualTableView> normalized;
+  for(size_t view_index = 0; view_index < result.size(); ++view_index) {
+    bool duplicate = false;
+    for(size_t prior = 0; prior < normalized.size(); ++prior)
+      if(normalized[prior].base.get() == result[view_index].base.get() &&
+         normalized[prior].offset == result[view_index].offset) {
+        duplicate = true;
+        break;
+      }
+    if(!duplicate) normalized.push_back(result[view_index]);
+  }
+  stable_sort(normalized.begin(), normalized.end(),
+    [](const RenderedVirtualTableView& left, const RenderedVirtualTableView& right) {
+      return left.offset < right.offset;
+    });
+  return normalized;
 }
 
 TypePtr PA14Lowerer::SemanticType(const Type* raw_type) const
@@ -892,7 +1063,8 @@ PA14Lowerer::FunctionRecord* PA14Lowerer::EnsurePureVirtual(const VirtualMethodI
 
 PA14Lowerer::FunctionRecord* PA14Lowerer::EnsureVirtualDestructor(const TypePtr& raw_owner,
                                                      const VirtualMethodInfo& slot,
-                                                     bool deleting)
+                                                     bool deleting,
+                                                     bool for_base_subobject)
 {
   const TypePtr owner = type_value(raw_owner);
   if (!owner || owner->kind != TYPE_CLASS) return 0;
@@ -944,6 +1116,9 @@ PA14Lowerer::FunctionRecord* PA14Lowerer::EnsureVirtualDestructor(const TypePtr&
       complete->node = special;
     }
   }
+  BuildFunctionABI(*complete);
+  if (complete->symbol.empty())
+    complete->symbol = low_symbol_component(complete->qualified_name);
   MarkFunctionNeeded(complete);
   if (deleting) {
     const string qname = complete->qualified_name + "__deleting_entry";
@@ -967,6 +1142,8 @@ PA14Lowerer::FunctionRecord* PA14Lowerer::EnsureVirtualDestructor(const TypePtr&
     entry->member = true;
     entry->destructor = true;
     entry->deleting_entry = true;
+    BuildFunctionABI(*entry);
+    entry->symbol = low_symbol_component(entry->qualified_name);
     MarkFunctionNeeded(entry);
     entry->unwind_no = complete->unwind_no;
     entry->special_initializer = complete->special_initializer;
@@ -977,11 +1154,8 @@ PA14Lowerer::FunctionRecord* PA14Lowerer::EnsureVirtualDestructor(const TypePtr&
     entry->template_arguments = complete->template_arguments;
     return entry;
   }
-  // The materialized template-vtable ABI used by PA19 has no standalone D2
-  // body for a class without a base; its D2 alias points at the complete
-  // destructor.  Keep the PA17 base-entry model for ordinary classes and
-  // for template classes that actually have a base subobject.
-  if (!owner->direct_base && !owner->template_specialization && !BaseEntryFor(complete)) {
+  if ((for_base_subobject || !owner->direct_base) &&
+      !owner->template_specialization && !BaseEntryFor(complete)) {
     const string qname = complete->qualified_name + "__base_entry";
     const string key = function_key(qname, complete->source_type);
     if (function_by_key_.find(key) == function_by_key_.end()) {
@@ -996,12 +1170,15 @@ PA14Lowerer::FunctionRecord* PA14Lowerer::EnsureVirtualDestructor(const TypePtr&
       entry->qualified_name = qname;
       entry->definition = true;
       entry->member = true;
-      entry->destructor = true;
+    entry->destructor = true;
+      entry->vtt_parameter = HasVirtualBases(owner);
       MarkFunctionNeeded(entry);
       entry->unwind_no = complete->unwind_no;
-      entry->base_entry = true;
-      entry->base_entry_for = complete->qualified_name;
-      entry->special_initializer = complete->special_initializer;
+    entry->base_entry = true;
+    entry->base_entry_for = complete->qualified_name;
+    entry->special_initializer = complete->special_initializer;
+      BuildFunctionABI(*entry);
+      entry->symbol = low_symbol_component(entry->qualified_name);
     }
   }
   return complete;
@@ -1022,11 +1199,7 @@ PA14Lowerer::FunctionRecord* PA14Lowerer::VirtualFunctionRecord(const TypePtr& r
 
 void PA14Lowerer::PreparePolymorphicModel()
 {
-  emitted_rtti_.clear();
-  // A class with a real virtual definition is a vtable root.  Constructors
-  // and base-subobject construction then pull the required inherited tables
-  // into the same model below.
-  for (map<const CPPGMAstNode*, TypePtr>::const_iterator it = analyzer_.class_types_.begin();
+  emitted_rtti_.clear(); for (map<const CPPGMAstNode*, TypePtr>::const_iterator it = analyzer_.class_types_.begin();
        it != analyzer_.class_types_.end(); ++it) {
     const TypePtr type = it->second;
     if (!type || !type->polymorphic) continue;
@@ -1035,11 +1208,16 @@ void PA14Lowerer::PreparePolymorphicModel()
       const FunctionRecord& function = functions_[i];
       if (!function.definition || type_value(function.member_owner) != type ||
           !function.member || function.static_member) continue;
+      if ((function.constructor || function.destructor) && function.needed) {
+        root = true;
+        break;
+      }
       if (!IsVirtualFunction(function)) continue;
       const string declared_name = function.node && function.node->children.size() > 1 ?
         declarator_name(function.node->children[1]) : string();
       const bool key_function = declared_name.find("::") != string::npos;
       if(function.needed || key_function ||
+         (function.needed && (function.constructor || function.destructor)) ||
          complete_template_object_uses_.find(type.get()) !=
            complete_template_object_uses_.end()) { root = true; break; }
     }
@@ -1052,19 +1230,19 @@ void PA14Lowerer::PreparePolymorphicModel()
     current.insert(current.end(), emitted_vtables_.begin(), emitted_vtables_.end());
     current.insert(current.end(), external_vtables_.begin(), external_vtables_.end());
     for (size_t i = 0; i < current.size(); ++i) {
-      const Type* raw_base = current[i]->direct_base.get();
-      if (!raw_base || !raw_base->polymorphic) continue;
-      const TypePtr base = SemanticType(raw_base);
-      if (ShouldUseExternalVtable(base)) {
-        if (external_vtables_.insert(raw_base).second) changed = true;
-      } else if (emitted_vtables_.insert(raw_base).second) changed = true;
+      const TypePtr owner = SemanticType(current[i]);
+      if (!owner) continue;
+      const vector<TypePtr> bases = DirectBaseTypes(owner);
+      for (size_t base_index = 0; base_index < bases.size(); ++base_index) {
+        const TypePtr base = bases[base_index];
+        if (!base || !base->polymorphic) continue;
+        const Type* raw_base = base.get();
+        if (ShouldUseExternalVtable(base)) {
+          if (external_vtables_.insert(raw_base).second) changed = true;
+        } else if (emitted_vtables_.insert(raw_base).second) changed = true;
+      }
     }
   }
-
-  // A polymorphic object always needs a constructor action even when PA16's
-  // value-semantics demand pass would otherwise omit an empty implicit
-  // constructor.  External abstract tables still need their base-entry
-  // constructor to establish the correct intermediate vptr.
   set<const Type*> constructor_type_set = emitted_vtables_;
   constructor_type_set.insert(external_vtables_.begin(), external_vtables_.end());
   const vector<const Type*> constructor_types = OrderedTypes(constructor_type_set);
@@ -1074,17 +1252,40 @@ void PA14Lowerer::PreparePolymorphicModel()
     CollectImplicitConstructor(type, type->owned_scope, true);
     const vector<Binding*> constructors = DirectBindings(type->owned_scope,
       LastComponent(type->name));
+    bool user_destructor = false;
+    if(HasVirtualBases(type))
+      for(size_t function_index = 0; function_index < functions_.size(); ++function_index) {
+        const FunctionRecord& candidate = functions_[function_index];
+        if(!candidate.definition || candidate.base_entry || candidate.deleting_entry ||
+           !candidate.destructor || !PA12SameType(type_value(candidate.member_owner), type, true) ||
+           !candidate.node ||
+           candidate.node->source_token_begin == static_cast<size_t>(-1) ||
+           candidate.node->source_token_end == static_cast<size_t>(-1)) continue;
+        user_destructor = true;
+        break;
+      }
     for (size_t i = 0; i < constructors.size(); ++i) {
       FunctionRecord* record = RecordForBinding(constructors[i]);
       if (record && record->constructor && !record->static_member) {
         if (!record->implicit_constructor && constructors[i]->access == "protected")
           MarkFunctionNeeded(record);
         EnsureConstructorBaseEntry(record);
+        FunctionRecord* base_entry = BaseEntryFor(record);
+        if(user_destructor && base_entry) MarkFunctionNeeded(base_entry);
         break;
       }
     }
+    if(user_destructor) {
+      for(size_t slot_index = 0; slot_index < type->virtual_methods.size(); ++slot_index)
+        if(type->virtual_methods[slot_index].destructor) {
+          FunctionRecord* destructor = EnsureVirtualDestructor(type,
+            type->virtual_methods[slot_index], false, true);
+          FunctionRecord* base_entry = destructor ? BaseEntryFor(destructor) : 0;
+          if(base_entry) MarkFunctionNeeded(base_entry);
+          break;
+        }
+    }
   }
-
   const vector<const Type*> emitted_types = OrderedTypes(emitted_vtables_);
   for (size_t type_index = 0; type_index < emitted_types.size(); ++type_index) {
     const TypePtr type = SemanticType(emitted_types[type_index]);
@@ -1100,10 +1301,6 @@ void PA14Lowerer::PreparePolymorphicModel()
       }
     }
   }
-
-  // A pure declaration supplies only the slot type; the table points at the
-  // shared runtime pure-virtual entry.  Calls through that slot must not
-  // resurrect the source declaration as an undefined LowIR function.
   for (size_t i = 0; i < functions_.size(); ++i) {
     FunctionRecord& function = functions_[i];
     if (!function.member || !function.member_owner) continue;
@@ -1119,12 +1316,11 @@ void PA14Lowerer::PreparePolymorphicModel()
       }
     }
   }
+  MarkVirtualMemberCallDependencies();
+}
 
-  // A member body containing a call through a class member can be the only
-  // observable use of a virtual slot (for example, a callback helper that is
-  // not itself called by main).  Discover that dependency through the typed
-  // receiver and virtual-slot map so name collisions cannot manufacture an
-  // unrelated demand edge.
+void PA14Lowerer::MarkVirtualMemberCallDependencies()
+{
   for (size_t i = 0; i < functions_.size(); ++i) {
     if (!functions_[i].member || !functions_[i].definition || !functions_[i].node)
       continue;
@@ -1147,130 +1343,69 @@ void PA14Lowerer::EmitVPointerStore(const TypePtr& owner, const string& address)
   const string table_address = new_temp();
   AddInstruction(table_address + " = addr @" + vtable);
   const string vptr = new_temp();
-  AddInstruction(vptr + " = index i8 " + table_address + ", 16");
+  const long long address_point = HasVirtualBases(owner) ? 24 : 16;
+  AddInstruction(vptr + " = index i8 " + table_address + ", " +
+    integer_text(address_point));
   emit_store(PointerTo(Fundamental("char")), vptr, address);
+  const vector<RenderedVirtualTableView> views = RenderedVirtualTableViews(owner);
+  for(size_t view = 0; view < views.size(); ++view) {
+    const RenderedVirtualTableView& secondary = views[view];
+    if(!secondary.base || secondary.offset == 0) continue;
+    bool direct_view = false;
+    for(size_t direct = 0; direct < owner->virtual_table_views.size(); ++direct) {
+      const VirtualTableView& candidate = owner->virtual_table_views[direct];
+      if(candidate.base && SameLayoutType(candidate.base, secondary.base) &&
+         candidate.base_index < owner->direct_base_offsets.size() &&
+         owner->direct_base_offsets[candidate.base_index] == secondary.offset) {
+        direct_view = true;
+        break;
+      }
+    }
+    size_t virtual_offset = 0;
+    const bool virtual_view = FindVirtualBaseOffset(owner, secondary.base,
+      &virtual_offset);
+    // A virtual-base-bearing complete object owns the vtable group for every
+    // physical polymorphic subobject.  In particular, a nested non-virtual
+    // view such as D's B subobject still needs its final D-adjusted vptr.
+    // Keep the older filtering for ordinary direct-base groups, where the
+    // nested view remains reachable through the owning base vptr.
+    if(!direct_view && !virtual_view && !HasVirtualBases(owner)) continue;
+    const size_t offset = secondary.offset;
+    // Each secondary vptr is a projection from the complete object address.
+    // Constructor/destructor lowering passes a materialized `this` value for
+    // the primary store; keep the secondary projection as its own typed load
+    // so the address path remains visible in LowIR and is not accidentally
+    // tied to the vtable-address temporary.
+    const string secondary_object = new_temp();
+    AddInstruction(secondary_object + " = load ptr $this");
+    string view_address;
+    if(virtual_view) {
+      const string current_vptr = new_temp();
+      AddInstruction(current_vptr + " = load ptr " + secondary_object);
+      const string offset_address = new_temp();
+      AddInstruction(offset_address + " = index i8 " + current_vptr + ", -24");
+      const string dynamic_offset = new_temp();
+      AddInstruction(dynamic_offset + " = load i64 " + offset_address);
+      const string virtual_object = new_temp();
+      AddInstruction(virtual_object + " = index i8 " + secondary_object + ", " +
+        dynamic_offset);
+      view_address = new_temp();
+      AddInstruction(view_address + " = index i8 [projection=base_subobject] " +
+        virtual_object + ", 0");
+    } else {
+      view_address = new_temp();
+      AddInstruction(view_address + " = index i8 [projection=base_subobject] " +
+        secondary_object + ", " + integer_text(static_cast<long long>(offset)));
+    }
+    const string view_table_address = new_temp();
+    AddInstruction(view_table_address + " = addr @" +
+      VTableViewSymbol(owner, secondary.base, offset));
+    const string view_vptr = new_temp();
+    AddInstruction(view_vptr + " = index i8 " + view_table_address + ", " +
+      integer_text(address_point));
+    emit_store(PointerTo(Fundamental("char")), view_vptr, view_address);
+  }
 }
 
-void PA14Lowerer::EmitPolymorphicGlobals(vector<string>& entries)
-{
-	for(set<const Type*>::const_iterator it = emitted_vtables_.begin(); it != emitted_vtables_.end(); ++it) EnsureRttiType(SemanticType(*it)); for(set<const Type*>::const_iterator it = external_vtables_.begin(); it != external_vtables_.end(); ++it) EnsureRttiType(SemanticType(*it));
-  if (emitted_vtables_.empty() && external_vtables_.empty() && demanded_rtti_types_.empty() &&
-      demanded_exception_types_.empty() && !has_dynamic_cast_void_) return;
-  bool has_class = false, has_fundamental = false, has_pointer = false, has_si = false;
-  for(map<string, TypePtr>::const_iterator it = demanded_rtti_types_.begin(); it != demanded_rtti_types_.end(); ++it) {
-    const TypePtr type = RttiValueType(it->second);
-    if(!type) continue;
-    if(type->kind == TYPE_FUNDAMENTAL) has_fundamental = true;
-    else if(type->kind == TYPE_POINTER || type->kind == TYPE_ARRAY) has_pointer = true;
-    else if(type->kind == TYPE_CLASS || type->kind == TYPE_ENUM) { has_class = true; if(type->kind == TYPE_CLASS && type->direct_base) has_si = true; }
-  }
-  EmitExceptionRttiDeclarations(entries, &has_fundamental, &has_pointer, &has_class, &has_si);
-	if(has_dynamic_cast_void_) entries.push_back("declare global @__external_rtti__void [binding=strong, object=_ZTIv]");
-  if(has_fundamental)
-    entries.push_back("declare global @__external_rtti_vtable____fundamental_type_info [binding=strong, object=_ZTVN10__cxxabiv123__fundamental_type_infoE]");
-  if(has_pointer)
-    entries.push_back("declare global @__external_rtti_vtable____pointer_type_info [binding=strong, object=_ZTVN10__cxxabiv119__pointer_type_infoE]");
-  if(has_class)
-    entries.push_back("declare global @__external_rtti_vtable____class_type_info [binding=strong, object=_ZTVN10__cxxabiv117__class_type_infoE]");
-  if(has_si)
-    entries.push_back("declare global @__external_rtti_vtable____si_class_type_info [binding=strong, object=_ZTVN10__cxxabiv120__si_class_type_infoE]");
-
-  const vector<const Type*> emitted_types = OrderedTypes(emitted_vtables_), external_types = OrderedTypes(external_vtables_);
-  for (size_t type_index = 0; type_index < external_types.size(); ++type_index) {
-    const TypePtr type = SemanticType(external_types[type_index]);
-    entries.push_back("declare global @__external_vtable__" + low_symbol_component(TypeQualifiedName(type)) + " [binding=strong, object=_ZTV" + TypeMangledName(type) + "]");
-  }
-
-  vector<TypePtr> ordered_rtti_types;
-  for(map<string, TypePtr>::const_iterator it = demanded_rtti_types_.begin();
-      it != demanded_rtti_types_.end(); ++it)
-    ordered_rtti_types.push_back(RttiValueType(it->second));
-  sort(ordered_rtti_types.begin(), ordered_rtti_types.end(),
-    [this](const TypePtr& left, const TypePtr& right) {
-      if(RttiMangledName(left) != RttiMangledName(right))
-        return RttiMangledName(left) < RttiMangledName(right);
-      return RttiInfoSymbol(left) < RttiInfoSymbol(right);
-    });
-  for (size_t type_index = 0; type_index < ordered_rtti_types.size(); ++type_index) {
-    const TypePtr type = ordered_rtti_types[type_index];
-    if(!type) continue;
-    const string info_symbol = RttiInfoSymbol(type);
-    const string rtti_symbol = RttiSymbol(type);
-    const string mangled = RttiMangledName(type);
-    ostringstream name;
-    name << "global @" << info_symbol << " [storage=readonly, binding=weak, object=_ZTS" << mangled << "] = {\n";
-    for (size_t i = 0; i < mangled.size(); ++i)
-      name << "  i8 " << static_cast<unsigned int>(static_cast<unsigned char>(mangled[i])) << "\n";
-    name << "  i8 0\n}";
-    entries.push_back(name.str());
-    ostringstream rtti;
-    rtti << "global @" << rtti_symbol <<
-      " [storage=readonly, binding=weak, object=_ZTI" << mangled << "] = {\n";
-    if(type->kind == TYPE_FUNDAMENTAL)
-      rtti << "  ptr addr @__external_rtti_vtable____fundamental_type_info + 16\n";
-    else if(type->kind == TYPE_POINTER || type->kind == TYPE_ARRAY ||
-            type->kind == TYPE_FUNCTION || type->kind == TYPE_MEMBER_POINTER)
-      rtti << "  ptr addr @__external_rtti_vtable____pointer_type_info + 16\n";
-    else if (type->direct_base && !ShouldUseExternalVtable(type))
-      rtti << "  ptr addr @__external_rtti_vtable____si_class_type_info + 16\n";
-    else
-      rtti << "  ptr addr @__external_rtti_vtable____class_type_info + 16\n";
-    rtti << "  ptr addr @" << info_symbol << "\n";
-    if(type->kind == TYPE_POINTER || type->kind == TYPE_ARRAY ||
-       type->kind == TYPE_FUNCTION || type->kind == TYPE_MEMBER_POINTER) {
-      const bool incomplete_pointee = type->child &&
-        RttiNeedsTypeMangledClassName(RttiValueType(type->child));
-      rtti << "  i32 " << (incomplete_pointee ? 8 : 0) << "\n";
-      rtti << "  ptr addr @" << RttiSymbol(type->child) << "\n";
-    } else if (type->direct_base && !ShouldUseExternalVtable(type)) {
-      const TypePtr base = type->direct_base;
-      rtti << "  ptr addr @" << RttiSymbol(base) << "\n";
-    }
-    rtti << "}";
-    entries.push_back(rtti.str());
-  }
-  for (size_t type_index = 0; type_index < emitted_types.size(); ++type_index) {
-    const TypePtr type = SemanticType(emitted_types[type_index]);
-    const string mangled = TypeMangledName(type);
-    bool strong = false;
-    for (size_t i = 0; i < functions_.size(); ++i) {
-      const FunctionRecord& function = functions_[i];
-      if (!function.definition || type_value(function.member_owner) != type ||
-          !function.member || !IsVirtualFunction(function)) continue;
-      if (function.node && FirstIdentifier(function.node).find("::") != string::npos)
-        strong = true;
-    }
-    ostringstream table;
-    table << "global @" << VTableSymbol(type) <<
-      " [storage=readonly, binding=" << (strong ? "strong" : "weak") <<
-      ", object=_ZTV" << mangled << "] = {\n";
-    table << "  i64 0\n  ptr addr @" << RttiSymbol(type) << "\n";
-    for (size_t i = 0; i < type->virtual_methods.size(); ++i) {
-      const VirtualMethodInfo& slot = type->virtual_methods[i];
-      if (slot.pure) {
-        FunctionRecord* pure = EnsurePureVirtual(slot);
-        table << "  ptr addr @" << (pure ? pure->symbol : "__cxa_pure_virtual") << "\n";
-        continue;
-      }
-      if (IsDestructorSlot(slot)) {
-        FunctionRecord* complete = EnsureVirtualDestructor(type, slot, false);
-        FunctionRecord* deleting = EnsureVirtualDestructor(type, slot, true);
-        table << "  ptr addr @" << (complete ? complete->symbol : "__missing_destructor") << "\n";
-        table << "  ptr addr @" << (deleting ? deleting->symbol : "__missing_deleting_destructor") << "\n";
-        continue;
-      }
-      FunctionRecord* function = VirtualFunctionRecord(type, slot);
-      if (!function) {
-        table << "  ptr addr @__cxa_pure_virtual\n";
-      } else {
-        MarkFunctionNeeded(function);
-        table << "  ptr addr @" << function->symbol << "\n";
-      }
-    }
-    table << "}";
-    entries.push_back(table.str());
-  }
-  EmitExceptionObjects(entries);
-}
 
 } // namespace cppgm_pa14_lowering

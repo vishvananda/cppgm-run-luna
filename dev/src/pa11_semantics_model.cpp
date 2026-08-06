@@ -1,4 +1,5 @@
 #include "pa11_semantics_model.h"
+#include "pa11_semantics_layout.h"
 
 using namespace std;
 
@@ -8,11 +9,15 @@ Type::Type(TypeKind type_kind, const string& type_name)
 	  parameters(), variadic(false), function_const(false), function_volatile(false),
 	  function_lvalue_ref_qualified(false), function_rvalue_ref_qualified(false),
 	  member_owner(), owned_scope(0),
-	  underlying(), class_members(), direct_base(), direct_bases(), direct_base_offset(0),
-	  direct_base_offsets(), object_size(0), object_alignment(1),
+	  underlying(), class_members(), direct_base(), direct_bases(), direct_base_virtual(),
+	  direct_base_access(),
+	  direct_base_offset(0), direct_base_offsets(), primary_base_index(static_cast<size_t>(-1)),
+	  virtual_base_types(),
+	  virtual_base_roots(),
+	  virtual_base_offsets(), nonvirtual_size(0), object_size(0), object_alignment(1),
 	  explicit_alignment(0), layout_complete(false), layout_in_progress(false),
 	  is_union(false), enclosing_type(), dependent_base_lookup(false),
-	  friend_access(), virtual_methods(),
+	  friend_access(), virtual_methods(), virtual_table_views(),
 	polymorphic(false), has_vpointer(false), template_specialization(false),
 	  template_primary(), template_arguments(), template_parameter_names(),
 	  template_parameter_packs(), template_empty_pack(false), has_deferred_constructor(false),
@@ -98,6 +103,46 @@ vector<TypePtr> DirectBaseTypes(const TypePtr& type)
 	if (!type->direct_bases.empty()) return type->direct_bases;
 	return type->direct_base ? vector<TypePtr>(1, type->direct_base) :
 		vector<TypePtr>();
+}
+
+bool IsVirtualDirectBase(const TypePtr& type, size_t index)
+{
+	return type && index < type->direct_base_virtual.size() &&
+		type->direct_base_virtual[index];
+}
+
+size_t NonVirtualObjectSize(const TypePtr& type)
+{
+	if (!type) return 0;
+	return type->kind == TYPE_CLASS && type->nonvirtual_size != 0 &&
+		type->nonvirtual_size <= type->object_size ? type->nonvirtual_size : type->object_size;
+}
+
+bool HasVirtualBases(const TypePtr& type)
+{
+	return type && type->kind == TYPE_CLASS && !type->virtual_base_types.empty();
+}
+
+vector<TypePtr> VirtualBaseTypes(const TypePtr& type)
+{
+	return type && type->kind == TYPE_CLASS ? type->virtual_base_types :
+		vector<TypePtr>();
+}
+
+bool FindVirtualBaseOffset(const TypePtr& type, const TypePtr& target,
+	size_t* offset, size_t occurrence)
+{
+	if (!type || !target || !offset || type->kind != TYPE_CLASS) return false;
+	size_t seen = 0;
+	for (size_t i = 0; i < type->virtual_base_types.size(); ++i) {
+		const TypePtr candidate = type->virtual_base_types[i];
+		if (!candidate || !SameLayoutType(candidate, target)) continue;
+		if (seen++ != occurrence) continue;
+		if (i >= type->virtual_base_offsets.size()) return false;
+		*offset = type->virtual_base_offsets[i];
+		return true;
+	}
+	return false;
 }
 
 vector<TypePtr> BaseTypeClosure(const TypePtr& type)

@@ -478,6 +478,8 @@ CPPGMAstNodePtr Parser::ParseSpecialMember(bool definition, bool member_context)
 			return CPPGMAstNodePtr();
 		}
 		CPPGMAstNodePtr result = Node("special-member-declaration", name);
+		result->source_token_begin = mark.position;
+		result->source_token_end = position_ == 0 ? 0 : position_ - 1;
 		Add(result, member_specs);
 		Add(result, declarator);
 		value_names_ = saved_value_names;
@@ -495,6 +497,8 @@ CPPGMAstNodePtr Parser::ParseSpecialMember(bool definition, bool member_context)
 	}
 	value_names_ = saved_value_names;
 	CPPGMAstNodePtr result = Node("special-member-definition", name);
+	result->source_token_begin = mark.position;
+	result->source_token_end = position_ == 0 ? 0 : position_ - 1;
 	Add(result, member_specs);
 	Add(result, declarator);
 	Add(result, ctor);

@@ -888,15 +888,15 @@ public:
 	void ApplyClassAttributes(const CPPGMAstNodePtr& node, const TypePtr& type,
 		Scope* scope)
 	;
-	void ComputeClassLayout(const CPPGMAstNodePtr& node, const TypePtr& type,
-		Scope* class_scope)
-	;
-	void ComputeClassMemberLayout(const TypePtr& type, size_t union_size,
-		size_t* offset, size_t* maximum_alignment)
-	;
+	void ComputeClassLayout(const CPPGMAstNodePtr& node, const TypePtr& type, Scope* class_scope);
+	bool ComputeVirtualClassLayout(const TypePtr& type);
+	void ComputeClassMemberLayout(const TypePtr& type, size_t union_size, size_t* offset,
+		size_t* maximum_alignment);
 	void RecordClassMembers(const CPPGMAstNodePtr& node, const TypePtr& type,
-		Scope* scope, Scope* class_scope)
-	;
+		Scope* scope, Scope* class_scope);
+	void FinalizeVirtualClassMembers(const TypePtr& type, Scope* class_scope);
+	void RecordDirectClassBases(const CPPGMAstNodePtr& node, const TypePtr& type,
+		Scope* owner);
 	void RecordClassDeclaration(const CPPGMAstNodePtr& child, const TypePtr& type,
 		Scope* class_scope, const string& access)
 	;
